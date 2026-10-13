@@ -1,57 +1,40 @@
 # plain-core
 
-Shared Rust implementation for PlainApp desktop, mobile and headless hosts.
+Shared Rust code for PlainApp desktop, mobile and command-line hosts.
 
-| Package | Responsibility |
-| --- | --- |
-| `plain-rs` | Domain services, storage, crypto, protocols and platform interfaces |
-| `plain-server` | Server assembly, GraphQL, transports and host coordination |
-| `plain-media` | Media catalog and processing |
-| `plain-inference` | Inference models and ONNX Runtime integration |
-| `plainapp` | Headless executable in `crates/plain-cli` |
+```text
+plain-core/
+├── Cargo.toml                Builds and tests the five packages together
+├── plain-rs/                 Domain services, storage, crypto and protocols
+├── plain-server/             Server, GraphQL and host communication
+├── plain-media/              Media catalog, scanning and processing
+├── plain-inference/          Model inference
+├── plain-cli/                The plainapp command-line executable
+├── schema/                   GraphQL and SQLite definitions
+└── scripts/                  Development tools
+```
 
-Tauri shell code lives in plain-desktop. Mobile JNI/C ABI host glue lives in plain-app. Existing Rust package names and Cargo features remain unchanged.
+Each `plain-*` directory is a Rust package managed by the root `Cargo.toml`.
+Desktop shell and mobile JNI/C ABI code live in plain-desktop and plain-app, respectively.
 
 ## Build
 
-Use Rust 1.96 or newer. The inference build also requires Python 3.10 or newer and a C compiler.
+Requires Rust 1.96+, Python 3.10+ and a C compiler.
 
 ```sh
-cargo check --workspace --locked
-cargo test --workspace --locked
-cargo run -p plainapp -- run --help
+cargo check --workspace --locked    # Check all packages for compile errors
+cargo test --workspace --locked     # Test Rust functionality in all packages
+cargo run -p plainapp -- run --help  # Build plainapp and show run-command help
 ```
 
-Pass `--web-root` to the headless `run` command when serving a separately built web frontend.
+Use `run --web-root <directory>` to serve a built web frontend.
 
-## Consumer dependencies
+## Work on desktop or app
 
-Consumers depend on `https://github.com/plainhub/plain-core.git`, branch `main`. Their committed `Cargo.lock` files pin the exact Git commit and transitive dependencies. Normal builds do not automatically follow new commits.
+Keep plain-core next to plain-desktop or plain-app. Run these commands in the desktop or app repository; its `scripts/core` calls `plain-core/scripts/core-dependencies.py`.
 
-Check out plain-core, plain-desktop and plain-app as sibling directories. Run the following commands from plain-core:
-
-```sh
-python3 scripts/core-dependencies.py local
-python3 scripts/core-dependencies.py pinned
-python3 scripts/core-dependencies.py update
-```
-
-`local` saves each consumer's pinned lock and machine configuration, then resolves all shared packages from this working directory. Uncommitted core changes can be compiled by normal desktop and mobile build commands. Gradle invokes Cargo for native builds so Cargo can detect changes in external Rust sources.
-
-`pinned` restores the saved configuration and exact pinned lock. Changes to consumer manifests or machine configuration require reconciliation before switching, so the tool does not overwrite edits silently. Do not commit consumer locks while local mode is active.
-
-`update` resolves the current remote main commit once and updates both consumer locks to it. It requires pinned mode. To select a specific published commit:
-
-```sh
-python3 scripts/core-dependencies.py update --commit <commit-sha>
-```
-
-Use `--project desktop` or `--project app` to operate on one consumer. Use `--desktop`, `--app` and `--core` to provide alternate checkout paths. Review and commit the updated consumer locks after validation.
-
-The core commit referenced by a consumer lock must be available on the remote repository before another machine can build it.
-
-## Development-tool tests
-
-```sh
-python3 -m unittest discover -s tests/scripts
+```bash
+./scripts/core local        # Use local plain-core
+./scripts/core local --off  # Stop using local paths
+./scripts/core update       # Lock this project to the latest remote commit
 ```
