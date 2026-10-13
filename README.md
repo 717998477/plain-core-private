@@ -19,7 +19,7 @@ Desktop shell and mobile JNI/C ABI code live in plain-desktop and plain-app, res
 
 ## Build
 
-Requires Rust 1.96+, Python 3.10+ and a C compiler.
+Requires Rust 1.99+, Python 3.10+ and a C compiler.
 
 ```sh
 cargo check --workspace --locked    # Check all packages for compile errors
