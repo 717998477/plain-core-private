@@ -6,7 +6,7 @@ impl Db {
         &self,
         kind: &str,
         message: &str,
-        client_id: &str,
+        client_id: Option<&str>,
     ) -> rusqlite::Result<String> {
         let id = crate::utils::short_uuid::short_uuid();
         let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);

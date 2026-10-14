@@ -59,3 +59,12 @@ fn list_filters_by_case_insensitive_needle_before_paging() {
     assert_eq!(paged.len(), 1);
     assert_eq!(paged[0].r#type, "login");
 }
+
+#[test]
+fn events_without_a_client_serialize_as_null() {
+    let log = fresh();
+    log.add("mount", "/mnt/example", "").unwrap();
+    let event = log.list(0, 1, None).unwrap().pop().unwrap();
+    assert!(event.client_id.is_none());
+    assert!(serde_json::to_value(event).unwrap()["client_id"].is_null());
+}

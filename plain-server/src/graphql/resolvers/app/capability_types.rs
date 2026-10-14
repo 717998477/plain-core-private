@@ -61,7 +61,7 @@ pub struct AuditEvent {
     pub id: ID,
     pub r#type: AuditEventType,
     pub message: String,
-    pub client_id: String,
+    pub client_id: Option<String>,
     pub created_at: Instant,
 }
 

@@ -6,7 +6,7 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
         id TEXT NOT NULL PRIMARY KEY,
         type TEXT NOT NULL,
         message TEXT NOT NULL,
-        client_id TEXT NOT NULL,
+        client_id TEXT,
         created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS audit_events_created_at ON audit_events(created_at DESC,id DESC);",

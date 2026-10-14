@@ -217,7 +217,7 @@ impl PlatformMutation {
             &name,
             ctx.data_opt::<String>()
                 .map(String::as_str)
-                .unwrap_or_default(),
+                .filter(|client_id| !client_id.is_empty()),
         )?;
         Ok(true)
     }

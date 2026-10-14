@@ -146,7 +146,7 @@ pub(crate) fn event_sink(
             }
             return;
         }
-        if let Err(error) = db.audit_event_add(kind, message, "") {
+        if let Err(error) = db.audit_event_add(kind, message, None) {
             log::error!("mount audit failed: {error}");
         }
     }))

@@ -47,10 +47,11 @@ pub(super) async fn dispatch(
                     let prefs = core.shared_preferences()?;
                     let events = crate::assembly::headless::storage::event_sink(&core, false)?;
                     let db = core.headless_state().db.clone();
+                    let client_id = (!request.client_id.is_empty()).then_some(request.client_id.as_str());
                     let result = plain_rs::platform::linux::disks::format::format_disk_single_partition(&prefs, &request.path, |mount| {
-                        let _ = db.audit_event_add("unmount", mount, &request.client_id);
+                        let _ = db.audit_event_add("unmount", mount, client_id);
                     }, &events);
-                    let _ = db.audit_event_add(if result.is_ok() { "format_disk" } else { "format_disk_failed" }, &request.path, &request.client_id);
+                    let _ = db.audit_event_add(if result.is_ok() { "format_disk" } else { "format_disk_failed" }, &request.path, client_id);
                     let _ = core.headless_state().events.send(plain_rs::events::WsEvent::broadcast("DISK_FORMAT_DONE", serde_json::json!({"path":request.path,"ok":result.is_ok(),"error":result.as_ref().err().map(ToString::to_string)}).to_string()));
                     result.map(|_| Value::Bool(true)).map_err(|error| error.to_string())
                 }).await.map_err(|error| error.to_string())?

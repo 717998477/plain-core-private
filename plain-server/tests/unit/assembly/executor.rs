@@ -32,5 +32,9 @@ async fn client_id_reaches_mutation_resolvers() {
     let events = plain_media::storage::kv::EventLog::new(&state.ctx.media.db)
         .list(0, 10, None)
         .unwrap();
-    assert!(events.iter().any(|event| event.client_id == cid));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.client_id.as_deref() == Some(cid.as_str()))
+    );
 }

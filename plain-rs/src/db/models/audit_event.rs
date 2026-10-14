@@ -3,6 +3,6 @@ pub struct AuditEventRow {
     pub id: String,
     pub r#type: String,
     pub message: String,
-    pub client_id: String,
+    pub client_id: Option<String>,
     pub created_at: String,
 }

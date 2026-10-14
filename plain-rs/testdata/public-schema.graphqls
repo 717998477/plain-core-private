@@ -126,7 +126,7 @@ type AuditEvent {
 	id: ID!
 	type: AuditEventType!
 	message: String!
-	clientId: String!
+	clientId: String
 	createdAt: Instant!
 }
 

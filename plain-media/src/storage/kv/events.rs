@@ -24,7 +24,7 @@ pub struct Event {
     pub id: String,
     pub r#type: String,
     pub message: String,
-    pub client_id: String,
+    pub client_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -42,7 +42,7 @@ impl<'a> EventLog<'a> {
             id: new_event_id(),
             r#type: kind.to_string(),
             message: message.to_string(),
-            client_id: client_id.to_string(),
+            client_id: (!client_id.is_empty()).then(|| client_id.to_string()),
             created_at: Utc::now(),
         };
         // Use a monotonically increasing timestamp prefix so scans are chronological.
