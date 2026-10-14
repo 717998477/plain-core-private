@@ -42,8 +42,6 @@ pub struct Mutation(
     crate::graphql::resolvers::chat::host::ChatHostMutation,
     crate::graphql::resolvers::settings::state::PreferencesMutation,
     crate::graphql::resolvers::files::tasks::FileTaskMutation,
-    crate::graphql::resolvers::audio::host::AudioHostMutation,
-    crate::graphql::resolvers::audio::playback::AudioPlaybackMutation,
     crate::graphql::resolvers::videos::progress::VideoProgressMutation,
     crate::graphql::resolvers::shares::host::ShareHostMutation,
     crate::graphql::resolvers::files::app_files_host::AppFileHostMutation,

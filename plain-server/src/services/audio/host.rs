@@ -62,7 +62,3 @@ impl Audio {
         .map_err(|e| async_graphql::Error::new(e.to_string()))
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/services/audio/host.rs"]
-mod tests;

@@ -24,35 +24,6 @@ type AudioArtistPlayCount {
 	count: Long!
 }
 
-enum AudioCommand {
-	PLAY
-	PAUSE
-	SEEK
-	NEXT
-	PREVIOUS
-	COMPLETED
-	CLEAR
-	RESTART
-	SET_SPEED
-}
-
-input AudioHostTrackInput {
-	path: String!
-	mediaId: ID
-	title: String!
-	artist: String!
-	albumId: ID!
-	durationMs: Long!
-}
-
-type AudioItem {
-	mediaId: ID
-	title: String!
-	artist: String!
-	path: String!
-	durationMs: Long!
-}
-
 type AudioPlayback {
 	path: String!
 	positionMs: Long!
@@ -433,17 +404,6 @@ type Mutation {
 	deletePlaylistVideos(paths: [String!]!): ActionResult!
 	removeFileHostTask(clientId: String!, id: ID!): Boolean!
 	createFileHostTask(clientId: String!, type: FileTaskType!, title: String!, ops: [FileHostTaskOpInput!]!): FileHostTask!
-	audioHostEnqueue(mediaIds: [ID!]!): Boolean!
-	audioHostRemovePaths(paths: [String!]!): Boolean!
-	audioHostSetCurrent(mediaId: ID): Boolean!
-	audioHostResolveNext(isNext: Boolean!, shuffle: Boolean!): AudioItem
-	audioHostAddPlaylistItems(id: ID!, mediaIds: [ID!]!): Int!
-	audioReportStarted(track: AudioHostTrackInput!, revision: Long!): Boolean!
-	audioReportProgress(path: String!, revision: Long!, positionMs: Long!): Boolean!
-	audioInvalidateEngine: AudioPlayback!
-	audioCommand(action: AudioCommand!, positionMs: Long!, speed: Float!): AudioPlayback!
-	audioPlayTrack(mediaId: ID!): AudioPlayback!
-	audioPlayPath(path: String!): AudioPlayback!
 	saveVideoPlayProgress(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
 	recordVideoPlay(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
 	deleteVideoPlayProgress(mediaId: ID!): Boolean!
