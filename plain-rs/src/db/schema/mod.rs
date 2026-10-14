@@ -19,8 +19,6 @@ mod favorite_folder;
 #[cfg(feature = "library")]
 mod feeds;
 #[cfg(feature = "library")]
-mod file_task;
-#[cfg(feature = "library")]
 mod image_editor_project;
 #[cfg(feature = "library")]
 mod image_embedding;
@@ -83,7 +81,6 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
     #[cfg(feature = "library")]
     favorite_folder::init(conn)?;
     #[cfg(feature = "library")]
-    file_task::init(conn)?;
     #[cfg(feature = "library")]
     image_editor_project::init(conn)?;
     #[cfg(feature = "library")]

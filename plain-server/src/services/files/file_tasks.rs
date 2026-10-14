@@ -2,7 +2,6 @@ use crate::host::bridge::Host;
 use anyhow::{Result, anyhow, bail};
 use plain_rs::db::Db;
 use plain_rs::events::WsEvent;
-use plain_rs::files::tasks;
 use plain_rs::files::tasks::CompletedOp;
 use plain_rs::files::tasks::Events;
 use plain_rs::files::tasks::FileTask;
@@ -19,18 +18,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::broadcast;
-#[cfg(feature = "core")]
-pub mod deletion_recovery;
 pub struct FileTasks {
     deletion_lock: tokio::sync::Mutex<()>,
-    db: Arc<Db>,
     events: broadcast::Sender<WsEvent>,
     service: Mutex<Option<Arc<Service>>>,
     hooks: Arc<NativeHooks>,
 }
 impl FileTasks {
     pub fn new(
-        db: Arc<Db>,
         host: Arc<Host>,
         events: broadcast::Sender<WsEvent>,
         audio: Arc<crate::services::audio::host::Audio>,
@@ -44,7 +39,6 @@ impl FileTasks {
                 index,
                 prefs,
             }),
-            db,
             deletion_lock: tokio::sync::Mutex::new(()),
             events,
             service: Mutex::new(None),
@@ -60,7 +54,6 @@ impl FileTasks {
         }
         tokio::runtime::Handle::try_current()?;
         let next = Arc::new(Service::with_hooks(
-            Arc::new(tasks::sqlite::SqliteStore(self.db.clone())),
             Arc::new(Changes(self.events.clone())),
             self.hooks.clone(),
         ));
@@ -98,7 +91,6 @@ impl FileTasks {
             .create(&client_id, kind, &format!("{kind:?}").to_uppercase(), ops)
             .await?;
         let service = self.service()?;
-        let mut recovered = false;
         loop {
             let current = match service.get(&task.id)? {
                 Some(current) => current,
@@ -111,18 +103,10 @@ impl FileTasks {
             };
             match current.status {
                 FileTaskStatus::Done => return Ok(true),
-                FileTaskStatus::Error if !recovered => {
-                    self.recover(client_id.clone(), task.id.clone()).await?;
-                    recovered = true;
-                }
                 FileTaskStatus::Error => return Ok(false),
                 _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
             }
         }
-    }
-    pub async fn recover(&self, client_id: String, id: String) -> Result<Option<FileTask>> {
-        let service = self.service()?;
-        tokio::task::spawn_blocking(move || service.recover(&client_id, &id)).await?
     }
     pub async fn remove(&self, client_id: String, id: String) -> Result<bool> {
         let service = self.service()?;
@@ -180,15 +164,7 @@ impl Hooks for NativeHooks {
         op: &'a CompletedOp,
         snapshot: &'a serde_json::Value,
     ) -> HookResult<'a> {
-        self.apply_completed(kind, op, snapshot, None)
-    }
-    fn completed_receipt<'a>(&'a self, kind: FileTaskType, op: &'a CompletedOp) -> HookResult<'a> {
-        match op.recovery.as_ref() {
-            Some(recovery) => {
-                self.apply_completed(kind, op, &recovery.snapshot, Some(recovery.id.clone()))
-            }
-            None => Box::pin(async { bail!("missing file recovery receipt") }),
-        }
+        self.apply_completed(kind, op, snapshot)
     }
     fn authorize<'a>(&'a self, kind: FileTaskType, ops: &'a [FileTaskOp]) -> HookResult<'a> {
         Box::pin(async move {
@@ -205,25 +181,20 @@ impl NativeHooks {
         kind: FileTaskType,
         op: &'a CompletedOp,
         snapshot: &'a serde_json::Value,
-        receipt: Option<String>,
     ) -> HookResult<'a> {
         Box::pin(async move {
             self.completed(kind, op).await?;
-            tasks::validate_receipt(kind, op).await?;
             if kind == FileTaskType::Move {
                 let change =
                     crate::services::files::file_task_media::resolve(&self.host, &op.dst, snapshot)
                         .await?;
-                tasks::validate_receipt(kind, op).await?;
                 let raw_source = op.src.clone();
                 let raw_destination = op.dst.clone();
-                let verified_op = op.clone();
                 let prefs = self.prefs.clone();
                 let index = self.index.clone();
                 self.audio
                     .run(move |db, engine| {
                         use plain_rs::files::moves as media_moves;
-                        use plain_rs::files::tasks::audio_effects as file_task_audio;
                         use plain_rs::media::audio::playback as audio_playback;
                         let before = audio_playback::snapshot(db)?;
                         let source_prefix =
@@ -237,26 +208,19 @@ impl NativeHooks {
                                     raw_source.trim_end_matches('/')
                                 )));
                         let rebind = |db: &Db| {
-                            tasks::validate_receipt_sync(kind, &verified_op).map_err(|error| {
-                                plain_rs::error::DomainError::Other(error.to_string())
-                            })?;
-                            media_moves::rebind_once(
+                            media_moves::rebind_with_aliases(
                                 db,
                                 &change.bindings,
                                 &change.source_root,
                                 &change.destination_root,
                                 &[(raw_source, raw_destination)],
-                                receipt.as_deref(),
                             )
                         };
                         index.update_cache(rebind)?;
-                        file_task_audio::clear_after_move(
-                            db,
-                            &prefs,
-                            engine,
-                            receipt.as_deref(),
-                            moved_audio.then_some(before.path.as_str()),
-                        )?;
+                        if moved_audio {
+                            use plain_rs::media::audio::commands::{self, Action};
+                            commands::command(db, &prefs, engine, Action::Clear, 0, 1.0)?;
+                        }
                         Ok(())
                     })
                     .await

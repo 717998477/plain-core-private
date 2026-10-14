@@ -1,56 +1,14 @@
 use crate::events::EVENT_FILE_TASK_PROGRESS;
 use crate::events::EventBus;
-use crate::storage::kv::get_default;
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use plain_rs::files::tasks::Events;
 pub use plain_rs::files::tasks::FileTask;
 pub use plain_rs::files::tasks::FileTaskOp;
 pub use plain_rs::files::tasks::FileTaskStatus;
 pub use plain_rs::files::tasks::FileTaskType;
 use plain_rs::files::tasks::Service;
-use plain_rs::files::tasks::Store;
 use std::sync::{Arc, Mutex};
 
-const NS: &str = "filetask:";
-fn client_prefix(client_id: &str) -> String {
-    format!(
-        "{NS}{}:",
-        plain_rs::utils::hex::bytes_to_hex(client_id.as_bytes())
-    )
-}
-fn db_key(client_id: &str, task_id: &str) -> String {
-    format!("{}{task_id}", client_prefix(client_id))
-}
-struct KvStore;
-impl Store for KvStore {
-    fn remove(&self, client_id: &str, id: &str) -> Result<bool> {
-        let task = self.list(client_id)?.into_iter().find(|task| task.id == id);
-        if task
-            .is_some_and(|task| matches!(task.status, FileTaskStatus::Done | FileTaskStatus::Error))
-        {
-            get_default().remove(db_key(client_id, id))?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-    fn put(&self, task: &FileTask) -> Result<()> {
-        get_default().insert(db_key(&task.client_id, &task.id), serde_json::to_vec(task)?)?;
-        Ok(())
-    }
-    fn list(&self, client_id: &str) -> Result<Vec<FileTask>> {
-        let mut tasks = Vec::new();
-        for row in get_default().scan_prefix(client_prefix(client_id)) {
-            let (_, value) = row?;
-            let task: FileTask = serde_json::from_slice(&value)?;
-            if task.client_id != client_id {
-                bail!("file task owner mismatch");
-            }
-            tasks.push(task);
-        }
-        Ok(tasks)
-    }
-}
 struct ProgressEvents;
 impl Events for ProgressEvents {
     fn changed(&self, t: &FileTask) {
@@ -69,7 +27,7 @@ fn get_manager() -> Result<Arc<Service>> {
         return Ok(service.clone());
     }
     tokio::runtime::Handle::try_current()?;
-    let service = Arc::new(Service::new(Arc::new(KvStore), Arc::new(ProgressEvents)));
+    let service = Arc::new(Service::new(Arc::new(ProgressEvents)));
     *manager = Some(service.clone());
     Ok(service)
 }

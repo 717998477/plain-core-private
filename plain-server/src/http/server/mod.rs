@@ -1,4 +1,4 @@
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "media")]
 pub mod events;
 #[cfg(feature = "api")]
 pub mod models;

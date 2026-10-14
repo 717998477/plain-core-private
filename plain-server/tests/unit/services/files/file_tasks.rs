@@ -1,6 +1,5 @@
 use super::*;
 use crate::assembly::server::ContentServer;
-use plain_rs::files::tasks::Store;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 async fn call(port: u16, token: &str, doc: String) -> Value {
@@ -18,7 +17,8 @@ async fn call(port: u16, token: &str, doc: String) -> Value {
     serde_json::from_str(&text).unwrap()
 }
 #[tokio::test]
-async fn mobile_http_tasks_persist_resolved_paths_and_gate_execution_on_native_authorization() {
+async fn mobile_http_tasks_track_resolved_paths_in_memory_and_gate_execution_on_native_authorization()
+ {
     let temp = tempfile::tempdir().unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[12; 32]);
     let db_path = temp.path().join("tasks.db");
@@ -104,8 +104,11 @@ async fn mobile_http_tasks_persist_resolved_paths_and_gate_execution_on_native_a
     let denied = call(server.port, &token, document).await;
     assert!(denied.get("errors").is_some());
     assert!(!temp.path().join("target_2.txt").exists());
-    let rows = tasks::sqlite::SqliteStore(Arc::new(Db::open(&db_path).unwrap()))
-        .list("owner")
+    let rows = server
+        .runtime_state()
+        .files
+        .list("owner".into())
+        .await
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, FileTaskStatus::Done);
@@ -232,60 +235,18 @@ async fn media_move_case(missing_destination: bool) {
         })
         .map(|id| assert_eq!(id, "1"))
         .unwrap();
-        let client = reqwest::Client::new();
-        let url = format!("http://127.0.0.1:{}/files/mutate", server.port);
-        assert_eq!(
-            client
-                .post(&url)
-                .header("content-type", "application/json")
-                .body(json!({"action":"recover","clientId":"owner","id":id}).to_string())
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            401
-        );
-        let foreign = client
-            .post(&url)
-            .bearer_auth(&token)
-            .header("content-type", "application/json")
-            .body(json!({"action":"recover","clientId":"foreign","id":id}).to_string())
-            .send()
-            .await
-            .unwrap()
-            .text()
-            .await
-            .unwrap();
-        assert!(serde_json::from_str::<Value>(&foreign).unwrap().is_null());
         unavailable.store(false, std::sync::atomic::Ordering::SeqCst);
-        let response = client
-            .post(&url)
-            .bearer_auth(&token)
-            .header("content-type", "application/json")
-            .body(json!({"action":"recover","clientId":"owner","id":id}).to_string())
-            .send()
-            .await
-            .unwrap();
-        assert!(response.status().is_success());
-        let recovered = tokio::time::timeout(std::time::Duration::from_secs(5),async {
-            loop {
-                let row=call(server.port,&token,format!("query {{ fileHostTaskRecord(clientId:\"owner\",id:{}) {{ status error }} }}",json!(id))).await;
-                let task=row["data"]["fileHostTaskRecord"].clone();
-                if task["status"]=="DONE" || task["status"]=="ERROR" { break task; }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-        }).await.unwrap();
-        assert_eq!(recovered["status"], "DONE", "{recovered}");
-        assert_eq!(clear_count.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(
-            db.with_conn(|c| c.query_row(
-                "SELECT duration_ms FROM media_item WHERE media_id='11'",
-                [],
-                |r| r.get::<_, i64>(0)
-            ))
-            .unwrap(),
-            5000000001
-        );
+        let row = call(
+            server.port,
+            &token,
+            format!(
+                "query {{ fileHostTaskRecord(clientId:\"owner\",id:{}) {{ status }} }}",
+                json!(id)
+            ),
+        )
+        .await;
+        assert_eq!(row["data"]["fileHostTaskRecord"]["status"], "ERROR");
+        assert_eq!(clear_count.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(!base.join("target_2").exists());
     } else {
         assert_eq!(task["status"], "DONE", "{task}");
@@ -339,11 +300,12 @@ async fn media_move_case(missing_destination: bool) {
         })
         .unwrap();
     }
-    assert!(
+    assert_eq!(
         plain_rs::media::audio::playback::snapshot(&db)
             .unwrap()
             .path
-            .is_empty()
+            .is_empty(),
+        !missing_destination
     );
     worker.abort();
     let _ = worker.await;

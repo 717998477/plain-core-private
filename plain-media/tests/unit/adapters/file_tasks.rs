@@ -1,8 +1,6 @@
 use super::*;
 #[tokio::test]
-async fn queued_tasks_really_finish_and_kv_history_is_checked_and_owner_isolated() {
-    let root = crate::storage::paths::pin_test_data_dir();
-    crate::storage::kv::open(&root.join("fjall")).unwrap();
+async fn queued_tasks_finish_in_memory_and_are_owner_isolated() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source");
     let destination = temp.path().join("destination");
@@ -37,20 +35,7 @@ async fn queued_tasks_really_finish_and_kv_history_is_checked_and_owner_isolated
     assert_eq!(completed.done_items, 1);
     assert_eq!(std::fs::read(destination).unwrap(), b"synthetic");
     let neighboring = format!("{cid}:neighbor");
-    let foreign = FileTask {
-        client_id: neighboring.clone(),
-        id: "foreign".into(),
-        ..completed.clone()
-    };
-    KvStore.put(&foreign).unwrap();
-    assert_eq!(list_tasks(&cid).unwrap().len(), 1);
-    assert_eq!(list_tasks(&neighboring).unwrap().len(), 1);
-    let malformed = db_key(&cid, "broken");
-    get_default().insert(&malformed, b"invalid JSON").unwrap();
-    assert!(list_tasks(&cid).is_err());
-    get_default().remove(malformed).unwrap();
-    get_default().remove(db_key(&cid, &task.id)).unwrap();
-    get_default()
-        .remove(db_key(&neighboring, "foreign"))
-        .unwrap();
+    assert!(list_tasks(&neighboring).unwrap().is_empty());
+    assert!(get_manager().unwrap().remove(&cid, &task.id).unwrap());
+    assert!(list_tasks(&cid).unwrap().is_empty());
 }

@@ -59,7 +59,7 @@ impl FileTasks {
                 FileTaskStatus::Done => break,
                 FileTaskStatus::Error if current.completed_ops.is_empty() => return Ok(None),
                 FileTaskStatus::Error => bail!(
-                    "rename postprocessing requires recovery for task {}: {}",
+                    "rename postprocessing failed for task {}: {}",
                     current.id,
                     current.error
                 ),
@@ -100,34 +100,23 @@ impl FileTasks {
         self.hooks
             .call("fileTaskAuthorize", json!({"paths":[root]}))
             .await?;
-        let intent = deletion_recovery::Intent {
-            id: plain_rs::short_uuid::short_uuid(),
-            path,
-            root,
-            planned: plan.paths(),
-            snapshot,
-            outcome: None,
-        };
-        intent.save(&self.db)?;
         let outcome = tokio::task::spawn_blocking(move || plan.execute()).await?;
-        let intent = deletion_recovery::Intent {
-            outcome: Some(outcome.clone()),
-            ..intent
-        };
-        intent.save(&self.db)?;
-        self.finish_deletion(&intent, &outcome).await?;
+        self.finish_deletion(&path, &root, &snapshot, &outcome)
+            .await?;
         Ok(outcome)
     }
     pub(crate) async fn finish_deletion(
         &self,
-        intent: &deletion_recovery::Intent,
+        path: &str,
+        root: &str,
+        snapshot: &serde_json::Value,
         outcome: &Outcome,
     ) -> Result<()> {
-        let root = intent.root.clone();
-        let path = intent.path.clone();
-        let snapshot = intent.snapshot.clone();
+        let root = root.to_owned();
+        let path = path.to_owned();
+        let snapshot = snapshot.clone();
         for path in &outcome.paths {
-            deletion_recovery::require_absent(path)?;
+            require_absent(path)?;
         }
         if !outcome.paths.is_empty() {
             let items =
@@ -170,7 +159,7 @@ impl FileTasks {
                         });
                     let cleanup = |db: &Db| {
                         for path in &removed_paths {
-                            deletion_recovery::require_absent(path)
+                            require_absent(path)
                                 .map_err(|e| plain_rs::error::DomainError::Other(e.to_string()))?;
                         }
                         media_deletes::cleanup(db, &items, &removed_paths, &roots)
@@ -199,7 +188,14 @@ impl FileTasks {
                     .await?;
             }
         }
-        intent.remove(&self.db)?;
         Ok(())
+    }
+}
+
+fn require_absent(path: &str) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+        Ok(_) => bail!("deleted path reappeared: {path}"),
     }
 }

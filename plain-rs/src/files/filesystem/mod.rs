@@ -252,44 +252,13 @@ pub fn count_dir_entries(dir: &Path, show_hidden: bool) -> std::io::Result<usize
 /// index here — callers that need it call `media_scan::delete_by_path` +
 /// `media_scan::scan` themselves, the same way the Go handlers do.
 pub async fn rename(src: &Path, dst: &Path) -> std::io::Result<()> {
-    rename_with_checkpoint(src, dst, None, |_, _| async { Ok(()) })
-        .await
-        .map(|_| ())
+    rename_with_progress(src, dst, None).await
 }
-
-pub async fn rename_with_checkpoint<F, Fut>(
+pub async fn rename_with_progress(
     src: &Path,
     dst: &Path,
     progress: Option<&TransferProgress>,
-    checkpoint: F,
-) -> std::io::Result<bool>
-where
-    F: FnOnce(PathBuf, PathBuf) -> Fut,
-    Fut: std::future::Future<Output = std::io::Result<()>>,
-{
-    rename_with_intent(
-        src,
-        dst,
-        progress,
-        |_, _| async { Ok(String::new()) },
-        |_, source, target| checkpoint(source, target),
-    )
-    .await
-}
-
-pub async fn rename_with_intent<B, BFut, C, CFut>(
-    src: &Path,
-    dst: &Path,
-    progress: Option<&TransferProgress>,
-    begin: B,
-    checkpoint: C,
-) -> std::io::Result<bool>
-where
-    B: FnOnce(PathBuf, PathBuf) -> BFut,
-    BFut: std::future::Future<Output = std::io::Result<String>>,
-    C: FnOnce(String, PathBuf, PathBuf) -> CFut,
-    CFut: std::future::Future<Output = std::io::Result<()>>,
-{
+) -> std::io::Result<()> {
     let from = src.to_path_buf();
     let to = dst.to_path_buf();
     match tokio::fs::symlink_metadata(&to).await {
@@ -302,7 +271,6 @@ where
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    let receipt_id = begin(from.clone(), to.clone()).await?;
     let result = tokio::task::spawn_blocking(move || rename::no_replace(&from, &to))
         .await
         .map_err(std::io::Error::other)?;
@@ -315,12 +283,12 @@ where
                     .map_err(std::io::Error::other)??;
                 callback(bytes, items)?;
             }
-            Ok(false)
+            Ok(())
         }
         Err(error) if rename::copy_required(&error, false) => {
-            checkpoint(receipt_id, src.to_owned(), dst.to_owned()).await?;
+            copy_to(src, dst, false, progress).await?;
             remove(src).await?;
-            Ok(true)
+            Ok(())
         }
         Err(error) => Err(error),
     }
@@ -360,52 +328,10 @@ pub async fn move_path_with_progress(
     overwrite: bool,
     progress: Option<&TransferProgress>,
 ) -> std::io::Result<PathBuf> {
-    move_path_with_checkpoint(src, dst, overwrite, progress, |_, _| async { Ok(()) })
-        .await
-        .map(|(path, _)| path)
-}
-
-pub async fn move_path_with_checkpoint<F, Fut>(
-    src: &Path,
-    dst: &Path,
-    overwrite: bool,
-    progress: Option<&TransferProgress>,
-    checkpoint: F,
-) -> std::io::Result<(PathBuf, bool)>
-where
-    F: FnOnce(PathBuf, PathBuf) -> Fut,
-    Fut: std::future::Future<Output = std::io::Result<()>>,
-{
-    move_path_with_intent(
-        src,
-        dst,
-        overwrite,
-        progress,
-        |_, _| async { Ok(String::new()) },
-        |_, source, target| checkpoint(source, target),
-    )
-    .await
-}
-
-pub async fn move_path_with_intent<B, BFut, C, CFut>(
-    src: &Path,
-    dst: &Path,
-    overwrite: bool,
-    progress: Option<&TransferProgress>,
-    begin: B,
-    checkpoint: C,
-) -> std::io::Result<(PathBuf, bool)>
-where
-    B: FnOnce(PathBuf, PathBuf) -> BFut,
-    BFut: std::future::Future<Output = std::io::Result<String>>,
-    C: FnOnce(String, PathBuf, PathBuf) -> CFut,
-    CFut: std::future::Future<Output = std::io::Result<()>>,
-{
     let src = clean(src);
     let info = tokio::fs::symlink_metadata(&src).await?;
     let resolved = resolve_destination(&src, dst, overwrite).await?;
     require_separate_paths(&src, &resolved, info.is_dir()).await?;
-    let receipt_id = begin(src.clone(), resolved.clone()).await?;
     let totals = if progress.is_some() {
         let path = src.clone();
         Some(
@@ -430,36 +356,15 @@ where
             if let (Some(callback), Some((bytes, items))) = (progress, totals) {
                 callback(bytes, items)?;
             }
-            Ok((resolved, false))
+            Ok(resolved)
         }
         Err(error) if rename::copy_required(&error, overwrite) => {
             copy_to(&src, &resolved, overwrite, progress).await?;
-            checkpoint(receipt_id, src.clone(), resolved.clone()).await?;
             remove(&src).await?;
-            Ok((resolved, true))
+            Ok(resolved)
         }
         Err(error) => Err(error),
     }
-}
-
-#[cfg(test)]
-async fn copy_remove_with_checkpoint<F, Fut>(
-    src: &Path,
-    dst: &Path,
-    overwrite: bool,
-    progress: Option<&TransferProgress>,
-    checkpoint: F,
-) -> std::io::Result<PathBuf>
-where
-    F: FnOnce(PathBuf, PathBuf) -> Fut,
-    Fut: std::future::Future<Output = std::io::Result<()>>,
-{
-    let src = clean(src);
-    let dst = clean(dst);
-    copy_to(&src, &dst, overwrite, progress).await?;
-    checkpoint(src.clone(), dst.clone()).await?;
-    remove(&src).await?;
-    Ok(dst)
 }
 
 #[cfg(test)]

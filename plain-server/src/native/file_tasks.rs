@@ -98,14 +98,6 @@ impl NativeFileTasks {
             .map_err(|error| error.to_string())
     }
 
-    pub async fn recover(&self, id: String) -> Result<Option<FileTask>, String> {
-        self.ensure_running()?;
-        self.tasks
-            .recover(self.client_id.clone(), id)
-            .await
-            .map_err(|error| error.to_string())
-    }
-
     pub async fn remove(&self, id: String) -> Result<bool, String> {
         self.ensure_running()?;
         self.tasks

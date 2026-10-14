@@ -130,7 +130,7 @@ async fn strict_rename_rebinds_and_delete_cleans_confirmed_metadata_through_shar
 }
 
 #[tokio::test]
-async fn failed_rename_postprocessing_is_visible_and_recovers_after_core_restart() {
+async fn failed_rename_postprocessing_is_visible_and_is_not_replayed_after_core_restart() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source.txt");
     let destination = temp.path().join("renamed.txt");
@@ -176,14 +176,16 @@ async fn failed_rename_postprocessing_is_visible_and_recovers_after_core_restart
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
     assert!(!source.exists());
     assert_eq!(std::fs::read(&destination).unwrap(), b"fixture");
-    let store = plain_rs::files::tasks::sqlite::SqliteStore(Arc::new(
-        plain_rs::db::Db::open(&db_path).unwrap(),
-    ));
     use plain_rs::files::tasks::FileTaskStatus;
-    use plain_rs::files::tasks::Store;
-    let failed = store.list("owner").unwrap().remove(0);
+    let failed = first
+        .runtime_state()
+        .files
+        .list("owner".into())
+        .await
+        .unwrap()
+        .remove(0);
     assert_eq!(failed.status, FileTaskStatus::Error);
-    assert!(failed.completed_ops[0].recovery.is_some());
+    assert_eq!(failed.completed_ops[0].dst, destination.to_str().unwrap());
     db.with_conn(|c| {
         c.query_row(
             "SELECT key FROM tag_relations WHERE tag_id='tag'",
@@ -198,29 +200,15 @@ async fn failed_rename_postprocessing_is_visible_and_recovers_after_core_restart
     first.shutdown().await;
     let second = ContentServer::start(&db_path, &token, prefs).unwrap();
     let worker = host(&second, false).await;
-    let response = client
-        .post(format!("http://127.0.0.1:{}/files/mutate", second.port))
-        .bearer_auth(&token)
-        .header("content-type", "application/json")
-        .body(json!({"action":"recover","clientId":"owner","id":failed.id}).to_string())
-        .send()
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            let task = store.list("owner").unwrap().remove(0);
-            if task.status == FileTaskStatus::Done {
-                break;
-            }
-            assert_ne!(task.status, FileTaskStatus::Error, "{}", task.error);
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
-    let task = store.list("owner").unwrap().remove(0);
-    assert!(task.completed_ops[0].recovery.is_none());
+    assert!(
+        second
+            .runtime_state()
+            .files
+            .list("owner".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
     db.with_conn(|c| {
         c.query_row(
             "SELECT key FROM tag_relations WHERE tag_id='tag'",
@@ -228,10 +216,81 @@ async fn failed_rename_postprocessing_is_visible_and_recovers_after_core_restart
             |row| row.get::<_, String>(0),
         )
     })
-    .map(|key| assert_eq!(key, destination.to_str().unwrap()))
+    .map(|key| assert_eq!(key, source.to_str().unwrap()))
     .unwrap();
     assert!(!temp.path().join("renamed_1.txt").exists());
     worker.abort();
     let _ = worker.await;
     second.shutdown().await;
+}
+#[tokio::test]
+async fn deletion_scan_failure_is_reported_without_a_pending_deletion_record_or_retry() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.txt");
+    std::fs::write(&source, b"fixture").unwrap();
+    let token = plain_rs::utils::base64::base64_encode(&[29; 32]);
+    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&temp.path().join("prefs.json")).unwrap());
+    let server = ContentServer::start(&temp.path().join("content.db"), &token, prefs).unwrap();
+    let scans = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = scans.clone();
+    let mut socket = crate::host::events::TestHost::new(&server);
+    let worker = tokio::spawn(async move {
+        while let Some(Ok(Message::Text(text))) = socket.next().await {
+            let request: Value = serde_json::from_str(&text).unwrap();
+            let reply = match request["method"].as_str().unwrap() {
+                "fileTaskAuthorize" => json!({"id":request["id"],"result":true}),
+                "fileTaskMediaSnapshot" => json!({"id":request["id"],"result":[]}),
+                "fileTaskScan" => {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    json!({"id":request["id"],"error":"synthetic scan failure"})
+                }
+                method => panic!("unexpected method {method}"),
+            };
+            socket
+                .send(Message::Text(reply.to_string().into()))
+                .await
+                .unwrap();
+        }
+    });
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/files/mutate", server.port);
+    let first = client
+        .post(&url)
+        .bearer_auth(&token)
+        .header("content-type", "application/json")
+        .body(json!({"action":"delete","path":source}).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(
+        first
+            .text()
+            .await
+            .unwrap()
+            .contains("synthetic scan failure")
+    );
+    assert!(!source.exists());
+    let second = client
+        .post(&url)
+        .bearer_auth(&token)
+        .header("content-type", "application/json")
+        .body(json!({"action":"delete","path":source}).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success());
+    assert_eq!(scans.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(
+        server
+            .runtime_state()
+            .files
+            .list("owner".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    worker.abort();
+    let _ = worker.await;
+    server.shutdown().await;
 }

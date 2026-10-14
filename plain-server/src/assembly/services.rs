@@ -77,7 +77,6 @@ impl Services {
             host.clone(),
         ));
         let files = Arc::new(crate::services::files::file_tasks::FileTasks::new(
-            db.clone(),
             host.clone(),
             events.clone(),
             audio.clone(),

@@ -3,6 +3,7 @@
 //! and Windows mDNS firewall diagnostics.
 
 pub mod firewall;
+#[cfg(target_os = "macos")]
 pub mod macos_dns_sd;
 #[cfg(feature = "api")]
 pub mod nearby_discover_manager;
