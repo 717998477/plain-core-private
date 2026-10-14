@@ -194,9 +194,7 @@ async fn apply(
             let shuffle = state.prefs.get_user_or("audio_play_mode", String::new()) == "SHUFFLE";
             state
                 .audio
-                .run(move |db, lib| {
-                    plain_rs::media::audio::queue::select_next(db, lib, true, shuffle)
-                })
+                .run(move |db, lib| plain_rs::media::audio::queue::select_next(db, true, shuffle))
                 .await
                 .map_err(|e| anyhow::anyhow!(e.message))?
                 .map(

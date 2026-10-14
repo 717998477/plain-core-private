@@ -62,6 +62,16 @@ fn public_schema_matches_committed_sdl() {
 #[test]
 fn public_schema_exposes_the_contract_it_has_to_serve() {
     let sdl = sdl();
+    let playback = sdl
+        .split("type AudioPlayback {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    assert!(playback.contains("mediaId: ID\n"));
+    assert!(playback.contains("path: String\n"));
+    assert!(!playback.contains("currentPath"));
     assert!(sdl.contains("lastSeen: Instant!"));
     if cfg!(feature = "mobile") {
         assert!(sdl.contains("TTY_TDD"));
@@ -175,28 +185,25 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "deleteFeedEntries(query: String!): ActionResult!",
         "audioCount(query: String!): Int!",
         "audios(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Audio!]!",
-        "audioLyrics(path: String!): String",
+        "audioLyrics(mediaId: ID!): String",
         "audioQueueItems(query: String!, offset: Int!, limit: Int!): [AudioItem!]!",
         "audioQueueItemCount: Int!",
         "audioPlayback: AudioPlayback!",
         "audioPlaylists: [AudioPlaylist!]!",
-        "audioPlaylist(id: ID!): AudioPlaylist",
         "audioPlaylistItems(id: ID!, query: String!, offset: Int!, limit: Int!): [AudioItem!]!",
-        "audioPlaylistItemCount(id: ID!): Int!",
+        "audioPlaylistItemCount(id: ID!, query: String!): Int!",
         "audioPlayHistory(query: String!, offset: Int!, limit: Int!): [AudioPlayHistory!]!",
-        "playAudio(path: String!): AudioItem!",
+        "playAudio(mediaId: ID!): AudioItem!",
         "updateAudioPlayMode(mode: MediaPlayMode!): Boolean!",
         "clearAudioQueue: Boolean!",
-        "removeAudioFromQueue(path: String!): Boolean!",
-        "addAudiosToQueue(query: String!): Boolean!",
-        "reorderAudioQueue(paths: [String!]!): Boolean!",
+        "removeAudioFromQueue(mediaId: ID!): Boolean!",
+        "addAudioToQueue(query: String!): Boolean!",
+        "reorderAudioQueue(mediaIds: [ID!]!): Boolean!",
         "createAudioPlaylist(name: String!): AudioPlaylist!",
         "updateAudioPlaylist(id: ID!, name: String!): AudioPlaylist!",
         "deleteAudioPlaylist(id: ID!): Boolean!",
-        "addAudioPlaylistItems(id: ID!, paths: [String!]!): Boolean!",
-        "removeAudioPlaylistItem(id: ID!, path: String!): Boolean!",
-        "playAudioPlaylist(id: ID!, path: String, shuffle: Boolean!): AudioItem",
-        "playAllAudios(shuffle: Boolean!): AudioItem",
+        "addAudioPlaylistItems(id: ID!, query: String!): Boolean!",
+        "removeAudioPlaylistItem(id: ID!, query: String!): ActionResult!",
         "chatChannels: [ChatChannel!]!",
         "chatItems(target: String!, query: String!, offset: Int!, limit: Int!): [ChatItem!]!",
         "latestChatItems: [ChatItem!]!",

@@ -53,7 +53,13 @@ fn open_creates_every_table_once() {
     }
     assert!(!tables.iter().any(|t| t == "settings"));
     assert!(!tables.iter().any(|t| t == "audio_playback"));
-    for removed in ["audio_queue_source","audio_play_history","video_play_progress"] { assert!(!tables.iter().any(|table|table==removed)); }
+    for removed in [
+        "audio_queue_source",
+        "audio_play_history",
+        "video_play_progress",
+    ] {
+        assert!(!tables.iter().any(|table| table == removed));
+    }
     for removed in [
         "file_tasks",
         "file_deletions",
@@ -78,10 +84,11 @@ fn open_creates_every_table_once() {
 }
 
 #[test]
-fn source_row_defaults_to_none() {
-    let db = test_db("source_default");
-    let src = crate::db::audio_queue::get_source(&db).unwrap();
-    assert_eq!(src.source, crate::db::audio_queue::QueueSourceKind::None);
-    assert_eq!(src.current_path, "");
-    assert_eq!(src.current_index, -1);
+fn current_track_defaults_to_none() {
+    let db = test_db("current_default");
+    assert_eq!(db.audio_current_media_id(), None);
+    assert_eq!(
+        crate::media::audio::queue::get_audio_current(&db).unwrap(),
+        ""
+    );
 }

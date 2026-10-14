@@ -12,6 +12,7 @@ fn replace_queue_items_assigns_dense_sort_orders() {
         &db,
         &[
             crate::db::QueueItem {
+                media_id: format!("test:{}", "/a.mp3"),
                 path: "/a.mp3".into(),
                 sort_order: 99,
                 title: "A".into(),
@@ -19,6 +20,7 @@ fn replace_queue_items_assigns_dense_sort_orders() {
                 duration_ms: 1,
             },
             crate::db::QueueItem {
+                media_id: format!("test:{}", "/b.mp3"),
                 path: "/b.mp3".into(),
                 sort_order: -5,
                 title: "B".into(),
@@ -47,6 +49,7 @@ fn history_upsert_and_trim_are_deterministic() {
     let mk = |path: &str, played_at: &str| {
         register_audio(&db, &audio(path, "t", 1));
         crate::db::PlayHistory {
+            media_id: format!("test:{}", path),
             path: path.into(),
             title: "T".into(),
             artist: String::new(),
@@ -88,6 +91,7 @@ fn remove_by_paths_deletes_only_matches() {
     let history = |p: &str| {
         register_audio(&db, &audio(p, "t", 1));
         crate::db::PlayHistory {
+            media_id: format!("test:{}", p),
             path: p.into(),
             title: String::new(),
             artist: String::new(),
@@ -108,8 +112,16 @@ fn remove_by_paths_deletes_only_matches() {
 #[test]
 fn playlist_item_counts_and_bulk_delete() {
     let db = test_db("pl_counts");
-    register_audio_tracks(&db,&[audio("/1.mp3","One",0),audio("/2.mp3","Two",0),audio("/3.mp3","Three",0)]);
+    register_audio_tracks(
+        &db,
+        &[
+            audio("/1.mp3", "One", 0),
+            audio("/2.mp3", "Two", 0),
+            audio("/3.mp3", "Three", 0),
+        ],
+    );
     let item = |pl: &str, path: &str, sort: i64| crate::db::PlaylistItem {
+        media_id: format!("test:{path}"),
         id: format!("{pl}-{path}"),
         playlist_id: pl.into(),
         audio_path: path.into(),

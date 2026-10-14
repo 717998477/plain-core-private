@@ -390,23 +390,3 @@ fn serialized_field_names_are_snake_case() {
     // The Rust keyword field is exposed under its plain name, not `r#type`.
     assert_eq!(object["type"], "WEB");
 }
-
-/// The queue-source enum serializes as the plain-app enum names.
-#[test]
-fn queue_source_kind_serializes_as_upper_snake() {
-    use crate::db::models::audio_queue::QueueSourceKind;
-    assert_eq!(
-        serde_json::to_string(&QueueSourceKind::None).unwrap(),
-        "\"NONE\""
-    );
-    assert_eq!(
-        serde_json::to_string(&QueueSourceKind::Playlist).unwrap(),
-        "\"PLAYLIST\""
-    );
-    assert_eq!(
-        serde_json::to_string(&QueueSourceKind::Library).unwrap(),
-        "\"LIBRARY\""
-    );
-    let back: QueueSourceKind = serde_json::from_str("\"LIBRARY\"").unwrap();
-    assert_eq!(back, QueueSourceKind::Library);
-}

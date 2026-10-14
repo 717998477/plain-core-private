@@ -18,12 +18,19 @@ fn stub(host: Arc<Host>, db: Arc<Db>, handler: impl Fn(&str, Value) -> Value + S
                 || request["method"] == "audioMetadata"
             {
                 let params = &request["params"];
-                let mut rows = db.with_conn(|conn|conn.prepare("SELECT id,path,title,artist,duration_ms,cover_image_id FROM media_items WHERE data_type=1 UNION SELECT media_id,path,title,artist,duration_ms,album_id FROM platform_audio_media").unwrap().query_map([],|row|Ok(json!({"mediaId":row.get::<_,String>(0)?,"path":row.get::<_,String>(1)?,"title":row.get::<_,String>(2)?,"artist":row.get::<_,String>(3)?,"durationMs":row.get::<_,i64>(4)?,"albumId":row.get::<_,String>(5)?,"aliases":[]}))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
-                let paths = if request["method"] == "audioMetadata" {
+                let mut rows = db.with_conn(|conn|conn.prepare("SELECT id,path,title,artist,duration_ms,cover_image_id FROM media_items WHERE data_type=1 UNION SELECT media_id,path,title,artist,duration_ms,album_id FROM platform_audio_media UNION SELECT id,path,title,artist,duration_ms,'' FROM media_items WHERE data_type=1").unwrap().query_map([],|row|Ok(json!({"mediaId":row.get::<_,String>(0)?,"path":row.get::<_,String>(1)?,"title":row.get::<_,String>(2)?,"artist":row.get::<_,String>(3)?,"durationMs":row.get::<_,i64>(4)?,"albumId":row.get::<_,String>(5)?,"aliases":[]}))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
+                let mut paths = if request["method"] == "audioMetadata" {
                     vec![params["path"].clone()]
                 } else {
                     params["paths"].as_array().unwrap().clone()
                 };
+                if let Some(ids) = params["ids"].as_array() {
+                    paths.extend(ids.iter().filter_map(|id| {
+                        id.as_str()
+                            .and_then(|id| id.strip_prefix("mock:"))
+                            .map(|path| json!(path))
+                    }));
+                }
                 for path in &paths {
                     if rows.iter().any(|row| row["path"] == *path) {
                         continue;
@@ -49,6 +56,14 @@ fn stub(host: Arc<Host>, db: Arc<Db>, handler: impl Fn(&str, Value) -> Value + S
                             .collect::<Vec<_>>()
                     )
                 }
+            } else if request["method"] == "systemAudioSearchTracks" {
+                let mut rows = handler("systemAudioSearchTracks", request["params"].clone());
+                if let Some(items) = rows.as_array_mut() {
+                    for item in items {
+                        item["mediaId"] = json!(format!("mock:{}", item["path"].as_str().unwrap()));
+                    }
+                }
+                rows
             } else if request["method"] == "systemAudioPlaybackPermission" {
                 json!(true)
             } else {
@@ -135,6 +150,7 @@ async fn query(schema: &PublicSchema, document: &str) -> Value {
 
 fn track(path: &str, title: &str, artist: &str) -> AudioTrack {
     AudioTrack {
+        media_id: None,
         path: path.to_string(),
         title: title.to_string(),
         artist: artist.to_string(),
@@ -211,17 +227,17 @@ async fn playback_joins_the_queue_state_and_the_player_state() {
         .unwrap();
     query(
         &schema,
-        r#"mutation { playAudio(path: "/music/one.mp3") { title path } }"#,
+        r#"mutation { playAudioByPath(path: "/music/one.mp3") { title path } }"#,
     )
     .await;
 
     let state = query(
         &schema,
-        r#"query { audioPlayback { currentPath mode isPlaying positionMs } }"#,
+        r#"query { audioPlayback { path mode isPlaying positionMs } }"#,
     )
     .await;
     let playback = &state["data"]["audioPlayback"];
-    assert_eq!(playback["currentPath"], "/music/one.mp3", "{state}");
+    assert_eq!(playback["path"], "/music/one.mp3", "{state}");
     assert_eq!(playback["mode"], "SHUFFLE");
     assert_eq!(playback["isPlaying"], true);
     assert_eq!(playback["positionMs"], 4200);
@@ -231,7 +247,7 @@ async fn playback_joins_the_queue_state_and_the_player_state() {
 /// T58). `playAudio` used to append the track to the manual queue, and enqueue
 /// moves an already-queued track to the tail — so every desktop play jumped the
 /// clicked track to the end. Queueing is the caller's job: they combine
-/// `addAudiosToQueue`/`enqueue` with the play.
+/// `addAudioToQueue`/`enqueue` with the play.
 #[tokio::test]
 async fn playing_a_track_never_changes_the_queue() {
     let (_dir, schema) = fixture_with(GRANTED, |method, params| match method {
@@ -253,11 +269,11 @@ async fn playing_a_track_never_changes_the_queue() {
 
     let played = query(
         &schema,
-        r#"mutation { playAudio(path: "/music/one.mp3") { path } }"#,
+        r#"mutation { playAudioByPath(path: "/music/one.mp3") { path } }"#,
     )
     .await;
     assert_eq!(
-        played["data"]["playAudio"]["path"], "/music/one.mp3",
+        played["data"]["playAudioByPath"]["path"], "/music/one.mp3",
         "{played}"
     );
 
@@ -286,13 +302,11 @@ async fn an_idle_player_reports_a_null_current_path() {
     let (_dir, schema) = fixture();
     let state = query(
         &schema,
-        r#"query { audioPlayback { currentPath mode isPlaying positionMs } }"#,
+        r#"query { audioPlayback { path mode isPlaying positionMs } }"#,
     )
     .await;
-    assert!(
-        state["data"]["audioPlayback"]["currentPath"].is_null(),
-        "{state}"
-    );
+    assert!(state["errors"].is_null(), "{state}");
+    assert!(state["data"]["audioPlayback"]["path"].is_null(), "{state}");
     assert_eq!(state["data"]["audioPlayback"]["mode"], "REPEAT");
 }
 
@@ -302,20 +316,32 @@ async fn empty_lyrics_are_null_rather_than_an_empty_string() {
         "systemAudioLyrics" => json!(""),
         _other => panic!("unexpected host call {_other}"),
     });
-    let none = query(&schema, r#"query { audioLyrics(path: "/music/a.mp3") }"#).await;
+    seed_queue(&schema, &[("/music/a.mp3", "One", "Artist")]);
+    let none = query(
+        &schema,
+        r#"query { audioLyrics(mediaId: "test:/music/a.mp3") }"#,
+    )
+    .await;
+    assert!(none["errors"].is_null(), "{none}");
     assert!(none["data"]["audioLyrics"].is_null(), "{none}");
 
     let (_dir, schema) = fixture_with(GRANTED, |method, _params| match method {
         "systemAudioLyrics" => json!("la la la"),
         _other => panic!("unexpected host call {_other}"),
     });
-    let some = query(&schema, r#"query { audioLyrics(path: "/music/a.mp3") }"#).await;
+    seed_queue(&schema, &[("/music/a.mp3", "One", "Artist")]);
+    let some = query(
+        &schema,
+        r#"query { audioLyrics(mediaId: "test:/music/a.mp3") }"#,
+    )
+    .await;
     assert_eq!(some["data"]["audioLyrics"], "la la la");
 }
 
 #[tokio::test]
 async fn clearing_empties_the_queue_and_tells_the_player() {
     let (_dir, schema) = fixture();
+    seed_queue(&schema, &[("/music/one.mp3", "One", "Artist")]);
     seed_queue(&schema, &[("/music/a.mp3", "Alpha", "One")]);
     let mut events = schema
         .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()
@@ -342,7 +368,7 @@ async fn reordering_writes_the_order_the_client_sent() {
     );
     let ok = query(
         &schema,
-        r#"mutation { reorderAudioQueue(paths: ["/music/c.mp3", "/music/a.mp3", "/music/b.mp3"]) }"#,
+        r#"mutation { reorderAudioQueue(mediaIds: ["test:/music/c.mp3", "test:/music/a.mp3", "test:/music/b.mp3"]) }"#,
     )
     .await;
     assert_eq!(ok["data"]["reorderAudioQueue"], true);
@@ -377,7 +403,7 @@ async fn removing_one_item_leaves_the_rest_of_the_queue() {
     );
     let ok = query(
         &schema,
-        r#"mutation { removeAudioFromQueue(path: "/music/a.mp3") }"#,
+        r#"mutation { removeAudioFromQueue(mediaId: "test:/music/a.mp3") }"#,
     )
     .await;
     assert_eq!(ok["data"]["removeAudioFromQueue"], true);
@@ -399,6 +425,18 @@ async fn removing_one_item_leaves_the_rest_of_the_queue() {
 #[tokio::test]
 async fn a_playlist_is_created_renamed_and_empties_into_a_count() {
     let (_dir, schema) = fixture();
+    seed_queue(
+        &schema,
+        &[
+            ("/music/a.mp3", "Track", "Artist"),
+            ("/music/b.mp3", "Track", "Artist"),
+        ],
+    );
+    let db = database(&schema);
+    db.with_conn(|c|c.execute("INSERT INTO audio_playlists(id,name,created_at,updated_at) VALUES('seed','Seed','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')",[])).unwrap();
+    let tracks = domain::queue_page(db, 0, 10, "").unwrap();
+    domain::add_playlist_items(db, "seed", &tracks).unwrap();
+
     let created = query(
         &schema,
         r#"mutation { createAudioPlaylist(name: "Focus") { id name itemCount } }"#,
@@ -411,16 +449,14 @@ async fn a_playlist_is_created_renamed_and_empties_into_a_count() {
 
     let added = query(
         &schema,
-        &format!(
-            r#"mutation {{ addAudioPlaylistItems(id: "{id}", paths: ["/music/a.mp3", "/music/b.mp3"]) }}"#
-        ),
+        &format!(r#"mutation {{ addAudioPlaylistItems(id: "{id}", query: "playlist_id:seed") }}"#),
     )
     .await;
     assert_eq!(added["data"]["addAudioPlaylistItems"], true, "{added}");
 
     let count = query(
         &schema,
-        &format!(r#"query {{ audioPlaylistItemCount(id: "{id}") }}"#),
+        &format!(r#"query {{ audioPlaylistItemCount(id: "{id}", query: "") }}"#),
     )
     .await;
     assert_eq!(count["data"]["audioPlaylistItemCount"], 2, "{count}");
@@ -438,7 +474,7 @@ async fn a_playlist_is_created_renamed_and_empties_into_a_count() {
     let listed = query(&schema, r#"query { audioPlaylists { id name itemCount } }"#).await;
     assert_eq!(
         listed["data"]["audioPlaylists"].as_array().map(Vec::len),
-        Some(1)
+        Some(2)
     );
 
     let _ = query(
@@ -449,13 +485,19 @@ async fn a_playlist_is_created_renamed_and_empties_into_a_count() {
     let after = query(&schema, r#"query { audioPlaylists { id } }"#).await;
     assert_eq!(
         after["data"]["audioPlaylists"].as_array().map(Vec::len),
-        Some(0)
+        Some(1)
     );
 }
 
 #[tokio::test]
 async fn removing_a_playlist_item_lowers_its_count() {
     let (_dir, schema) = fixture();
+    seed_queue(&schema, &[("/music/a.mp3", "Track", "Artist")]);
+    let db = database(&schema);
+    db.with_conn(|c|c.execute("INSERT INTO audio_playlists(id,name,created_at,updated_at) VALUES('seed','Seed','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')",[])).unwrap();
+    let tracks = domain::queue_page(db, 0, 10, "").unwrap();
+    domain::add_playlist_items(db, "seed", &tracks).unwrap();
+
     let created = query(
         &schema,
         r#"mutation { createAudioPlaylist(name: "Mix") { id } }"#,
@@ -467,23 +509,23 @@ async fn removing_a_playlist_item_lowers_its_count() {
         .to_string();
     let _ = query(
         &schema,
-        &format!(r#"mutation {{ addAudioPlaylistItems(id: "{id}", paths: ["/music/a.mp3"]) }}"#),
+        &format!(r#"mutation {{ addAudioPlaylistItems(id: "{id}", query: "playlist_id:seed") }}"#),
     )
     .await;
 
     let removed = query(
         &schema,
-        &format!(r#"mutation {{ removeAudioPlaylistItem(id: "{id}", path: "/music/a.mp3") }}"#),
+        &format!(r#"mutation {{ removeAudioPlaylistItem(id: "{id}", query: "ids:test:/music/a.mp3") {{ affectedCount }} }}"#),
     )
     .await;
     assert_eq!(
-        removed["data"]["removeAudioPlaylistItem"], true,
+        removed["data"]["removeAudioPlaylistItem"]["affectedCount"], 1,
         "{removed}"
     );
 
     let count = query(
         &schema,
-        &format!(r#"query {{ audioPlaylistItemCount(id: "{id}") }}"#),
+        &format!(r#"query {{ audioPlaylistItemCount(id: "{id}", query: "") }}"#),
     )
     .await;
     assert_eq!(count["data"]["audioPlaylistItemCount"], 0, "{count}");
@@ -492,44 +534,6 @@ async fn removing_a_playlist_item_lowers_its_count() {
 /// An empty playlist has nothing to start, and the contract types the result
 /// nullable for exactly that. An error would make "nothing to play" look
 /// like a failure.
-#[tokio::test]
-async fn playing_an_empty_playlist_is_null_rather_than_an_error() {
-    let (_dir, schema) = fixture();
-    let created = query(
-        &schema,
-        r#"mutation { createAudioPlaylist(name: "Nothing") { id } }"#,
-    )
-    .await;
-    let id = created["data"]["createAudioPlaylist"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let played = query(
-        &schema,
-        &format!(r#"mutation {{ playAudioPlaylist(id: "{id}", shuffle: false) {{ title }} }}"#),
-    )
-    .await;
-    assert!(
-        played["errors"].as_array().is_none_or(Vec::is_empty),
-        "{played}"
-    );
-    assert!(played["data"]["playAudioPlaylist"].is_null(), "{played}");
-}
-
-#[tokio::test]
-async fn playing_the_library_is_null_when_nothing_matches() {
-    let (_dir, schema) = fixture();
-    let played = query(
-        &schema,
-        r#"mutation { playAllAudios(shuffle: false) { title } }"#,
-    )
-    .await;
-    assert!(
-        played["errors"].as_array().is_none_or(Vec::is_empty),
-        "{played}"
-    );
-    assert!(played["data"]["playAllAudios"].is_null(), "{played}");
-}
 
 #[tokio::test]
 async fn play_mode_is_written_and_read_from_rust_preferences() {
@@ -604,7 +608,7 @@ async fn a_library_row_keeps_the_album_art_reference() {
 }
 
 #[tokio::test]
-async fn playlist_items_accept_the_original_audio_item_fragment_and_path() {
+async fn playlist_items_expose_catalog_identity_and_path() {
     let (_dir, schema) = fixture();
     let db = database(&schema);
     seed_queue(
@@ -635,4 +639,124 @@ async fn playlist_items_accept_the_original_audio_item_fragment_and_path() {
             {"__typename":"AudioItem", "title":"Second", "artist":"Artist", "path":"/music/second.mp3", "durationMs":1000}
         ])
     );
+}
+
+#[tokio::test]
+async fn adding_tracks_reads_every_search_page_without_an_item_limit() {
+    let (_dir, schema) = fixture_with(GRANTED, |method, params| match method {
+        "systemAudioSearchTracks" => {
+            let offset = params["offset"].as_u64().unwrap() as usize;
+            json!((offset..(offset+500).min(1205)).map(|i|json!({"path":format!("/track/{i}"),"title":format!("Track {i}"),"artist":"Artist","durationMs":123})).collect::<Vec<_>>())
+        }
+        "systemAudioPlaylistTracks" => json!(
+            params["paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|path| json!({"path":path,"title":"Track","artist":"Artist","durationMs":123}))
+                .collect::<Vec<_>>()
+        ),
+        method => panic!("unexpected {method}"),
+    });
+    let added = query(
+        &schema,
+        r#"mutation { addAudioToQueue(query:"trash:false") }"#,
+    )
+    .await;
+    assert!(added["errors"].is_null(), "{added}");
+    let page=query(&schema,r#"{ audioQueueItemCount audioQueueItems(query:"",offset:1200,limit:200) { mediaId path } }"#).await;
+    assert_eq!(page["data"]["audioQueueItemCount"], 1205, "{page}");
+    assert_eq!(page["data"]["audioQueueItems"].as_array().unwrap().len(), 5);
+    assert_eq!(
+        page["data"]["audioQueueItems"][4]["mediaId"],
+        "mock:/track/1204"
+    );
+}
+
+#[tokio::test]
+async fn playing_by_id_leaves_order_and_removing_current_clears_the_engine() {
+    let clears = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = clears.clone();
+    let (_dir, schema) = fixture_with(GRANTED, move |method, params| match method {
+        "audioEngineCommand" => {
+            assert_eq!(params["action"], "CLEAR");
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            engine_report(&params)
+        }
+        "systemAudioPlaybackState" => json!({"isPlaying":false,"positionMs":0}),
+        method => panic!("unexpected {method}"),
+    });
+    seed_queue(
+        &schema,
+        &[
+            ("/one", "One", "Artist"),
+            ("/two", "Two", "Artist"),
+            ("/three", "Three", "Artist"),
+        ],
+    );
+    let played = query(
+        &schema,
+        r#"mutation { playAudio(mediaId:"test:/two") { mediaId path } }"#,
+    )
+    .await;
+    assert_eq!(
+        played["data"]["playAudio"]["mediaId"], "test:/two",
+        "{played}"
+    );
+    query(
+        &schema,
+        r#"mutation { reorderAudioQueue(mediaIds:["test:/two","test:/one"]) }"#,
+    )
+    .await;
+    let page = query(
+        &schema,
+        r#"{ audioQueueItems(query:"",offset:0,limit:10) { mediaId } }"#,
+    )
+    .await;
+    assert_eq!(
+        page["data"]["audioQueueItems"],
+        json!([{"mediaId":"test:/two"},{"mediaId":"test:/one"},{"mediaId":"test:/three"}])
+    );
+    let removed = query(
+        &schema,
+        r#"mutation { removeAudioFromQueue(mediaId:"test:/two") }"#,
+    )
+    .await;
+    assert!(removed["errors"].is_null(), "{removed}");
+    let state = query(&schema, "{ audioPlayback { mediaId path } }").await;
+    assert!(state["errors"].is_null(), "{state}");
+    assert_eq!(
+        state["data"]["audioPlayback"]["mediaId"],
+        Value::Null,
+        "{state}"
+    );
+    assert_eq!(state["data"]["audioPlayback"]["path"], Value::Null);
+    assert_eq!(clears.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn playlist_query_removal_reports_actual_count_without_changing_other_lists() {
+    let (_dir, schema) = fixture();
+    seed_queue(
+        &schema,
+        &[("/one", "One", "Artist"), ("/two", "Two", "Artist")],
+    );
+    let db = database(&schema);
+    let first = domain::create_playlist(db, "First").unwrap();
+    let second = domain::create_playlist(db, "Second").unwrap();
+    let tracks = domain::queue_page(db, 0, 10, "").unwrap();
+    domain::add_playlist_items(db, &first.id, &tracks).unwrap();
+    domain::add_playlist_items(db, &second.id, &tracks).unwrap();
+    let page=query(&schema,&format!(r#"{{ audioPlaylistItems(id:"{}",query:"text:Two",offset:0,limit:10) {{ mediaId }} audioPlaylistItemCount(id:"{}",query:"text:Two") }}"#,first.id,first.id)).await;
+    assert_eq!(page["data"]["audioPlaylistItemCount"], 1, "{page}");
+    assert_eq!(
+        page["data"]["audioPlaylistItems"],
+        json!([{"mediaId":"test:/two"}])
+    );
+    let removed=query(&schema,&format!(r#"mutation {{ removeAudioPlaylistItem(id:"{}",query:"ids:test:/one,test:/absent") {{ affectedCount }} }}"#,first.id)).await;
+    assert_eq!(
+        removed["data"]["removeAudioPlaylistItem"]["affectedCount"], 1,
+        "{removed}"
+    );
+    assert_eq!(domain::playlist_item_count(db, &second.id).unwrap(), 2);
 }

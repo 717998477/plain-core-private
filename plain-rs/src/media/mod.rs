@@ -5,7 +5,7 @@
 //! plain-app's Room tables) so NAS and desktop run identical behavior:
 //! both consumers call these functions against a [`crate::db::Db`]
 //! SQLite file; only the media-library resolution seam
-//! ([`crate::media::audio::queue::LibraryTracks`]) is implemented per platform.
+//! Metadata and playback execution are implemented per platform.
 
 pub mod duration_cache;
 

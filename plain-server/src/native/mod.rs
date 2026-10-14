@@ -30,3 +30,6 @@ pub mod discovery;
 
 #[cfg(feature = "core")]
 pub mod media_catalog;
+
+#[cfg(all(feature = "core", feature = "media"))]
+pub mod audio;

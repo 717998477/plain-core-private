@@ -104,10 +104,8 @@ pub fn cleanup(
         if kind==DataType::Audio && matches!(action,Action::Trash|Action::Delete) { audio_queue::remove_paths_conn(&tx,&paths, state)?; }
         if kind==DataType::Audio && action==Action::Move {
             if let Some(item)=successful.iter().find(|item|item.path==state.playback.path) {
-                let mut source=crate::db::audio_queue::io::get_source(tx,state)?;
-                source.current_path=item.destination_path.clone();
-                source.current_index=-1;
-                crate::db::audio_queue::io::save_source(tx,&source,state)?;
+                crate::db::audio_queue::io::save_current(tx,&item.destination_path,state)?;
+                state.select(&item.destination_path)?;
             }
         }
 

@@ -5,7 +5,6 @@ use crate::media::audio::playback as audio_playback;
 use crate::media::audio::playback::Playback;
 use crate::media::audio::queue as audio_queue;
 use crate::media::audio::queue::AudioTrack;
-use crate::media::audio::queue::LibraryTracks;
 use crate::prefs::Prefs;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
@@ -38,7 +37,7 @@ pub struct EngineReport {
     pub revision: i64,
     pub loaded: bool,
 }
-pub trait Engine: LibraryTracks {
+pub trait Engine {
     fn metadata(&mut self, path: &str) -> DomainResult<AudioTrack>;
     fn execute(&mut self, command: &EngineCommand) -> DomainResult<EngineReport>;
 }
@@ -47,12 +46,11 @@ pub fn play_track(
     prefs: &Prefs,
     engine: &mut impl Engine,
     track: AudioTrack,
-    enqueue: bool,
 ) -> DomainResult<Playback> {
     if track.path.trim().is_empty() || track.duration_ms < 0 {
         return Err(DomainError::Other("invalid audio track".into()));
     }
-    let playback = audio_playback::prepare_track(db, &track, enqueue)?;
+    let playback = audio_playback::prepare_track(db, &track)?;
     dispatch(
         db,
         prefs,
@@ -77,7 +75,7 @@ pub fn play_path(
     if track.path != path {
         return Err(DomainError::Other("audio metadata path mismatch".into()));
     }
-    play_track(db, prefs, engine, track, true)
+    play_track(db, prefs, engine, track)
 }
 pub fn command(
     db: &Db,
@@ -104,7 +102,6 @@ pub fn command(
             } else {
                 audio_queue::select_next(
                     db,
-                    engine,
                     !matches!(action, Action::Previous),
                     mode == crate::media::audio::play_mode::MediaPlayMode::Shuffle,
                 )?
@@ -154,7 +151,16 @@ pub fn command(
 }
 pub fn clear_engine(db: &Db, prefs: &Prefs, engine: &mut impl Engine) -> DomainResult<Playback> {
     let playback = audio_playback::invalidate(db)?;
-    dispatch(db,prefs,engine,Action::Clear,None,playback,None,false)
+    dispatch(
+        db,
+        prefs,
+        engine,
+        Action::Clear,
+        None,
+        playback,
+        None,
+        false,
+    )
 }
 
 fn dispatch(
@@ -203,7 +209,7 @@ fn dispatch(
     if report.loaded {
         audio_playback::loaded(db, &report.path, revision)?;
     }
-    if !matches!(action,Action::Clear) && !report.path.is_empty() {
+    if !matches!(action, Action::Clear) && !report.path.is_empty() {
         audio_playback::report(db, &report.path, revision, report.position_ms)?;
     }
     audio_playback::snapshot(db)

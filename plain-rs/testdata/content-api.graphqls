@@ -48,16 +48,9 @@ enum AudioCommand {
 	SET_SPEED
 }
 
-type AudioHostSource {
-	source: String!
-	playlistId: ID!
-	currentPath: String!
-	currentIndex: Long!
-	sortBy: String!
-}
-
 input AudioHostTrackInput {
 	path: String!
+	mediaId: ID
 	title: String!
 	artist: String!
 	albumId: ID!
@@ -65,13 +58,9 @@ input AudioHostTrackInput {
 }
 
 type AudioItem {
+	mediaId: ID
 	title: String!
 	artist: String!
-	"""
-	Album id from the platform catalog, null when the track carries no
-	album metadata.
-	"""
-	albumId: ID
 	path: String!
 	durationMs: Long!
 }
@@ -456,25 +445,16 @@ type Mutation {
 	deletePlaylistVideos(paths: [String!]!): ActionResult!
 	removeFileHostTask(clientId: String!, id: ID!): Boolean!
 	createFileHostTask(clientId: String!, type: FileTaskType!, title: String!, ops: [FileHostTaskOpInput!]!): FileHostTask!
-	audioHostEnqueue(items: [AudioHostTrackInput!]!, playNext: Boolean!): Boolean!
-	audioHostRemoveQueued(path: String!): Boolean!
-	audioHostReorder(paths: [String!]!): Boolean!
-	audioHostMoveQueued(from: Int!, to: Int!): Boolean!
-	audioHostClear: Boolean!
+	audioHostEnqueue(mediaIds: [ID!]!): Boolean!
 	audioHostRemovePaths(paths: [String!]!): Boolean!
-	audioHostSetCurrent(path: String!): Boolean!
-	audioHostOnPlaying(path: String!, title: String!, artist: String!, durationMs: Long!): Boolean!
-	audioHostSetPlaylistSource(id: ID!, startPath: String): AudioItem
-	audioHostSetLibrarySource(startPath: String, shuffle: Boolean!, sortBy: String!): AudioItem
+	audioHostSetCurrent(mediaId: ID): Boolean!
 	audioHostResolveNext(isNext: Boolean!, shuffle: Boolean!): AudioItem
-	audioHostAddPlaylistItems(id: ID!, items: [AudioHostTrackInput!]!): Int!
-	audioHostRemovePlaylistItems(id: ID!, paths: [String!]!): Boolean!
-	audioHostRecordHistory(path: String!, title: String!, artist: String!, durationMs: Long!): Boolean!
+	audioHostAddPlaylistItems(id: ID!, mediaIds: [ID!]!): Int!
 	audioReportStarted(track: AudioHostTrackInput!, revision: Long!): Boolean!
 	audioReportProgress(path: String!, revision: Long!, positionMs: Long!): Boolean!
 	audioInvalidateEngine: AudioPlayback!
 	audioCommand(action: AudioCommand!, positionMs: Long!, speed: Float!): AudioPlayback!
-	audioPlayTrack(track: AudioHostTrackInput!, enqueue: Boolean!): AudioPlayback!
+	audioPlayTrack(mediaId: ID!): AudioPlayback!
 	audioPlayPath(path: String!): AudioPlayback!
 	saveVideoPlayProgress(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
 	recordVideoPlay(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
@@ -678,8 +658,7 @@ type Query {
 	verifyAdbToken(token: String!): Boolean!
 	fileHostTaskRecord(clientId: String!, id: ID!): FileHostTask
 	fileHostTasks(clientId: String!, query: String!, offset: Int!, limit: Int!): [FileHostTask!]!
-	audioSource: AudioHostSource!
-	audioQueuedPaths: [String!]!
+	audioQueuedMediaIds: [ID!]!
 	audioArtistPlayCounts: [AudioArtistPlayCount!]!
 	audioPlayback: AudioPlayback!
 	videoPlayProgress(mediaId: ID!): VideoPlayProgress

@@ -266,6 +266,12 @@ impl ContentServer {
         ))
     }
 
+    #[cfg(feature = "media")]
+    pub fn native_audio(&self) -> Result<crate::native::audio::NativeAudio, String> {
+        self.state.native_client_id()?;
+        Ok(crate::native::audio::NativeAudio::new(self.state.clone()))
+    }
+
     pub fn native_media_catalog(
         &self,
     ) -> Result<crate::native::media_catalog::NativeMediaCatalog, String> {

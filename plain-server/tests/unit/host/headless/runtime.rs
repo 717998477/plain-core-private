@@ -350,3 +350,89 @@ async fn recent_files_and_image_info_reuse_shared_storage_and_metadata() {
     );
     core.stop_core().await;
 }
+
+#[tokio::test]
+async fn audio_queue_uses_the_registered_host_and_keeps_unindexed_playback_temporary() {
+    let directory = tempfile::tempdir().unwrap();
+    let indexed = directory.path().join("indexed.mp3");
+    let raw = directory.path().join("raw.mp3");
+    let fixture = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../plain-rs/testdata/audio-untagged.mp3"
+    ));
+    std::fs::copy(fixture, &indexed).unwrap();
+    std::fs::copy(fixture, &raw).unwrap();
+    let core = Arc::new(ContentServer::open(directory.path()).unwrap());
+    let db = core.runtime_state().db.clone();
+    let rows = db
+        .record_media_files(&[plain_rs::db::MediaFileMetadata {
+            data_type: plain_rs::enums::DataType::Audio,
+            path: indexed.to_string_lossy().into_owned(),
+            title: "Indexed".into(),
+            artist: "Artist".into(),
+            bucket_id: String::new(),
+            size_bytes: 1,
+            duration_ms: 123,
+            cover_image_id: None,
+            width: 0,
+            height: 0,
+            rotation: 0,
+            taken_at: None,
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            updated_at: "2026-01-01T00:00:00.000Z".into(),
+        }])
+        .unwrap();
+    let id = rows[0].id.clone();
+    let runtime = Arc::new(Runtime::new(core.clone(), Vec::new()));
+    let runner = tokio::spawn(runtime.run());
+    let executor = core.native_graphql().unwrap();
+    let response=executor.execute(format!(r#"mutation {{ addAudioToQueue(query:"ids:{id}") playAudio(mediaId:"{id}") {{ mediaId path }} }}"#).into()).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["playAudio"]["mediaId"],
+        id
+    );
+    let response=executor.execute("{ audioQueueItemCount audioQueueItems(query:\"\",offset:0,limit:200) { mediaId } audioPlayback { mediaId isPlaying } }".into()).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let page = response.data.into_json().unwrap();
+    assert_eq!(page["audioQueueItemCount"], 1);
+    assert_eq!(page["audioQueueItems"][0]["mediaId"], id);
+    assert_eq!(page["audioPlayback"]["mediaId"], id);
+    assert_eq!(page["audioPlayback"]["isPlaying"], false);
+    let response = executor
+        .execute(format!(r#"mutation {{ removeAudioFromQueue(mediaId:"{id}") }}"#).into())
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let response = executor
+        .execute(
+            format!(
+                r#"mutation {{ playAudioByPath(path:{}) {{ mediaId path }} }}"#,
+                serde_json::to_string(&raw.to_string_lossy()).unwrap()
+            )
+            .into(),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let result = response.data.into_json().unwrap();
+    assert!(result["playAudioByPath"]["mediaId"].is_null());
+    assert_eq!(
+        result["playAudioByPath"]["path"],
+        raw.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        db.media_file_count(plain_rs::enums::DataType::Audio)
+            .unwrap(),
+        1
+    );
+    assert_eq!(plain_rs::media::audio::queue::queue_total(&db).unwrap(), 0);
+    let response = executor
+        .execute("mutation { clearAudioQueue }".into())
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        plain_rs::media::audio::queue::get_audio_current(&db).unwrap(),
+        ""
+    );
+    core.stop_core().await;
+    runner.await.unwrap().unwrap();
+}

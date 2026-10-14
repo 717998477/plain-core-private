@@ -1,4 +1,4 @@
-use crate::db::{Db, MediaFileMetadata, QueueSource, QueueSourceKind, TrashedMessageRow};
+use crate::db::{Db, MediaFileMetadata, TrashedMessageRow};
 use crate::enums::DataType;
 use std::path::Path;
 use std::sync::Arc;
@@ -55,34 +55,23 @@ fn installed_schema_matches_generated_definitions() {
 }
 
 #[test]
-fn queue_source_reopens_from_preferences_without_playback_progress() {
+fn current_track_reopens_from_preferences_without_playback_progress() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db");
     let db = Db::open(&path).unwrap();
     let id = register(&db);
-    let source = QueueSource {
-        source: QueueSourceKind::Library,
-        current_path: "/track.mp3".into(),
-        current_index: 3,
-        sort_by: "NAME_ASC".into(),
-        ..QueueSource::default()
-    };
-    crate::db::audio_queue::save_source(&db, &source).unwrap();
+    crate::media::audio::queue::save_audio_current(&db, "/track.mp3").unwrap();
     crate::media::audio::playback::seek(&db, 123).unwrap();
     let prefs = crate::prefs::Prefs::load(&crate::prefs::default_path(directory.path())).unwrap();
     let stored = prefs
-        .get::<serde_json::Value>("audio_queue_source")
+        .get::<serde_json::Value>("audio_current_media_id")
         .unwrap()
         .unwrap();
-    assert_eq!(stored["current_media_id"], id);
+    assert_eq!(stored, id);
     assert!(stored.get("current_path").is_none());
     assert!(stored.get("position_ms").is_none());
     drop(db);
     let reopened = Db::open(&path).unwrap();
-    assert_eq!(
-        crate::db::audio_queue::get_source(&reopened).unwrap(),
-        source
-    );
     assert_eq!(
         crate::media::audio::playback::snapshot(&reopened)
             .unwrap()
@@ -103,7 +92,6 @@ fn preference_write_failure_rolls_back_database_and_runtime() {
     assert!(
         db.audio_transaction(|tx, state| {
             tx.execute("UPDATE media_items SET title='Changed'", [])?;
-            state.source.source = QueueSourceKind::Library;
             crate::db::audio_queue::io::save_current(tx, "/track.mp3", state)?;
             state.select("/track.mp3")
         })
@@ -119,7 +107,7 @@ fn preference_write_failure_rolls_back_database_and_runtime() {
     assert_eq!(db.audio_current_media_id(), None);
     assert!(
         prefs
-            .get::<serde_json::Value>("audio_queue_source")
+            .get::<serde_json::Value>("audio_current_media_id")
             .unwrap()
             .is_none()
     );

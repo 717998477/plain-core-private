@@ -29,7 +29,9 @@ async fn progress_updates_do_not_resolve_the_catalog_or_increment_play_counts() 
         }
     });
     let executor = core.native_graphql().unwrap();
-    let response=executor.execute_private(r#"mutation { audioPlayTrack(track:{path:"/one",title:"One",artist:"Test",albumId:"7",durationMs:117123},enqueue:true) { revision } }"#.into()).await;
+    let response = executor
+        .execute_private(r#"mutation { audioPlayTrack(mediaId:"42") { revision } }"#.into())
+        .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let revision = response.data.into_json().unwrap()["audioPlayTrack"]["revision"]
         .as_i64()

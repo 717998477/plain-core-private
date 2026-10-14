@@ -40,7 +40,7 @@ type CapabilityMutation {
 }
 
 type CapabilityQuery {
-	audioLyrics(path: String!): String
+	audioLyrics(mediaId: ID!): String
 	disks: [Disk!]!
 	sessions: [Session!]!
 	auditEvents(query: String!, offset: Int!, limit: Int!): [AuditEvent!]!

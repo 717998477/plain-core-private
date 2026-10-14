@@ -11,7 +11,9 @@ pub struct CapabilityQuery;
 
 #[Object]
 impl CapabilityQuery {
-    async fn audio_lyrics(&self, path: String) -> Result<Option<String>> {
+    async fn audio_lyrics(&self, ctx: &Context<'_>, media_id: ID) -> Result<Option<String>> {
+        let c = ctx.data_unchecked::<Arc<AppCtx>>();
+        let path = plain_rs::media::audio::queue::track_by_id(&c.db, media_id.as_str())?.path;
         tokio::task::spawn_blocking(move || {
             plain_media::metadata::audio::lyrics::extract_lyrics_from_path(&path)
         })

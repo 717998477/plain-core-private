@@ -109,7 +109,6 @@ impl Db {
                         tx.execute(&format!("DELETE FROM {table} WHERE media_id=?1"),[id])?;
                     }
                     if state.current_media_id.as_deref() == Some(id.as_str()) {
-                        state.source.current_index = -1;
                         state.select("")?;
                     }
                 }

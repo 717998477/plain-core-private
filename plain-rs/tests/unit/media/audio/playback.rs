@@ -37,7 +37,8 @@ fn reopening_remembers_only_the_current_track_and_preserves_queue_and_history() 
     register_audio(&db, &track);
     let playlist = audio_queue::create_playlist(&db, "Saved playlist").unwrap();
     audio_queue::add_playlist_items(&db, &playlist.id, std::slice::from_ref(&track)).unwrap();
-    let row = prepare_track(&db, &track, true).unwrap();
+    crate::media::audio::queue::enqueue(&db, std::slice::from_ref(&track), false).unwrap();
+    let row = prepare_track(&db, &track).unwrap();
     loaded(&db, &track.path, row.revision).unwrap();
     assert!(started(&db, &track, row.revision).unwrap());
     seek(&db, 123_456).unwrap();
@@ -53,10 +54,7 @@ fn reopening_remembers_only_the_current_track_and_preserves_queue_and_history() 
         db.media_play_history_get(&id).unwrap().unwrap().position_ms,
         234_567
     );
-    assert_eq!(
-        db.audio_current_media_id().unwrap(),
-        id
-    );
+    assert_eq!(db.audio_current_media_id().unwrap(), id);
     assert!(
         crate::prefs::Prefs::load(&crate::prefs::default_path(dir.path()))
             .unwrap()
@@ -75,12 +73,7 @@ fn reopening_remembers_only_the_current_track_and_preserves_queue_and_history() 
         assert_eq!(state.started_revision, -1);
     });
     assert!(!started(&db, &track, playing.revision).unwrap());
-    assert_eq!(
-        audio_queue::queue_page(&db, &mut audio_queue::NoLibrary, 0, 10, "")
-            .unwrap()
-            .len(),
-        1
-    );
+    assert_eq!(audio_queue::queue_page(&db, 0, 10, "").unwrap().len(), 1);
     assert_eq!(
         audio_queue::history_page(&db, 0, 10, "").unwrap()[0].play_count,
         1
@@ -155,19 +148,17 @@ fn stale_reports_cannot_overwrite_seek_or_returned_track() {
     assert!(report(&db, "one", 0, -1).is_err());
 }
 #[test]
-fn source_and_progress_reset_are_atomic() {
+fn current_and_progress_reset_are_atomic() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("db")).unwrap();
     indexed_current(&db, "one").unwrap();
-    let mut source = audio_queue::source(&db).unwrap();
-    audio_queue::save_source(&db, &source).unwrap();
+    audio_queue::save_audio_current(&db, "one").unwrap();
     seek(&db, 123).unwrap();
     let prefs_path = crate::prefs::default_path(dir.path());
     std::fs::remove_file(&prefs_path).unwrap();
     std::fs::create_dir(&prefs_path).unwrap();
-    source.current_path = "two".into();
-    source.current_index = 99;
-    assert!(audio_queue::save_source(&db, &source).is_err());
+    register_audio(&db, &audio_queue::AudioTrack::from_path_stem("two"));
+    assert!(audio_queue::save_audio_current(&db, "two").is_err());
     assert_eq!(audio_queue::get_audio_current(&db).unwrap(), "one");
     assert_eq!(snapshot(&db).unwrap().position_ms, 123);
     assert_eq!(seek(&db, 456).unwrap().position_ms, 456);
@@ -179,7 +170,7 @@ fn playback_start_is_once_per_revision_and_failed_history_write_can_retry() {
     let db = Db::open(&dir.path().join("db")).unwrap();
     let track = audio_queue::AudioTrack::from_path_stem("one");
     register_audio(&db, &track);
-    let row = prepare_track(&db, &track, true).unwrap();
+    let row = prepare_track(&db, &track).unwrap();
     loaded(&db, &track.path, row.revision).unwrap();
     assert!(started(&db, &track, row.revision).unwrap());
     assert!(!started(&db, &track, row.revision).unwrap());
@@ -187,7 +178,7 @@ fn playback_start_is_once_per_revision_and_failed_history_write_can_retry() {
         audio_queue::history_page(&db, 0, 10, "").unwrap()[0].play_count,
         1
     );
-    let newer = prepare_track(&db, &track, false).unwrap();
+    let newer = prepare_track(&db, &track).unwrap();
     loaded(&db, &track.path, newer.revision).unwrap();
     assert!(!started(&db, &track, row.revision).unwrap());
     db.with_conn(|c| c.execute_batch("CREATE TRIGGER fail_history BEFORE INSERT ON media_play_history BEGIN SELECT RAISE(ABORT,'fail'); END")).unwrap();
@@ -207,12 +198,12 @@ fn buffered_start_survives_pause_resume_and_seek_but_not_track_replacement() {
     let db = Db::open(&dir.path().join("db")).unwrap();
     let track = audio_queue::AudioTrack::from_path_stem("one");
     register_audio(&db, &track);
-    let first = prepare_track(&db, &track, false).unwrap();
+    let first = prepare_track(&db, &track).unwrap();
     loaded(&db, &track.path, first.revision).unwrap();
     invalidate(&db).unwrap();
     seek(&db, 100).unwrap();
     assert!(started(&db, &track, first.revision).unwrap());
-    let next = prepare_track(&db, &track, false).unwrap();
+    let next = prepare_track(&db, &track).unwrap();
     loaded(&db, &track.path, next.revision).unwrap();
     assert!(!started(&db, &track, first.revision).unwrap());
     assert!(started(&db, &track, next.revision).unwrap());

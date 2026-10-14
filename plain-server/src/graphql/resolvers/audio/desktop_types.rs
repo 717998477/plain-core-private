@@ -4,9 +4,9 @@ use async_graphql::ID;
 use async_graphql::SimpleObject;
 
 /// One track of the playback queue / a playlist (plain-app `AudioItem`).
-/// Stored durations are seconds; the wire field is milliseconds.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct AudioItem {
+    pub media_id: Option<ID>,
     pub title: String,
     pub artist: String,
     pub path: String,
@@ -31,12 +31,13 @@ pub struct AudioPlaylist {
 #[derive(SimpleObject, Clone, Debug)]
 #[graphql(complex)]
 pub struct AudioPlayHistory {
+    pub media_id: ID,
     pub path: String,
     pub title: String,
     pub artist: String,
     #[graphql(name = "durationMs")]
     pub duration_ms: Long,
-    pub play_count: i64,
+    pub play_count: i32,
     #[graphql(skip)]
     pub played_at: String,
 }
@@ -48,7 +49,8 @@ pub struct AudioPlayHistory {
 #[graphql(name = "AudioPlayback")]
 pub struct AudioPlayback {
     pub mode: crate::assembly::enums::MediaPlayMode,
-    pub current_path: Option<String>,
+    pub media_id: Option<ID>,
+    pub path: Option<String>,
     pub is_playing: bool,
     pub position_ms: Long,
 }

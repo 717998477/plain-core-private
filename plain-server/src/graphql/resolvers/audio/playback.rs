@@ -130,19 +130,20 @@ impl AudioPlaybackMutation {
     async fn audio_play_track(
         &self,
         ctx: &Context<'_>,
-        track: crate::graphql::resolvers::audio::host::AudioHostTrackInput,
-        enqueue: bool,
+        media_id: async_graphql::ID,
     ) -> async_graphql::Result<AudioPlayback> {
         let prefs = ctx.data::<Arc<plain_rs::prefs::Prefs>>()?.clone();
         Ok(ctx
             .data::<Arc<Audio>>()?
             .run(move |db, engine| {
-                engine.cache_paths(std::slice::from_ref(&track.path))?;
-                audio_commands::play_track(db, &prefs, engine, track.into(), enqueue)
+                engine.cache_ids(&[media_id.to_string()])?;
+                let track = plain_rs::media::audio::queue::track_by_id(db, media_id.as_str())?;
+                audio_commands::play_track(db, &prefs, engine, track)
             })
             .await?
             .into())
     }
+
     async fn audio_play_path(
         &self,
         ctx: &Context<'_>,

@@ -55,15 +55,10 @@ pub fn report(db: &Db, path: &str, revision: i64, position_ms: i64) -> DomainRes
 pub fn prepare_track(
     db: &Db,
     track: &crate::media::audio::queue::AudioTrack,
-    enqueue: bool,
 ) -> DomainResult<Playback> {
     db.audio_transaction(|tx, state| {
-        if enqueue {
-            crate::media::audio::queue::enqueue_conn(tx, std::slice::from_ref(track), false)?;
-        }
-        let mut source = crate::db::audio_queue::io::get_source(tx, state)?;
-        source.current_path = track.path.clone();
-        crate::db::audio_queue::io::save_source(tx, &source, state)?;
+        crate::db::audio_queue::io::save_current(tx, &track.path, state)?;
+        state.select(&track.path)?;
         state.advance()?;
         state.playback.position_ms = 0;
         Ok(state.playback.clone())

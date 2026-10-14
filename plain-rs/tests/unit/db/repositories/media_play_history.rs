@@ -90,7 +90,7 @@ fn unidentified_audio_plays_without_persisting_references_or_history() {
         .unwrap(),
         0
     );
-    let playback = crate::media::audio::playback::prepare_track(&db, &track, true).unwrap();
+    let playback = crate::media::audio::playback::prepare_track(&db, &track).unwrap();
     crate::media::audio::playback::loaded(&db, &track.path, playback.revision).unwrap();
     assert!(crate::media::audio::playback::started(&db, &track, playback.revision).unwrap());
     assert_eq!(
@@ -110,7 +110,6 @@ fn unidentified_audio_plays_without_persisting_references_or_history() {
                 0
             );
         }
-
     });
 }
 
@@ -129,7 +128,8 @@ fn platform_system_ids_and_uri_aliases_are_used_without_persisting_metadata() {
     )
     .unwrap();
     let track = crate::media::audio::queue::AudioTrack::from_path_stem(uri);
-    let playback = crate::media::audio::playback::prepare_track(&db, &track, true).unwrap();
+    crate::media::audio::queue::enqueue(&db, std::slice::from_ref(&track), false).unwrap();
+    let playback = crate::media::audio::playback::prepare_track(&db, &track).unwrap();
     crate::media::audio::playback::loaded(&db, uri, playback.revision).unwrap();
     crate::media::audio::playback::started(&db, &track, playback.revision).unwrap();
     assert!(
@@ -160,7 +160,12 @@ fn platform_system_ids_and_uri_aliases_are_used_without_persisting_metadata() {
 fn current_system_media_is_restored_after_the_platform_catalog_resolves_it() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     db.use_platform_audio_catalog().unwrap();
-    db.audio().update(|state| { state.current_media_id = Some("42".into()); Ok(()) }).unwrap();
+    db.audio()
+        .update(|state| {
+            state.current_media_id = Some("42".into());
+            Ok(())
+        })
+        .unwrap();
     assert!(
         crate::media::audio::playback::snapshot(&db)
             .unwrap()

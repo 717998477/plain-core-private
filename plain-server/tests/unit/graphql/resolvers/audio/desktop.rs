@@ -1,6 +1,3 @@
-//! Resolver-mapping tests for the audio-queue schema module — the queue
-//! state-machine behavior locks live in plain-rs; these cover the local
-//! seam (NoLibrary library source, mode mapping, DSL text extraction).
 use super::*;
 use plain_rs::db::Db;
 use plain_rs::media::audio::queue::AudioTrack;
@@ -33,15 +30,6 @@ fn mode_maps_names_with_repeat_default() {
         MediaPlayMode::RepeatOne
     ));
 }
-
-#[test]
-fn text_of_extracts_the_dsl_text_field() {
-    assert_eq!(text_of(r#"text:"road song" trash:false"#), "road song");
-    assert_eq!(text_of(""), "");
-}
-
-/// playAudio → queue + history through the core, on the exact handles
-/// the resolvers use (queue renders head→manual→tail, supersede hidden).
 #[test]
 fn play_audio_flow_on_the_resolver_seam() {
     let db = test_library();
@@ -51,15 +39,7 @@ fn play_audio_flow_on_the_resolver_seam() {
     plain_rs::media::audio::queue::on_playing(&db, &track.path, &track.title, &track.artist, 0)
         .unwrap();
 
-    let mut lib = plain_rs::media::audio::queue::NoLibrary;
-    let page = plain_rs::media::audio::queue::queue_page(&db, &mut lib, 0, 10, "").unwrap();
+    let page = plain_rs::media::audio::queue::queue_page(&db, 0, 10, "").unwrap();
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].title, "My Song");
-    // playAllAudios on an empty library returns null (documented local
-    // semantics — no media index yet).
-    assert!(
-        plain_rs::media::audio::queue::set_library_source(&db, &mut lib, None, false, "DATE_DESC")
-            .unwrap()
-            .is_none()
-    );
 }

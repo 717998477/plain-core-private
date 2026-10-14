@@ -30,9 +30,7 @@ pub mod tag;
 #[cfg(feature = "chat")]
 pub use app_file::DAppFile;
 #[cfg(feature = "library")]
-pub use audio_queue::{
-    HISTORY_KEEP, PlayHistory, Playlist, PlaylistItem, QueueItem, QueueSource, QueueSourceKind,
-};
+pub use audio_queue::{HISTORY_KEEP, PlayHistory, Playlist, PlaylistItem, QueueItem};
 #[cfg(feature = "chat")]
 pub use channel::DChannel;
 #[cfg(feature = "chat")]
@@ -67,11 +65,17 @@ mod media_play_history;
 pub use media_play_history::MediaPlayHistoryRow;
 
 #[cfg(feature = "chat")]
-pub(crate) fn serialize_optional_text<S: serde::Serializer>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn serialize_optional_text<S: serde::Serializer>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(value.as_deref().unwrap_or_default())
 }
 
 #[cfg(feature = "chat")]
-pub(crate) fn deserialize_optional_text<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
-    <Option<String> as serde::Deserialize>::deserialize(deserializer).map(|value|value.filter(|value|!value.is_empty()))
+pub(crate) fn deserialize_optional_text<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    <Option<String> as serde::Deserialize>::deserialize(deserializer)
+        .map(|value| value.filter(|value| !value.is_empty()))
 }

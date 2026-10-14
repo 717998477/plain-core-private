@@ -1,32 +1,9 @@
 use super::*;
-use crate::media::audio::queue::NoLibrary;
 #[path = "../../library/fixtures.rs"]
 mod fixtures;
 struct Fake {
     commands: Vec<(Action, String, i64)>,
     fail: bool,
-}
-impl LibraryTracks for Fake {
-    fn library_count(&mut self) -> DomainResult<usize> {
-        NoLibrary.library_count()
-    }
-    fn library_path_at(&mut self, o: usize, s: &str) -> DomainResult<Option<String>> {
-        NoLibrary.library_path_at(o, s)
-    }
-    fn library_tracks_page(
-        &mut self,
-        o: usize,
-        l: usize,
-        s: &str,
-    ) -> DomainResult<Vec<AudioTrack>> {
-        NoLibrary.library_tracks_page(o, l, s)
-    }
-    fn library_locate(&mut self, p: &str, s: &str) -> DomainResult<i64> {
-        NoLibrary.library_locate(p, s)
-    }
-    fn library_contains(&mut self, p: &str) -> DomainResult<bool> {
-        NoLibrary.library_contains(p)
-    }
 }
 impl Engine for Fake {
     fn metadata(&mut self, path: &str) -> DomainResult<AudioTrack> {
@@ -106,10 +83,7 @@ fn restarting_the_core_plays_the_remembered_track_from_zero() {
     command(&db, &prefs, &mut engine, Action::Next, 0, 1.0).unwrap();
     command(&db, &prefs, &mut engine, Action::Seek, 123_456, 1.0).unwrap();
     command(&db, &prefs, &mut engine, Action::Pause, 0, 1.0).unwrap();
-    assert_eq!(
-        db.audio_current_media_id().unwrap(),
-        "test:two"
-    );
+    assert_eq!(db.audio_current_media_id().unwrap(), "test:two");
     drop(db);
     let db = Db::open(&path).unwrap();
     audio_playback::invalidate(&db).unwrap();
@@ -117,4 +91,30 @@ fn restarting_the_core_plays_the_remembered_track_from_zero() {
     assert_eq!(restored.path, "two");
     assert_eq!(restored.position_ms, 0);
     assert!(matches!(engine.commands.last().unwrap(), (Action::Play, path, 0) if path == "two"));
+}
+
+#[test]
+fn path_playback_is_temporary_and_never_enqueues_or_fabricates_an_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let db = Db::open(&path).unwrap();
+    let prefs = Prefs::load(&dir.path().join("prefs.json")).unwrap();
+    let mut engine = Fake {
+        commands: vec![],
+        fail: false,
+    };
+    let playback = play_path(&db, &prefs, &mut engine, "/unindexed.mp3").unwrap();
+    assert_eq!(playback.path, "/unindexed.mp3");
+    assert_eq!(db.audio_current_media_id(), None);
+    assert_eq!(audio_queue::queue_total(&db).unwrap(), 0);
+    let track = AudioTrack::from_path_stem("/unindexed.mp3");
+    assert!(audio_playback::started(&db, &track, playback.revision).unwrap());
+    assert!(
+        audio_queue::history_page(&db, 0, 10, "")
+            .unwrap()
+            .is_empty()
+    );
+    drop(db);
+    let reopened = Db::open(&path).unwrap();
+    assert_eq!(audio_queue::get_audio_current(&reopened).unwrap(), "");
 }
