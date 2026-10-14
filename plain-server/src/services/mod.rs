@@ -7,6 +7,8 @@ pub mod pomodoro;
 
 pub mod discovery;
 
+pub mod temp_values;
+
 pub mod chat;
 
 pub mod casting;

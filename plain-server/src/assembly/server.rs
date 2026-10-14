@@ -87,7 +87,7 @@ pub(crate) struct ServerState {
     pub(crate) login_attempts: Arc<std::sync::Mutex<crate::http::auth::ws_login::LoginAttempts>>,
     pub(crate) directory: std::path::PathBuf,
     pub(crate) token: Arc<str>,
-    pub(crate) temporary_values: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+    pub(crate) temp_values: crate::services::temp_values::TempValues,
     pub(crate) events: broadcast::Sender<WsEvent>,
     pub(crate) shutdown: Arc<tokio::sync::Mutex<()>>,
     pub(crate) stop: watch::Receiver<bool>,
@@ -138,16 +138,6 @@ pub struct ContentServer {
     stop: watch::Sender<bool>,
 }
 impl ContentServer {
-    pub(crate) fn set_temporary_value(&self, key: String, value: String) -> Result<(), String> {
-        self.state.native_client_id()?;
-        self.state
-            .temporary_values
-            .lock()
-            .map_err(|_| "Temporary values unavailable")?
-            .insert(key, value);
-        Ok(())
-    }
-
     #[cfg(feature = "headless")]
     pub(crate) fn headless_state(&self) -> &ServerState {
         &self.state
@@ -503,7 +493,7 @@ impl ContentServer {
                 ),
             )),
             token: Arc::from(token.as_str()),
-            temporary_values: Default::default(),
+            temp_values: services.temp_values.clone(),
             events,
             shutdown: Arc::new(tokio::sync::Mutex::new(())),
             stop: receiver.clone(),

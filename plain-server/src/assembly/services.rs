@@ -15,6 +15,7 @@ pub(crate) struct Services {
     pub image_updates: Arc<plain_rs::media::images::editor::Updates>,
     pub upload_chunks: Arc<crate::services::files::upload_chunks::UploadChunks>,
     pub uploads: Arc<plain_rs::files::uploads::Runtime>,
+    pub temp_values: crate::services::temp_values::TempValues,
 }
 impl Services {
     pub fn new(
@@ -118,6 +119,7 @@ impl Services {
             feed_assets: shared.feed_assets,
             image_updates: shared.image_updates,
             uploads: shared.uploads,
+            temp_values: Default::default(),
         }
     }
     pub(crate) fn configure_schema<
@@ -151,5 +153,6 @@ impl Services {
             .data(self.feed_assets)
             .data(self.upload_chunks)
             .data(self.uploads)
+            .data(self.temp_values)
     }
 }

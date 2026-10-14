@@ -28,18 +28,6 @@ impl Runtime {
             return linux::dispatch(&self.core, method, params).await;
         }
         match method {
-            "systemSetTempValue" => {
-                let key = params["key"]
-                    .as_str()
-                    .ok_or("Temporary value key required")?
-                    .to_owned();
-                let value = params["value"]
-                    .as_str()
-                    .ok_or("Temporary value required")?
-                    .to_owned();
-                self.core.set_temporary_value(key, value)?;
-                Ok(Value::Bool(true))
-            }
             "systemRecentFileFacts" => {
                 let paths = plain_media::storage::kv::recent::get_recent_files(
                     self.core.preferences()?,

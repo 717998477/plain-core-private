@@ -101,3 +101,7 @@ impl FileStore {
         Ok(path)
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/files/app_files.rs"]
+mod tests;

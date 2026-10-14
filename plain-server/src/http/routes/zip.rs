@@ -12,8 +12,9 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+use plain_rs::enums::DataType;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -324,6 +325,139 @@ async fn zip_dir(
     stream_archive(state, items, &name, None, permit).await
 }
 
+/// Rows store the relative portion of an attachment path, but a row written
+/// before that convention may still hold an absolute one.
+fn stored_path(directory: &Path, stored: &str) -> PathBuf {
+    let path = Path::new(stored);
+    if stored.is_empty() || path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        directory.join(path)
+    }
+}
+
+fn app_file_entries(state: &ServerState, query: &str) -> anyhow::Result<Vec<(PathBuf, String)>> {
+    let names =
+        plain_rs::chat::attachments::app_file_store::file_name_map(&state.db.get_all_chats());
+    let files = match query.strip_prefix("ids:") {
+        Some(ids) => ids
+            .split(',')
+            .filter(|id| !id.is_empty())
+            .filter_map(|id| {
+                state
+                    .db
+                    .app_file_get(id.split('.').next().unwrap_or_default())
+                    .ok()
+                    .flatten()
+            })
+            .collect(),
+        None => state.db.app_file_items(0, i32::MAX, query)?,
+    };
+    Ok(files
+        .into_iter()
+        .map(|file| {
+            let entry_name =
+                plain_rs::chat::attachments::app_file_store::display_name(&file, &names);
+            (stored_path(&state.directory, &file.real_path), entry_name)
+        })
+        .collect())
+}
+
+/// Media rows have no separate archive name, so each entry keeps its own file
+/// name and the archive builder resolves it from the path.
+async fn media_entries(
+    state: &ServerState,
+    data_type: &str,
+    query: &str,
+) -> anyhow::Result<Vec<(PathBuf, String)>> {
+    let facts = state
+        .host
+        .call(
+            "systemMediaRows",
+            json!({
+                "dataType": data_type,
+                "query": query,
+                "offset": 0,
+                "limit": i32::MAX,
+                "sortBy": "DATE_DESC",
+            }),
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let rows: Vec<Value> = serde_json::from_value(facts)?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| Some((PathBuf::from(row["path"].as_str()?), String::new())))
+        .collect())
+}
+
+#[cfg(feature = "mobile")]
+async fn package_entries(state: &ServerState, query: &str) -> anyhow::Result<Vec<(PathBuf, String)>> {
+    let facts = state
+        .host
+        .call("systemPackageFacts", json!({}))
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let facts: Vec<Value> = serde_json::from_value(facts)?;
+    let items = crate::mobile::packages::query::packages(&state.db, facts, query, "NAME_ASC")?;
+    Ok(items
+        .iter()
+        .filter_map(|item| {
+            let name = item["name"].as_str().unwrap_or_default().replace(' ', "");
+            let id = item["id"].as_str().unwrap_or_default();
+            Some((PathBuf::from(item["path"].as_str()?), format!("{name}-{id}.apk")))
+        })
+        .collect())
+}
+
+#[cfg(not(feature = "mobile"))]
+async fn package_entries(_state: &ServerState, _query: &str) -> anyhow::Result<Vec<(PathBuf, String)>> {
+    anyhow::bail!("unsupported provider")
+}
+
+#[derive(Deserialize)]
+struct DownloadFileItem {
+    path: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// Consumes the selection `setTempValue` parked under `key`.
+fn temp_file_entries(state: &ServerState, key: &str) -> Vec<(PathBuf, String)> {
+    let Some(value) = state.temp_values.take(key) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<DownloadFileItem>>(&value)
+        .map(|items| {
+            items
+                .into_iter()
+                .map(|item| (PathBuf::from(item.path), item.name))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn zip_items(
+    state: &ServerState,
+    request: &ZipFilesRequest,
+) -> anyhow::Result<Vec<(PathBuf, String)>> {
+    let data_type: DataType = serde_json::from_value(Value::String(request.r#type.clone()))?;
+    match data_type {
+        DataType::AppFile => app_file_entries(state, &request.query),
+        DataType::Audio | DataType::Video | DataType::Image => {
+            let name = match data_type {
+                DataType::Audio => "AUDIO",
+                DataType::Video => "VIDEO",
+                _ => "IMAGE",
+            };
+            media_entries(state, name, &request.query).await
+        }
+        DataType::Package => package_entries(state, &request.query).await,
+        DataType::File => Ok(temp_file_entries(state, &request.id)),
+        _ => anyhow::bail!("unsupported archive type"),
+    }
+}
+
 async fn zip_files(
     state: &ServerState,
     params: &Params,
@@ -345,44 +479,15 @@ async fn zip_files(
     if request.r#type.is_empty() {
         return plain(StatusCode::BAD_REQUEST, "");
     }
-    // The item list is a platform search (MediaStore / packages / a temp
-    // selection); the host resolves it, Rust owns the archive.
-    let facts = match state
-        .host
-        .call(
-            "zipItemsFacts",
-            serde_json::json!({
-                "type": request.r#type,
-                "query": request.query,
-                "id": request.id,
-            }),
-        )
-        .await
-    {
-        Ok(facts) => facts,
-        Err(error) => return plain(StatusCode::BAD_REQUEST, error),
-    };
-    if facts.as_bool() == Some(false) {
-        return plain(StatusCode::NOT_FOUND, "");
+    // The host answers only the platform lookups it owns; attachment rows and
+    // the parked selection are already in this process.
+    let items: Vec<(PathBuf, String)> = match zip_items(state, &request).await {
+        Ok(items) => items,
+        Err(error) => return plain(StatusCode::BAD_REQUEST, error.to_string()),
     }
-    let items: Vec<(PathBuf, String)> = facts["items"]
-        .as_array()
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| {
-                    let path = value.get("path")?.as_str()?.to_owned();
-                    let name = value
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned();
-                    Some((PathBuf::from(path), name))
-                })
-                .filter(|(path, _)| path.is_file())
-                .collect()
-        })
-        .unwrap_or_default();
+    .into_iter()
+    .filter(|(path, _)| path.is_file())
+    .collect();
     if items.is_empty() {
         return plain(StatusCode::NOT_FOUND, "");
     }

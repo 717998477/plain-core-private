@@ -319,14 +319,8 @@ impl DeviceMutation {
         key: String,
         value: String,
     ) -> async_graphql::Result<KeyValuePair> {
-        host_call(
-            ctx,
-            "systemSetTempValue",
-            json!({ "key": key, "value": value }),
-        )
-        .await?;
-        // The pair echoes what was stored rather than re-reading it: the
-        // platform keeps this in memory, so a read-back would race.
+        ctx.data::<crate::services::temp_values::TempValues>()?
+            .set(key.clone(), value.clone());
         Ok(KeyValuePair { key, value })
     }
 

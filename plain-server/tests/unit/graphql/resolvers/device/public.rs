@@ -257,14 +257,7 @@ async fn clearing_the_logs_reports_success() {
 
 #[tokio::test]
 async fn a_temp_value_is_echoed_rather_than_read_back() {
-    let (_dir, schema) = fixture(|method, params| match method {
-        "systemSetTempValue" => {
-            assert_eq!(params["key"], "k");
-            assert_eq!(params["value"], "v");
-            json!(true)
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema) = fixture(|method, _| panic!("unexpected host call {method}"));
     let response = schema
         .execute(r#"mutation { setTempValue(key:"k", value:"v") { key value } }"#)
         .await;

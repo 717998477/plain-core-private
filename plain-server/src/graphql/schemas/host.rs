@@ -21,7 +21,6 @@ pub struct Query(
     crate::graphql::resolvers::shares::host::ShareHostQuery,
     app_file::AppFileQuery,
     favorite_folder::FavoriteFolderQuery,
-    crate::graphql::resolvers::files::app_files_host::AppFileHostQuery,
     note::NoteQuery,
     feed::FeedQuery,
     crate::graphql::resolvers::tags::host::TagQuery,

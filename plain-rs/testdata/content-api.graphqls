@@ -19,18 +19,6 @@ type AppFile {
 	updatedAt: Instant!
 }
 
-type AppFileRecord {
-	fileName: String!
-	id: String!
-	size: Long!
-	mimeType: String!
-	realPath: String!
-	refCount: Int!
-	weakHash: String!
-	createdAt: Instant!
-	updatedAt: Instant!
-}
-
 type AudioArtistPlayCount {
 	artist: String!
 	count: Long!
@@ -462,7 +450,7 @@ type Mutation {
 	createShare(name: String!, realPaths: [String!]!, readOnly: Boolean!, expiresAt: Instant): ShareRecord!
 	updateShare(id: ID!, name: String!, expiresAt: Instant, realPaths: [String!]): ShareRecord!
 	deleteShare(id: ID!): Boolean!
-	importAppFile(source: String!, fileName: String!, mimeType: String!, deleteSource: Boolean!): AppFileRecord!
+	importAppFile(source: String!, fileName: String!, mimeType: String!, deleteSource: Boolean!): AppFile!
 	releaseAppFile(id: String!): Boolean!
 	"""
 	Register a favorite folder and return the whole list.
@@ -677,9 +665,6 @@ type Query {
 	List all favorite folders.
 	"""
 	favoriteFolders: [FavoriteFolder!]!
-	appFileRecord(id: String!): AppFileRecord
-	appFileRecords(query: String!, offset: Int!, limit: Int!): [AppFileRecord!]!
-	resolveAppFile(id: String!): String!
 	noteCount(query: String!): Int!
 	note(id: ID!): Note
 	notes(query: String!, offset: Int!, limit: Int!): [Note!]!

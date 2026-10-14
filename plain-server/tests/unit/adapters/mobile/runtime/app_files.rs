@@ -11,7 +11,7 @@ async fn file_import_dedupe_release_and_restart_use_core_storage() {
     let source = dir.path().join("upload");
     std::fs::write(&source, b"shared attachment").unwrap();
     let query = format!(
-        r#"mutation {{importAppFile(source:{},fileName:"original.%_",mimeType:"text/plain",deleteSource:false) {{id refCount realPath weakHash createdAt size}}}}"#,
+        r#"mutation {{importAppFile(source:{},fileName:"original.%_",mimeType:"text/plain",deleteSource:false) {{id realPath createdAt size}}}}"#,
         serde_json::to_string(source.to_str().unwrap()).unwrap()
     );
     let first = call(server.port, &token, &query).await;
@@ -20,43 +20,19 @@ async fn file_import_dedupe_release_and_restart_use_core_storage() {
     let id = file["id"].as_str().unwrap();
     let relative = file["realPath"].as_str().unwrap();
     assert_eq!(file["size"], 17);
+    let second = call(server.port, &token, &query).await;
     assert_eq!(
-        call(server.port, &token, &query).await["data"]["importAppFile"]["refCount"],
-        2
+        second["data"]["importAppFile"]["id"], id,
+        "an identical import must reuse the stored row"
     );
-    let page = call(server.port,&token,r#"{appFiles(offset:0,limit:20,query:"%_") {id} appFileCount(query:"%_") appFileRecords(offset:0,limit:20,query:"%_") {id refCount fileName}}"#).await;
-    assert_eq!(page["data"]["appFileCount"], 1);
-    assert_eq!(page["data"]["appFiles"][0]["id"], id);
-    assert_eq!(page["data"]["appFileRecords"][0]["refCount"], 2);
-    let suffix = Path::new(relative).file_name().unwrap().to_str().unwrap();
-    let resolved = call(
+    let page = call(
         server.port,
         &token,
-        &format!(
-            "{{resolveAppFile(id:{})}}",
-            serde_json::to_string(suffix).unwrap()
-        ),
+        r#"{appFiles(offset:0,limit:20,query:"%_") {id} appFileCount(query:"%_")}"#,
     )
     .await;
-    assert_eq!(
-        resolved["data"]["resolveAppFile"],
-        dir.path().join(relative).to_str().unwrap()
-    );
-    for bad in ["../../secret", id] {
-        assert!(
-            call(
-                server.port,
-                &token,
-                &format!(
-                    "{{resolveAppFile(id:{})}}",
-                    serde_json::to_string(bad).unwrap()
-                )
-            )
-            .await
-            .get("errors")
-            .is_some()
-        );
-    }
+    assert_eq!(page["data"]["appFileCount"], 1);
+    assert_eq!(page["data"]["appFiles"][0]["id"], id);
     let url_token = plain_rs::prefs::ensure_url_token(&prefs);
     let encoded = plain_rs::utils::base64::base64_encode(
         &plain_rs::crypto::xchacha_encrypt(
