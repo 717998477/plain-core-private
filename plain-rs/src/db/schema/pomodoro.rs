@@ -10,7 +10,6 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
                 total_break_seconds INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
-            );
-         CREATE TABLE IF NOT EXISTS pomodoro_runtime (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);",
+            );",
     )
 }

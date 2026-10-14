@@ -233,7 +233,6 @@ total_break_seconds INTEGER NOT NULL,
 created_at TEXT NOT NULL,
 updated_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS pomodoro_runtime (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (
 client_id TEXT NOT NULL PRIMARY KEY,
 name TEXT NOT NULL DEFAULT '',

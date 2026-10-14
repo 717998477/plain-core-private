@@ -1,6 +1,7 @@
 use crate::graphql::types::Instant;
 use async_graphql::{Enum, SimpleObject};
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use plain_rs::db::Db;
 use plain_rs::events::WS_POMODORO_ACTION;
 use plain_rs::events::WsEvent;
@@ -52,7 +53,7 @@ pub struct PomodoroTickResult {
     pub today: PomodoroToday,
     pub completed_state: Option<PomodoroState>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 struct Runtime {
     calendar_date: String,
     day_start: DateTime<Utc>,
@@ -75,10 +76,16 @@ pub struct Service {
     db: Arc<Db>,
     prefs: Arc<Prefs>,
     events: broadcast::Sender<WsEvent>,
+    runtime: Mutex<Option<Runtime>>,
 }
 impl Service {
     pub fn new(db: Arc<Db>, prefs: Arc<Prefs>, events: broadcast::Sender<WsEvent>) -> Arc<Self> {
-        Arc::new(Self { db, prefs, events })
+        Arc::new(Self {
+            db,
+            prefs,
+            events,
+            runtime: Mutex::new(None),
+        })
     }
     pub fn settings(&self) -> anyhow::Result<PomodoroSettings> {
         let settings: PomodoroSettings = serde_json::from_value(
@@ -100,15 +107,7 @@ impl Service {
             PomodoroState::LongBreak => settings.long_break_duration_min,
         }) * 60
     }
-    fn load(conn: &rusqlite::Connection, settings: &PomodoroSettings) -> anyhow::Result<Runtime> {
-        let raw: Option<String> = conn
-            .query_row("SELECT data FROM pomodoro_runtime WHERE id=1", [], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        if let Some(raw) = raw {
-            return Ok(serde_json::from_str(&raw)?);
-        }
+    fn initial_runtime(settings: &PomodoroSettings) -> anyhow::Result<Runtime> {
         let today = chrono::Local::now().date_naive();
         let day_start = today
             .and_hms_opt(0, 0, 0)
@@ -128,9 +127,15 @@ impl Service {
             state: PomodoroState::Work,
         })
     }
-    fn save(conn: &rusqlite::Connection, runtime: &Runtime) -> anyhow::Result<()> {
-        conn.execute("INSERT INTO pomodoro_runtime(id,data) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET data=excluded.data",[serde_json::to_string(runtime)?])?;
-        Ok(())
+    fn runtime(
+        &self,
+        settings: &PomodoroSettings,
+    ) -> anyhow::Result<parking_lot::MutexGuard<'_, Option<Runtime>>> {
+        let mut runtime = self.runtime.lock();
+        if runtime.is_none() {
+            *runtime = Some(Self::initial_runtime(settings)?);
+        }
+        Ok(runtime)
     }
     fn snapshot(
         conn: &rusqlite::Connection,
@@ -157,15 +162,17 @@ impl Service {
     }
     pub fn today(&self) -> anyhow::Result<PomodoroToday> {
         let settings = self.settings()?;
+        let runtime = self.runtime(&settings)?;
         self.db
-            .with_conn(|c| Self::snapshot(c, &Self::load(c, &settings)?, Utc::now()))
+            .with_conn(|c| Self::snapshot(c, runtime.as_ref().unwrap(), Utc::now()))
     }
     pub fn configure_day(&self, date: &str, start: DateTime<Utc>) -> anyhow::Result<PomodoroToday> {
         let parsed = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")?;
         anyhow::ensure!(parsed.to_string() == date, "invalid calendar date");
         let settings = self.settings()?;
-        self.db.with_conn(|c| {
-            let mut r = Self::load(c, &settings)?;
+        let mut runtime = self.runtime(&settings)?;
+        let mut r = runtime.as_ref().unwrap().clone();
+        let today = self.db.with_conn(|c| {
             if r.calendar_date != date {
                 r.round = 1;
             }
@@ -175,15 +182,17 @@ impl Service {
                 r.remaining = Self::duration(&settings, r.state);
                 r.total = r.remaining;
             }
-            Self::save(c, &r)?;
             Self::snapshot(c, &r, Utc::now())
-        })
+        })?;
+        *runtime = Some(r);
+        Ok(today)
     }
     pub fn command(&self, action: &str, duration: Option<i32>) -> anyhow::Result<PomodoroToday> {
         let settings = self.settings()?;
         let now = Utc::now();
+        let mut runtime = self.runtime(&settings)?;
+        let mut r = runtime.as_ref().unwrap().clone();
         let today = self.db.with_conn(|c| {
-            let mut r = Self::load(c, &settings)?;
             match action {
                 "start" => {
                     let seconds = duration.unwrap_or(r.remaining(now));
@@ -214,16 +223,18 @@ impl Service {
                 }
                 _ => anyhow::bail!("unknown pomodoro action"),
             }
-            Self::save(c, &r)?;
             Self::snapshot(c, &r, now)
         })?;
+        *runtime = Some(r);
         self.publish(action, &today, None);
         Ok(today)
     }
     pub fn tick(&self, skip: bool) -> anyhow::Result<PomodoroTickResult> {
         let settings = self.settings()?;
         let now = Utc::now();
-        let result=self.db.with_conn(|c| {let tx=c.unchecked_transaction()?;let mut r=Self::load(&tx,&settings)?;
+        let mut runtime = self.runtime(&settings)?;
+        let mut r = runtime.as_ref().unwrap().clone();
+        let result=self.db.with_conn(|c| {let tx=c.unchecked_transaction()?;
             let completed= if skip || (r.deadline.is_some() && r.remaining(now)==0) {Some(r.state)} else {None};
             if let Some(state)=completed {
                 let count: Option<i32>=tx.query_row("SELECT completed_count FROM pomodoro_items WHERE date=?1",[&r.calendar_date],|row|row.get(0)).optional()?;
@@ -238,9 +249,10 @@ impl Service {
                     count+=increment;
                 }
                 r.state=if state==PomodoroState::Work {if count>0 && count%settings.pomodoros_before_long_break==0 {PomodoroState::LongBreak} else {PomodoroState::ShortBreak}} else {r.round+=1;PomodoroState::Work};
-                r.deadline=None;r.paused=false;r.remaining=Self::duration(&settings,r.state);r.total=r.remaining;Self::save(&tx,&r)?;
+                r.deadline=None;r.paused=false;r.remaining=Self::duration(&settings,r.state);r.total=r.remaining;
             }
             let today=Self::snapshot(&tx,&r,now)?;tx.commit()?;Ok::<_,anyhow::Error>(PomodoroTickResult {today,completed_state:completed}) })?;
+        *runtime = Some(r);
         if result.completed_state.is_some() {
             self.publish(
                 if skip { "skip" } else { "complete" },
@@ -257,3 +269,7 @@ impl Service {
             .send(WsEvent::broadcast(WS_POMODORO_ACTION, payload.to_string()));
     }
 }
+
+#[cfg(all(test, feature = "core", feature = "http_transport"))]
+#[path = "../../tests/unit/services/pomodoro.rs"]
+mod tests;

@@ -1,25 +1,49 @@
 use super::*;
-fn expire(db: &Db) {
-    db.with_conn(|c| {
-        let raw: String = c
-            .query_row("SELECT data FROM pomodoro_runtime WHERE id=1", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        let mut state: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        state["deadline"] = serde_json::json!("2000-01-01T00:00:00Z");
-        c.execute(
-            "UPDATE pomodoro_runtime SET data=?1 WHERE id=1",
-            [state.to_string()],
-        )
+use crate::assembly::server::ContentServer;
+use crate::graphql::executor::content_changes;
+use async_graphql::Request;
+use serde_json::{Value, json};
+
+async fn call(port: u16, token: &str, query: &str) -> Value {
+    let text = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{port}/graphql"))
+        .bearer_auth(token)
+        .header("content-type", "application/json")
+        .body(json!({"query": query}).to_string())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
         .unwrap();
-    });
+    serde_json::from_str(&text).unwrap()
 }
+
+async fn expire(server: &ContentServer, token: &str) {
+    let result = call(
+        server.port,
+        token,
+        "mutation {adjustPomodoro(durationSec:0) {timeLeftSec}}",
+    )
+    .await;
+    assert!(result.get("errors").is_none(), "{result}");
+}
+
 #[tokio::test]
 async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("plain.db");
     let db = Arc::new(Db::open(&path).unwrap());
+    db.with_conn(|conn| {
+        let count: i32 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='pomodoro_runtime'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    });
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
     let mut settings = plain_rs::prefs::user::UserSettings::default().pomodoro_settings;
     for (key, value) in [
@@ -46,10 +70,46 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
     call(
         server.port,
         &token,
+        "mutation {startPomodoro(durationSec:30)}",
+    )
+    .await;
+    call(server.port, &token, "mutation {pausePomodoro}").await;
+    assert_eq!(
+        call(
+            server.port,
+            &token,
+            "{pomodoroToday {isRunning isPaused timeLeftSec}}"
+        )
+        .await["data"]["pomodoroToday"],
+        json!({"isRunning":false,"isPaused":true,"timeLeftSec":30})
+    );
+    call(
+        server.port,
+        &token,
+        "mutation {startPomodoro(durationSec:30)}",
+    )
+    .await;
+    assert_eq!(
+        call(server.port, &token, "{pomodoroToday {isRunning isPaused}}").await["data"]["pomodoroToday"],
+        json!({"isRunning":true,"isPaused":false})
+    );
+    call(server.port, &token, "mutation {stopPomodoro}").await;
+    assert_eq!(
+        call(
+            server.port,
+            &token,
+            "{pomodoroToday {isRunning isPaused timeLeftSec state}}"
+        )
+        .await["data"]["pomodoroToday"],
+        json!({"isRunning":false,"isPaused":false,"timeLeftSec":60,"state":"WORK"})
+    );
+    call(
+        server.port,
+        &token,
         "mutation {startPomodoro(durationSec:1)}",
     )
     .await;
-    expire(&db);
+    expire(&server, &token).await;
     let query = "mutation {tickPomodoro {today {completedCount state timeLeftSec} completedState}}";
     let results =
         futures_util::future::join_all((0..16).map(|_| call(server.port, &token, query))).await;
@@ -69,7 +129,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
         "mutation {startPomodoro(durationSec:1)}",
     )
     .await;
-    expire(&db);
+    expire(&server, &token).await;
     call(server.port, &token, query).await;
     let row = db.pomodoro_get_by_date("2026-10-03").unwrap().unwrap();
     assert_eq!(row.total_break_seconds, 120);
@@ -79,7 +139,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
         "mutation {startPomodoro(durationSec:1)}",
     )
     .await;
-    expire(&db);
+    expire(&server, &token).await;
     let done = call(server.port, &token, query).await;
     assert_eq!(done["data"]["tickPomodoro"]["today"]["state"], "LONG_BREAK");
     assert_eq!(done["data"]["tickPomodoro"]["today"]["timeLeftSec"], 180);
@@ -111,7 +171,18 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
             "{pomodoroToday {isRunning completedCount}}"
         )
         .await["data"]["pomodoroToday"]["isRunning"],
-        true
+        false
+    );
+    let restored = call(server.port, &token, config).await;
+    assert_eq!(restored["data"]["configurePomodoroDay"]["timeLeftSec"], 60);
+    assert_eq!(
+        call(
+            server.port,
+            &token,
+            "{pomodoroToday {completedCount currentRound isPaused state}}"
+        )
+        .await["data"]["pomodoroToday"],
+        json!({"completedCount":2,"currentRound":1,"isPaused":false,"state":"WORK"})
     );
     call(server.port, &token, "mutation {pausePomodoro}").await;
     assert!(
@@ -129,8 +200,8 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
         "mutation {startPomodoro(durationSec:1)}",
     )
     .await;
-    expire(&db);
-    db.with_conn(|c| c.execute_batch("CREATE TRIGGER reject_runtime BEFORE UPDATE ON pomodoro_runtime BEGIN SELECT RAISE(ABORT, 'test write failure'); END;").unwrap());
+    expire(&server, &token).await;
+    db.with_conn(|c| c.execute_batch("CREATE TRIGGER reject_statistics BEFORE INSERT ON pomodoro_items BEGIN SELECT RAISE(ABORT, 'test write failure'); END;").unwrap());
     assert!(
         call(server.port, &token, query)
             .await
@@ -138,7 +209,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
             .is_some()
     );
     assert!(db.pomodoro_get_by_date("2026-10-04").unwrap().is_none());
-    db.with_conn(|c| c.execute_batch("DROP TRIGGER reject_runtime;").unwrap());
+    db.with_conn(|c| c.execute_batch("DROP TRIGGER reject_statistics;").unwrap());
     assert_eq!(
         call(server.port, &token, query).await["data"]["tickPomodoro"]["today"]["completedCount"],
         1
@@ -151,6 +222,26 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
         2
     );
     assert_eq!(history["data"]["pomodoroRecord"]["completedCount"], 1);
+    call(
+        server.port,
+        &token,
+        "mutation {startPomodoro(durationSec:30)}",
+    )
+    .await;
+    call(server.port, &token, "mutation {pausePomodoro}").await;
+    server.shutdown().await;
+    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
+    let server = ContentServer::start(&path, &token, prefs).unwrap();
+    call(server.port, &token, config).await;
+    assert_eq!(
+        call(
+            server.port,
+            &token,
+            "{pomodoroToday {isRunning isPaused timeLeftSec completedCount}}"
+        )
+        .await["data"]["pomodoroToday"],
+        json!({"isRunning":false,"isPaused":false,"timeLeftSec":60,"completedCount":2})
+    );
     server.shutdown().await;
 }
 #[test]
