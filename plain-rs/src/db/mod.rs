@@ -44,10 +44,69 @@ pub use models::{DAppFile, DChannel, DChat, DNearbyDeviceCache, DPeer};
 pub use repositories::db_time::{iso_from_unix_millis, now_iso, now_millis, short_id};
 
 #[derive(Clone)]
-pub struct Db(Arc<Mutex<Connection>>, Arc<Mutex<()>>);
+pub struct Db(
+    Arc<Mutex<Connection>>,
+    Arc<Mutex<()>>,
+    #[cfg(feature = "library")] Arc<crate::media::audio::state::Runtime>,
+);
 
 impl Db {
     pub fn open(db_path: &Path) -> rusqlite::Result<Self> {
+        #[cfg(feature = "library")]
+        {
+            if db_path == Path::new(":memory:") {
+                return Ok(Self(
+                    Arc::new(Mutex::new(Self::open_connection(db_path)?)),
+                    Arc::new(Mutex::new(())),
+                    Arc::new(crate::media::audio::state::Runtime::in_memory()),
+                ));
+            }
+            let directory = db_path.parent().unwrap_or(Path::new("."));
+            let prefs = Arc::new(
+                crate::prefs::Prefs::load(&crate::prefs::default_path(directory))
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+            );
+            Self::open_with_prefs(db_path, prefs)
+        }
+        #[cfg(not(feature = "library"))]
+        Ok(Self(
+            Arc::new(Mutex::new(Self::open_connection(db_path)?)),
+            Arc::new(Mutex::new(())),
+        ))
+    }
+
+    #[cfg(feature = "library")]
+    pub fn open_with_prefs(
+        db_path: &Path,
+        prefs: Arc<crate::prefs::Prefs>,
+    ) -> rusqlite::Result<Self> {
+        Ok(Self(
+            Arc::new(Mutex::new(Self::open_connection(db_path)?)),
+            Arc::new(Mutex::new(())),
+            Arc::new(
+                crate::media::audio::state::Runtime::new(prefs)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+            ),
+        ))
+    }
+
+    #[cfg(feature = "library")]
+    pub(crate) fn audio(&self) -> &crate::media::audio::state::Runtime {
+        &self.2
+    }
+
+    #[cfg(feature = "library")]
+    pub(crate) fn audio_transaction<T>(
+        &self,
+        operation: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &mut crate::media::audio::state::State,
+        ) -> crate::error::DomainResult<T>,
+    ) -> crate::error::DomainResult<T> {
+        self.audio().transaction(self, operation)
+    }
+
+    fn open_connection(db_path: &Path) -> rusqlite::Result<Connection> {
         if let Some(parent) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).map_err(|e| {
                 rusqlite::Error::SqliteFailure(
@@ -68,7 +127,7 @@ impl Db {
         )?;
         #[cfg(any(feature = "chat", feature = "library"))]
         schema::init(&conn)?;
-        Ok(Self(Arc::new(Mutex::new(conn)), Arc::new(Mutex::new(()))))
+        Ok(conn)
     }
 
     #[cfg(feature = "chat")]

@@ -74,3 +74,34 @@ fn commands_preserve_resume_and_repeat_one_only_applies_to_completion() {
     engine.fail = true;
     assert!(command(&db, &prefs, &mut engine, Action::Pause, 0, 1.0).is_err());
 }
+
+#[test]
+fn restarting_the_core_plays_the_remembered_track_from_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let prefs = std::sync::Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
+    let db = Db::open_with_prefs(&path, prefs.clone()).unwrap();
+    let mut engine = Fake {
+        commands: vec![],
+        fail: false,
+    };
+    play_path(&db, &prefs, &mut engine, "one").unwrap();
+    audio_queue::enqueue(&db, &[AudioTrack::from_path_stem("two")], false).unwrap();
+    command(&db, &prefs, &mut engine, Action::Next, 0, 1.0).unwrap();
+    command(&db, &prefs, &mut engine, Action::Seek, 123_456, 1.0).unwrap();
+    command(&db, &prefs, &mut engine, Action::Pause, 0, 1.0).unwrap();
+    assert_eq!(
+        prefs
+            .get::<String>(crate::prefs::system::keys::AUDIO_CURRENT_PATH)
+            .unwrap()
+            .as_deref(),
+        Some("two")
+    );
+    drop(db);
+    let db = Db::open_with_prefs(&path, prefs.clone()).unwrap();
+    audio_playback::invalidate(&db).unwrap();
+    let restored = command(&db, &prefs, &mut engine, Action::Play, 0, 1.0).unwrap();
+    assert_eq!(restored.path, "two");
+    assert_eq!(restored.position_ms, 0);
+    assert!(matches!(engine.commands.last().unwrap(), (Action::Play, path, 0) if path == "two"));
+}

@@ -171,17 +171,11 @@ pub fn save_source(db: &Db, src: &QueueSource) -> DomainResult<()> {
 
 /// The path of the current track — `App.audioCurrent` serves this.
 pub fn get_audio_current(db: &Db) -> DomainResult<String> {
-    Ok(source(db)?.current_path)
+    Ok(db.audio().read(|state| state.playback.path.clone()))
 }
 
-/// Overwrite the current track on the source row.
 pub fn save_audio_current(db: &Db, path: &str) -> DomainResult<()> {
-    transaction(db, |c| {
-        let mut src = io::get_source(c)?;
-        src.current_path = path.into();
-        io::save_source(c, &src)?;
-        Ok(())
-    })
+    db.audio().update(|state| state.select(path))
 }
 
 /// The play mode name (REPEAT / REPEAT_ONE / SHUFFLE); REPEAT when unset.
@@ -228,8 +222,8 @@ pub fn on_playing(
         return Ok(());
     }
     validate_duration(duration_ms)?;
-    transaction(db, |c| {
-        let mut src = io::get_source(c)?;
+    transaction(db, |c, state| {
+        let mut src = io::get_source(c, state)?;
         if src.source == QueueSourceKind::Library
             && src.current_path != path
             && !io::all_queue_items(c)?.iter().any(|q| q.path == path)
@@ -237,7 +231,7 @@ pub fn on_playing(
             src.current_index = -1;
         }
         src.current_path = path.into();
-        io::save_source(c, &src)?;
+        io::save_source(c, &src, state)?;
         record_history_conn(c, path, title, artist, duration_ms)?;
         Ok(())
     })
@@ -259,7 +253,7 @@ pub fn enqueue(db: &Db, items: &[AudioTrack], play_next: bool) -> DomainResult<(
             return Err(DomainError::Other("empty audio path".into()));
         }
     }
-    transaction(db, |c| {
+    transaction(db, |c, _| {
         enqueue_conn(c, items, play_next)?;
         Ok(())
     })
@@ -308,7 +302,7 @@ pub fn reorder_queued(db: &Db, paths: &[String]) -> DomainResult<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    transaction(db, |c| {
+    transaction(db, |c, _| {
         let all = io::all_queue_items(c)?;
         let mut seen = HashSet::new();
         let mut ordered = Vec::with_capacity(all.len());
@@ -330,30 +324,41 @@ pub fn remove_paths(db: &Db, paths: &[String]) -> DomainResult<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    transaction(db, |c| remove_paths_conn(c, paths))
+    transaction(db, |c, state| remove_paths_conn(c, paths, state))
 }
 
-pub(crate) fn remove_root_paths_conn(c: &rusqlite::Connection, root: &str) -> DomainResult<()> {
+pub(crate) fn remove_root_paths_conn(
+    c: &rusqlite::Connection,
+    root: &str,
+    state: &mut super::state::State,
+) -> DomainResult<()> {
     let prefix = format!("{}/", root.trim_end_matches('/'));
-    let mut statement = c.prepare("SELECT path FROM (SELECT path FROM audio_queue_items UNION SELECT audio_path AS path FROM audio_playlist_items UNION SELECT path FROM audio_play_history UNION SELECT current_path AS path FROM audio_queue_source) WHERE path=?1 OR substr(path,1,length(?2))=?2")?;
-    let paths = statement
+    let mut statement = c.prepare("SELECT path FROM (SELECT path FROM audio_queue_items UNION SELECT audio_path AS path FROM audio_playlist_items UNION SELECT path FROM audio_play_history) WHERE path=?1 OR substr(path,1,length(?2))=?2")?;
+    let mut paths = statement
         .query_map(rusqlite::params![root, prefix], |row| {
             row.get::<_, String>(0)
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
-    remove_paths_conn(c, &paths)
+    if state.playback.path == root || state.playback.path.starts_with(&prefix) {
+        paths.push(state.playback.path.clone());
+    }
+    remove_paths_conn(c, &paths, state)
 }
 
-pub(crate) fn remove_paths_conn(c: &rusqlite::Connection, paths: &[String]) -> DomainResult<()> {
+pub(crate) fn remove_paths_conn(
+    c: &rusqlite::Connection,
+    paths: &[String],
+    state: &mut super::state::State,
+) -> DomainResult<()> {
     io::remove_queue_paths(c, paths)?;
     io::remove_history(c, paths)?;
     io::remove_playlist_items_by_paths(c, paths)?;
-    let mut src = io::get_source(c)?;
+    let mut src = io::get_source(c, state)?;
     if paths.contains(&src.current_path) {
         src.current_path.clear();
         src.current_index = -1;
-        io::save_source(c, &src)?;
+        io::save_source(c, &src, state)?;
     }
     Ok(())
 }
@@ -361,9 +366,9 @@ pub(crate) fn remove_paths_conn(c: &rusqlite::Connection, paths: &[String]) -> D
 /// Reset the source and the manual queue. Stopping playback is the caller's
 /// job (`clearAudioQueue` also clears the current track).
 pub fn clear_queue(db: &Db) -> DomainResult<()> {
-    transaction(db, |c| {
+    transaction(db, |c, state| {
         io::replace_queue_items(c, &[])?;
-        io::save_source(c, &QueueSource::default())?;
+        io::save_source(c, &QueueSource::default(), state)?;
         Ok(())
     })
 }
@@ -669,11 +674,11 @@ fn resolve_next_inner(
         _ => return Ok(None),
     };
     let next = next_source(db, &order, target, &audio.path)?;
-    transaction(db, |c| {
-        if io::get_source(c)? != order.src {
+    transaction(db, |c, state| {
+        if io::get_source(c, state)? != order.src {
             return Err(DomainError::Other("playback source changed".into()));
         }
-        io::save_source(c, &next)?;
+        io::save_source(c, &next, state)?;
         if record_play {
             record_history_conn(
                 c,
@@ -885,7 +890,7 @@ fn set_playlist_source_inner(
     start_path: Option<&str>,
     record_play: bool,
 ) -> DomainResult<Option<AudioTrack>> {
-    transaction(db, |c| {
+    transaction(db, |c, state| {
         if io::playlist_by_id(c, playlist_id)?.is_none() {
             return Err(DomainError::Other("playlist not found".into()));
         }
@@ -895,7 +900,7 @@ fn set_playlist_source_inner(
             .and_then(|p| items.iter().find(|i| i.audio_path == p))
             .or_else(|| items.first())
         else {
-            io::save_source(c, &QueueSource::default())?;
+            io::save_source(c, &QueueSource::default(), state)?;
             return Ok(None);
         };
         let src = QueueSource {
@@ -905,7 +910,7 @@ fn set_playlist_source_inner(
             current_index: start.sort_order,
             ..QueueSource::default()
         };
-        io::save_source(c, &src)?;
+        io::save_source(c, &src, state)?;
         let track = AudioTrack::from(start);
         if record_play {
             record_history_conn(
@@ -989,9 +994,9 @@ fn set_library_source_inner(
         ..QueueSource::default()
     };
     validate_duration(start.duration_ms)?;
-    transaction(db, |c| {
+    transaction(db, |c, state| {
         io::replace_queue_items(c, &[])?;
-        io::save_source(c, &src)?;
+        io::save_source(c, &src, state)?;
         if record_play {
             record_history_conn(
                 c,
@@ -1039,7 +1044,7 @@ pub fn create_playlist(db: &Db, name: &str) -> DomainResult<Playlist> {
 }
 
 pub fn rename_playlist(db: &Db, id: &str, name: &str) -> DomainResult<()> {
-    transaction(db, |c| {
+    transaction(db, |c, _| {
         let mut pl = io::playlist_by_id(c, id)?
             .ok_or_else(|| DomainError::Other("playlist not found".into()))?;
         pl.name = name.into();
@@ -1050,14 +1055,14 @@ pub fn rename_playlist(db: &Db, id: &str, name: &str) -> DomainResult<()> {
 }
 
 pub fn delete_playlist(db: &Db, id: &str) -> DomainResult<()> {
-    transaction(db, |c| {
+    transaction(db, |c, state| {
         io::delete_playlist(c, id)?;
         io::delete_playlist_items(c, id)?;
-        let mut src = io::get_source(c)?;
+        let mut src = io::get_source(c, state)?;
         if src.source == QueueSourceKind::Playlist && src.playlist_id == id {
             src.source = QueueSourceKind::None;
             src.playlist_id.clear();
-            io::save_source(c, &src)?;
+            io::save_source(c, &src, state)?;
         }
         Ok(())
     })
@@ -1072,7 +1077,7 @@ pub fn add_playlist_items(db: &Db, playlist_id: &str, items: &[AudioTrack]) -> D
             return Err(DomainError::Other("empty audio path".into()));
         }
     }
-    transaction(db, |c| {
+    transaction(db, |c, _| {
         let mut pl = io::playlist_by_id(c, playlist_id)?
             .ok_or_else(|| DomainError::Other("playlist not found".into()))?;
         let existing = io::playlist_items(c, playlist_id)?;
@@ -1106,7 +1111,7 @@ pub fn add_playlist_items(db: &Db, playlist_id: &str, items: &[AudioTrack]) -> D
 }
 
 pub fn remove_playlist_item(db: &Db, playlist_id: &str, path: &str) -> DomainResult<()> {
-    transaction(db, |c| {
+    transaction(db, |c, _| {
         io::remove_playlist_item(c, playlist_id, path)?;
         if let Some(mut pl) = io::playlist_by_id(c, playlist_id)? {
             pl.updated_at = now_iso_millis();
@@ -1183,14 +1188,9 @@ pub fn history_page(
 
 fn transaction<T>(
     db: &Db,
-    operation: impl FnOnce(&rusqlite::Connection) -> DomainResult<T>,
+    operation: impl FnOnce(&rusqlite::Connection, &mut super::state::State) -> DomainResult<T>,
 ) -> DomainResult<T> {
-    db.with_conn(|c| {
-        let tx = c.unchecked_transaction()?;
-        let result = operation(&tx)?;
-        tx.commit()?;
-        Ok(result)
-    })
+    db.audio_transaction(|tx, state| operation(tx, state))
 }
 fn validate_duration(value: i64) -> DomainResult<()> {
     if value < 0 {
@@ -1263,7 +1263,7 @@ pub fn playlist_item_records_page(
         .collect())
 }
 pub fn remove_playlist_items(db: &Db, playlist_id: &str, paths: &[String]) -> DomainResult<()> {
-    transaction(db, |c| {
+    transaction(db, |c, _| {
         for path in paths {
             io::remove_playlist_item(c, playlist_id, path)?;
         }
@@ -1275,7 +1275,7 @@ pub fn remove_playlist_items(db: &Db, playlist_id: &str, paths: &[String]) -> Do
     })
 }
 pub fn move_queued(db: &Db, from: i32, to: i32) -> DomainResult<()> {
-    transaction(db, |c| {
+    transaction(db, |c, _| {
         let mut items = io::all_queue_items(c)?;
         if from < 0 || to < 0 || from as usize >= items.len() || to as usize >= items.len() {
             return Err(DomainError::Other("invalid queue index".into()));
@@ -1300,7 +1300,7 @@ pub fn record_history(
         return Err(DomainError::Other("empty audio path".into()));
     }
     validate_duration(duration_ms)?;
-    transaction(db, |c| {
+    transaction(db, |c, _| {
         record_history_conn(c, path, title, artist, duration_ms)
     })
 }

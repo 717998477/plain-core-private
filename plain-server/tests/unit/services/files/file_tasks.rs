@@ -142,7 +142,7 @@ async fn media_move_case(missing_destination: bool) {
         Arc::new(plain_rs::prefs::Prefs::load(&base.join("prefs")).unwrap()),
     )
     .unwrap();
-    let db = Db::open(&db_path).unwrap();
+    let db = server.runtime_state().db.clone();
     let audio_path = source.join("audio").to_str().unwrap().to_owned();
     db.with_conn(|c| -> rusqlite::Result<()> {
         for (kind, id, tag) in [(1,"1","audio"),(2,"2","video"),(3,"3","image"),(24,"4","document")] {
@@ -151,9 +151,11 @@ async fn media_move_case(missing_destination: bool) {
         c.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES('file',?1,22,'first',7,'fixture')",[source.join("document").to_str().unwrap()])?;
         c.execute_batch("INSERT INTO media_item(media_type,media_id,duration_ms,updated_at) VALUES('audio','1',5000000001,'first'),('video','2',6000000001,'first'); INSERT INTO video_play_progress(media_id,position_ms,updated_at) VALUES('2',4000000001,'first');")?;
         c.execute("INSERT INTO audio_queue_items(path,sort_order,title,artist,duration_ms) VALUES(?1,0,'fixture','',5000000001)",[&audio_path])?;
-        c.execute("INSERT INTO audio_playback(id,path,position_ms,revision) VALUES(1,?1,100,4)",[&audio_path])?;
+
         Ok(())
     }).unwrap();
+    plain_rs::media::audio::queue::save_audio_current(&db, &audio_path).unwrap();
+    plain_rs::media::audio::playback::seek(&db, 100).unwrap();
     let mut socket = crate::host::events::TestHost::new(&server);
     let source_root = source.clone();
     let clear_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -333,17 +335,16 @@ async fn media_move_case(missing_destination: bool) {
                     .get::<_, i64>(0))?,
                 0
             );
-            assert_eq!(
-                c.query_row("SELECT path FROM audio_playback WHERE id=1", [], |r| r
-                    .get::<_, String>(
-                    0
-                ))?,
-                ""
-            );
             Ok(())
         })
         .unwrap();
     }
+    assert!(
+        plain_rs::media::audio::playback::snapshot(&db)
+            .unwrap()
+            .path
+            .is_empty()
+    );
     worker.abort();
     let _ = worker.await;
     server.shutdown().await;

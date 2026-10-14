@@ -85,8 +85,7 @@ pub fn cleanup(
         .iter()
         .map(|item| item.path.clone())
         .collect::<Vec<_>>();
-    db.with_conn(|c| {
-        let tx=c.unchecked_transaction()?;
+    db.audio_transaction(|tx, state| {
         for item in successful { update_catalog(&tx, kind, action, item)?; }
         if action!=Action::Move && action!=Action::Restore {
             tx.execute("DELETE FROM tag_relations WHERE type=?1 AND key IN (SELECT value FROM json_each(?2))",params![kind.kind(),ids])?;
@@ -100,8 +99,8 @@ pub fn cleanup(
         if kind==DataType::Image && action!=Action::Restore {
             tx.execute("DELETE FROM image_embeddings WHERE id IN (SELECT value FROM json_each(?1))",[&ids])?;
         }
-        if kind==DataType::Audio && action!=Action::Restore { audio_queue::remove_paths_conn(&tx,&paths)?; }
-        tx.commit()?;
+        if kind==DataType::Audio && action!=Action::Restore { audio_queue::remove_paths_conn(&tx,&paths, state)?; }
+
         Ok(successful.len())
     })
 }

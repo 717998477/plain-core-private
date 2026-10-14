@@ -14,14 +14,36 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub(crate) mod io {
     use super::*;
-    pub fn get_source(c: &Connection) -> rusqlite::Result<QueueSource> {
-        Ok(c.query_row("SELECT source,playlist_id,current_path,current_index,sort_by FROM audio_queue_source WHERE id=1", [], |r| Ok(QueueSource {
-            source: QueueSourceKind::parse_stored(&r.get::<_,String>(0)?), playlist_id:r.get(1)?, current_path:r.get(2)?, current_index:r.get(3)?, sort_by:r.get(4)?
-        })).optional()?.unwrap_or_default())
+    pub fn get_source(
+        c: &Connection,
+        state: &crate::media::audio::state::State,
+    ) -> rusqlite::Result<QueueSource> {
+        Ok(c.query_row(
+            "SELECT source,playlist_id,current_index,sort_by FROM audio_queue_source WHERE id=1",
+            [],
+            |r| {
+                Ok(QueueSource {
+                    source: QueueSourceKind::parse_stored(&r.get::<_, String>(0)?),
+                    playlist_id: r.get(1)?,
+                    current_path: state.playback.path.clone(),
+                    current_index: r.get(2)?,
+                    sort_by: r.get(3)?,
+                })
+            },
+        )
+        .optional()?
+        .unwrap_or_else(|| QueueSource {
+            current_path: state.playback.path.clone(),
+            ..QueueSource::default()
+        }))
     }
-    pub fn save_source(c: &Connection, src: &QueueSource) -> rusqlite::Result<()> {
-        c.execute("INSERT INTO audio_queue_source (id,source,playlist_id,current_path,current_index,sort_by) VALUES (1,?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET source=?1,playlist_id=?2,current_path=?3,current_index=?4,sort_by=?5", params![src.source.as_str(),src.playlist_id,src.current_path,src.current_index,src.sort_by])?;
-        crate::media::audio::playback::sync_source(c, &src.current_path)?;
+    pub fn save_source(
+        c: &Connection,
+        src: &QueueSource,
+        state: &mut crate::media::audio::state::State,
+    ) -> crate::error::DomainResult<()> {
+        c.execute("INSERT INTO audio_queue_source (id,source,playlist_id,current_index,sort_by) VALUES (1,?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET source=?1,playlist_id=?2,current_index=?3,sort_by=?4", params![src.source.as_str(),src.playlist_id,src.current_index,src.sort_by])?;
+        state.select(&src.current_path)?;
         Ok(())
     }
     fn queue_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<QueueItem> {
@@ -210,14 +232,11 @@ pub(crate) mod io {
 }
 
 pub fn get_source(db: &Db) -> rusqlite::Result<QueueSource> {
-    db.with_conn(|c| io::get_source(c))
+    db.audio()
+        .read(|state| db.with_conn(|c| io::get_source(c, state)))
 }
-pub fn save_source(db: &Db, src: &QueueSource) -> rusqlite::Result<()> {
-    db.with_conn(|c| {
-        let tx = c.unchecked_transaction()?;
-        io::save_source(&tx, src)?;
-        tx.commit()
-    })
+pub fn save_source(db: &Db, src: &QueueSource) -> crate::error::DomainResult<()> {
+    db.audio_transaction(|tx, state| io::save_source(tx, src, state))
 }
 pub fn all_queue_items(db: &Db) -> rusqlite::Result<Vec<QueueItem>> {
     db.with_conn(|c| io::all_queue_items(c))

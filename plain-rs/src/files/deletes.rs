@@ -18,8 +18,7 @@ pub fn cleanup(db: &Db, items: &[Item], paths: &[String], roots: &[String]) -> D
     }) {
         return Err(DomainError::Other("invalid deleted media receipt".into()));
     }
-    db.with_conn(|c| {
-        let tx=c.unchecked_transaction()?;
+    db.audio_transaction(|tx, state| {
         let encoded=serde_json::to_string(paths).map_err(|e|DomainError::Other(e.to_string()))?;
         let mut media = items.to_vec();
         {
@@ -45,15 +44,15 @@ pub fn cleanup(db: &Db, items: &[Item], paths: &[String], roots: &[String]) -> D
         tx.execute("DELETE FROM media_files WHERE path IN (SELECT value FROM json_each(?1))",[&encoded])?;
         tx.execute("DELETE FROM tag_relations WHERE type=?1 AND key IN (SELECT value FROM json_each(?2))",params![DataType::File.kind(),encoded])?;
         tx.execute("DELETE FROM image_embeddings WHERE path IN (SELECT value FROM json_each(?1))",[&encoded])?;
-        audio_queue::remove_paths_conn(&tx,paths)?;
+        audio_queue::remove_paths_conn(&tx,paths, state)?;
         for root in roots {
             let prefix=directory_prefix(root);
             tx.execute("DELETE FROM media_files WHERE path=?1 OR substr(path,1,length(?2))=?2",params![root,prefix])?;
             tx.execute("DELETE FROM tag_relations WHERE type=?1 AND (key=?2 OR substr(key,1,length(?3))=?3)",params![DataType::File.kind(),root,prefix])?;
             tx.execute("DELETE FROM image_embeddings WHERE path=?1 OR substr(path,1,length(?2))=?2",params![root,prefix])?;
-            audio_queue::remove_root_paths_conn(&tx,root)?;
+            audio_queue::remove_root_paths_conn(&tx,root, state)?;
         }
-        tx.commit()?;Ok(())
+        Ok(())
     })
 }
 fn directory_prefix(root: &str) -> String {

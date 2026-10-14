@@ -13,3 +13,4 @@ pub const MDNS_HOSTNAME: &str = "mdns_hostname";
 pub const SIGNATURE_KEY_PAIR: &str = "signature_key_pair";
 pub const DEV_TOKEN: &str = "dev_token";
 pub const LOG_LEVEL: &str = "log_level";
+pub const AUDIO_CURRENT_PATH: &str = "audio_current_path";

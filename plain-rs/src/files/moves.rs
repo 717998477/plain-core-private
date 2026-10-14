@@ -66,8 +66,7 @@ pub fn rebind_once(
     if source_root.is_empty() || destination_root.is_empty() {
         return Err(invalid("file move roots required"));
     }
-    db.with_conn(|c| {
-        let tx = c.unchecked_transaction()?;
+    db.audio_transaction(|tx, state| {
         if let Some(id) = receipt {
             if id.is_empty() { return Err(invalid("empty recovery receipt")); }
             if tx.query_row("SELECT 1 FROM file_task_effects WHERE id=?1", [id], |_| Ok(())).optional()?.is_some() { return Ok(0); }
@@ -113,13 +112,13 @@ pub fn rebind_once(
                 }
             }
             if media_type==DataType::Image { tx.execute("DELETE FROM image_embeddings WHERE id IN (?1,?2)",params![binding.source_id,binding.destination_id])?; }
-            if media_type==DataType::Audio { audio_queue::remove_paths_conn(&tx,std::slice::from_ref(&binding.source_path))?; }
+            if media_type==DataType::Audio { audio_queue::remove_paths_conn(&tx,std::slice::from_ref(&binding.source_path), state)?; }
         }
         let mut roots=HashSet::new();
         for (source_root,destination_root) in aliases.iter().map(|(a,b)|(a.as_str(),b.as_str())).chain(std::iter::once((source_root,destination_root))) {
             if source_root.is_empty()||destination_root.is_empty() { return Err(invalid("file move roots required")); }
             if !roots.insert(source_root) { continue; }
-        audio_queue::remove_root_paths_conn(&tx, source_root)?;
+        audio_queue::remove_root_paths_conn(&tx, source_root, state)?;
         let source_prefix = format!("{}/",source_root.trim_end_matches('/'));
         let mut statement = tx.prepare("SELECT tag_id,key,created_at,size,title FROM tag_relations WHERE type=?1 AND (key=?2 OR substr(key,1,length(?3))=?3)")?;
         let relations = statement.query_map(params![DataType::File.kind(),source_root,source_prefix],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,i64>(3)?,row.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -134,7 +133,7 @@ pub fn rebind_once(
         tx.execute("DELETE FROM image_embeddings WHERE path=?1 OR substr(path,1,length(?2))=?2",params![source_root,source_prefix])?;
         }
         if let Some(id) = receipt { tx.execute("INSERT INTO file_task_effects(id) VALUES(?1)", [id])?; }
-        tx.commit()?;
+
         Ok(bindings.len())
     })
 }

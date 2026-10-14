@@ -18,7 +18,8 @@ fn unique_tmp_dir(label: &str) -> std::path::PathBuf {
 }
 
 fn make_state(dir: &std::path::Path) -> Arc<ChatState> {
-    let prefs = plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(dir)).unwrap();
+    let prefs =
+        Arc::new(plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(dir)).unwrap());
     Arc::new(ChatState::nas_init(dir, &prefs).unwrap())
 }
 
@@ -77,7 +78,8 @@ fn identity_is_stable_across_reopen() {
 #[test]
 fn service_token_is_the_fs_url_token() {
     let dir = unique_tmp_dir("token");
-    let prefs = plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(&dir)).unwrap();
+    let prefs =
+        Arc::new(plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(&dir)).unwrap());
     let state = ChatState::nas_init(&dir, &prefs).unwrap();
     let url_token = plain_media::storage::kv::UrlToken::new(&prefs)
         .ensure()
@@ -89,8 +91,9 @@ fn service_token_is_the_fs_url_token() {
 #[test]
 fn nas_identity_matches_shared_persisted_identity() {
     let directory = tempfile::tempdir().unwrap();
-    let prefs =
-        plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(directory.path())).unwrap();
+    let prefs = Arc::new(
+        plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(directory.path())).unwrap(),
+    );
     let stored = plain_rs::prefs::ensure_identity(&prefs);
     let state = ChatState::nas_init(directory.path(), &prefs).unwrap();
     assert_eq!(state.identity.client_id, stored.client_id);

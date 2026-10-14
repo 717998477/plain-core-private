@@ -321,7 +321,7 @@ impl ContentServer {
         prefs: Arc<plain_rs::prefs::Prefs>,
     ) -> Result<(ServerState, watch::Sender<bool>, watch::Receiver<bool>), String> {
         crate::assembly::core_dependencies::CoreDependencies::validate_token(token)?;
-        let db = Arc::new(Db::open(path).map_err(|e| e.to_string())?);
+        let db = Arc::new(Db::open_with_prefs(path, prefs.clone()).map_err(|e| e.to_string())?);
         let (events, _) = broadcast::channel(256);
         Self::build_state_with(crate::assembly::core_dependencies::CoreDependencies::new(
             db,

@@ -311,9 +311,9 @@ impl ChatState {
     /// (`client_id`, signature keypair, URL token, display name).
     pub fn nas_init(
         data_dir: &std::path::Path,
-        prefs: &plain_rs::prefs::Prefs,
+        prefs: &Arc<plain_rs::prefs::Prefs>,
     ) -> anyhow::Result<Self> {
-        let db = Db::open(&data_dir.join("plain.db"))?;
+        let db = Db::open_with_prefs(&data_dir.join("plain.db"), prefs.clone())?;
         let token = plain_media::storage::kv::UrlToken::new(prefs).ensure()?;
         let stored = plain_rs::prefs::ensure_identity(prefs);
         let identity = Arc::new(ChatIdentity::new(
