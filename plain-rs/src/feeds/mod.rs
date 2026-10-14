@@ -25,11 +25,11 @@ pub fn require_url(url: &str) -> DomainResult<()> {
     Ok(())
 }
 
-pub fn update(db: &Db, id: &str, name: &str, fetch_content: bool) -> DomainResult<FeedRow> {
+pub fn update(db: &Db, id: &str, name: &str, fetch_full_content: bool) -> DomainResult<FeedRow> {
     let feed = db
         .feed_get(id)?
         .ok_or_else(|| error(format!("Feed {id} not found")))?;
-    Ok(db.feed_save(id, name, &feed.url, fetch_content, &now())?)
+    Ok(db.feed_save(id, name, &feed.url, fetch_full_content, &now())?)
 }
 
 pub fn delete(db: &Db, id: &str) -> DomainResult<bool> {
@@ -72,7 +72,7 @@ pub fn delete_entries(db: &Db, query: &str) -> DomainResult<usize> {
 pub fn update_url(db: &Db, id: &str, url: &str) -> DomainResult<FeedRow> {
     require_url(url)?;
     let feed = db.feed_get(id)?.ok_or_else(|| error("feed_not_found"))?;
-    Ok(db.feed_save(id, &feed.name, url, feed.fetch_content, &now())?)
+    Ok(db.feed_save(id, &feed.name, url, feed.fetch_full_content, &now())?)
 }
 
 pub fn mark_read(db: &Db, query: &str, read: bool) -> DomainResult<usize> {
@@ -106,10 +106,10 @@ pub fn import_opml(db: &Db, content: &str) -> DomainResult<()> {
             .or_else(|| tag.attr("text"))
             .unwrap_or_default()
             .to_string();
-        let fetch_content = tag.attr("fetchContent") == Some("true");
-        feeds.push((name, url.to_string(), fetch_content));
+        let fetch_full_content = tag.attr("fetchContent") == Some("true");
+        feeds.push((name, url.to_string(), fetch_full_content));
     }
-    for (name, url, fetch_content) in feeds {
+    for (name, url, fetch_full_content) in feeds {
         // One malformed outline must not cost the user the rest of the file:
         // OPML is hand-edited and exported by plenty of other readers.
         if require_url(&url).is_err() || db.feed_get_by_url(&url)?.is_some() {
@@ -119,7 +119,7 @@ pub fn import_opml(db: &Db, content: &str) -> DomainResult<()> {
             &uuid::Uuid::new_v4().to_string(),
             &name,
             &url,
-            fetch_content,
+            fetch_full_content,
             &now(),
         )?;
     }
@@ -137,7 +137,7 @@ pub fn export_opml(db: &Db) -> DomainResult<String> {
             xml::escape(&feed.name),
             xml::escape(&feed.name),
             xml::escape(&feed.url),
-            feed.fetch_content
+            feed.fetch_full_content
         ));
     }
     xml.push_str("</body></opml>");

@@ -87,7 +87,7 @@ pub struct MemberPeerInfo {
     #[serde(default)]
     pub ip: String,
     #[serde(default)]
-    pub port: u16,
+    pub port: Option<u16>,
 }
 
 // ── ChannelInvite ─────────────────────────────────────────────────────────

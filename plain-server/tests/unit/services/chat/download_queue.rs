@@ -21,7 +21,7 @@ fn fixture() -> (
         "peer",
         "fixture",
         "",
-        443,
+        Some(443),
         plain_rs::chat::enums::DeviceType::Phone,
     );
     plain_rs::db::chat_store::peers::save(

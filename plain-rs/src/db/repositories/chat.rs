@@ -33,7 +33,7 @@ impl Db {
             ("WHERE channel_id=?1", cid)
         } else {
             let pid = id.strip_prefix("peer:").unwrap_or(id);
-            ("WHERE channel_id='' AND (to_id=?1 OR from_id=?1)", pid)
+            ("WHERE channel_id IS NULL AND (to_id=?1 OR from_id=?1)", pid)
         };
         let text_clause = if text.is_empty() {
             String::new()
@@ -58,17 +58,17 @@ impl Db {
         chats
     }
 
-    pub fn insert_chat(&self, chat: &DChat) {
+    pub fn insert_chat(&self, chat: &DChat) -> rusqlite::Result<()> {
         let conn = self.0.lock().unwrap();
-        let _ = conn.execute(
+        conn.execute(
             "INSERT INTO chats (id,from_id,to_id,channel_id,content,status,status_data,created_at,updated_at) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
-                chat.id, chat.from_id, chat.to_id, chat.channel_id,
-                chat.content, chat.status, chat.status_data,
-                chat.created_at, chat.updated_at
+                chat.id, chat.from_id, chat.to_id, chat.channel_id.as_deref().filter(|value|!value.is_empty()),
+                chat.content, chat.status, chat.status_data.as_deref().filter(|value|!value.is_empty()),
+                crate::utils::dbtime::normalize(&chat.created_at)?, crate::utils::dbtime::normalize(&chat.updated_at)?
             ],
-        );
+        ).map(|_| ())
     }
 
     pub fn delete_chat(&self, id: &str) -> bool {
@@ -101,7 +101,7 @@ impl Db {
             let conn = self.0.lock().unwrap();
             let _ = conn.execute(
                 "UPDATE chats SET status=?1, status_data=?2, updated_at=?3 WHERE id=?4",
-                params![status, status_data, now, id],
+                params![status, (!status_data.is_empty()).then_some(status_data), now, id],
             );
         }
         self.get_chat_by_id(id)
@@ -148,13 +148,13 @@ impl Db {
     ///     SELECT c.* FROM chats c
     ///     INNER JOIN (
     ///         SELECT '' as from_id, '' as to_id, channel_id, MAX(created_at) as max_created_at
-    ///         FROM chats WHERE channel_id != '' GROUP BY channel_id
+    ///         FROM chats WHERE channel_id IS NOT NULL GROUP BY channel_id
     ///         UNION ALL
     ///         SELECT from_id, to_id, '' as channel_id, MAX(created_at) as max_created_at
-    ///         FROM chats WHERE channel_id = '' GROUP BY from_id, to_id
+    ///         FROM chats WHERE channel_id IS NULL GROUP BY from_id, to_id
     ///     ) latest ON (
-    ///         (c.channel_id != '' AND c.channel_id = latest.channel_id AND c.created_at = latest.max_created_at)
-    ///         OR (c.channel_id = '' AND c.from_id = latest.from_id AND c.to_id = latest.to_id AND c.created_at = latest.max_created_at)
+    ///         (c.channel_id IS NOT NULL AND c.channel_id = latest.channel_id AND c.created_at = latest.max_created_at)
+    ///         OR (c.channel_id IS NULL AND c.from_id = latest.from_id AND c.to_id = latest.to_id AND c.created_at = latest.max_created_at)
     ///     )
     ///     ORDER BY c.created_at DESC
     /// """)
@@ -167,13 +167,13 @@ impl Db {
              FROM chats c \
              INNER JOIN ( \
                  SELECT '' as from_id, '' as to_id, channel_id, MAX(created_at) as max_created_at \
-                 FROM chats WHERE channel_id != '' GROUP BY channel_id \
+                 FROM chats WHERE channel_id IS NOT NULL GROUP BY channel_id \
                  UNION ALL \
                  SELECT from_id, to_id, '' as channel_id, MAX(created_at) as max_created_at \
-                 FROM chats WHERE channel_id = '' GROUP BY from_id, to_id \
+                 FROM chats WHERE channel_id IS NULL GROUP BY from_id, to_id \
              ) latest ON ( \
-                 (c.channel_id != '' AND c.channel_id = latest.channel_id AND c.created_at = latest.max_created_at) \
-                 OR (c.channel_id = '' AND c.from_id = latest.from_id AND c.to_id = latest.to_id AND c.created_at = latest.max_created_at) \
+                 (c.channel_id IS NOT NULL AND c.channel_id = latest.channel_id AND c.created_at = latest.max_created_at) \
+                 OR (c.channel_id IS NULL AND c.from_id = latest.from_id AND c.to_id = latest.to_id AND c.created_at = latest.max_created_at) \
              ) \
              ORDER BY c.created_at DESC",
         ) {
@@ -205,7 +205,7 @@ impl Db {
     pub fn delete_chats_by_peer(&self, peer_id: &str) {
         let conn = self.0.lock().unwrap();
         let _ = conn.execute(
-            "DELETE FROM chats WHERE channel_id='' AND (to_id=? OR from_id=?)",
+            "DELETE FROM chats WHERE channel_id IS NULL AND (to_id=? OR from_id=?)",
             params![peer_id, peer_id],
         );
     }
@@ -225,7 +225,7 @@ impl Db {
     pub fn get_chats_by_peer(&self, peer_id: &str) -> Vec<DChat> {
         let conn = self.0.lock().unwrap();
         let mut stmt = match conn.prepare(&format!(
-            "SELECT {CHAT_COLS} FROM chats WHERE channel_id='' AND (to_id=? OR from_id=?) ORDER BY created_at ASC"
+            "SELECT {CHAT_COLS} FROM chats WHERE channel_id IS NULL AND (to_id=? OR from_id=?) ORDER BY created_at ASC"
         )) {
             Ok(s) => s,
             Err(_) => return vec![],

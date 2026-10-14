@@ -1,11 +1,14 @@
 use super::*;
 use crate::media::audio::queue as audio_queue;
+#[path = "../../library/fixtures.rs"]
+mod fixtures;
+use fixtures::{indexed_current, register_audio};
 
 #[test]
 fn in_memory_databases_have_independent_playback_state() {
     let first = Db::open(std::path::Path::new(":memory:")).unwrap();
     let second = Db::open(std::path::Path::new(":memory:")).unwrap();
-    audio_queue::save_audio_current(&first, "one").unwrap();
+    indexed_current(&first, "one").unwrap();
     seek(&first, 123).unwrap();
     assert_eq!(snapshot(&first.clone()).unwrap().position_ms, 123);
     assert_eq!(snapshot(&second).unwrap(), Playback::default());
@@ -16,7 +19,7 @@ fn recreated_runtime_rejects_reports_from_the_previous_engine_session() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
     let db = Db::open(&path).unwrap();
-    audio_queue::save_audio_current(&db, "one").unwrap();
+    indexed_current(&db, "one").unwrap();
     let previous = snapshot(&db).unwrap();
     drop(db);
     let db = Db::open(&path).unwrap();
@@ -29,25 +32,37 @@ fn recreated_runtime_rejects_reports_from_the_previous_engine_session() {
 fn reopening_remembers_only_the_current_track_and_preserves_queue_and_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
-    let prefs_path = crate::prefs::default_path(dir.path());
     let db = Db::open(&path).unwrap();
     let track = audio_queue::AudioTrack::from_path_stem("one");
+    register_audio(&db, &track);
     let playlist = audio_queue::create_playlist(&db, "Saved playlist").unwrap();
     audio_queue::add_playlist_items(&db, &playlist.id, std::slice::from_ref(&track)).unwrap();
     let row = prepare_track(&db, &track, true).unwrap();
     loaded(&db, &track.path, row.revision).unwrap();
     assert!(started(&db, &track, row.revision).unwrap());
     seek(&db, 123_456).unwrap();
-    let before = std::fs::read(&prefs_path).unwrap();
-    let writes = db.with_conn(|c| c.total_changes());
     let playing = invalidate(&db).unwrap();
     assert!(report(&db, "one", playing.revision, 234_567).unwrap());
     loaded(&db, "one", playing.revision).unwrap();
-    assert_eq!(db.with_conn(|c| c.total_changes()), writes);
-    assert_eq!(std::fs::read(&prefs_path).unwrap(), before);
+    let id = db
+        .media_file_by_path(crate::enums::DataType::Audio, "one")
+        .unwrap()
+        .unwrap()
+        .id;
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&before).unwrap(),
-        serde_json::json!({"audio_current_path": "one"})
+        db.media_play_history_get(&id).unwrap().unwrap().position_ms,
+        234_567
+    );
+    assert_eq!(
+        db.audio_current_media_id().unwrap(),
+        id
+    );
+    assert!(
+        crate::prefs::Prefs::load(&crate::prefs::default_path(dir.path()))
+            .unwrap()
+            .get::<String>("audio_current_path")
+            .unwrap()
+            .is_none()
     );
     drop(db);
 
@@ -76,20 +91,21 @@ fn reopening_remembers_only_the_current_track_and_preserves_queue_and_history() 
             .audio_path,
         "one"
     );
-    audio_queue::save_audio_current(&db, "two").unwrap();
+    indexed_current(&db, "two").unwrap();
     drop(db);
     assert_eq!(snapshot(&Db::open(&path).unwrap()).unwrap().path, "two");
 }
 
 #[test]
-fn failed_database_commit_restores_current_track_preferences_and_runtime() {
+fn failed_database_commit_restores_current_track_row_and_runtime() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("db")).unwrap();
-    audio_queue::save_audio_current(&db, "one").unwrap();
+    indexed_current(&db, "one").unwrap();
     let before = seek(&db, 123).unwrap();
     db.with_conn(|c| c.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(parent_id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);")).unwrap();
     assert!(
         db.audio_transaction(|tx, state| {
+            state.current_media_id = Some("test:two".into());
             state.select("two")?;
             tx.execute("INSERT INTO child VALUES(1)", [])?;
             Ok(())
@@ -97,23 +113,17 @@ fn failed_database_commit_restores_current_track_preferences_and_runtime() {
         .is_err()
     );
     assert_eq!(snapshot(&db).unwrap(), before);
-    let prefs = crate::prefs::Prefs::load(&crate::prefs::default_path(dir.path())).unwrap();
-    assert_eq!(
-        prefs
-            .get::<String>(crate::prefs::system::keys::AUDIO_CURRENT_PATH)
-            .unwrap()
-            .as_deref(),
-        Some("one")
-    );
+    let selected = db.audio_current_media_id().unwrap();
+    assert_eq!(selected, "test:one");
 }
 
 #[test]
-fn failed_preferences_write_keeps_the_source_and_runtime_unchanged() {
+fn failed_current_media_write_keeps_the_source_and_runtime_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("db");
-    let db = Db::open(&path).unwrap();
-    audio_queue::save_audio_current(&db, "one").unwrap();
+    let db = Db::open(&dir.path().join("db")).unwrap();
+    indexed_current(&db, "one").unwrap();
     let before = seek(&db, 123).unwrap();
+    register_audio(&db, &audio_queue::AudioTrack::from_path_stem("two"));
     let prefs_path = crate::prefs::default_path(dir.path());
     std::fs::remove_file(&prefs_path).unwrap();
     std::fs::create_dir(&prefs_path).unwrap();
@@ -122,11 +132,11 @@ fn failed_preferences_write_keeps_the_source_and_runtime_unchanged() {
     assert_eq!(audio_queue::get_audio_current(&db).unwrap(), "one");
 }
 #[test]
-fn progress_is_runtime_only_and_stale_reports_cannot_overwrite_seek_or_returned_track() {
+fn stale_reports_cannot_overwrite_seek_or_returned_track() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
     let db = Db::open(&path).unwrap();
-    audio_queue::save_audio_current(&db, "one").unwrap();
+    indexed_current(&db, "one").unwrap();
     let first = snapshot(&db).unwrap();
     assert!(report(&db, "one", first.revision, 3_000_000_123).unwrap());
     assert_eq!(snapshot(&db.clone()).unwrap().position_ms, 3_000_000_123);
@@ -136,9 +146,9 @@ fn progress_is_runtime_only_and_stale_reports_cannot_overwrite_seek_or_returned_
     let sought = seek(&db, 0).unwrap();
     assert!(!report(&db, "one", resumed.revision, 100).unwrap());
     assert!(report(&db, "one", sought.revision, 456).unwrap());
-    audio_queue::save_audio_current(&db, "two").unwrap();
+    indexed_current(&db, "two").unwrap();
     assert_eq!(snapshot(&db).unwrap().position_ms, 0);
-    audio_queue::save_audio_current(&db, "one").unwrap();
+    indexed_current(&db, "one").unwrap();
     assert!(!report(&db, "one", sought.revision, 999).unwrap());
     assert_eq!(snapshot(&db).unwrap().position_ms, 0);
     assert!(seek(&db, -1).is_err());
@@ -148,11 +158,13 @@ fn progress_is_runtime_only_and_stale_reports_cannot_overwrite_seek_or_returned_
 fn source_and_progress_reset_are_atomic() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("db")).unwrap();
-    audio_queue::save_audio_current(&db, "one").unwrap();
+    indexed_current(&db, "one").unwrap();
     let mut source = audio_queue::source(&db).unwrap();
     audio_queue::save_source(&db, &source).unwrap();
     seek(&db, 123).unwrap();
-    db.with_conn(|c| c.execute_batch("CREATE TRIGGER fail_source BEFORE UPDATE ON audio_queue_source BEGIN SELECT RAISE(ABORT,'fail'); END")).unwrap();
+    let prefs_path = crate::prefs::default_path(dir.path());
+    std::fs::remove_file(&prefs_path).unwrap();
+    std::fs::create_dir(&prefs_path).unwrap();
     source.current_path = "two".into();
     source.current_index = 99;
     assert!(audio_queue::save_source(&db, &source).is_err());
@@ -166,6 +178,7 @@ fn playback_start_is_once_per_revision_and_failed_history_write_can_retry() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("db")).unwrap();
     let track = audio_queue::AudioTrack::from_path_stem("one");
+    register_audio(&db, &track);
     let row = prepare_track(&db, &track, true).unwrap();
     loaded(&db, &track.path, row.revision).unwrap();
     assert!(started(&db, &track, row.revision).unwrap());
@@ -177,7 +190,7 @@ fn playback_start_is_once_per_revision_and_failed_history_write_can_retry() {
     let newer = prepare_track(&db, &track, false).unwrap();
     loaded(&db, &track.path, newer.revision).unwrap();
     assert!(!started(&db, &track, row.revision).unwrap());
-    db.with_conn(|c| c.execute_batch("CREATE TRIGGER fail_history BEFORE INSERT ON audio_play_history BEGIN SELECT RAISE(ABORT,'fail'); END")).unwrap();
+    db.with_conn(|c| c.execute_batch("CREATE TRIGGER fail_history BEFORE INSERT ON media_play_history BEGIN SELECT RAISE(ABORT,'fail'); END")).unwrap();
     assert!(started(&db, &track, newer.revision).is_err());
     db.with_conn(|c| c.execute_batch("DROP TRIGGER fail_history"))
         .unwrap();
@@ -193,6 +206,7 @@ fn buffered_start_survives_pause_resume_and_seek_but_not_track_replacement() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("db")).unwrap();
     let track = audio_queue::AudioTrack::from_path_stem("one");
+    register_audio(&db, &track);
     let first = prepare_track(&db, &track, false).unwrap();
     loaded(&db, &track.path, first.revision).unwrap();
     invalidate(&db).unwrap();
@@ -206,7 +220,7 @@ fn buffered_start_survives_pause_resume_and_seek_but_not_track_replacement() {
         audio_queue::history_page(&db, 0, 10, "").unwrap()[0].play_count,
         2
     );
-    audio_queue::save_audio_current(&db, "other").unwrap();
-    audio_queue::save_audio_current(&db, "one").unwrap();
+    indexed_current(&db, "other").unwrap();
+    indexed_current(&db, "one").unwrap();
     assert!(!started(&db, &track, next.revision).unwrap());
 }

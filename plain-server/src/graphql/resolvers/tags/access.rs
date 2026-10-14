@@ -36,7 +36,7 @@ struct TagHostRelation {
 fn relation(r: domain::RelationRecord) -> Result<TagHostRelation> {
     Ok(TagHostRelation {
         tag_id: r.tag_id.into(),
-        key: r.key,
+        key: r.target_key,
         r#type: r.kind,
         created_at: crate::graphql::resolvers::common::content_common::instant(&r.created_at)?,
         size_bytes: Long(r.size_bytes),
@@ -55,7 +55,7 @@ impl From<TagHostRelationInput> for domain::RelationInput {
     fn from(r: TagHostRelationInput) -> Self {
         Self {
             tag_id: r.tag_id.to_string(),
-            key: r.key,
+            target_key: r.key,
             kind: r.r#type.kind(),
             size_bytes: r.size_bytes.0,
             title: r.title,

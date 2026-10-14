@@ -32,13 +32,13 @@ impl TryFrom<DChat> for ChatItem {
         Ok(Self {
             from_id: ID(row.from_id),
             to_id: ID(row.to_id),
-            channel_id: (!row.channel_id.is_empty()).then_some(ID(row.channel_id)),
+            channel_id: row.channel_id.map(ID),
             id: ID(row.id),
             content: row.content,
             created_at: Instant(chrono::DateTime::parse_from_rfc3339(&row.created_at)?.into()),
             updated_at: Instant(chrono::DateTime::parse_from_rfc3339(&row.updated_at)?.into()),
             status: row.status,
-            status_data: row.status_data,
+            status_data: row.status_data.unwrap_or_default(),
         })
     }
 }

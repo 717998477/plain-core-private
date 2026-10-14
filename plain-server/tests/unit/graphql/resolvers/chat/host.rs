@@ -191,7 +191,7 @@ async fn retry_returns_pending_before_platform_transport_completes() {
         "remote",
         "remote",
         "",
-        443,
+        Some(443),
         plain_rs::chat::enums::DeviceType::Phone,
     );
     remote.status = plain_rs::chat::enums::PeerStatus::Paired;

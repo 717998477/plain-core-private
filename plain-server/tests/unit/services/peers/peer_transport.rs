@@ -6,7 +6,7 @@ fn peer() -> DPeer {
         "fixture",
         "fixture",
         "",
-        443,
+        Some(443),
         plain_rs::chat::enums::DeviceType::Phone,
     );
     p.key = plain_rs::utils::base64::base64_encode(&[7; 32]);

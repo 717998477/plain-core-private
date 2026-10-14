@@ -57,7 +57,7 @@ impl TagQuery {
                 .into_iter()
                 .map(|r| TagRelation {
                     tag_id: ID(r.tag_id),
-                    key: r.key,
+                    key: r.target_key,
                 })
                 .collect(),
         )

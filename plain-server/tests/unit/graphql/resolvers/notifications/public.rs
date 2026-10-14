@@ -51,8 +51,8 @@ async fn notifications_map_host_facts_into_the_contract_type() {
     let (_dir, schema) = fixture(json!(["NOTIFICATION_LISTENER"]));
     stub(schema_host(&schema), |method, _| match method {
         "systemNotificationFacts" => json!([
-            fact("0|1|com.a", "com.a", "2026-10-05T01:00:00Z"),
-            fact("0|2|com.b", "com.b", "2026-10-05T02:00:00Z"),
+            fact("0|1|com.a", "com.a", "2026-10-05T01:00:00.000Z"),
+            fact("0|2|com.b", "com.b", "2026-10-05T02:00:00.000Z"),
         ]),
         other => panic!("unexpected host call {other}"),
     });

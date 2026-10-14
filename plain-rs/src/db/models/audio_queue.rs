@@ -23,16 +23,9 @@ impl QueueSourceKind {
         }
     }
 
-    pub fn parse_stored(s: &str) -> Self {
-        match s {
-            "PLAYLIST" => QueueSourceKind::Playlist,
-            "LIBRARY" => QueueSourceKind::Library,
-            _ => QueueSourceKind::None,
-        }
-    }
+
 }
 
-/// The single queue-source row (plain-app `DAudioQueueSource`, id = 1).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct QueueSource {
     pub source: QueueSourceKind,
@@ -51,7 +44,6 @@ impl Default for QueueSource {
             source: QueueSourceKind::None,
             playlist_id: String::new(),
             current_path: String::new(),
-            // Matches the SQL column default: unknown position.
             current_index: -1,
             sort_by: String::new(),
         }

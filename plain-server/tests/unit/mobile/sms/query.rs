@@ -31,19 +31,19 @@ fn sms_mms_plans_partition_ids_literal_text_trash_and_archive_boundaries() {
     let db = db(&dir);
     db.archived_conversation_save(&plain_rs::db::ArchivedConversationRow {
         conversation_id: "4".into(),
-        conversation_date: "2026-10-05T01:00:00.123Z".into(),
+        archived_at: "2026-10-05T01:00:00.123Z".into(),
     })
     .unwrap();
     db.trashed_message_save_many(&[
         plain_rs::db::TrashedMessageRow {
-            message_id: "mms_2".into(),
+            message_id: "2".into(),
             is_mms: true,
-            trashed_at: "today".into(),
+            trashed_at: "2026-01-01T00:00:00.000Z".into(),
         },
         plain_rs::db::TrashedMessageRow {
             message_id: "1".into(),
             is_mms: false,
-            trashed_at: "today".into(),
+            trashed_at: "2026-01-01T00:00:00.000Z".into(),
         },
     ])
     .unwrap();
@@ -65,7 +65,7 @@ fn sms_mms_plans_partition_ids_literal_text_trash_and_archive_boundaries() {
 #[test]
 fn merged_messages_sort_real_instants_then_page_and_resolve_blank_addresses() {
     let items = vec![
-        json!({"id":"sms","date":"2026-10-05T01:00:00Z","address":""}),
+        json!({"id":"sms","date":"2026-10-05T01:00:00.000Z","address":""}),
         json!({"id":"mms","date":"2026-10-05T04:00:00+02:00","address":"123"}),
     ];
     let result = page(items, 1, 1, "canonical").unwrap();

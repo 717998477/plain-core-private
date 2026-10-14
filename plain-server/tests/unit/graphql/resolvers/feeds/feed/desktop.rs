@@ -5,7 +5,7 @@ use async_graphql::Request;
 async fn graphql_feed_entry_joins_and_counts() {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Db::open(&dir.path().join("plain.db")).unwrap());
-    let at = chrono::Utc::now().to_rfc3339();
+    let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     db.feed_save("feed", "News", "https://example.org/rss", false, &at)
         .unwrap();
     db.feed_entries_insert(&[FeedEntryRow {
@@ -17,9 +17,9 @@ async fn graphql_feed_entry_joins_and_counts() {
         description: "Summary".into(),
         author: String::new(),
         content: String::new(),
-        raw_id: "hash".into(),
+        source_entry_id: "hash".into(),
         published_at: at.clone(),
-        read: false,
+        is_read: false,
         created_at: at.clone(),
         updated_at: at,
     }])

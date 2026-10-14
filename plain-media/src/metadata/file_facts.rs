@@ -75,7 +75,7 @@ pub fn read_file_metadata_with_availability(
         dimensions: width > 0 && height > 0,
         rotation: width > 0 && height > 0 && rotation.is_some(),
         taken_at: false,
-        album_file_id: false,
+        cover_image_id: false,
     };
     Ok(MediaFileMetadataRead {
         available,
@@ -91,7 +91,7 @@ pub fn read_file_metadata_with_availability(
             bucket_id,
             size_bytes,
             duration_ms,
-            album_file_id: String::new(),
+            cover_image_id: None,
             width,
             height,
             rotation: rotation.unwrap_or_default(),

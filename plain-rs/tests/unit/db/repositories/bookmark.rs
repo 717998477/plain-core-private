@@ -16,7 +16,7 @@ fn bookmark_store_survives_reopen_and_ungroups_on_group_delete() {
     assert_eq!(get_bookmark_groups(&db).len(), 1);
     delete_bookmark_group(&db, &group.id).unwrap();
     let ungrouped = get_bookmark_by_id(&db, &bookmark.id).unwrap();
-    assert_eq!(ungrouped.group_id, "");
+    assert_eq!(ungrouped.group_id, None);
     assert!(get_bookmark_group_by_id(&db, &group.id).is_none());
     assert_eq!(delete_bookmarks(&db, &[bookmark.id]).unwrap(), 1);
     assert!(get_bookmarks(&db).is_empty());

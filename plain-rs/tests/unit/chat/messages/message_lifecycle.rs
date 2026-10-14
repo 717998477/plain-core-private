@@ -6,7 +6,7 @@ fn db() -> Db {
         "peer",
         "Fixture",
         "",
-        1,
+        Some(1),
         crate::chat::enums::DeviceType::Phone,
     ));
     db
@@ -39,7 +39,7 @@ fn reception_is_atomic_and_receipt_survives_restart_and_message_deletion() {
         "peer",
         "Fixture",
         "",
-        1,
+        Some(1),
         crate::chat::enums::DeviceType::Phone,
     ));
     let signature = crate::base64_encode(&[7; 64]);
@@ -102,7 +102,7 @@ fn retry_merges_current_recipient_results_and_protects_content_and_creation() {
     assert_eq!(retried.status, ChatStatus::Sent);
     assert_eq!(retried.content, chat.content);
     assert_eq!(retried.created_at, chat.created_at);
-    let data: StatusData = serde_json::from_str(&retried.status_data).unwrap();
+    let data: StatusData = serde_json::from_str(retried.status_data.as_deref().unwrap()).unwrap();
     assert_eq!(data.results.unwrap().len(), 2);
     assert!(
         delivery(

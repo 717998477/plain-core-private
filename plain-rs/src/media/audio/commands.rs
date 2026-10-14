@@ -152,6 +152,11 @@ pub fn command(
         new_track,
     )
 }
+pub fn clear_engine(db: &Db, prefs: &Prefs, engine: &mut impl Engine) -> DomainResult<Playback> {
+    let playback = audio_playback::invalidate(db)?;
+    dispatch(db,prefs,engine,Action::Clear,None,playback,None,false)
+}
+
 fn dispatch(
     db: &Db,
     prefs: &Prefs,
@@ -198,7 +203,7 @@ fn dispatch(
     if report.loaded {
         audio_playback::loaded(db, &report.path, revision)?;
     }
-    if !report.path.is_empty() {
+    if !matches!(action,Action::Clear) && !report.path.is_empty() {
         audio_playback::report(db, &report.path, revision, report.position_ms)?;
     }
     audio_playback::snapshot(db)

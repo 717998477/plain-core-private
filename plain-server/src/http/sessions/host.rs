@@ -59,7 +59,7 @@ pub(crate) fn touch(state: &ServerState, client_id: &str) -> anyhow::Result<()> 
     let now = chrono::Utc::now().timestamp_millis();
     state
         .db
-        .session_touch(&[(client_id.to_owned(), now.to_string())])?;
+        .session_touch(&[(client_id.to_owned(), plain_rs::utils::dbtime::iso_from_unix_millis(now))])?;
     let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
         "WEB_REQUEST_RECEIVED",
         json!({"clientId":client_id,"time":now}).to_string(),
@@ -76,7 +76,7 @@ pub(crate) fn execute(state: &ServerState, request: Request) -> anyhow::Result<V
             )
         }
         Request::Create { name } => {
-            let now = chrono::Utc::now().timestamp_millis().to_string();
+            let now = plain_rs::utils::dbtime::now_iso();
             let row = SessionRow {
                 client_id: uuid::Uuid::new_v4().to_string(),
                 name,
@@ -87,7 +87,7 @@ pub(crate) fn execute(state: &ServerState, request: Request) -> anyhow::Result<V
                 browser_name: String::new(),
                 browser_version: String::new(),
                 token: plain_rs::utils::base64::base64_encode(&plain_rs::crypto::random_bytes(32)),
-                last_active_at: None,
+                last_seen_at: None,
                 created_at: now.clone(),
                 updated_at: now,
             };
@@ -100,7 +100,7 @@ pub(crate) fn execute(state: &ServerState, request: Request) -> anyhow::Result<V
                 rusqlite::params![
                     client_id,
                     name,
-                    chrono::Utc::now().timestamp_millis().to_string()
+                    plain_rs::utils::dbtime::now_iso()
                 ]
             ))? == 1
         ),

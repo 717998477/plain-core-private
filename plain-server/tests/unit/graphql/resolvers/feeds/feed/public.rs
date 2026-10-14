@@ -74,9 +74,9 @@ fn seed_entry(db: &Arc<Db>, feed: &str, title: &str, image: &str) {
         description: String::new(),
         author: String::new(),
         content: String::new(),
-        raw_id: format!("raw-{title}"),
+        source_entry_id: format!("raw-{title}"),
         published_at: NOW.to_string(),
-        read: false,
+        is_read: false,
         created_at: NOW.to_string(),
         updated_at: NOW.to_string(),
     }])

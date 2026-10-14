@@ -40,7 +40,7 @@ async fn outgoing_completes_in_one_host_call() {
         "peer",
         "peer",
         "",
-        443,
+        Some(443),
         plain_rs::chat::enums::DeviceType::Phone,
     );
     let task = tokio::spawn(async move {

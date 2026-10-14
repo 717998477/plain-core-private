@@ -14,7 +14,7 @@ pub struct TagRecord {
 }
 pub struct RelationRecord {
     pub tag_id: String,
-    pub key: String,
+    pub target_key: String,
     pub kind: i32,
     pub created_at: String,
     pub size_bytes: i64,
@@ -22,7 +22,7 @@ pub struct RelationRecord {
 }
 pub struct RelationInput {
     pub tag_id: String,
-    pub key: String,
+    pub target_key: String,
     pub kind: i32,
     pub size_bytes: i64,
     pub title: String,
@@ -55,7 +55,7 @@ pub fn get(db: &Db, id: &str) -> DomainResult<Option<TagRecord>> {
     })?)
 }
 pub fn relations(db: &Db, kind: i32, keys: &[String]) -> DomainResult<Vec<RelationRecord>> {
-    Ok(db.with_conn(|c|c.prepare("SELECT tag_id,key,type,created_at,size,title FROM tag_relations WHERE type=?1 AND key IN (SELECT value FROM json_each(?2)) ORDER BY rowid")?.query_map(params![kind,json(keys)?],|r|Ok(RelationRecord{tag_id:r.get(0)?,key:r.get(1)?,kind:r.get(2)?,created_at:r.get(3)?,size_bytes:r.get(4)?,title:r.get(5)?}))?.collect::<rusqlite::Result<Vec<_>>>())?)
+    Ok(db.with_conn(|c|c.prepare("SELECT r.tag_id,r.target_key,r.type,r.created_at,COALESCE(m.size_bytes,0),COALESCE(m.title,n.title,e.title,'') FROM tag_relations r LEFT JOIN media_items m ON m.id=r.target_key AND m.data_type=r.type LEFT JOIN notes n ON n.id=r.target_key AND r.type=6 LEFT JOIN feed_entries e ON e.id=r.target_key AND r.type=7 WHERE r.type=?1 AND r.target_key IN (SELECT value FROM json_each(?2)) ORDER BY r.rowid")?.query_map(params![kind,json(keys)?],|r|Ok(RelationRecord{tag_id:r.get(0)?,target_key:r.get(1)?,kind:r.get(2)?,created_at:r.get(3)?,size_bytes:r.get(4)?,title:r.get(5)?}))?.collect::<rusqlite::Result<Vec<_>>>())?)
 }
 fn json(items: &[String]) -> rusqlite::Result<String> {
     serde_json::to_string(items).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
@@ -68,11 +68,11 @@ fn validate(c: &Connection, id: &str, kind: i32) -> DomainResult<()> {
 }
 fn insert(c: &Connection, items: &[RelationInput]) -> DomainResult<()> {
     for item in items {
-        if item.key.is_empty() || item.size_bytes < 0 {
+        if item.target_key.is_empty() || item.size_bytes < 0 {
             return Err(DomainError::Other("invalid tag relation".into()));
         }
         validate(c, &item.tag_id, item.kind)?;
-        c.execute("INSERT INTO tag_relations (tag_id,key,type,created_at,size,title) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(tag_id,key,type) DO UPDATE SET size=excluded.size,title=excluded.title",params![item.tag_id,item.key,item.kind,crate::utils::dbtime::now_iso_millis(),item.size_bytes,item.title])?;
+        c.execute("INSERT INTO tag_relations (tag_id,target_key,type,created_at) VALUES (?1,?2,?3,?4) ON CONFLICT(tag_id,target_key,type) DO NOTHING",params![item.tag_id,item.target_key,item.kind,crate::utils::dbtime::now_iso_millis()])?;
     }
     Ok(())
 }
@@ -80,7 +80,6 @@ fn transaction<T>(db: &Db, f: impl FnOnce(&Connection) -> DomainResult<T>) -> Do
     db.with_conn(|c| {
         let tx = c.unchecked_transaction()?;
         let result = f(&tx)?;
-        tag::io::touch_counts(&tx)?;
         tx.commit()?;
         Ok(result)
     })
@@ -110,7 +109,7 @@ pub fn edit(
                 .iter()
                 .map(|id| RelationInput {
                     tag_id: id.clone(),
-                    key: key.into(),
+                    target_key: key.into(),
                     kind,
                     title: title.into(),
                     size_bytes,
@@ -139,7 +138,7 @@ pub fn remove(db: &Db, keys: &[String], ids: &[String]) -> DomainResult<()> {
 pub fn remove_keys(db: &Db, kind: i32, keys: &[String]) -> DomainResult<()> {
     transaction(db, |c| {
         c.execute(
-            "DELETE FROM tag_relations WHERE type=?1 AND key IN (SELECT value FROM json_each(?2))",
+            "DELETE FROM tag_relations WHERE type=?1 AND target_key IN (SELECT value FROM json_each(?2))",
             params![kind, json(keys)?],
         )?;
         Ok(())
@@ -168,7 +167,7 @@ pub fn intersection(db: &Db, ids: &[String]) -> DomainResult<Vec<String>> {
             if kind.is_some_and(|k|k!=t.kind) {return Err(DomainError::Other("tag type mismatch".into()));}
             kind=Some(t.kind);
         }
-        Ok(c.prepare("SELECT key FROM tag_relations WHERE tag_id IN (SELECT value FROM json_each(?1)) GROUP BY key HAVING COUNT(DISTINCT tag_id)=(SELECT COUNT(DISTINCT value) FROM json_each(?1)) ORDER BY MIN(rowid)")?.query_map([json(ids)?],|r|r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(c.prepare("SELECT target_key FROM tag_relations WHERE tag_id IN (SELECT value FROM json_each(?1)) GROUP BY target_key HAVING COUNT(DISTINCT tag_id)=(SELECT COUNT(DISTINCT value) FROM json_each(?1)) ORDER BY MIN(rowid)")?.query_map([json(ids)?],|r|r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
     })
 }
 #[cfg(test)]

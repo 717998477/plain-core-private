@@ -109,7 +109,7 @@ fn audio_row_carries_probe_tags_and_real_stat_facts() {
     assert_eq!(m.size_bytes, i64::try_from(meta.len()).unwrap());
     assert_eq!(m.artist, "Hydrate Artist");
     assert_eq!(m.title, "Hydrate Title");
-    assert_eq!(m.album_file_id, "");
+    assert_eq!(m.cover_image_id, None);
     let probed = crate::metadata::probe_media(m.path.as_str(), "audio");
     assert_eq!(m.duration_ms, i64::from(probed.duration_secs) * 1000);
     assert!(m.duration_ms > 0);
@@ -138,11 +138,11 @@ fn created_at_falls_back_to_modified_when_the_os_records_no_birth_time() {
     let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     let born = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
 
-    assert_eq!(created_at_of(None, modified), "2023-11-14T22:13:20Z");
-    assert_eq!(created_at_of(Some(born), modified), "2020-09-13T12:26:40Z");
+    assert_eq!(created_at_of(None, modified), "2023-11-14T22:13:20.000Z");
+    assert_eq!(created_at_of(Some(born), modified), "2020-09-13T12:26:40.000Z");
     assert_eq!(
         row_timestamp(SystemTime::UNIX_EPOCH),
-        "1970-01-01T00:00:00Z"
+        "1970-01-01T00:00:00.000Z"
     );
 }
 
@@ -333,7 +333,7 @@ fn probe_availability_keeps_unknown_distinct_from_valid_untagged_audio() {
     let unknown = read_file_metadata_with_availability(&damaged, DataType::Audio).unwrap();
     assert!(!unknown.available.tags);
     assert!(!unknown.available.duration);
-    assert!(!unknown.available.album_file_id);
+    assert!(!unknown.available.cover_image_id);
     let untagged =
         read_file_metadata_with_availability(&fixture("audio-untagged.mp3"), DataType::Audio)
             .unwrap();

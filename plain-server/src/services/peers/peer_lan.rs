@@ -60,7 +60,7 @@ pub(crate) async fn send(
     let response = state
         .lan
         .client
-        .post(peer.peer_graphql_url())
+        .post(peer.peer_graphql_url().ok_or_else(|| Failure::Unavailable("No peer address".into()))?)
         .timeout(Duration::from_secs(10))
         .header("content-type", "application/octet-stream")
         .header("c-id", actor)

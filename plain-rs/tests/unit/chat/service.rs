@@ -209,7 +209,7 @@ async fn kicked_channel_rejects_incoming_message() {
         "peer",
         "Fixture",
         "",
-        1,
+        Some(1),
         DeviceType::Phone,
     ));
     channel.status = ChannelStatus::Kicked;
@@ -246,7 +246,7 @@ async fn kicked_channel_rejects_incoming_message() {
 async fn unpaired_peer_send_fails_and_local_cache_tracks_deletion() {
     let dir = unique_tmp_dir("unpaired-send");
     let db = Db::open(&dir.join("plain.db")).expect("open db");
-    let peer = crate::db::DPeer::new("peer", "Peer", "127.0.0.1", 8443, DeviceType::Phone);
+    let peer = crate::db::DPeer::new("peer", "Peer", "127.0.0.1", Some(8443), DeviceType::Phone);
     db.upsert_peer(&peer);
     let service = ChatService::new(
         db,

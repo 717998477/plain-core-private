@@ -57,7 +57,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
     prefs.set_user("pomodoro_settings", settings).unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[12; 32]);
     let server = ContentServer::start(&path, &token, prefs.clone()).unwrap();
-    let config = r#"mutation {configurePomodoroDay(date:"2026-10-03",dayStart:"2026-10-02T16:00:00Z") {date timeLeftSec}}"#;
+    let config = r#"mutation {configurePomodoroDay(date:"2026-10-03",dayStart:"2026-10-02T16:00:00.000Z") {date timeLeftSec}}"#;
     let result = call(server.port, &token, config).await;
     assert!(result.get("errors").is_none(), "{result}");
     assert_eq!(result["data"]["configurePomodoroDay"]["timeLeftSec"], 60);
@@ -122,7 +122,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
     );
     let row = db.pomodoro_get_by_date("2026-10-03").unwrap().unwrap();
     assert_eq!(row.completed_count, 1);
-    assert_eq!(row.total_work_seconds, 60);
+    assert_eq!(row.total_work_secs, 60);
     call(
         server.port,
         &token,
@@ -132,7 +132,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
     expire(&server, &token).await;
     call(server.port, &token, query).await;
     let row = db.pomodoro_get_by_date("2026-10-03").unwrap().unwrap();
-    assert_eq!(row.total_break_seconds, 120);
+    assert_eq!(row.total_break_secs, 120);
     call(
         server.port,
         &token,
@@ -153,7 +153,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
         db.pomodoro_get_by_date("2026-10-03")
             .unwrap()
             .unwrap()
-            .total_break_seconds,
+            .total_break_secs,
         120
     );
     call(
@@ -188,7 +188,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
     assert!(
         call(server.port, &token, query).await["data"]["tickPomodoro"]["completedState"].is_null()
     );
-    call(server.port,&token,r#"mutation {configurePomodoroDay(date:"2026-10-04",dayStart:"2026-10-03T16:00:00Z") {completedCount}}"#).await;
+    call(server.port,&token,r#"mutation {configurePomodoroDay(date:"2026-10-04",dayStart:"2026-10-03T16:00:00.000Z") {completedCount}}"#).await;
     assert_eq!(
         call(server.port, &token, "{pomodoroToday {completedCount}}").await["data"]["pomodoroToday"]
             ["completedCount"],

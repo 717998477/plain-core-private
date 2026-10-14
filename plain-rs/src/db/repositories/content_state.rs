@@ -37,7 +37,7 @@ impl Db {
                 values.extend(chunk.iter().cloned().map(Value::Text));
                 count += tx.execute(
                     &format!(
-                        "UPDATE feed_entries SET read=? WHERE id IN ({})",
+                        "UPDATE feed_entries SET is_read=? WHERE id IN ({})",
                         vec!["?"; chunk.len()].join(",")
                     ),
                     params_from_iter(values),

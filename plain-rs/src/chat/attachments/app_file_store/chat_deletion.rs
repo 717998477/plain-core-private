@@ -108,7 +108,7 @@ fn mutate(
                     bail!("peer id is empty");
                 }
                 let mut statement = tx.prepare(
-                    "SELECT id,content FROM chats WHERE channel_id='' AND (from_id=?1 OR to_id=?1)",
+                    "SELECT id,content FROM chats WHERE channel_id IS NULL AND (from_id=?1 OR to_id=?1)",
                 )?;
                 statement
                     .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?

@@ -64,11 +64,11 @@ async fn peer_graphql_create_chat_item_roundtrip() {
         key: base64_encode(&key),
         public_key: base64_encode(&vk),
         status: PeerStatus::Paired,
-        port: 2443,
+        port: Some(2443),
         device_type: DeviceType::Phone,
         token: String::new(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: "2026-01-01T00:00:00Z".into(),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        updated_at: "2026-01-01T00:00:00.000Z".into(),
     });
     plain_rs::chat::events::refresh_peer_key_cache(
         &state.ctx.chat.service.db,

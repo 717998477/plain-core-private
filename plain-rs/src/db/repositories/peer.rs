@@ -51,7 +51,7 @@ impl Db {
 
     pub fn upsert_peer(&self, peer: &DPeer) {
         let conn = self.0.lock().unwrap();
-        let result = conn.execute(
+        let result = (|| -> rusqlite::Result<usize> { conn.execute(
             "INSERT INTO peers (id,name,ip,key,public_key,status,port,device_type,token,created_at,updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
              ON CONFLICT(id) DO UPDATE SET
@@ -61,10 +61,10 @@ impl Db {
                token=excluded.token, updated_at=excluded.updated_at",
             params![
                 peer.id, peer.name, peer.ip, peer.key, peer.public_key,
-                peer.status, peer.port as i64, peer.device_type, peer.token,
-                peer.created_at, peer.updated_at
+                peer.status, peer.port.map(i64::from), peer.device_type, peer.token,
+                crate::utils::dbtime::normalize(&peer.created_at)?, crate::utils::dbtime::normalize(&peer.updated_at)?
             ],
-        );
+        ) })();
         if let Err(e) = result {
             log::error!("upsert_peer failed id={} err={e}", peer.id);
         } else {

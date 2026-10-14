@@ -11,5 +11,5 @@ pub struct TagRow {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TagRelationRow {
     pub tag_id: String,
-    pub key: String,
+    pub target_key: String,
 }

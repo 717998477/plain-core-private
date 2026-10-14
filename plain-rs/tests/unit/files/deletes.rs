@@ -2,7 +2,7 @@ use super::*;
 #[test]
 fn deleted_receipts_cascade_atomically_and_preserve_failed_and_foreign_records() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    db.with_conn(|c|c.execute_batch("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES('video','old',2,'first',4,'video'),('foreign','old',6,'first',4,'note'),('file','/root/deleted',22,'first',4,'file'),('failed','/root/failed',22,'first',4,'failed'),('sibling','/root_sibling/file',22,'first',4,'sibling'); INSERT INTO media_item(media_type,media_id,duration_ms,updated_at) VALUES('video','old',5000000001,'first'),('video','keep',5000000002,'first'); INSERT INTO video_play_progress(media_id,position_ms,updated_at) VALUES('old',4000000001,'first'),('keep',4000000002,'first'); INSERT INTO audio_queue_items(path,sort_order,title,artist,duration_ms) VALUES('/root/deleted',0,'gone','',1),('/root/failed',1,'keep','',1),('/root_sibling/file',2,'keep','',1);")).unwrap();
+    db.with_conn(|c|c.execute_batch("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('video','old',2,'first'),('foreign','old',6,'first'),('file','/root/deleted',22,'first'),('failed','/root/failed',22,'first'),('sibling','/root_sibling/file',22,'first'); INSERT INTO media_play_history(media_id,position_ms,played_at,play_count) VALUES('old',4000000001,'first',0),('keep',4000000002,'first',0); INSERT INTO media_items(id,data_type,path,mime_type,file_name,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,created_at,updated_at) VALUES('test:/root/deleted',1,'/root/deleted','audio/mpeg','song','gone','','',1,1,'',0,0,0,'now','now'),('test:/root/failed',1,'/root/failed','audio/mpeg','song','keep','','',1,1,'',0,0,0,'now','now'),('test:/root_sibling/file',1,'/root_sibling/file','audio/mpeg','song','keep','','',1,1,'',0,0,0,'now','now'); INSERT INTO audio_queue_items(media_id,sort_order) VALUES('test:/root/deleted',0),('test:/root/failed',1),('test:/root_sibling/file',2);")).unwrap();
     db.with_conn(|c|c.execute_batch("INSERT INTO image_embeddings(id,path,embedding,created_at,updated_at) VALUES('private','/root/deleted',x'3f800000','first','first'),('pending','/root/failed',x'3f800000','first','first'),('sibling','/root_sibling/file',x'3f800000','first','first');")).unwrap();
     cleanup(
         &db,
@@ -17,12 +17,7 @@ fn deleted_receipts_cascade_atomically_and_preserve_failed_and_foreign_records()
     .unwrap();
     db.with_conn(|c| {
         assert_eq!(
-            c.query_row("SELECT count(*) FROM media_item", [], |r| r
-                .get::<_, i64>(0))?,
-            1
-        );
-        assert_eq!(
-            c.query_row("SELECT count(*) FROM video_play_progress", [], |r| r
+            c.query_row("SELECT count(*) FROM media_play_history", [], |r| r
                 .get::<_, i64>(0))?,
             1
         );
@@ -78,13 +73,13 @@ fn catalog_file(data_type: DataType, path: &str) -> crate::db::MediaFileMetadata
         bucket_id: "/root".into(),
         size_bytes: 10,
         duration_ms: 0,
-        album_file_id: String::new(),
+        cover_image_id: None,
         width: 0,
         height: 0,
         rotation: 0,
         taken_at: None,
-        created_at: "2026-10-13T00:00:00Z".into(),
-        updated_at: "2026-10-13T00:00:00Z".into(),
+        created_at: "2026-10-13T00:00:00.000Z".into(),
+        updated_at: "2026-10-13T00:00:00.000Z".into(),
     }
 }
 
@@ -100,9 +95,8 @@ fn deletion_uses_current_catalog_identities_and_preserves_partial_failures_and_f
         .unwrap();
     let video = &created[0].id;
     db.with_conn(|c| -> rusqlite::Result<()> {
-        c.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES('media',?1,2,'first',1,'title'),('foreign',?1,6,'first',1,'title')",[video])?;
-        c.execute("INSERT INTO video_play_progress(media_id,position_ms,updated_at) VALUES(?1,123,'first')",[video])?;
-        c.execute("INSERT INTO media_item(media_type,media_id,duration_ms,updated_at) VALUES('video',?1,100,'first')",[video])?;
+        c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('media',?1,2,'first'),('foreign',?1,6,'first')",[video])?;
+        c.execute("INSERT INTO media_play_history(media_id,position_ms,played_at,play_count) VALUES(?1,123,'first',0)",[video])?;
         Ok(())
     }).unwrap();
     cleanup(&db, &[], &["/root/deleted.mp4".into()], &[]).unwrap();
@@ -124,7 +118,7 @@ fn deletion_uses_current_catalog_identities_and_preserves_partial_failures_and_f
     db.with_conn(|c| -> rusqlite::Result<()> {
         assert_eq!(
             c.query_row(
-                "SELECT count(*) FROM tag_relations WHERE key=?1 AND type=2",
+                "SELECT count(*) FROM tag_relations WHERE target_key=?1 AND type=2",
                 [video],
                 |r| r.get::<_, i64>(0)
             )?,
@@ -132,19 +126,14 @@ fn deletion_uses_current_catalog_identities_and_preserves_partial_failures_and_f
         );
         assert_eq!(
             c.query_row(
-                "SELECT count(*) FROM tag_relations WHERE key=?1 AND type=6",
+                "SELECT count(*) FROM tag_relations WHERE target_key=?1 AND type=6",
                 [video],
                 |r| r.get::<_, i64>(0)
             )?,
             1
         );
         assert_eq!(
-            c.query_row("SELECT count(*) FROM video_play_progress", [], |r| r
-                .get::<_, i64>(0))?,
-            0
-        );
-        assert_eq!(
-            c.query_row("SELECT count(*) FROM media_item", [], |r| r
+            c.query_row("SELECT count(*) FROM media_play_history", [], |r| r
                 .get::<_, i64>(0))?,
             0
         );
@@ -190,9 +179,9 @@ fn catalog_deletion_failure_rolls_back_all_associated_state_cleanup() {
         .unwrap()
         .remove(0);
     db.with_conn(|c| -> rusqlite::Result<()> {
-        c.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES('media',?1,2,'first',1,'title')",[&created.id])?;
-        c.execute("INSERT INTO video_play_progress(media_id,position_ms,updated_at) VALUES(?1,123,'first')",[&created.id])?;
-        c.execute_batch("CREATE TRIGGER reject_catalog_delete BEFORE DELETE ON media_files BEGIN SELECT RAISE(ABORT,'catalog delete rejected'); END;")?;
+        c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('media',?1,2,'first')",[&created.id])?;
+        c.execute("INSERT INTO media_play_history(media_id,position_ms,played_at,play_count) VALUES(?1,123,'first',0)",[&created.id])?;
+        c.execute_batch("CREATE TRIGGER reject_catalog_delete BEFORE DELETE ON media_items BEGIN SELECT RAISE(ABORT,'catalog delete rejected'); END;")?;
         Ok(())
     }).unwrap();
     assert!(cleanup(&db, &[], &[created.path.clone()], &[]).is_err());
@@ -204,7 +193,7 @@ fn catalog_deletion_failure_rolls_back_all_associated_state_cleanup() {
             1
         );
         assert_eq!(
-            c.query_row("SELECT count(*) FROM video_play_progress", [], |r| r
+            c.query_row("SELECT count(*) FROM media_play_history", [], |r| r
                 .get::<_, i64>(0))?,
             1
         );
@@ -237,11 +226,11 @@ fn forgetting_a_path_drops_the_row_and_its_associated_state() {
         .unwrap();
     db.with_conn(|c| -> rusqlite::Result<()> {
         c.execute(
-            "INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES('media',?1,2,'first',1,'title')",
+            "INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('media',?1,2,'first')",
             [&gone.id],
         )?;
         c.execute(
-            "INSERT INTO video_play_progress(media_id,position_ms,updated_at) VALUES(?1,123,'first')",
+            "INSERT INTO media_play_history(media_id,position_ms,played_at,play_count) VALUES(?1,123,'first',0)",
             [&gone.id],
         )?;
         c.execute(
@@ -266,12 +255,12 @@ fn forgetting_a_path_drops_the_row_and_its_associated_state() {
     );
     db.with_conn(|c| -> rusqlite::Result<()> {
         let tags: i64 = c.query_row(
-            "SELECT COUNT(*) FROM tag_relations WHERE key=?1",
+            "SELECT COUNT(*) FROM tag_relations WHERE target_key=?1",
             [&gone.id],
             |row| row.get(0),
         )?;
         let progress: i64 = c.query_row(
-            "SELECT COUNT(*) FROM video_play_progress WHERE media_id=?1",
+            "SELECT COUNT(*) FROM media_play_history WHERE media_id=?1",
             [&gone.id],
             |row| row.get(0),
         )?;

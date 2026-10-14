@@ -37,7 +37,7 @@ pub struct Peer {
     pub name: String,
     pub ip: String,
     pub status: PeerStatus,
-    pub port: i32,
+    pub port: Option<i32>,
     #[graphql(name = "deviceType")]
     pub device_type: DeviceType,
     #[graphql(name = "createdAt")]
@@ -116,7 +116,7 @@ impl PeersQuery {
                     plain_rs::chat::enums::PeerStatus::Unpaired => PeerStatus::Unpaired,
                     plain_rs::chat::enums::PeerStatus::Channel => PeerStatus::Channel,
                 },
-                port: i32::from(row.port),
+                port: row.port.map(i32::from),
                 device_type: parse_device_type(&row.device_type.to_string()),
                 created_at: crate::graphql::types::facts::stored_instant(&row.created_at),
                 updated_at: crate::graphql::types::facts::stored_instant(&row.updated_at),

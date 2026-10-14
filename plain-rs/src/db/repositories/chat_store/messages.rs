@@ -33,7 +33,7 @@ pub fn save(db: &Db, rows: &[DChat], mode: SaveMode) -> Result<()> {
     db.with_conn(|c|->Result<()>{ let tx=c.unchecked_transaction()?;
  for row in rows {
   let sql=match mode { SaveMode::Insert=>"INSERT INTO chats(id,from_id,to_id,channel_id,content,status,status_data,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)", SaveMode::Update=>"UPDATE chats SET from_id=?2,to_id=?3,channel_id=?4,content=?5,status=?6,status_data=?7,created_at=?8,updated_at=?9 WHERE id=?1",SaveMode::Upsert=>"INSERT INTO chats(id,from_id,to_id,channel_id,content,status,status_data,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET from_id=excluded.from_id,to_id=excluded.to_id,channel_id=excluded.channel_id,content=excluded.content,status=excluded.status,status_data=excluded.status_data,updated_at=excluded.updated_at" };
-  let changed=tx.execute(sql,params![row.id,row.from_id,row.to_id,row.channel_id,row.content,row.status,row.status_data,row.created_at,row.updated_at])?;
+  let changed=tx.execute(sql,params![row.id,row.from_id,row.to_id,row.channel_id.as_deref().filter(|value|!value.is_empty()),row.content,row.status,row.status_data.as_deref().filter(|value|!value.is_empty()),crate::utils::dbtime::normalize(&row.created_at)?,crate::utils::dbtime::normalize(&row.updated_at)?])?;
   if changed!=1 { bail!("messages record missing"); }
  } tx.commit()?; Ok(()) })
 }
@@ -86,9 +86,9 @@ pub fn list(db: &Db, filter: &Filter) -> Result<serde_json::Value> {
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    let condition = "(?1 IS NULL OR (channel_id='' AND (from_id=?1 OR to_id=?1))) AND (?2 IS NULL OR channel_id=?2) AND (?3='' OR content LIKE ?4 ESCAPE '\\')";
+    let condition = "(?1 IS NULL OR (channel_id IS NULL AND (from_id=?1 OR to_id=?1))) AND (?2 IS NULL OR channel_id=?2) AND (?3='' OR content LIKE ?4 ESCAPE '\\')";
     let latest = if filter.latest {
-        " AND julianday(c.created_at)=(SELECT max(julianday(other.created_at)) FROM chats other WHERE (c.channel_id<>'' AND other.channel_id=c.channel_id) OR (c.channel_id='' AND other.channel_id='' AND other.from_id=c.from_id AND other.to_id=c.to_id))"
+        " AND julianday(c.created_at)=(SELECT max(julianday(other.created_at)) FROM chats other WHERE (c.channel_id IS NOT NULL AND other.channel_id=c.channel_id) OR (c.channel_id IS NULL AND other.channel_id IS NULL AND other.from_id=c.from_id AND other.to_id=c.to_id))"
     } else {
         ""
     };

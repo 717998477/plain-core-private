@@ -16,17 +16,7 @@ pub struct SearchResult {
     pub score: f32,
 }
 fn vector(bytes: &[u8]) -> DomainResult<Vec<f32>> {
-    if bytes.is_empty() || bytes.len() % 4 != 0 || bytes.len() > 4096 * 4 {
-        return Err(DomainError::Other("invalid embedding dimensions".into()));
-    }
-    let values = bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_be_bytes(c.try_into().unwrap()))
-        .collect::<Vec<_>>();
-    if values.iter().any(|v| !v.is_finite()) {
-        return Err(DomainError::Other("invalid embedding values".into()));
-    }
-    Ok(values)
+    crate::utils::vector::decode_f32_be(bytes).map_err(DomainError::Other)
 }
 fn decode(value: &str) -> DomainResult<Vec<u8>> {
     crate::utils::base64::base64_decode_checked(value)

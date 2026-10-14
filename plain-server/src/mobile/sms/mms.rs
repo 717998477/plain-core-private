@@ -284,7 +284,7 @@ impl Runtime {
             attachments,
             launch_time_sec: launched,
             minimum_id: latest,
-            created_at: chrono::Utc::now().to_rfc3339(),
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         };
         let (cancel, receiver) = watch::channel(false);
         {

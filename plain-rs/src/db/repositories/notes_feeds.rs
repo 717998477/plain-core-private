@@ -7,8 +7,8 @@ pub use crate::db::models::notes_feeds::NoteRow;
 
 const NOTE_COLUMNS: &str = "id,title,content,deleted_at,created_at,updated_at";
 const FEED_COLUMNS: &str =
-    "id,name,url,logo,fetch_content,last_sync_at,last_error,created_at,updated_at";
-const ENTRY_COLUMNS: &str = "id,title,url,image,description,author,content,feed_id,raw_id,published_at,read,created_at,updated_at";
+    "id,name,url,logo,fetch_full_content,last_sync_at,last_error,created_at,updated_at";
+const ENTRY_COLUMNS: &str = "id,title,url,image,description,author,content,feed_id,source_entry_id,published_at,is_read,created_at,updated_at";
 const NOTE_TAG_KIND: i32 = 6;
 const FEED_ENTRY_TAG_KIND: i32 = 7;
 
@@ -29,7 +29,7 @@ fn feed_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FeedRow> {
         name: row.get(1)?,
         url: row.get(2)?,
         logo: row.get(3)?,
-        fetch_content: row.get::<_, i64>(4)? != 0,
+        fetch_full_content: row.get::<_, i64>(4)? != 0,
         last_sync_at: row.get(5)?,
         last_error: row.get(6)?,
         created_at: row.get(7)?,
@@ -47,9 +47,9 @@ fn entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FeedEntryRow> {
         author: row.get(5)?,
         content: row.get(6)?,
         feed_id: row.get(7)?,
-        raw_id: row.get(8)?,
+        source_entry_id: row.get(8)?,
         published_at: row.get(9)?,
-        read: row.get::<_, i64>(10)? != 0,
+        is_read: row.get::<_, i64>(10)? != 0,
         created_at: row.get(11)?,
         updated_at: row.get(12)?,
     })
@@ -134,11 +134,11 @@ fn query_filter(
                 }
             }
             "tag_id" => {
-                clauses.push("id IN (SELECT key FROM tag_relations WHERE tag_id=?)".to_string());
+                clauses.push("id IN (SELECT target_key FROM tag_relations WHERE tag_id=?)".to_string());
                 values.push(Value::Text(field.value));
             }
             "read" if !notes => {
-                clauses.push("read=?".into());
+                clauses.push("is_read=?".into());
                 values.push(Value::Integer(i64::from(field.value == "true")));
             }
             "feed_id" if !notes => {
@@ -156,7 +156,7 @@ fn query_filter(
                         .earliest()
                         .unwrap()
                         .with_timezone(&chrono::Utc)
-                        .to_rfc3339(),
+                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 ));
             }
             "created_at"
@@ -286,7 +286,7 @@ impl Db {
             for id in ids {
                 count += tx.execute("UPDATE notes SET deleted_at=?2,updated_at=?3 WHERE id=?1 AND ((?4=1 AND deleted_at IS NULL) OR (?4=0 AND deleted_at IS NOT NULL))", params![id, if deleted { Some(now) } else { None }, now, deleted])?;
                 if deleted {
-                    tx.execute("DELETE FROM tag_relations WHERE key=?1 AND tag_id IN (SELECT id FROM tags WHERE type=?2)", params![id, NOTE_TAG_KIND])?;
+                    tx.execute("DELETE FROM tag_relations WHERE target_key=?1 AND tag_id IN (SELECT id FROM tags WHERE type=?2)", params![id, NOTE_TAG_KIND])?;
                 }
             }
             tx.commit()?;
@@ -303,7 +303,7 @@ impl Db {
                     "DELETE FROM notes WHERE id=? AND deleted_at IS NOT NULL",
                     [id],
                 )?;
-                tx.execute("DELETE FROM tag_relations WHERE key=?1 AND tag_id IN (SELECT id FROM tags WHERE type=?2)", params![id, NOTE_TAG_KIND])?;
+                tx.execute("DELETE FROM tag_relations WHERE target_key=?1 AND tag_id IN (SELECT id FROM tags WHERE type=?2)", params![id, NOTE_TAG_KIND])?;
             }
             tx.commit()?;
             Ok(count)
@@ -346,11 +346,11 @@ impl Db {
         id: &str,
         name: &str,
         url: &str,
-        fetch_content: bool,
+        fetch_full_content: bool,
         now: &str,
     ) -> rusqlite::Result<FeedRow> {
         self.with_conn(|c| {
-            c.execute("INSERT INTO feeds(id,name,url,logo,fetch_content,last_error,created_at,updated_at) VALUES(?1,?2,?3,'',?4,'',?5,?5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,url=excluded.url,fetch_content=excluded.fetch_content,updated_at=excluded.updated_at", params![id,name,url,fetch_content,now])?;
+            c.execute("INSERT INTO feeds(id,name,url,logo,fetch_full_content,last_error,created_at,updated_at) VALUES(?1,?2,?3,'',?4,'',?5,?5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,url=excluded.url,fetch_full_content=excluded.fetch_full_content,updated_at=excluded.updated_at", params![id,name,url,fetch_full_content,now])?;
             c.query_row(&format!("SELECT {FEED_COLUMNS} FROM feeds WHERE id=?"), [id], feed_from_row)
         })
     }
@@ -358,7 +358,7 @@ impl Db {
     pub fn feed_delete(&self, id: &str) -> rusqlite::Result<bool> {
         self.with_conn(|c| {
             let tx = c.unchecked_transaction()?;
-            tx.execute("DELETE FROM tag_relations WHERE key IN (SELECT id FROM feed_entries WHERE feed_id=?1) AND tag_id IN (SELECT id FROM tags WHERE type=?2)", params![id, FEED_ENTRY_TAG_KIND])?;
+            tx.execute("DELETE FROM tag_relations WHERE target_key IN (SELECT id FROM feed_entries WHERE feed_id=?1) AND tag_id IN (SELECT id FROM tags WHERE type=?2)", params![id, FEED_ENTRY_TAG_KIND])?;
             tx.execute("DELETE FROM feed_entries WHERE feed_id=?", [id])?;
             let count = tx.execute("DELETE FROM feeds WHERE id=?", [id])?;
             tx.commit()?;
@@ -418,8 +418,8 @@ impl Db {
             let tx = c.unchecked_transaction()?;
             let mut inserted = Vec::new();
             for entry in entries {
-                let count = tx.execute("INSERT OR IGNORE INTO feed_entries(id,title,url,image,description,author,content,feed_id,raw_id,published_at,read,created_at,updated_at) SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13 WHERE NOT EXISTS (SELECT 1 FROM feed_entries WHERE feed_id=?8 AND (raw_id=?9 OR (url=?3 AND ?3<>'')))", params![entry.id,entry.title,entry.url,entry.image,entry.description,entry.author,entry.content,entry.feed_id,entry.raw_id,entry.published_at,entry.read,entry.created_at,entry.updated_at])?;
-                if count > 0 { inserted.push(entry.clone()); }
+                let count = tx.execute("INSERT INTO feed_entries(id,title,url,image,description,author,content,feed_id,source_entry_id,published_at,is_read,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) ON CONFLICT(feed_id,source_entry_id) DO NOTHING", params![entry.id,entry.title,entry.url,entry.image,entry.description,entry.author,entry.content,entry.feed_id,entry.source_entry_id,crate::utils::dbtime::normalize(&entry.published_at)?,entry.is_read,crate::utils::dbtime::normalize(&entry.created_at)?,crate::utils::dbtime::normalize(&entry.updated_at)?])?;
+                if count > 0 { inserted.push(tx.query_row(&format!("SELECT {ENTRY_COLUMNS} FROM feed_entries WHERE id=?1"),[&entry.id],entry_from_row)?); }
             }
             tx.commit()?;
             Ok(inserted)
@@ -451,7 +451,7 @@ impl Db {
                 .collect::<rusqlite::Result<_>>()?;
             drop(stmt);
             for id in &ids {
-                tx.execute("DELETE FROM tag_relations WHERE key=?1 AND tag_id IN (SELECT id FROM tags WHERE type=?2)", params![id, FEED_ENTRY_TAG_KIND])?;
+                tx.execute("DELETE FROM tag_relations WHERE target_key=?1 AND tag_id IN (SELECT id FROM tags WHERE type=?2)", params![id, FEED_ENTRY_TAG_KIND])?;
                 tx.execute("DELETE FROM feed_entries WHERE id=?", [id])?;
             }
             tx.commit()?;

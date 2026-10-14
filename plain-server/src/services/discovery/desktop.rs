@@ -73,7 +73,7 @@ impl ChatDiscovery {
                             device_type: device.device_type.clone(),
                             version: device.version.clone(),
                             platform: device.platform.clone(),
-                            last_seen: plain_rs::db::now_iso(),
+                            last_seen_at: plain_rs::db::now_iso(),
                         };
                         if let Err(e) = worker_db.save_cached_nearby_device(&cached) {
                             log::error!(
@@ -97,7 +97,7 @@ impl ChatDiscovery {
                 p.ip.split(',')
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
-                    .map(|ip| format!("{ip}:{}", p.port))
+                    .filter_map(|ip| p.port.map(|port| format!("{ip}:{port}")))
                     .collect::<Vec<_>>()
             })
             .collect();
@@ -193,9 +193,9 @@ fn update_known_peer(db: &Db, device: &FoundDevice) {
     let mut ips = device.ips.clone();
     ips.sort();
     let new_ip = ips.join(",");
-    if new_ip != peer.ip || device.port != peer.port {
+    if new_ip != peer.ip || Some(device.port) != peer.port {
         peer.ip = new_ip;
-        peer.port = device.port;
+        peer.port = Some(device.port);
         peer.updated_at = plain_rs::db::now_iso();
         db.upsert_peer(&peer);
     }

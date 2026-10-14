@@ -52,7 +52,7 @@ impl Loader<TagKey> for TagsLoader {
                     result
                         .entry(TagKey {
                             kind,
-                            id: relation.key,
+                            id: relation.target_key,
                         })
                         .or_default()
                         .push(Tag {

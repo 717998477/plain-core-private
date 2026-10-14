@@ -1,18 +1,6 @@
-//! Timestamp helpers for database rows (no chrono — std only).
-//!
-//! Two precisions, both fixed-width so lexicographic comparison equals
-//! chronological comparison within a column:
-//! - `now_iso` / `unix_secs_to_iso8601`: whole seconds — the chat tables'
-//!   format, shared with plain-app's Room rows.
-//! - `now_iso_millis`: always three fraction digits — the library tables
-//!   (playlists, play history), where same-second rows must still order.
 
 pub fn now_iso() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    unix_secs_to_iso8601(secs)
+    now_iso_millis()
 }
 
 pub fn now_iso_millis() -> String {
@@ -29,20 +17,14 @@ pub fn now_millis() -> i64 {
         .as_millis() as i64
 }
 
-/// Second-precision rendering (the chat tables' format): sub-second
-/// digits are truncated, never rendered.
 pub fn iso_from_unix_millis(millis: i64) -> String {
-    unix_secs_to_iso8601(millis.max(0) as u64 / 1000)
+    unix_millis_to_iso8601(millis.max(0) as u64)
 }
 
 fn is_leap(y: u64) -> bool {
     y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400))
 }
 
-fn unix_secs_to_iso8601(secs: u64) -> String {
-    let (date, hh, mm, ss) = split_unix_secs(secs);
-    format!("{date}T{hh:02}:{mm:02}:{ss:02}Z")
-}
 
 fn unix_millis_to_iso8601(millis: u64) -> String {
     let (date, hh, mm, ss) = split_unix_secs(millis / 1000);
@@ -50,7 +32,6 @@ fn unix_millis_to_iso8601(millis: u64) -> String {
     format!("{date}T{hh:02}:{mm:02}:{ss:02}.{ms:03}Z")
 }
 
-/// Civil-date split of a unix timestamp: (YYYY-MM-DD, hh, mm, ss).
 fn split_unix_secs(secs: u64) -> (String, u64, u64, u64) {
     let ss = secs % 60;
     let t = secs / 60;
@@ -86,4 +67,11 @@ fn split_unix_secs(secs: u64) -> (String, u64, u64, u64) {
         mm,
         ss,
     )
+}
+
+#[cfg(any(feature = "chat", feature = "library"))]
+pub fn normalize(value: &str) -> rusqlite::Result<String> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|instant| instant.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
 }

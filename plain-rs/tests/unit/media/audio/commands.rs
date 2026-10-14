@@ -1,5 +1,7 @@
 use super::*;
 use crate::media::audio::queue::NoLibrary;
+#[path = "../../library/fixtures.rs"]
+mod fixtures;
 struct Fake {
     commands: Vec<(Action, String, i64)>,
     fail: bool,
@@ -53,6 +55,13 @@ fn commands_preserve_resume_and_repeat_one_only_applies_to_completion() {
         commands: vec![],
         fail: false,
     };
+    fixtures::register_audio_tracks(
+        &db,
+        &[
+            AudioTrack::from_path_stem("one"),
+            AudioTrack::from_path_stem("two"),
+        ],
+    );
     play_path(&db, &prefs, &mut engine, "one").unwrap();
     audio_queue::enqueue(&db, &[AudioTrack::from_path_stem("two")], false).unwrap();
     command(&db, &prefs, &mut engine, Action::Seek, 3_000_000_123, 1.0).unwrap();
@@ -80,25 +89,29 @@ fn restarting_the_core_plays_the_remembered_track_from_zero() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
     let prefs = std::sync::Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
-    let db = Db::open_with_prefs(&path, prefs.clone()).unwrap();
+    let db = Db::open(&path).unwrap();
     let mut engine = Fake {
         commands: vec![],
         fail: false,
     };
+    fixtures::register_audio_tracks(
+        &db,
+        &[
+            AudioTrack::from_path_stem("one"),
+            AudioTrack::from_path_stem("two"),
+        ],
+    );
     play_path(&db, &prefs, &mut engine, "one").unwrap();
     audio_queue::enqueue(&db, &[AudioTrack::from_path_stem("two")], false).unwrap();
     command(&db, &prefs, &mut engine, Action::Next, 0, 1.0).unwrap();
     command(&db, &prefs, &mut engine, Action::Seek, 123_456, 1.0).unwrap();
     command(&db, &prefs, &mut engine, Action::Pause, 0, 1.0).unwrap();
     assert_eq!(
-        prefs
-            .get::<String>(crate::prefs::system::keys::AUDIO_CURRENT_PATH)
-            .unwrap()
-            .as_deref(),
-        Some("two")
+        db.audio_current_media_id().unwrap(),
+        "test:two"
     );
     drop(db);
-    let db = Db::open_with_prefs(&path, prefs.clone()).unwrap();
+    let db = Db::open(&path).unwrap();
     audio_playback::invalidate(&db).unwrap();
     let restored = command(&db, &prefs, &mut engine, Action::Play, 0, 1.0).unwrap();
     assert_eq!(restored.path, "two");

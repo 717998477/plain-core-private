@@ -39,7 +39,7 @@ fn contact_fact(id: &str) -> Value {
         "id": id, "prefix": "Dr", "firstName": "Ada", "middleName": "M", "lastName": "Lovelace",
         "suffix": "Jr", "nickname": "ada", "photoId": "content://photo/1", "source": "Local",
         "starred": true, "contactId": "c1", "thumbnailId": "content://thumb/1", "notes": "note",
-        "ringtone": "content://ring/1", "updatedAt": "2026-10-05T00:00:00Z",
+        "ringtone": "content://ring/1", "updatedAt": "2026-10-05T00:00:00.000Z",
         "phoneNumbers": [
             {"value": "+1 555", "type": 2, "label": "mobile", "normalizedNumber": "+1555"},
             {"value": "+1 999", "type": 99, "label": "", "normalizedNumber": "+1999"},

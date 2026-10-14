@@ -254,7 +254,7 @@ impl Runtime {
                     .into(),
                 version: found.version,
                 platform: found.platform,
-                last_seen: plain_rs::db::now_iso(),
+                last_seen_at: plain_rs::db::now_iso(),
                 discovery_methods: vec!["LAN".into()],
             };
             match observer.seen(device, visible.load(Ordering::SeqCst), true) {
@@ -317,7 +317,7 @@ impl Runtime {
                                 .into(),
                             version: found.version,
                             platform: found.platform,
-                            last_seen: plain_rs::db::now_iso(),
+                            last_seen_at: plain_rs::db::now_iso(),
                             discovery_methods: vec!["DNS_SD".into()],
                         };
                         match system_observer.seen(

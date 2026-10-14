@@ -10,13 +10,13 @@ fn file(data_type: DataType, path: &str, title: &str, size_bytes: i64) -> MediaF
         bucket_id: "bucket".into(),
         size_bytes,
         duration_ms: 10,
-        album_file_id: String::new(),
+        cover_image_id: None,
         width: 0,
         height: 0,
         rotation: 0,
         taken_at: None,
-        created_at: "2026-10-12T00:00:00Z".into(),
-        updated_at: "2026-10-12T00:00:00Z".into(),
+        created_at: "2026-10-12T00:00:00.000Z".into(),
+        updated_at: "2026-10-12T00:00:00.000Z".into(),
     }
 }
 
@@ -67,7 +67,7 @@ fn document_filters_and_explicit_trash_selection_use_current_catalog() {
     );
     db.with_conn(|conn| {
         conn.execute(
-            "UPDATE media_files SET is_trashed=1 WHERE id=?1",
+            "UPDATE media_items SET trashed=1 WHERE id=?1",
             [&created[0].id],
         )
     })
@@ -98,7 +98,7 @@ fn bucket_items_use_shared_visibility_and_original_folder_names() {
         9_000_000_000,
     );
     recent.bucket_id = older.bucket_id.clone();
-    recent.updated_at = "2026-10-13T00:00:00Z".into();
+    recent.updated_at = "2026-10-13T00:00:00.000Z".into();
     let mut other = file(DataType::Image, "/second/Albums/other.jpg", "Title", 7);
     other.bucket_id = "/second/Albums".into();
     let created = db
@@ -111,7 +111,7 @@ fn bucket_items_use_shared_visibility_and_original_folder_names() {
         .unwrap();
     db.with_conn(|conn| {
         conn.execute(
-            "UPDATE media_files SET is_trashed=1 WHERE id=?1",
+            "UPDATE media_items SET trashed=1 WHERE id=?1",
             [&created[0].id],
         )
     })
@@ -161,7 +161,7 @@ fn action_ids_share_filters_and_explicit_from_trash_overrides_the_query_mode() {
         .unwrap();
     db.with_conn(|conn| {
         conn.execute(
-            "UPDATE media_files SET is_trashed=1 WHERE id=?1",
+            "UPDATE media_items SET trashed=1 WHERE id=?1",
             [&created[0].id],
         )
     })

@@ -38,9 +38,9 @@ fn fixture(permissions: Value) -> (tempfile::TempDir, PublicSchema, Arc<Prefs>) 
 fn fact(id: &str, kind: &str, size: i64) -> Value {
     json!({"item":{
         "id":id,"name":id,"type":kind,"version":"1.0","path":"/data/app.apk","size":size,
-        "installedAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-05T00:00:00Z",
+        "installedAt":"2026-10-01T00:00:00.000Z","updatedAt":"2026-10-05T00:00:00.000Z",
         "certs":[{"issuer":"issuer","subject":"subject","serialNumber":"0x1",
-                  "validFrom":"2026-01-01T00:00:00Z","validTo":"2036-01-01T00:00:00Z"}],
+                  "validFrom":"2026-01-01T00:00:00.000Z","validTo":"2036-01-01T00:00:00.000Z"}],
     },"nameSortKey":id})
 }
 
@@ -108,7 +108,7 @@ async fn package_statuses_keep_missing_packages_in_the_reply() {
     stub(host.clone(), |method, params| match method {
         "systemPackageStatuses" => {
             assert_eq!(params["ids"], json!(["gone", "com.a"]));
-            json!({"gone": Value::Null, "com.a": {"updatedAt":"2026-10-05T00:00:00Z"}})
+            json!({"gone": Value::Null, "com.a": {"updatedAt":"2026-10-05T00:00:00.000Z"}})
         }
         other => panic!("unexpected host call {other}"),
     });

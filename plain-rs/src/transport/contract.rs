@@ -78,11 +78,12 @@ impl<T: PeerTransport> PeerTransport for std::sync::Arc<T> {
 /// Build all candidate URLs for a peer's /peer_graphql endpoint,
 /// ordered with the most-recently-seen IP first.
 pub fn peer_graphql_urls(peer: &DPeer) -> Vec<String> {
+    let Some(port) = peer.port.filter(|port| *port > 0) else { return Vec::new(); };
     peer.ip
         .split(',')
         .map(str::trim)
         .filter(|ip| !ip.is_empty())
-        .map(|ip| build_url("https", ip, peer.port, "/peer_graphql"))
+        .map(|ip| build_url("https", ip, port, "/peer_graphql"))
         .collect()
 }
 

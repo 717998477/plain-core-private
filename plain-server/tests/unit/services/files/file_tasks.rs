@@ -149,14 +149,29 @@ async fn media_move_case(missing_destination: bool) {
     let audio_path = source.join("audio").to_str().unwrap().to_owned();
     db.with_conn(|c| -> rusqlite::Result<()> {
         for (kind, id, tag) in [(1,"1","audio"),(2,"2","video"),(3,"3","image"),(24,"4","document")] {
-            c.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES(?1,?2,?3,'first',7,'fixture')",rusqlite::params![tag,id,kind])?;
+            c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES(?1,?2,?3,'first')",rusqlite::params![tag,id,kind])?;
         }
-        c.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES('file',?1,22,'first',7,'fixture')",[source.join("document").to_str().unwrap()])?;
-        c.execute_batch("INSERT INTO media_item(media_type,media_id,duration_ms,updated_at) VALUES('audio','1',5000000001,'first'),('video','2',6000000001,'first'); INSERT INTO video_play_progress(media_id,position_ms,updated_at) VALUES('2',4000000001,'first');")?;
-        c.execute("INSERT INTO audio_queue_items(path,sort_order,title,artist,duration_ms) VALUES(?1,0,'fixture','',5000000001)",[&audio_path])?;
+        c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('file',?1,22,'first')",[source.join("document").to_str().unwrap()])?;
+        c.execute_batch("INSERT INTO media_play_history(media_id,position_ms,play_count,played_at) VALUES('2',4000000001,0,'first');")?;
+        c.execute("INSERT INTO audio_queue_items(media_id,sort_order) SELECT id,0 FROM media_items WHERE path=?1",[&audio_path])?;
 
         Ok(())
     }).unwrap();
+    let duration_cache = plain_rs::media::duration_cache::DurationCache::new(&base);
+    duration_cache
+        .save(plain_rs::media::duration_cache::Duration {
+            media_type: "audio".into(),
+            media_id: "1".into(),
+            path: audio_path.clone(),
+            size_bytes: 7,
+            modified_at: "2026-01-01T00:00:00.000Z".into(),
+            duration_ms: 5_000_000_001,
+            updated_at: String::new(),
+        })
+        .unwrap();
+    db.use_platform_audio_catalog().unwrap();
+    db.cache_platform_audio(&[plain_rs::db::audio_catalog::AudioMedia { media_id:Some("1".into()),aliases:Vec::new(),track:plain_rs::media::audio::queue::AudioTrack::from_path_stem(&audio_path) }],false).unwrap();
+    db.with_conn(|conn|conn.execute("INSERT INTO audio_queue_items(media_id,sort_order) VALUES('1',0)",[])).unwrap();
     plain_rs::media::audio::queue::save_audio_current(&db, &audio_path).unwrap();
     plain_rs::media::audio::playback::seek(&db, 100).unwrap();
     let mut socket = crate::host::events::TestHost::new(&server);
@@ -182,6 +197,15 @@ async fn media_move_case(missing_destination: bool) {
                         assert!(PathBuf::from(path).is_file());
                         Some(json!({"mediaType":kind,"mediaId":(if old{id}else{id+10}).to_string(),"path":path}))
                     }).collect::<Vec<_>>();
+                    json!(rows)
+                }
+                "audioLibraryResolve" => {
+                    let mut rows=Vec::new();
+                    for id in params["ids"].as_array().unwrap() {
+                        let id=id.as_str().unwrap();
+                        let path = match id { "1"=>source_root.join("audio"), "11"=>source_root.parent().unwrap().join("target_1").join("audio"), _=>continue };
+                        if path.is_file() { rows.push(json!({"mediaId":id,"path":path.to_str().unwrap(),"title":"fixture","artist":"","albumId":"","durationMs":5000000001_i64})); }
+                    }
                     json!(rows)
                 }
                 "audioEngineCommand" => {
@@ -214,6 +238,7 @@ async fn media_move_case(missing_destination: bool) {
     }).await.unwrap();
     let moved = base.join("target_1");
     assert!(!source.exists());
+    assert!(duration_cache.all().unwrap().is_empty());
     assert!(moved.join("audio").is_file());
     assert_eq!(task["completedOps"][0]["dst"], moved.to_str().unwrap());
     assert_eq!(std::fs::read(&destination).unwrap(), b"existing");
@@ -228,7 +253,7 @@ async fn media_move_case(missing_destination: bool) {
         assert_eq!(clear_count.load(std::sync::atomic::Ordering::SeqCst), 0);
         db.with_conn(|c| {
             c.query_row(
-                "SELECT key FROM tag_relations WHERE tag_id='audio'",
+                "SELECT target_key FROM tag_relations WHERE tag_id='audio'",
                 [],
                 |r| r.get::<_, String>(0),
             )
@@ -260,7 +285,7 @@ async fn media_move_case(missing_destination: bool) {
             ] {
                 assert_eq!(
                     c.query_row(
-                        "SELECT key FROM tag_relations WHERE tag_id=?1",
+                        "SELECT target_key FROM tag_relations WHERE tag_id=?1",
                         [tag],
                         |r| r.get::<_, String>(0)
                     )?,
@@ -269,7 +294,7 @@ async fn media_move_case(missing_destination: bool) {
             }
             assert_eq!(
                 c.query_row(
-                    "SELECT key FROM tag_relations WHERE tag_id='file'",
+                    "SELECT target_key FROM tag_relations WHERE tag_id='file'",
                     [],
                     |r| r.get::<_, String>(0)
                 )?,
@@ -277,36 +302,23 @@ async fn media_move_case(missing_destination: bool) {
             );
             assert_eq!(
                 c.query_row(
-                    "SELECT duration_ms FROM media_item WHERE media_type='audio' AND media_id='11'",
-                    [],
-                    |r| r.get::<_, i64>(0)
-                )?,
-                5000000001
-            );
-            assert_eq!(
-                c.query_row(
-                    "SELECT position_ms FROM video_play_progress WHERE media_id='12'",
+                    "SELECT position_ms FROM media_play_history WHERE media_id='12'",
                     [],
                     |r| r.get::<_, i64>(0)
                 )?,
                 4000000001
             );
             assert_eq!(
-                c.query_row("SELECT count(*) FROM audio_queue_items", [], |r| r
-                    .get::<_, i64>(0))?,
-                0
+                c.query_row("SELECT media_id FROM audio_queue_items", [], |r| r
+                    .get::<_, String>(0))?,
+                "11"
             );
             Ok(())
         })
         .unwrap();
     }
-    assert_eq!(
-        plain_rs::media::audio::playback::snapshot(&db)
-            .unwrap()
-            .path
-            .is_empty(),
-        !missing_destination
-    );
+    assert_eq!(plain_rs::media::audio::playback::snapshot(&db).unwrap().path,
+        if missing_destination { audio_path } else { moved.join("audio").to_str().unwrap().to_owned() });
     worker.abort();
     let _ = worker.await;
     server.shutdown().await;

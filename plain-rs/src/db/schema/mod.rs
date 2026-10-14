@@ -2,6 +2,8 @@
 mod audit_event;
 use rusqlite::Connection;
 
+pub(crate) const VERSION: i32 = 1;
+
 #[cfg(feature = "chat")]
 mod app_file;
 #[cfg(feature = "library")]
@@ -24,8 +26,6 @@ mod image_editor_project;
 mod image_embedding;
 #[cfg(feature = "library")]
 mod media_file;
-#[cfg(feature = "library")]
-mod media_item;
 #[cfg(feature = "chat")]
 mod nearby_device;
 #[cfg(feature = "library")]
@@ -43,7 +43,7 @@ mod tag;
 #[cfg(feature = "library")]
 mod trashed_sms;
 #[cfg(feature = "library")]
-mod video_play_progress;
+mod media_play_history;
 
 pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
     #[cfg(feature = "library")]
@@ -69,8 +69,6 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
     #[cfg(feature = "library")]
     tag::init(conn)?;
     #[cfg(feature = "library")]
-    media_item::init(conn)?;
-    #[cfg(feature = "library")]
     media_file::init(conn)?;
     #[cfg(feature = "library")]
     pomodoro::init(conn)?;
@@ -90,6 +88,7 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
     #[cfg(feature = "library")]
     trashed_sms::init(conn)?;
     #[cfg(feature = "library")]
-    video_play_progress::init(conn)?;
+    media_play_history::init(conn)?;
+    conn.pragma_update(None, "user_version", VERSION)?;
     Ok(())
 }

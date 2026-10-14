@@ -21,7 +21,6 @@ description = "Shared Plain media scanning, indexing and thumbnails"
 "rusqlite" = { "version" = "0.32", "features" = ["bundled"] }
 "anyhow" = { "version" = "1" }
 "chrono" = { "version" = "0.4", "features" = ["serde"] }
-"fjall" = { "version" = "=3.1.10" }
 "tantivy" = { "version" = "0.22" }
 "lofty" = { "version" = "0.22" }
 "image" = { "version" = "0.25", "default-features" = false, "features" = ["jpeg", "png", "webp", "gif"] }

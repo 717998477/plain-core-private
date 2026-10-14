@@ -108,7 +108,7 @@ fn channel_invite_serializes_to_camelcase_wire() {
             public_key: "PUB".to_string(),
             device_type: DeviceType::Computer,
             ip: "".to_string(),
-            port: 0,
+            port: None,
         }],
         version: 3,
         signature: "SIG".to_string(),

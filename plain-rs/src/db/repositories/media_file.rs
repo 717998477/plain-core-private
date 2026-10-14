@@ -4,7 +4,7 @@ use crate::db::{
 use crate::enums::DataType;
 use rusqlite::{OptionalExtension, params};
 
-pub const COLUMNS: &str = "id,data_type,path,title,artist,bucket_id,size_bytes,duration_ms,album_file_id,width,height,rotation,taken_at,created_at,updated_at,is_favorite,is_trashed,original_path";
+pub const COLUMNS: &str = "id,data_type,path,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,taken_at,created_at,updated_at,favorited,trashed,original_path";
 
 pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaFileRow> {
     Ok(MediaFileRow {
@@ -16,15 +16,15 @@ pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaFileRow> {
         bucket_id: row.get(5)?,
         size_bytes: row.get(6)?,
         duration_ms: row.get(7)?,
-        album_file_id: row.get(8)?,
+        cover_image_id: row.get(8)?,
         width: row.get(9)?,
         height: row.get(10)?,
         rotation: row.get(11)?,
         taken_at: row.get(12)?,
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
-        is_favorite: row.get(15)?,
-        is_trashed: row.get(16)?,
+        favorited: row.get(15)?,
+        trashed: row.get(16)?,
         original_path: row.get(17)?,
     })
 }
@@ -65,12 +65,12 @@ impl Db {
             for (file, available) in files {
                 let data_type = kind(file.data_type)?;
                 tx.execute(
-                    "INSERT INTO media_files(id,data_type,path,title,artist,bucket_id,size_bytes,duration_ms,album_file_id,width,height,rotation,taken_at,created_at,updated_at,mime_type,file_name)
+                    "INSERT INTO media_items(id,data_type,path,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,taken_at,created_at,updated_at,mime_type,file_name)
                      VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
-                     ON CONFLICT(data_type,path) DO UPDATE SET title=CASE WHEN ?18 THEN excluded.title ELSE media_files.title END,artist=CASE WHEN ?18 THEN excluded.artist ELSE media_files.artist END,bucket_id=excluded.bucket_id,size_bytes=excluded.size_bytes,duration_ms=CASE WHEN ?19 THEN excluded.duration_ms ELSE media_files.duration_ms END,album_file_id=CASE WHEN ?20 THEN excluded.album_file_id ELSE media_files.album_file_id END,width=CASE WHEN ?21 THEN excluded.width ELSE media_files.width END,height=CASE WHEN ?21 THEN excluded.height ELSE media_files.height END,rotation=CASE WHEN ?22 THEN excluded.rotation ELSE media_files.rotation END,taken_at=CASE WHEN ?23 THEN excluded.taken_at ELSE media_files.taken_at END,updated_at=excluded.updated_at,mime_type=excluded.mime_type,file_name=excluded.file_name",
-                    params![uuid::Uuid::new_v4().to_string(),data_type,file.path,file.title,file.artist,file.bucket_id,file.size_bytes,file.duration_ms,file.album_file_id,file.width,file.height,file.rotation,file.taken_at,file.created_at,file.updated_at,crate::utils::mime::mime_from_ext(&file.path),std::path::Path::new(&file.path).file_name().and_then(|name|name.to_str()).unwrap_or(&file.path),available.tags,available.duration,available.album_file_id,available.dimensions,available.rotation,available.taken_at],
+                     ON CONFLICT(data_type,path) DO UPDATE SET title=CASE WHEN ?18 THEN excluded.title ELSE media_items.title END,artist=CASE WHEN ?18 THEN excluded.artist ELSE media_items.artist END,bucket_id=excluded.bucket_id,size_bytes=excluded.size_bytes,duration_ms=CASE WHEN ?19 THEN excluded.duration_ms ELSE media_items.duration_ms END,cover_image_id=CASE WHEN ?20 THEN excluded.cover_image_id ELSE media_items.cover_image_id END,width=CASE WHEN ?21 THEN excluded.width ELSE media_items.width END,height=CASE WHEN ?21 THEN excluded.height ELSE media_items.height END,rotation=CASE WHEN ?22 THEN excluded.rotation ELSE media_items.rotation END,taken_at=CASE WHEN ?23 THEN excluded.taken_at ELSE media_items.taken_at END,updated_at=excluded.updated_at,mime_type=excluded.mime_type,file_name=excluded.file_name",
+                    params![uuid::Uuid::new_v4().to_string(),data_type,file.path,file.title,file.artist,file.bucket_id,file.size_bytes,file.duration_ms,file.cover_image_id,file.width,file.height,file.rotation,file.taken_at.as_deref().map(crate::utils::dbtime::normalize).transpose()?,crate::utils::dbtime::normalize(&file.created_at)?,crate::utils::dbtime::normalize(&file.updated_at)?,crate::utils::mime::mime_from_ext(&file.path),std::path::Path::new(&file.path).file_name().and_then(|name|name.to_str()).unwrap_or(&file.path),available.tags,available.duration,available.cover_image_id,available.dimensions,available.rotation,available.taken_at],
                 )?;
-                rows.push(tx.query_row(&format!("SELECT {COLUMNS} FROM media_files WHERE data_type=?1 AND path=?2"),params![data_type,file.path],from_row)?);
+                rows.push(tx.query_row(&format!("SELECT {COLUMNS} FROM media_items WHERE data_type=?1 AND path=?2"),params![data_type,file.path],from_row)?);
             }
             tx.commit()?;
             Ok(rows)
@@ -85,7 +85,7 @@ impl Db {
         let data_type = kind(data_type)?;
         self.with_conn(|conn| {
             conn.query_row(
-                &format!("SELECT {COLUMNS} FROM media_files WHERE data_type=?1 AND path=?2"),
+                &format!("SELECT {COLUMNS} FROM media_items WHERE data_type=?1 AND path=?2"),
                 params![data_type, path],
                 from_row,
             )
@@ -97,34 +97,27 @@ impl Db {
     /// watcher reports the file is gone; without this the row and its
     /// tag, duration and embedding rows would outlive it.
     pub fn forget_media_file(&self, path: &str) -> rusqlite::Result<usize> {
-        self.with_conn(|conn| {
-            let tx = conn.unchecked_transaction()?;
-            let mut statement = tx.prepare("SELECT data_type,id FROM media_files WHERE path=?1")?;
-            let rows = statement
-                .query_map([path], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            drop(statement);
-            for (data_type, id) in &rows {
-                tx.execute(
-                    "DELETE FROM tag_relations WHERE type=?1 AND key=?2",
-                    params![data_type, id],
-                )?;
-                tx.execute("DELETE FROM image_embeddings WHERE id=?1", params![id])?;
-                // Playback position is keyed by the video's own id.
-                tx.execute(
-                    "DELETE FROM video_play_progress WHERE media_id=?1",
-                    params![id],
-                )?;
+        self.audio_transaction(|tx,state| {
+            let rows = tx.prepare("SELECT data_type,id FROM media_items WHERE path=?1")?
+                .query_map([path],|row|Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            for (data_type,id) in &rows {
+                tx.execute("DELETE FROM tag_relations WHERE type=?1 AND target_key=?2",params![data_type,id])?;
+                tx.execute("DELETE FROM image_embeddings WHERE id=?1",[id])?;
+                tx.execute("DELETE FROM media_play_history WHERE media_id=?1",[id])?;
+                if *data_type==1 {
+                    for table in ["audio_queue_items","audio_playlist_items"] {
+                        tx.execute(&format!("DELETE FROM {table} WHERE media_id=?1"),[id])?;
+                    }
+                    if state.current_media_id.as_deref() == Some(id.as_str()) {
+                        state.source.current_index = -1;
+                        state.select("")?;
+                    }
+                }
             }
-            tx.execute(
-                "DELETE FROM media_item WHERE media_id=?1",
-                params![rows.first().map(|(_, id)| id.clone())],
-            )?;
-            let removed = tx.execute("DELETE FROM media_files WHERE path=?1", params![path])?;
-            tx.commit()?;
-            Ok(removed)
+            Ok(tx.execute("DELETE FROM media_items WHERE path=?1",[path])?)
+        }).map_err(|error|match error {
+            crate::error::DomainError::Sqlite(error)=>error,
+            error=>rusqlite::Error::ToSqlConversionFailure(Box::new(error)),
         })
     }
 
@@ -136,7 +129,7 @@ impl Db {
     ) -> rusqlite::Result<Vec<MediaFileRow>> {
         let data_type = kind(data_type)?;
         self.with_conn(|conn| {
-            let mut statement = conn.prepare(&format!("SELECT {COLUMNS} FROM media_files WHERE data_type=?1 AND is_trashed=0 ORDER BY updated_at DESC,id LIMIT ?2 OFFSET ?3"))?;
+            let mut statement = conn.prepare(&format!("SELECT {COLUMNS} FROM media_items WHERE data_type=?1 AND trashed=0 ORDER BY updated_at DESC,id LIMIT ?2 OFFSET ?3"))?;
             statement.query_map(params![data_type,limit,offset],from_row)?.collect()
         })
     }
@@ -145,7 +138,7 @@ impl Db {
         let data_type = kind(data_type)?;
         self.with_conn(|conn| {
             conn.query_row(
-                "SELECT COUNT(*) FROM media_files WHERE data_type=?1 AND is_trashed=0",
+                "SELECT COUNT(*) FROM media_items WHERE data_type=?1 AND trashed=0",
                 [data_type],
                 |row| row.get(0),
             )

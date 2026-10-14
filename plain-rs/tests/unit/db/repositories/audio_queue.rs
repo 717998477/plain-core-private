@@ -7,6 +7,7 @@ use fixtures::*;
 #[test]
 fn replace_queue_items_assigns_dense_sort_orders() {
     let db = test_db("replace_dense");
+    register_audio_tracks(&db, &[audio("/a.mp3", "A", 1), audio("/b.mp3", "B", 2)]);
     crate::db::audio_queue::replace_queue_items(
         &db,
         &[
@@ -43,13 +44,16 @@ fn replace_queue_items_assigns_dense_sort_orders() {
 #[test]
 fn history_upsert_and_trim_are_deterministic() {
     let db = test_db("history_io");
-    let mk = |path: &str, played_at: &str| crate::db::PlayHistory {
-        path: path.into(),
-        title: "T".into(),
-        artist: String::new(),
-        duration_ms: 1,
-        play_count: 1,
-        played_at: played_at.into(),
+    let mk = |path: &str, played_at: &str| {
+        register_audio(&db, &audio(path, "t", 1));
+        crate::db::PlayHistory {
+            path: path.into(),
+            title: "T".into(),
+            artist: String::new(),
+            duration_ms: 1,
+            play_count: 1,
+            played_at: played_at.into(),
+        }
     };
     crate::db::audio_queue::upsert_history(&db, &mk("/old.mp3", "2026-01-01T00:00:00.000Z"))
         .unwrap();
@@ -81,13 +85,16 @@ fn history_upsert_and_trim_are_deterministic() {
 #[test]
 fn remove_by_paths_deletes_only_matches() {
     let db = test_db("remove_paths_io");
-    let history = |p: &str| crate::db::PlayHistory {
-        path: p.into(),
-        title: String::new(),
-        artist: String::new(),
-        duration_ms: 0,
-        play_count: 1,
-        played_at: "2026-01-01T00:00:00.000Z".into(),
+    let history = |p: &str| {
+        register_audio(&db, &audio(p, "t", 1));
+        crate::db::PlayHistory {
+            path: p.into(),
+            title: String::new(),
+            artist: String::new(),
+            duration_ms: 0,
+            play_count: 1,
+            played_at: "2026-01-01T00:00:00.000Z".into(),
+        }
     };
     crate::db::audio_queue::upsert_history(&db, &history("/a.mp3")).unwrap();
     crate::db::audio_queue::upsert_history(&db, &history("/b.mp3")).unwrap();
@@ -101,6 +108,7 @@ fn remove_by_paths_deletes_only_matches() {
 #[test]
 fn playlist_item_counts_and_bulk_delete() {
     let db = test_db("pl_counts");
+    register_audio_tracks(&db,&[audio("/1.mp3","One",0),audio("/2.mp3","Two",0),audio("/3.mp3","Three",0)]);
     let item = |pl: &str, path: &str, sort: i64| crate::db::PlaylistItem {
         id: format!("{pl}-{path}"),
         playlist_id: pl.into(),

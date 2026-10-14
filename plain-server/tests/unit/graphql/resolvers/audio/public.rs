@@ -6,7 +6,7 @@ use plain_rs::prefs::Prefs;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-fn stub(host: Arc<Host>, handler: impl Fn(&str, Value) -> Value + Send + 'static) {
+fn stub(host: Arc<Host>, db: Arc<Db>, handler: impl Fn(&str, Value) -> Value + Send + 'static) {
     let (generation, mut requests) = host.connect();
     let host = host.clone();
     tokio::spawn(async move {
@@ -14,7 +14,42 @@ fn stub(host: Arc<Host>, handler: impl Fn(&str, Value) -> Value + Send + 'static
             let Some(id) = request["id"].as_u64() else {
                 continue;
             };
-            let result = if request["method"] == "systemAudioPlaybackPermission" {
+            let result = if request["method"] == "audioLibraryResolve"
+                || request["method"] == "audioMetadata"
+            {
+                let params = &request["params"];
+                let mut rows = db.with_conn(|conn|conn.prepare("SELECT id,path,title,artist,duration_ms,cover_image_id FROM media_items WHERE data_type=1 UNION SELECT media_id,path,title,artist,duration_ms,album_id FROM platform_audio_media").unwrap().query_map([],|row|Ok(json!({"mediaId":row.get::<_,String>(0)?,"path":row.get::<_,String>(1)?,"title":row.get::<_,String>(2)?,"artist":row.get::<_,String>(3)?,"durationMs":row.get::<_,i64>(4)?,"albumId":row.get::<_,String>(5)?,"aliases":[]}))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
+                let paths = if request["method"] == "audioMetadata" {
+                    vec![params["path"].clone()]
+                } else {
+                    params["paths"].as_array().unwrap().clone()
+                };
+                for path in &paths {
+                    if rows.iter().any(|row| row["path"] == *path) {
+                        continue;
+                    }
+                    let facts = handler("systemAudioPlaylistTracks", json!({"paths":[path]}));
+                    for mut track in facts.as_array().unwrap().iter().cloned() {
+                        track["mediaId"] =
+                            json!(format!("mock:{}", track["path"].as_str().unwrap()));
+                        track["albumId"] = json!("");
+                        track["aliases"] = json!([]);
+                        rows.push(track);
+                    }
+                }
+                if request["method"] == "audioMetadata" {
+                    rows.into_iter()
+                        .find(|row| row["path"] == params["path"])
+                        .unwrap()
+                } else {
+                    json!(
+                        rows.into_iter()
+                            .filter(|row| paths.contains(&row["path"])
+                                || params["ids"].as_array().unwrap().contains(&row["mediaId"]))
+                            .collect::<Vec<_>>()
+                    )
+                }
+            } else if request["method"] == "systemAudioPlaybackPermission" {
                 json!(true)
             } else {
                 handler(
@@ -81,7 +116,7 @@ fn fixture_with(
         .unwrap();
     let db = Arc::new(Db::open(&dir.path().join("data.db")).unwrap());
     let host = Arc::new(Host::default());
-    stub(host.clone(), handler);
+    stub(host.clone(), db.clone(), handler);
     let directory = dir.path().to_path_buf();
     let (events, _) = tokio::sync::broadcast::channel(16);
     (
@@ -113,6 +148,9 @@ fn seed_queue(schema: &PublicSchema, tracks: &[(&str, &str, &str)]) {
         .iter()
         .map(|(path, title, artist)| track(path, title, artist))
         .collect();
+    for item in &items {
+        database(schema).with_conn(|conn|conn.execute("INSERT INTO media_items(id,data_type,path,mime_type,file_name,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,created_at,updated_at) VALUES(?1,1,?2,'audio/mpeg','song',?3,?4,'',1,?5,'',0,0,0,'now','now')",rusqlite::params![format!("test:{}",item.path),item.path,item.title,item.artist,item.duration_ms])).unwrap();
+    }
     domain::enqueue(database(schema), &items, false).unwrap();
 }
 
@@ -515,7 +553,7 @@ async fn an_ungranted_library_counts_zero_and_refuses_to_list() {
         "systemMediaRows" => json!([{
             "id": "1", "title": "Hidden", "artist": "A", "path": "/m/a.mp3",
             "size": 1, "bucketId": "b", "durationMs": 1, "albumFileId": "",
-            "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
+            "createdAt": "2026-01-01T00:00:00.000Z", "updatedAt": "2026-01-01T00:00:00.000Z",
             "isFavorite": false,
         }]),
         _other => panic!("unexpected host call {_other}"),
@@ -542,7 +580,7 @@ async fn a_library_row_keeps_the_album_art_reference() {
             "id": "1", "title": "Song", "artist": "Band", "path": "/m/a.mp3",
             "size": 42, "bucketId": "bucket-1", "durationMs": 1234,
             "albumFileId": "album-file-1",
-            "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:01Z",
+            "createdAt": "2026-01-01T00:00:00.000Z", "updatedAt": "2026-01-01T00:00:01.000Z",
             "isFavorite": true,
         }]),
         _other => panic!("unexpected host call {_other}"),
@@ -569,6 +607,13 @@ async fn a_library_row_keeps_the_album_art_reference() {
 async fn playlist_items_accept_the_original_audio_item_fragment_and_path() {
     let (_dir, schema) = fixture();
     let db = database(&schema);
+    seed_queue(
+        &schema,
+        &[
+            ("/music/first.mp3", "First", "Artist"),
+            ("/music/second.mp3", "Second", "Artist"),
+        ],
+    );
     let playlist = domain::create_playlist(db, "Original contract").unwrap();
     domain::add_playlist_items(
         db,

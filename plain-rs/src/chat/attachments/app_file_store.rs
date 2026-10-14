@@ -282,7 +282,7 @@ fn store(
         db,
         &DAppFile {
             id: strong.into(),
-            size,
+            size_bytes: size,
             mime_type: effective_mime.into(),
             real_path: relative,
             ref_count: 1,

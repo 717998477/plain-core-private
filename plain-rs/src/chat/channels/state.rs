@@ -31,7 +31,7 @@ pub fn pending_invitation(
         return Ok(None);
     };
     if channel.status != ChannelStatus::Joined
-        || owner.is_some_and(|owner| owner != channel.owner_id)
+        || owner.is_some_and(|owner| Some(owner) != channel.owner_id.as_deref())
     {
         return Ok(None);
     }
@@ -66,23 +66,23 @@ pub fn apply(db: &Db, actor: &str, id: &str, action: Action) -> Result<DChannel>
         match action {
             Action::Rename { name } => { channel.name=name.trim().into(); versioned=true; }
             Action::Leave => {
-                if channel.owner_id==actor { bail!("Owner cannot leave; delete the channel instead"); }
+                if channel.owner_id.as_deref() == Some(actor) { bail!("Owner cannot leave; delete the channel instead"); }
                 channel.status=ChannelStatus::Left;
                 members.retain(|m|m.peer_id!=actor);
             }
             Action::Invite { peer } => {
-                if channel.owner_id!=actor { bail!("Only owner can add members"); }
+                if channel.owner_id.as_deref() != Some(actor) { bail!("Only owner can add members"); }
                 if peer.is_empty() { bail!("Missing member peer"); }
                 if members.iter().any(|m|m.peer_id==peer) { bail!("Already a member"); }
                 members.push(ChannelMember::pending(peer)); versioned=true;
             }
             Action::Kick { peer } => {
-                if channel.owner_id!=actor { bail!("Only owner can remove members"); }
+                if channel.owner_id.as_deref() != Some(actor) { bail!("Only owner can remove members"); }
                 if !members.iter().any(|m|m.peer_id==peer) { bail!("Not a member"); }
                 members.retain(|m|m.peer_id!=peer); versioned=true;
             }
             Action::Resend { peer } => {
-                if channel.owner_id!=actor { bail!("Only owner can resend invites"); }
+                if channel.owner_id.as_deref() != Some(actor) { bail!("Only owner can resend invites"); }
                 let member=members.iter().find(|m|m.peer_id==peer).ok_or_else(||anyhow::anyhow!("Not a member"))?;
                 if !member.is_pending() { bail!("Member is not pending"); }
                 if !tx.query_row("SELECT EXISTS(SELECT 1 FROM peers WHERE id=?1)",[peer],|r|r.get::<_,bool>(0))? { bail!("Peer not found"); }
@@ -98,7 +98,7 @@ pub fn apply(db: &Db, actor: &str, id: &str, action: Action) -> Result<DChannel>
             if versioned { channel.version=channel.version.checked_add(1).ok_or_else(||anyhow::anyhow!("Channel version overflow"))?; }
             channel.members=serde_json::to_string(&members)?;
             channel.updated_at=now_iso();
-            if tx.execute("UPDATE chat_channels SET name=?2,members=?3,version=?4,status=?5,updated_at=?6 WHERE id=?1",params![channel.id,channel.name,channel.members,channel.version,channel.status,channel.updated_at])? != 1 { bail!("Channel update failed"); }
+            if tx.execute("UPDATE chat_channels SET name=?2,members=?3,version=?4,status=?5,updated_at=?6 WHERE id=?1",params![channel.id,channel.name,channel.members,channel.version,channel.status,crate::utils::dbtime::normalize(&channel.updated_at)?])? != 1 { bail!("Channel update failed"); }
         }
         tx.commit()?;
         Ok(channel)

@@ -151,7 +151,7 @@ impl ShareHostMutation {
                     name,
                     real_paths,
                     read_only,
-                    expires_at.map(|i| i.0.to_rfc3339()),
+                    expires_at.map(|i| i.0.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
                 )
             })
             .await?,
@@ -168,7 +168,7 @@ impl ShareHostMutation {
         let service = ctx.data::<Arc<Service>>()?.clone();
         record(
             blocking(move || {
-                service.update(&id, &name, expires_at.map(|i| i.0.to_rfc3339()), real_paths)
+                service.update(&id, &name, expires_at.map(|i| i.0.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)), real_paths)
             })
             .await?,
         )

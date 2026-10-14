@@ -19,7 +19,7 @@ pub struct LoginPeer {
     pub ip: String,
     pub status: PeerStatus,
     pub online: bool,
-    pub port: i32,
+    pub port: Option<i32>,
     pub device_type: DeviceType,
     pub token: String,
     pub public_key: String,
@@ -71,10 +71,10 @@ impl NativePeers {
             .map_err(|error| error.to_string())?
             .filter(|peer| peer.is_paired() || !peer.token.is_empty());
         Ok(peer.and_then(|peer| {
-            if peer.ip.is_empty() || peer.port == 0 {
+            if peer.ip.is_empty() || peer.port.is_none() {
                 return None;
             }
-            Some(format!("{}:{}", peer.best_ip(), peer.port))
+            Some(format!("{}:{}", peer.best_ip(), peer.port?))
         }))
     }
 
@@ -95,7 +95,7 @@ impl NativePeers {
                 name: row.name,
                 ip: row.ip,
                 status: row.status,
-                port: i32::from(row.port),
+                port: row.port.map(i32::from),
                 device_type: row.device_type,
                 token: row.token,
                 public_key: row.public_key,

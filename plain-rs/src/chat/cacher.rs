@@ -41,8 +41,8 @@ impl ChatCacher {
         )?)?;
         let mut chat_cache = HashMap::<String, DChat>::new();
         for chat in latest_chats {
-            let chat_id = if !chat.channel_id.is_empty() && channel_ids.contains(&chat.channel_id) {
-                Some(chat.channel_id.clone())
+            let chat_id = if let Some(id) = chat.channel_id.as_ref().filter(|id| channel_ids.contains(*id)) {
+                Some(id.clone())
             } else if (chat.from_id == "me" && chat.to_id == "local")
                 || (chat.from_id == "local" && chat.to_id == "me")
             {

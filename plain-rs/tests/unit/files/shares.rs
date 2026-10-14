@@ -106,7 +106,7 @@ fn fresh_auth_revocation_expiry_and_disabled_service() {
     s.update(
         &row.id,
         "expired",
-        Some("2000-01-01T00:00:00Z".into()),
+        Some("2000-01-01T00:00:00.000Z".into()),
         None,
     )
     .unwrap();

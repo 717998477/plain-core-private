@@ -34,7 +34,7 @@ fn nas_init_creates_chat_db_with_plain_app_schema() {
         "chats",
         "chat_channels",
         "peers",
-        "nearby_device_cache",
+        "nearby_devices",
         "app_files",
         "tags",
         "audio_queue_items",

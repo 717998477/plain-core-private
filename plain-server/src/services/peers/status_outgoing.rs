@@ -185,7 +185,8 @@ impl Outgoing {
         }
     }
     async fn attempt(&self, state: &ServerState, peer: &DPeer, epoch: u64) -> Result<()> {
-        ensure!(!peer.ip.is_empty() && peer.port > 0, "No peer address");
+        ensure!(!peer.ip.is_empty(), "No peer address");
+        let port = peer.port.filter(|port| *port > 0).ok_or_else(|| anyhow::anyhow!("No peer address"))?;
         let permit = self.setup.clone().acquire_owned().await?;
         ensure!(self.current(epoch), "Status runtime stopped");
         let actor = state
@@ -197,7 +198,7 @@ impl Outgoing {
         let url = plain_rs::utils::build_url::build_url(
             "wss",
             &selected_ip,
-            peer.port,
+            port,
             &format!("/status?cid={actor}"),
         );
         let mut socket = tokio::time::timeout(
@@ -284,7 +285,7 @@ impl Outgoing {
     }
 }
 fn fingerprint(peer: &DPeer) -> String {
-    format!("{}:{}:{}:{}", peer.key, peer.public_key, peer.ip, peer.port)
+    format!("{}:{}:{}:{:?}", peer.key, peer.public_key, peer.ip, peer.port)
 }
 pub(crate) async fn ensure_aware(state: &ServerState) -> Result<()> {
     for peer in peers::all(&state.db)?.into_iter().filter(|p| p.is_paired()) {

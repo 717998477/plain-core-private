@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 #[derive(InputObject)]
 pub struct AudioHostTrackInput {
-    path: String,
+    pub(crate) path: String,
     title: String,
     artist: String,
     album_id: ID,
@@ -101,7 +101,13 @@ impl AudioHostMutation {
         play_next: bool,
     ) -> async_graphql::Result<bool> {
         audio(ctx)?
-            .run(move |db, _| {
+            .run(move |db, lib| {
+                lib.cache_paths(
+                    &items
+                        .iter()
+                        .map(|item| item.path.clone())
+                        .collect::<Vec<_>>(),
+                )?;
                 domain::enqueue(
                     db,
                     &items.into_iter().map(Into::into).collect::<Vec<_>>(),
@@ -162,7 +168,10 @@ impl AudioHostMutation {
         path: String,
     ) -> async_graphql::Result<bool> {
         audio(ctx)?
-            .run(move |db, _| domain::save_audio_current(db, &path))
+            .run(move |db, lib| {
+                lib.cache_paths(std::slice::from_ref(&path))?;
+                domain::save_audio_current(db, &path)
+            })
             .await?;
         Ok(true)
     }
@@ -175,7 +184,10 @@ impl AudioHostMutation {
         duration_ms: Long,
     ) -> async_graphql::Result<bool> {
         audio(ctx)?
-            .run(move |db, _| domain::on_playing(db, &path, &title, &artist, duration_ms.0))
+            .run(move |db, lib| {
+                lib.cache_paths(std::slice::from_ref(&path))?;
+                domain::on_playing(db, &path, &title, &artist, duration_ms.0)
+            })
             .await?;
         Ok(true)
     }
@@ -224,7 +236,13 @@ impl AudioHostMutation {
         items: Vec<AudioHostTrackInput>,
     ) -> async_graphql::Result<i32> {
         Ok(audio(ctx)?
-            .run(move |db, _| {
+            .run(move |db, lib| {
+                lib.cache_paths(
+                    &items
+                        .iter()
+                        .map(|item| item.path.clone())
+                        .collect::<Vec<_>>(),
+                )?;
                 domain::add_playlist_items(
                     db,
                     id.as_str(),
@@ -254,7 +272,10 @@ impl AudioHostMutation {
         duration_ms: Long,
     ) -> async_graphql::Result<bool> {
         audio(ctx)?
-            .run(move |db, _| domain::record_history(db, &path, &title, &artist, duration_ms.0))
+            .run(move |db, lib| {
+                lib.cache_paths(std::slice::from_ref(&path))?;
+                domain::record_history(db, &path, &title, &artist, duration_ms.0)
+            })
             .await?;
         Ok(true)
     }

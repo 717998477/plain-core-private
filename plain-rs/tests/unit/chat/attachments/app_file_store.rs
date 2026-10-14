@@ -228,8 +228,8 @@ fn seed_named_chat(db: &Db, at: &str, uri: &str, name: &str) {
 fn file_name_map_prefers_newest_chat_and_strips_fid_ext() {
     let dir = unique_tmp_dir("name-map");
     let db = Db::open(&dir.join("plain.db")).unwrap();
-    seed_named_chat(&db, "2026-01-01T00:00:01Z", "fid:aa11.jpg", "old.jpg");
-    seed_named_chat(&db, "2026-01-02T00:00:01Z", "fid:aa11.jpg", "new.jpg");
+    seed_named_chat(&db, "2026-01-01T00:00:01.000Z", "fid:aa11.jpg", "old.jpg");
+    seed_named_chat(&db, "2026-01-02T00:00:01.000Z", "fid:aa11.jpg", "new.jpg");
     // key is the bare hash — extension stripped.
     let map = file_name_map(&db.get_all_chats());
     assert_eq!(map.get("aa11").map(String::as_str), Some("new.jpg"));
@@ -240,7 +240,7 @@ fn file_name_map_prefers_newest_chat_and_strips_fid_ext() {
 fn display_name_falls_back_to_mime_extension() {
     let mut f = DAppFile {
         id: "bb22".to_string(),
-        size: 1,
+        size_bytes: 1,
         mime_type: "image/png".to_string(),
         real_path: String::new(),
         ref_count: 1,

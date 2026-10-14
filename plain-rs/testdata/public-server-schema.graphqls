@@ -989,7 +989,7 @@ type Peer {
 	name: String!
 	ip: String!
 	status: PeerStatus!
-	port: Int!
+	port: Int
 	deviceType: DeviceType!
 	createdAt: Instant!
 	updatedAt: Instant!

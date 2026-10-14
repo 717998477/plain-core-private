@@ -57,7 +57,7 @@ async fn execute(state: &ServerState, request: Request) -> anyhow::Result<Value>
         let tx = c.unchecked_transaction()?;
         for id in &completed {
             tx.execute(
-                "DELETE FROM tag_relations WHERE type=?1 AND key=?2",
+                "DELETE FROM tag_relations WHERE type=?1 AND target_key=?2",
                 rusqlite::params![kind, id],
             )?;
         }

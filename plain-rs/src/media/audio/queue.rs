@@ -27,6 +27,7 @@
 //! supersede, paging, history, playlist CRUD — is identical on both ends.
 
 use crate::db::audio_queue::io;
+use rusqlite::OptionalExtension;
 use crate::error::DomainError;
 use std::collections::HashSet;
 
@@ -171,11 +172,15 @@ pub fn save_source(db: &Db, src: &QueueSource) -> DomainResult<()> {
 
 /// The path of the current track — `App.audioCurrent` serves this.
 pub fn get_audio_current(db: &Db) -> DomainResult<String> {
+    db.restore_audio_current()?;
     Ok(db.audio().read(|state| state.playback.path.clone()))
 }
 
 pub fn save_audio_current(db: &Db, path: &str) -> DomainResult<()> {
-    db.audio().update(|state| state.select(path))
+    db.audio_transaction(|tx, state| {
+        io::save_current(tx,path,state)?;
+        state.select(path)
+    })
 }
 
 /// The play mode name (REPEAT / REPEAT_ONE / SHUFFLE); REPEAT when unset.
@@ -268,7 +273,8 @@ pub(crate) fn enqueue_conn(
     let mut incoming = Vec::new();
     let mut seen = HashSet::new();
     for item in items.iter().rev() {
-        if !seen.insert(&item.path) {
+        let Some(item)=io::audio_by_path(c,&item.path)? else { continue; };
+        if !seen.insert(item.path.clone()) {
             continue;
         }
         incoming.push(QueueItem {
@@ -332,10 +338,19 @@ pub(crate) fn remove_root_paths_conn(
     root: &str,
     state: &mut super::state::State,
 ) -> DomainResult<()> {
+    remove_root_paths_except_conn(c,root,state,&[])
+}
+
+pub(crate) fn remove_root_paths_except_conn(
+    c: &rusqlite::Connection,
+    root: &str,
+    state: &mut super::state::State,
+    retained_ids: &[String],
+) -> DomainResult<()> {
     let prefix = format!("{}/", root.trim_end_matches('/'));
-    let mut statement = c.prepare("SELECT path FROM (SELECT path FROM audio_queue_items UNION SELECT audio_path AS path FROM audio_playlist_items UNION SELECT path FROM audio_play_history) WHERE path=?1 OR substr(path,1,length(?2))=?2")?;
+    let mut statement = c.prepare("SELECT path FROM audio_media WHERE media_id IN (SELECT media_id FROM audio_queue_items UNION SELECT media_id FROM audio_playlist_items UNION SELECT media_id FROM media_play_history) AND media_id NOT IN (SELECT value FROM json_each(?3)) AND (path=?1 OR substr(path,1,length(?2))=?2)")?;
     let mut paths = statement
-        .query_map(rusqlite::params![root, prefix], |row| {
+        .query_map(rusqlite::params![root, prefix,serde_json::to_string(retained_ids).map_err(|e|DomainError::Other(e.to_string()))?], |row| {
             row.get::<_, String>(0)
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1086,6 +1101,7 @@ pub fn add_playlist_items(db: &Db, playlist_id: &str, items: &[AudioTrack]) -> D
         let mut added = 0;
         let now = now_iso_millis();
         for a in items {
+            let Some(a)=io::audio_by_path(c,&a.path)? else { continue; };
             if !paths.insert(a.path.clone()) {
                 continue;
             }
@@ -1201,27 +1217,14 @@ fn validate_duration(value: i64) -> DomainResult<()> {
 pub(crate) fn record_history_conn(
     c: &rusqlite::Connection,
     path: &str,
-    title: &str,
-    artist: &str,
-    duration_ms: i64,
+    _title: &str,
+    _artist: &str,
+    _duration_ms: i64,
 ) -> DomainResult<()> {
-    let count = io::history_by_path(c, path)?
-        .map(|h| h.play_count)
-        .unwrap_or(0)
-        .checked_add(1)
-        .ok_or_else(|| DomainError::Other("play count overflow".into()))?;
-    io::upsert_history(
-        c,
-        &PlayHistory {
-            path: path.into(),
-            title: title.into(),
-            artist: artist.into(),
-            duration_ms,
-            play_count: count,
-            played_at: now_iso_millis(),
-        },
-    )?;
-    let count: i64 = c.query_row("SELECT COUNT(*) FROM audio_play_history", [], |r| r.get(0))?;
+    let media_id = c.query_row("SELECT media_id FROM audio_media WHERE path=?1 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?1",[path],|row|row.get::<_,String>(0)).optional()?;
+    let Some(media_id) = media_id else { return Ok(()); };
+    crate::db::media_play_history::record_play(c,&media_id,0)?;
+    let count: i64 = c.query_row("SELECT COUNT(*) FROM media_play_history h JOIN audio_media m USING(media_id)", [], |r| r.get(0))?;
     if count > (HISTORY_KEEP * 5 / 4) as i64 {
         io::trim_history(c, HISTORY_KEEP)?;
     }

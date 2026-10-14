@@ -73,7 +73,7 @@ async fn native_management_public_auth_and_revoke_share_one_database_without_hos
             .session_get(id)
             .unwrap()
             .unwrap()
-            .last_active_at
+            .last_seen_at
             .is_some()
     );
     assert_eq!(

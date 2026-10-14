@@ -86,20 +86,30 @@ pub fn cleanup(
         .map(|item| item.path.clone())
         .collect::<Vec<_>>();
     db.audio_transaction(|tx, state| {
+        if matches!(kind,DataType::Audio|DataType::Video) && matches!(action,Action::Trash|Action::Delete) {
+            for table in ["audio_queue_items","audio_playlist_items"] {
+                tx.execute(&format!("DELETE FROM {table} WHERE media_id IN (SELECT value FROM json_each(?1))"),[&ids])?;
+            }
+        }
         for item in successful { update_catalog(&tx, kind, action, item)?; }
         if action!=Action::Move && action!=Action::Restore {
-            tx.execute("DELETE FROM tag_relations WHERE type=?1 AND key IN (SELECT value FROM json_each(?2))",params![kind.kind(),ids])?;
+            tx.execute("DELETE FROM tag_relations WHERE type=?1 AND target_key IN (SELECT value FROM json_each(?2))",params![kind.kind(),ids])?;
             if matches!(kind,DataType::Audio|DataType::Video) {
-                tx.execute("DELETE FROM media_item WHERE media_type=?1 AND media_id IN (SELECT value FROM json_each(?2))",params![if kind==DataType::Audio {"audio"}else{"video"},ids])?;
-            }
-            if kind==DataType::Video {
-                tx.execute("DELETE FROM video_play_progress WHERE media_id IN (SELECT value FROM json_each(?1))",[&ids])?;
+                tx.execute("DELETE FROM media_play_history WHERE media_id IN (SELECT value FROM json_each(?1))",[&ids])?;
             }
         }
         if kind==DataType::Image && action!=Action::Restore {
             tx.execute("DELETE FROM image_embeddings WHERE id IN (SELECT value FROM json_each(?1))",[&ids])?;
         }
-        if kind==DataType::Audio && action!=Action::Restore { audio_queue::remove_paths_conn(&tx,&paths, state)?; }
+        if kind==DataType::Audio && matches!(action,Action::Trash|Action::Delete) { audio_queue::remove_paths_conn(&tx,&paths, state)?; }
+        if kind==DataType::Audio && action==Action::Move {
+            if let Some(item)=successful.iter().find(|item|item.path==state.playback.path) {
+                let mut source=crate::db::audio_queue::io::get_source(tx,state)?;
+                source.current_path=item.destination_path.clone();
+                source.current_index=-1;
+                crate::db::audio_queue::io::save_source(tx,&source,state)?;
+            }
+        }
 
         Ok(successful.len())
     })
@@ -112,7 +122,7 @@ fn update_catalog(
 ) -> rusqlite::Result<()> {
     let row: Option<(String, Option<String>, bool)> = tx
         .query_row(
-            "SELECT path,original_path,is_trashed FROM media_files WHERE id=?1 AND data_type=?2",
+            "SELECT path,original_path,trashed FROM media_items WHERE id=?1 AND data_type=?2",
             params![item.id, kind.kind()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
@@ -125,7 +135,7 @@ fn update_catalog(
     }
     if action == Action::Delete {
         tx.execute(
-            "DELETE FROM media_files WHERE id=?1 AND data_type=?2 AND path=?3",
+            "DELETE FROM media_items WHERE id=?1 AND data_type=?2 AND path=?3",
             params![item.id, kind.kind(), item.path],
         )?;
         return Ok(());
@@ -167,7 +177,7 @@ fn update_catalog(
         .and_then(|name| name.to_str())
         .ok_or(rusqlite::Error::InvalidQuery)?;
     tx.execute(
-        "UPDATE media_files SET path=?1,file_name=?2,mime_type=?3,bucket_id=?4,is_trashed=?5,original_path=?6 WHERE id=?7 AND data_type=?8 AND path=?9",
+        "UPDATE media_items SET path=?1,file_name=?2,mime_type=?3,bucket_id=?4,trashed=?5,original_path=?6 WHERE id=?7 AND data_type=?8 AND path=?9",
         params![destination,name,crate::utils::mime::mime_from_ext(&destination),parent,next_trashed,next_original,item.id,kind.kind(),item.path],
     )?;
     Ok(())

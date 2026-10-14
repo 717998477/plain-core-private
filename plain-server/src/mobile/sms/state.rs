@@ -27,38 +27,24 @@ pub(crate) fn execute(db: &Db, request: Request) -> anyhow::Result<Value> {
             if id.is_empty() {
                 anyhow::bail!("conversation id is empty");
             }
-            let date = chrono::DateTime::parse_from_rfc3339(&date)?.to_rfc3339();
+            let date = chrono::DateTime::parse_from_rfc3339(&date)?.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             db.archived_conversation_save(&plain_rs::db::ArchivedConversationRow {
                 conversation_id: id,
-                conversation_date: date,
+                archived_at: date,
             })?;
             json!({"ok": true})
         }
         Request::Unarchive { id } => json!({"count": db.archived_conversation_delete(&id)?}),
         Request::Trashed => json!({"ids": db.trashed_message_ids()?}),
-        Request::Trash { ids } => json!({"count": db.with_conn(|c| {
-            let tx = c.unchecked_transaction()?;
-            let now = chrono::Utc::now().to_rfc3339();
-            let mut count = 0;
-            {
-                let mut statement = tx.prepare("INSERT OR IGNORE INTO trashed_sms (message_id,is_mms,trashed_at) VALUES (?1,?2,?3)")?;
-                for id in ids {
-                    count += statement.execute(rusqlite::params![id, id.starts_with("mms_"), now])?;
-                }
-            }
-            tx.commit()?;
-            Ok::<usize,rusqlite::Error>(count)
-        })?}),
-        Request::Restore { ids } => json!({"count": db.with_conn(|c| {
-            let tx = c.unchecked_transaction()?;
-            let mut count = 0;
-            {
-                let mut statement = tx.prepare("DELETE FROM trashed_sms WHERE message_id=?1")?;
-                for id in ids { count += statement.execute([id])?; }
-            }
-            tx.commit()?;
-            Ok::<usize,rusqlite::Error>(count)
-        })?}),
+        Request::Trash { ids } => {
+            let now = plain_rs::utils::dbtime::now_iso();
+            let rows = ids.iter().map(|id| {
+                let (message_id,is_mms)=match id.strip_prefix("mms_") { Some(id)=>(id,true),None=>(id.as_str(),false) };
+                plain_rs::db::TrashedMessageRow { message_id:message_id.into(),is_mms,trashed_at:now.clone() }
+            }).collect::<Vec<_>>();
+            json!({"count": db.trashed_message_save_many(&rows)?})
+        }
+        Request::Restore { ids } => json!({"count":db.trashed_message_delete_by_ids(&ids)?}),
     })
 }
 

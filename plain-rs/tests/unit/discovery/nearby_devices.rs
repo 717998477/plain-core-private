@@ -8,7 +8,7 @@ fn device(id: &str, method: &str) -> Device {
         device_type: "PHONE".into(),
         version: "1".into(),
         platform: "test".into(),
-        last_seen: crate::db::now_iso(),
+        last_seen_at: crate::db::now_iso(),
         discovery_methods: vec![method.into()],
     }
 }
@@ -57,7 +57,7 @@ fn stale_probe_cannot_remove_a_new_sighting_or_new_cached_version() {
         .pop()
         .unwrap();
     let mut newer = stale.device.cache();
-    newer.last_seen = "2099-01-01T00:00:00Z".into();
+    newer.last_seen_at = "2099-01-01T00:00:00.000Z".into();
     crate::db::chat_store::nearby::save(&db, &newer).unwrap();
     assert!(!devices.verified(&db, &stale, false).unwrap());
     assert_eq!(crate::db::chat_store::nearby::all(&db).unwrap().len(), 1);
@@ -113,7 +113,7 @@ fn merged_ble_timestamp_still_allows_checked_lan_cache_cleanup() {
     crate::db::chat_store::nearby::save(&db, &lan.cache()).unwrap();
     devices.seen_at(lan, t).unwrap();
     let mut ble = device("one", "BLE");
-    ble.last_seen = "2099-01-01T00:00:00Z".into();
+    ble.last_seen_at = "2099-01-01T00:00:00.000Z".into();
     devices.seen_at(ble, t + Duration::from_secs(1)).unwrap();
     let stale = devices
         .stale_at(&db, t + Duration::from_secs(62))

@@ -25,7 +25,7 @@ fn root(id: &str) -> (tempfile::TempDir, ContentServer, Vec<u8>, String) {
     (dir, server, kp.to_vec(), token)
 }
 fn peer(id: &str, port: u16, pk: &[u8], ip: &str) -> DPeer {
-    let mut row = DPeer::new(id, id, ip, port, DeviceType::Phone);
+    let mut row = DPeer::new(id, id, ip, Some(port), DeviceType::Phone);
     row.status = PeerStatus::Paired;
     row.key = plain_rs::utils::base64::base64_encode(&[7; 32]);
     row.public_key = plain_rs::utils::base64::base64_encode(pk);

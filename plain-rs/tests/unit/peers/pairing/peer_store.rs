@@ -17,7 +17,7 @@ fn repairing_preserves_creation_and_independent_token_and_rolls_back_errors() {
     assert_eq!(first.ip, "127.0.0.1");
     db.with_conn(|c| {
         c.execute(
-            "UPDATE peers SET token='keep',created_at='2000-01-01T00:00:00Z' WHERE id='peer'",
+            "UPDATE peers SET token='keep',created_at='2000-01-01T00:00:00.000Z' WHERE id='peer'",
             [],
         )
     })
@@ -26,7 +26,7 @@ fn repairing_preserves_creation_and_independent_token_and_rolls_back_errors() {
     next.key = crate::base64_encode(&[3; 32]);
     let updated = save(&db, next).unwrap();
     assert_eq!(updated.token, "keep");
-    assert_eq!(updated.created_at, "2000-01-01T00:00:00Z");
+    assert_eq!(updated.created_at, "2000-01-01T00:00:00.000Z");
     assert_eq!(updated.key, crate::base64_encode(&[3; 32]));
     db.with_conn(|c|c.execute_batch("CREATE TRIGGER fail_pair BEFORE UPDATE ON peers BEGIN SELECT RAISE(ABORT,'fixture failure'); END;")).unwrap();
     assert!(save(&db, facts()).is_err());

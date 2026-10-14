@@ -3,12 +3,12 @@ use rusqlite::{OptionalExtension, params};
 use crate::db::DAppFile;
 use crate::db::Db;
 
-const APP_FILE_COLS: &str = "id,size,mime_type,real_path,ref_count,weak_hash,created_at,updated_at";
+const APP_FILE_COLS: &str = "id,size_bytes,mime_type,real_path,ref_count,weak_hash,created_at,updated_at";
 
 fn row_to_app_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<DAppFile> {
     Ok(DAppFile {
         id: row.get(0)?,
-        size: row.get(1)?,
+        size_bytes: row.get(1)?,
         mime_type: row.get(2)?,
         real_path: row.get(3)?,
         ref_count: row.get(4)?,
@@ -32,8 +32,8 @@ impl Db {
 
     pub fn app_file_insert(&self, file: &DAppFile) -> rusqlite::Result<()> {
         self.with_conn(|conn| conn.execute(
-            "INSERT INTO app_files (id,size,mime_type,real_path,ref_count,weak_hash,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![file.id,file.size,file.mime_type,file.real_path,file.ref_count,file.weak_hash,file.created_at,file.updated_at]).map(|_| ()))
+            "INSERT INTO app_files (id,size_bytes,mime_type,real_path,ref_count,weak_hash,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![file.id,file.size_bytes,file.mime_type,file.real_path,file.ref_count,file.weak_hash,crate::utils::dbtime::normalize(&file.created_at)?,crate::utils::dbtime::normalize(&file.updated_at)?]).map(|_| ()))
     }
 
     pub fn app_file_retain(&self, id: &str) -> rusqlite::Result<()> {
@@ -100,7 +100,7 @@ impl Db {
     pub fn find_app_files_by_weak(&self, size: i64, weak_hash: &str) -> Vec<DAppFile> {
         let conn = self.0.lock().unwrap();
         let mut stmt = match conn.prepare(&format!(
-            "SELECT {APP_FILE_COLS} FROM app_files WHERE size=? AND weak_hash=?"
+            "SELECT {APP_FILE_COLS} FROM app_files WHERE size_bytes=? AND weak_hash=?"
         )) {
             Ok(s) => s,
             Err(_) => return vec![],
@@ -111,23 +111,23 @@ impl Db {
             .unwrap_or_default()
     }
 
-    pub fn insert_app_file(&self, f: &DAppFile) {
+    pub fn insert_app_file(&self, f: &DAppFile) -> rusqlite::Result<()> {
         let conn = self.0.lock().unwrap();
-        let _ = conn.execute(
+        conn.execute(
             "INSERT OR IGNORE INTO app_files \
-             (id,size,mime_type,real_path,ref_count,weak_hash,created_at,updated_at) \
+             (id,size_bytes,mime_type,real_path,ref_count,weak_hash,created_at,updated_at) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 f.id,
-                f.size,
+                f.size_bytes,
                 f.mime_type,
                 f.real_path,
                 f.ref_count,
                 f.weak_hash,
-                f.created_at,
-                f.updated_at
+                crate::utils::dbtime::normalize(&f.created_at)?,
+                crate::utils::dbtime::normalize(&f.updated_at)?
             ],
-        );
+        ).map(|_| ())
     }
 
     pub fn increment_app_file_ref(&self, id: &str) {

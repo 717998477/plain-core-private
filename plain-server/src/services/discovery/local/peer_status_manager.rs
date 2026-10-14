@@ -166,7 +166,7 @@ impl PeerStatusManager {
             self.schedule_reconnect(refreshed_peer.id.clone());
             return;
         }
-        if refreshed_peer.ip.is_empty() || refreshed_peer.port == 0 {
+        if refreshed_peer.ip.is_empty() || refreshed_peer.port.is_none() {
             self.schedule_reconnect(refreshed_peer.id.clone());
             return;
         }
@@ -203,10 +203,11 @@ impl PeerStatusManager {
             self.schedule_reconnect(peer_id);
             return;
         };
+        let Some(port) = peer.port.filter(|port| *port > 0) else { return; };
         let url = plain_rs::utils::build_url::build_url(
             "wss",
             &peer.best_ip(),
-            peer.port,
+            port,
             &format!("/status?cid={local_client_id}"),
         );
 

@@ -1,5 +1,5 @@
 /// Rows for the fixed-query tables that have no search DSL: clipboards,
-/// sessions, shares, pomodoro items, media duration cache, video play
+/// sessions, shares, pomodoro items, video play
 /// progress, image embeddings, archived conversations and trashed SMS.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClipboardRow {
@@ -23,7 +23,7 @@ pub struct SessionRow {
     pub browser_name: String,
     pub browser_version: String,
     pub token: String,
-    pub last_active_at: Option<String>,
+    pub last_seen_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -46,17 +46,9 @@ pub struct PomodoroItemRow {
     pub id: String,
     pub date: String,
     pub completed_count: i32,
-    pub total_work_seconds: i32,
-    pub total_break_seconds: i32,
+    pub total_work_secs: i32,
+    pub total_break_secs: i32,
     pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct MediaItemRow {
-    pub media_type: String,
-    pub media_id: String,
-    pub duration_ms: i64,
     pub updated_at: String,
 }
 
@@ -81,7 +73,7 @@ pub struct ImageEmbeddingRow {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ArchivedConversationRow {
     pub conversation_id: String,
-    pub conversation_date: String,
+    pub archived_at: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

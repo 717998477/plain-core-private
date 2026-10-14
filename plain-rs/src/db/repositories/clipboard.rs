@@ -24,9 +24,11 @@ impl Db {
                 "INSERT INTO clipboards (id,text,hash,source,label,sensitive,created_at)
                  SELECT ?1,?2,?3,?4,?5,?6,?7
                  WHERE NOT EXISTS (SELECT 1 FROM clipboards WHERE hash=?3)",
-                params![row.id, row.text, row.hash, row.source, row.label, row.sensitive, row.created_at],
+                params![row.id, row.text, row.hash, row.source, row.label, row.sensitive, crate::utils::dbtime::normalize(&row.created_at)?],
             )? != 0;
-            let item = if inserted { row.clone() } else {
+            let item = if inserted {
+                tx.query_row(&format!("SELECT {CLIPBOARD_COLUMNS} FROM clipboards WHERE id=?1"),[&row.id],clipboard_from_row)?
+            } else {
                 tx.query_row(&format!("SELECT {CLIPBOARD_COLUMNS} FROM clipboards WHERE hash=?1 ORDER BY created_at DESC, id DESC LIMIT 1"), [&row.hash], clipboard_from_row)?
             };
             tx.commit()?;
@@ -84,7 +86,7 @@ impl Db {
                     row.source,
                     row.label,
                     row.sensitive as i64,
-                    row.created_at
+                    crate::utils::dbtime::normalize(&row.created_at)?
                 ],
             )?;
             Ok(())

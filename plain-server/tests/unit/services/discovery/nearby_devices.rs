@@ -30,10 +30,10 @@ async fn rust_sweep_honors_radio_pause_and_real_tls_verdicts() {
         device_type: "PHONE".into(),
         version: "1".into(),
         platform: "test".into(),
-        last_seen: "1970-01-01T00:00:00Z".into(),
+        last_seen_at: "1970-01-01T00:00:00.000Z".into(),
         discovery_methods: vec!["LAN".into()],
     };
-    for d in [fixture("alive", listeners.https_port), fixture("dead", 0)] {
+    for d in [fixture("alive", listeners.https_port), fixture("dead", 1)] {
         execute(
             &state,
             Request::Seen {
@@ -84,7 +84,7 @@ async fn rust_sweep_honors_radio_pause_and_real_tls_verdicts() {
         "live",
         "old",
         "",
-        2443,
+        Some(2443),
         plain_rs::chat::enums::DeviceType::Phone,
     );
     peer.status = plain_rs::chat::enums::PeerStatus::Paired;
@@ -164,7 +164,7 @@ async fn nearby_invalidation_and_public_device_payloads_have_distinct_contracts(
         device_type: "PHONE".into(),
         version: "1".into(),
         platform: "test".into(),
-        last_seen: "2026-10-10T00:00:00Z".into(),
+        last_seen_at: "2026-10-10T00:00:00.000Z".into(),
         discovery_methods: vec!["BLE".into()],
     };
     execute(

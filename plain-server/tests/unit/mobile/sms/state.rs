@@ -62,7 +62,7 @@ fn archive_replaces_date_and_rejects_invalid_time() {
         &db,
         Request::Archive {
             id: "thread".into(),
-            date: "2026-10-05T01:00:00Z".into(),
+            date: "2026-10-05T01:00:00.000Z".into(),
         },
     )
     .unwrap();
@@ -70,7 +70,7 @@ fn archive_replaces_date_and_rejects_invalid_time() {
         &db,
         Request::Archive {
             id: "thread".into(),
-            date: "2026-10-05T02:00:00Z".into(),
+            date: "2026-10-05T02:00:00.000Z".into(),
         },
     )
     .unwrap();

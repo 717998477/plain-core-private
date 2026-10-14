@@ -32,7 +32,7 @@ pub fn build(
     };
     Ok(match kind {
         Type::Invite | Type::Update => {
-            if channel.owner_id != actor {
+            if channel.owner_id.as_deref() != Some(actor) {
                 bail!("Only owner can send channel membership");
             }
             let members: Vec<ChannelMember> = serde_json::from_str(&channel.members)?;
@@ -45,7 +45,7 @@ pub fn build(
                         public_key: base64_encode(&keypair[32..]),
                         device_type: device,
                         ip: String::new(),
-                        port: 0,
+                        port: None,
                     }];
                     for member in &members {
                         if member.peer_id == actor {
@@ -90,7 +90,7 @@ pub fn build(
             }
         }
         Type::Kick => {
-            if channel.owner_id != actor {
+            if channel.owner_id.as_deref() != Some(actor) {
                 bail!("Only owner can remove channel members");
             }
             serde_json::to_string(&ChannelKick {

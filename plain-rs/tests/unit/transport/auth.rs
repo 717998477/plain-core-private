@@ -36,11 +36,11 @@ fn seed_paired_peer(db: &Db) -> (String, [u8; 32], [u8; 64]) {
         key: base64_encode(&key),
         public_key: base64_encode(&vk),
         status: PeerStatus::Paired,
-        port: 2443,
+        port: Some(2443),
         device_type: DeviceType::Phone,
         token: String::new(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: "2026-01-01T00:00:00Z".into(),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        updated_at: "2026-01-01T00:00:00.000Z".into(),
     };
     db.upsert_peer(&peer);
     ("peer-a".into(), key, kp)

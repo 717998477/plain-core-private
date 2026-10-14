@@ -51,9 +51,9 @@ fn export_and_save_feed_entries() {
         description: "Summary".into(),
         author: String::new(),
         content: String::new(),
-        raw_id: "hash".into(),
+        source_entry_id: "hash".into(),
         published_at: at.clone(),
-        read: false,
+        is_read: false,
         created_at: at.clone(),
         updated_at: at,
     }])

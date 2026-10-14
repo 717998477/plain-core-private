@@ -149,7 +149,7 @@ impl MediaQueryRoot {
             .into_iter()
             .map(|rel| TagRelation {
                 tag_id: rel.tag_id.into(),
-                key: rel.key,
+                key: rel.target_key,
             })
             .collect();
         Ok(out)

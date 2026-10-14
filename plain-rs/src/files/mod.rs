@@ -18,3 +18,6 @@ pub mod deletes;
 
 #[cfg(feature = "filesystem")]
 pub mod tasks;
+
+#[cfg(feature = "library")]
+mod audio_moves;

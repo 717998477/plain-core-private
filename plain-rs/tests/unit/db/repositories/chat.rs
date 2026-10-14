@@ -36,10 +36,10 @@ fn get_chats_by_peer_returns_both_directions() {
 #[test]
 fn get_chats_page_resolves_peer_and_channel_targets() {
     let db = Db::open(&unique_tmp_dir("page-targets").join("plain.db")).expect("open db");
-    seed_chat_at(&db, "a", "me", "peer1", "", "2026-01-01T00:00:01Z");
-    seed_chat_at(&db, "b", "peer1", "me", "", "2026-01-01T00:00:02Z");
-    seed_chat_at(&db, "c", "me", "peer2", "", "2026-01-01T00:00:03Z");
-    seed_chat_at(&db, "d", "me", "", "ch1", "2026-01-01T00:00:04Z");
+    seed_chat_at(&db, "a", "me", "peer1", "", "2026-01-01T00:00:01.000Z");
+    seed_chat_at(&db, "b", "peer1", "me", "", "2026-01-01T00:00:02.000Z");
+    seed_chat_at(&db, "c", "me", "peer2", "", "2026-01-01T00:00:03.000Z");
+    seed_chat_at(&db, "d", "me", "", "ch1", "2026-01-01T00:00:04.000Z");
 
     // Bare peer id, `peer:`-prefixed id, and `channel:`-prefixed id;
     // pages come back oldest-first.

@@ -10,10 +10,10 @@ fn shared_invite_roundtrips_into_receiver_with_owner_key_and_preserves_real_peer
     let sender = Db::open(std::path::Path::new(":memory:")).unwrap();
     let receiver = Db::open(std::path::Path::new(":memory:")).unwrap();
     let (key, public) = ed25519_generate();
-    let mut owner = DPeer::new("owner", "known", "127.0.0.1", 1, DeviceType::Phone);
+    let mut owner = DPeer::new("owner", "known", "127.0.0.1", Some(1), DeviceType::Phone);
     owner.public_key = base64_encode(&public);
     peers::save(&receiver, &[owner], SaveMode::Insert).unwrap();
-    let guest = DPeer::new("guest", "中文 %_", "10.0.0.2", 443, DeviceType::Phone);
+    let guest = DPeer::new("guest", "中文 %_", "10.0.0.2", Some(443), DeviceType::Phone);
     peers::save(&sender, &[guest], SaveMode::Insert).unwrap();
     let mut channel = DChannel::new("group", "owner");
     channel.key = base64_encode(&[7; 32]);
@@ -148,7 +148,7 @@ async fn encrypted_delivery_requires_a_true_acknowledgement() {
         }
     }
     let (key, _) = ed25519_generate();
-    let peer = DPeer::new("guest", "guest", "127.0.0.1", 1, DeviceType::Phone);
+    let peer = DPeer::new("guest", "guest", "127.0.0.1", Some(1), DeviceType::Phone);
     for (body, expected) in [
         (r#"{"data":{"channelSystemMessage":true}}"#, true),
         (r#"{"data":{"channelSystemMessage":false}}"#, false),

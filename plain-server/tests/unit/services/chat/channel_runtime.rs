@@ -24,7 +24,7 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
 #[cfg(feature = "http_transport")]
 fn add_peer(state: &ServerState, id: &str, paired: bool) {
     let mut peer =
-        plain_rs::db::DPeer::new(id, id, "", 2443, plain_rs::chat::enums::DeviceType::Tablet);
+        plain_rs::db::DPeer::new(id, id, "", Some(2443), plain_rs::chat::enums::DeviceType::Tablet);
     if paired {
         peer.key = plain_rs::utils::base64::base64_encode(&[8; 32]);
     }

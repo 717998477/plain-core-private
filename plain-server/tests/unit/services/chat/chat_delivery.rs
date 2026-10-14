@@ -21,7 +21,7 @@ async fn host_transport_preserves_signed_wire_and_requires_an_actual_receipt() {
         "fixture",
         "fixture",
         "",
-        443,
+        Some(443),
         plain_rs::chat::enums::DeviceType::Phone,
     );
     peer.key = plain_rs::utils::base64::base64_encode(&[7; 32]);

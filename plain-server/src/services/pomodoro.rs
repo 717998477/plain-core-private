@@ -244,8 +244,8 @@ impl Service {
                     let rest=if state!=PomodoroState::Work {r.total} else {0};
                     let increment=i32::from(state==PomodoroState::Work);
                     let existing:Option<String>=tx.query_row("SELECT id FROM pomodoro_items WHERE date=?1",[&r.calendar_date],|row|row.get(0)).optional()?;
-                    if let Some(id)=existing {tx.execute("UPDATE pomodoro_items SET completed_count=completed_count+?1,total_work_seconds=total_work_seconds+?2,total_break_seconds=total_break_seconds+?3,updated_at=?4 WHERE id=?5",params![increment,work,rest,now.to_rfc3339(),id])?;}
-                    else {tx.execute("INSERT INTO pomodoro_items(id,date,completed_count,total_work_seconds,total_break_seconds,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",params![uuid::Uuid::new_v4().to_string(),r.calendar_date,increment,work,rest,now.to_rfc3339()])?;}
+                    if let Some(id)=existing {tx.execute("UPDATE pomodoro_items SET completed_count=completed_count+?1,total_work_secs=total_work_secs+?2,total_break_secs=total_break_secs+?3,updated_at=?4 WHERE id=?5",params![increment,work,rest,now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),id])?;}
+                    else {tx.execute("INSERT INTO pomodoro_items(id,date,completed_count,total_work_secs,total_break_secs,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",params![uuid::Uuid::new_v4().to_string(),r.calendar_date,increment,work,rest,now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)])?;}
                     count+=increment;
                 }
                 r.state=if state==PomodoroState::Work {if count>0 && count%settings.pomodoros_before_long_break==0 {PomodoroState::LongBreak} else {PomodoroState::ShortBreak}} else {r.round+=1;PomodoroState::Work};

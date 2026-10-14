@@ -1,7 +1,7 @@
 use super::*;
 use crate::chat::enums::DeviceType;
 fn peer(ip: &str) -> DPeer {
-    DPeer::new("fixture", "fixture", ip, 443, DeviceType::Phone)
+    DPeer::new("fixture", "fixture", ip, Some(443), DeviceType::Phone)
 }
 fn ticket(step: Step) -> Ticket {
     step.ticket.unwrap()

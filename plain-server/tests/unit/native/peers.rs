@@ -14,7 +14,7 @@ async fn login_logout_and_rename_keep_pairing_in_the_core() {
             chat_key: "pairing-key".into(),
         })
         .unwrap();
-    assert_eq!(peers.logged_in().unwrap()[0].port, 9443);
+    assert_eq!(peers.logged_in().unwrap()[0].port, Some(9443));
     peers.update_name("peer-a", "Renamed peer").unwrap();
     assert_eq!(peers.logged_in().unwrap()[0].name, "Renamed peer");
     peers.logout("peer-a").unwrap();
@@ -72,7 +72,7 @@ async fn address_resolves_only_for_a_reachable_paired_peer() {
     let mut row = plain_rs::db::chat_store::peers::get(&state.db, "peer-a")
         .unwrap()
         .unwrap();
-    row.port = 0;
+    row.port = None;
     plain_rs::db::chat_store::peers::save(
         &state.db,
         &[row],

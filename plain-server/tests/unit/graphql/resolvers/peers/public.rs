@@ -44,7 +44,7 @@ fn fixture_with(
         "peer-1",
         "Pixel",
         "192.168.1.20",
-        1234,
+        Some(1234),
         plain_rs::chat::enums::DeviceType::Phone,
     );
     peer.status = plain_rs::chat::enums::PeerStatus::Paired;

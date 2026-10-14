@@ -118,7 +118,7 @@ async fn rescan_with_failed_probe_retains_current_known_metadata_after_authoriza
     known.title = "Known title".into();
     known.artist = "Known artist".into();
     known.duration_ms = 1500;
-    known.album_file_id = "known-album".into();
+    known.cover_image_id = Some("known-album".into());
     known.size_bytes = 999;
     let original = catalog.record_files(&[known]).unwrap().remove(0);
     let host = core.runtime_state().host.clone();
@@ -140,7 +140,7 @@ async fn rescan_with_failed_probe_retains_current_known_metadata_after_authoriza
     assert_eq!(updated.title, original.title);
     assert_eq!(updated.artist, original.artist);
     assert_eq!(updated.duration_ms, original.duration_ms);
-    assert_eq!(updated.album_file_id, original.album_file_id);
+    assert_eq!(updated.cover_image_id, original.cover_image_id);
     assert_eq!(
         updated.size_bytes,
         std::fs::metadata(path).unwrap().len() as i64
@@ -770,13 +770,13 @@ async fn media_delete_returns_actual_os_receipts_and_keeps_failed_selection() {
                 bucket_id: directory.path().to_str().unwrap().into(),
                 size_bytes: 8,
                 duration_ms: 0,
-                album_file_id: String::new(),
+                cover_image_id: None,
                 width: 0,
                 height: 0,
                 rotation: 0,
                 taken_at: None,
-                created_at: "created".into(),
-                updated_at: "updated".into(),
+                created_at: "2026-01-01T00:00:00.000Z".into(),
+                updated_at: "2026-01-01T00:00:00.000Z".into(),
             }
         })
         .collect::<Vec<_>>();
@@ -785,7 +785,7 @@ async fn media_delete_returns_actual_os_receipts_and_keeps_failed_selection() {
         .db
         .with_conn(|conn| {
             conn.execute(
-                "UPDATE media_files SET is_trashed=1 WHERE id=?1",
+                "UPDATE media_items SET trashed=1 WHERE id=?1",
                 [&rows[1].id],
             )
         })
@@ -851,13 +851,13 @@ async fn image_delete_updates_index_before_any_parent_consumes_the_receipt() {
             bucket_id: directory.path().to_str().unwrap().into(),
             size_bytes: 5,
             duration_ms: 0,
-            album_file_id: String::new(),
+            cover_image_id: None,
             width: 0,
             height: 0,
             rotation: 0,
             taken_at: None,
-            created_at: "created".into(),
-            updated_at: "updated".into(),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            updated_at: "2026-01-01T00:00:00.000Z".into(),
         }])
         .unwrap();
     let index = core.runtime_state().image_index.clone();

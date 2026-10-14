@@ -3,6 +3,7 @@ use crate::enums::DataType;
 use crate::error::DomainError;
 use crate::error::DomainResult;
 use crate::media::audio::queue as audio_queue;
+use super::audio_moves;
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -58,63 +59,61 @@ pub fn rebind_with_aliases(
     }
     db.audio_transaction(|tx, state| {
         let mut snapshots = Vec::new();
+        let current_path = state.playback.path.clone();
         for binding in bindings {
             let media_type = kind(binding.media_type)?;
-            let mut statement = tx.prepare("SELECT tag_id,created_at,size,title FROM tag_relations WHERE type=?1 AND key=?2")?;
-            let tags = statement.query_map(params![binding.media_type,binding.source_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,i64>(2)?,row.get::<_,String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            let duration = if matches!(media_type,DataType::Audio|DataType::Video) {
-                tx.query_row("SELECT duration_ms,updated_at FROM media_item WHERE media_type=?1 AND media_id=?2",params![media_type.media_type_str().unwrap(),binding.source_id],|row|Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?))).optional()?
+            let mut statement = tx.prepare("SELECT tag_id,created_at FROM tag_relations WHERE type=?1 AND target_key=?2")?;
+            let tags = statement.query_map(params![binding.media_type,binding.source_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let progress = if matches!(media_type,DataType::Audio|DataType::Video) {
+                tx.query_row("SELECT position_ms,played_at,play_count FROM media_play_history WHERE media_id=?1",[&binding.source_id],|row|Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?,row.get::<_,i64>(2)?))).optional()?
             } else { None };
-            let progress = if media_type==DataType::Video {
-                tx.query_row("SELECT position_ms,updated_at FROM video_play_progress WHERE media_id=?1",[&binding.source_id],|row|Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?))).optional()?
-            } else { None };
-            snapshots.push((binding,media_type,tags,duration,progress));
+            let references = if media_type==DataType::Audio { Some(audio_moves::snapshot(tx,&binding.source_id)?) } else { None };
+            snapshots.push((binding,media_type,tags,progress,references));
         }
         for (binding,media_type,_,_,_) in &snapshots {
             if binding.source_id==binding.destination_id { continue; }
-            tx.execute("DELETE FROM tag_relations WHERE type=?1 AND key=?2",params![binding.media_type,binding.source_id])?;
-            if matches!(media_type,DataType::Audio|DataType::Video) {
-                tx.execute("DELETE FROM media_item WHERE media_type=?1 AND media_id=?2",params![media_type.media_type_str().unwrap(),binding.source_id])?;
-            }
-            if *media_type==DataType::Video { tx.execute("DELETE FROM video_play_progress WHERE media_id=?1",[&binding.source_id])?; }
+            if *media_type==DataType::Audio { audio_moves::remove_source(tx,&binding.source_id)?; }
+            tx.execute("DELETE FROM tag_relations WHERE type=?1 AND target_key=?2",params![binding.media_type,binding.source_id])?;
+            if matches!(media_type,DataType::Audio|DataType::Video) { tx.execute("DELETE FROM media_play_history WHERE media_id=?1",[&binding.source_id])?; }
         }
-        for (binding,media_type,tags,duration,progress) in snapshots {
+        for (binding,media_type,tags,progress,references) in snapshots {
             if binding.source_id!=binding.destination_id {
-                for (tag,created,size,title) in tags {
-                    tx.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(tag_id,key,type) DO UPDATE SET created_at=min(tag_relations.created_at,excluded.created_at),size=excluded.size,title=excluded.title",params![tag,binding.destination_id,binding.media_type,created,size,title])?;
+                for (tag,created) in tags {
+                    tx.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES(?1,?2,?3,?4) ON CONFLICT(tag_id,target_key,type) DO UPDATE SET created_at=min(tag_relations.created_at,excluded.created_at)",params![tag,binding.destination_id,binding.media_type,created])?;
                 }
                 if matches!(media_type,DataType::Audio|DataType::Video) {
-                    let name = media_type.media_type_str().unwrap();
-                    tx.execute("DELETE FROM media_item WHERE media_type=?1 AND media_id=?2",params![name,binding.destination_id])?;
-                    if let Some((duration,updated)) = duration {
-                        tx.execute("INSERT INTO media_item(media_type,media_id,duration_ms,updated_at) VALUES(?1,?2,?3,?4)",params![name,binding.destination_id,duration,updated])?;
-                    }
-                }
-                if media_type==DataType::Video {
-                    tx.execute("DELETE FROM video_play_progress WHERE media_id=?1",[&binding.destination_id])?;
-                    if let Some((position,updated)) = progress {
-                        tx.execute("INSERT INTO video_play_progress(media_id,position_ms,updated_at) VALUES(?1,?2,?3)",params![binding.destination_id,position,updated])?;
+                    tx.execute("DELETE FROM media_play_history WHERE media_id=?1",[&binding.destination_id])?;
+                    if let Some((position,played,count)) = progress {
+                        tx.execute("INSERT INTO media_play_history(media_id,position_ms,play_count,played_at) VALUES(?1,?2,?3,?4)",params![binding.destination_id,position,count,played])?;
                     }
                 }
             }
             if media_type==DataType::Image { tx.execute("DELETE FROM image_embeddings WHERE id IN (?1,?2)",params![binding.source_id,binding.destination_id])?; }
-            if media_type==DataType::Audio { audio_queue::remove_paths_conn(&tx,std::slice::from_ref(&binding.source_path), state)?; }
+            if media_type==DataType::Audio {
+                if binding.source_id!=binding.destination_id {
+                    audio_moves::apply(tx,&binding.destination_id,references.unwrap())?;
+                    if state.current_media_id.as_deref() == Some(binding.source_id.as_str()) { state.current_media_id = Some(binding.destination_id.clone()); }
+                }
+                if current_path==binding.source_path { state.select(&binding.destination_path)?; }
+            }
         }
+        let retained = bindings.iter().flat_map(|binding|[binding.source_id.clone(),binding.destination_id.clone()]).collect::<Vec<_>>();
         let mut roots=HashSet::new();
         for (source_root,destination_root) in aliases.iter().map(|(a,b)|(a.as_str(),b.as_str())).chain(std::iter::once((source_root,destination_root))) {
             if source_root.is_empty()||destination_root.is_empty() { return Err(invalid("file move roots required")); }
             if !roots.insert(source_root) { continue; }
-        audio_queue::remove_root_paths_conn(&tx, source_root, state)?;
+        audio_queue::remove_root_paths_except_conn(tx,source_root,state,&retained)?;
+
         let source_prefix = format!("{}/",source_root.trim_end_matches('/'));
-        let mut statement = tx.prepare("SELECT tag_id,key,created_at,size,title FROM tag_relations WHERE type=?1 AND (key=?2 OR substr(key,1,length(?3))=?3)")?;
-        let relations = statement.query_map(params![DataType::File.kind(),source_root,source_prefix],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,i64>(3)?,row.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut statement = tx.prepare("SELECT tag_id,target_key,created_at FROM tag_relations WHERE type=?1 AND (target_key=?2 OR substr(target_key,1,length(?3))=?3)")?;
+        let relations = statement.query_map(params![DataType::File.kind(),source_root,source_prefix],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
-        for (tag,key,created,size,title) in relations {
+        for (tag,key,created) in relations {
             let relative = if key==source_root { "" } else { &key[source_prefix.len()..] };
             let destination = if relative.is_empty() { destination_root.to_owned() } else { format!("{}/{relative}",destination_root.trim_end_matches('/')) };
             if destination==key { continue; }
-            tx.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(tag_id,key,type) DO UPDATE SET created_at=min(tag_relations.created_at,excluded.created_at),size=excluded.size,title=excluded.title",params![tag,destination,DataType::File.kind(),created,size,title])?;
-            tx.execute("DELETE FROM tag_relations WHERE tag_id=?1 AND key=?2 AND type=?3",params![tag,key,DataType::File.kind()])?;
+            tx.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES(?1,?2,?3,?4) ON CONFLICT(tag_id,target_key,type) DO UPDATE SET created_at=min(tag_relations.created_at,excluded.created_at)",params![tag,destination,DataType::File.kind(),created])?;
+            tx.execute("DELETE FROM tag_relations WHERE tag_id=?1 AND target_key=?2 AND type=?3",params![tag,key,DataType::File.kind()])?;
         }
         tx.execute("DELETE FROM image_embeddings WHERE path=?1 OR substr(path,1,length(?2))=?2",params![source_root,source_prefix])?;
         }

@@ -57,7 +57,8 @@ pub struct DiscoveredDevice {
     #[serde(default)]
     pub platform: String,
     #[serde(default)]
-    pub last_seen: String,
+    #[serde(rename = "lastSeen")]
+    pub last_seen_at: String,
     #[serde(default)]
     pub status: String,
     #[serde(default)]
@@ -355,7 +356,7 @@ impl NearbyDiscoverManager {
             device_type: device.device_type.clone(),
             version: device.version.clone(),
             platform: device.platform.clone(),
-            last_seen: device.last_seen.clone(),
+            last_seen_at: device.last_seen_at.clone(),
             status: self.get_device_status(&device.id),
             discovery_methods: vec!["LAN".to_string()],
         }
@@ -385,7 +386,7 @@ impl NearbyDiscoverManager {
             return;
         };
         let cutoff = iso_from_unix_millis(now_millis() - 60_000);
-        let old_records = devices.into_iter().filter(|d| d.last_seen < cutoff);
+        let old_records = devices.into_iter().filter(|d| d.last_seen_at < cutoff);
         let results = futures_util::future::join_all(old_records.map(|device| async move {
             let discovery_ping_succeeded = if device.ips.is_empty() {
                 false
@@ -402,7 +403,7 @@ impl NearbyDiscoverManager {
             if discovery_ping_succeeded {
                 if let Err(e) = self.db.refresh_cached_nearby_device_if_last_seen_matches(
                     &device.id,
-                    &device.last_seen,
+                    &device.last_seen_at,
                     &now_iso(),
                 ) {
                     log::error!(
@@ -413,7 +414,7 @@ impl NearbyDiscoverManager {
             } else {
                 match self
                     .db
-                    .delete_cached_nearby_device_if_last_seen_matches(&device.id, &device.last_seen)
+                    .delete_cached_nearby_device_if_last_seen_matches(&device.id, &device.last_seen_at)
                 {
                     Ok(true) => {
                         self.seen_in_session.lock().unwrap().remove(&device.id);
@@ -478,11 +479,11 @@ impl NearbyDiscoverManager {
             .db
             .get_peer_by_id(id)
             .filter(|p| p.is_paired() || !p.token.is_empty())?;
-        if peer.ip.is_empty() || peer.port == 0 {
+        if peer.ip.is_empty() || peer.port.is_none() {
             log::debug!("peer_address {}: db row has no address", id);
             return None;
         }
-        let addr = format!("{}:{}", peer.best_ip(), peer.port);
+        let addr = format!("{}:{}", peer.best_ip(), peer.port?);
         log::debug!("peer_address {} -> {}", id, addr);
         Some(addr)
     }
@@ -570,7 +571,7 @@ impl NearbyDiscoverManager {
             device_type: device.device_type.clone(),
             version: device.version.clone(),
             platform: device.platform.clone(),
-            last_seen: now_iso(),
+            last_seen_at: now_iso(),
         };
         if let Err(e) = self.db.save_cached_nearby_device(&cached) {
             log::error!(
@@ -588,7 +589,7 @@ impl NearbyDiscoverManager {
             device_type: device.device_type.clone(),
             version: device.version.clone(),
             platform: device.platform.clone(),
-            last_seen: now_iso(),
+            last_seen_at: now_iso(),
             status: self.get_device_status(&device.id),
             discovery_methods: vec!["LAN".to_string()],
         };
@@ -641,12 +642,12 @@ impl NearbyDiscoverManager {
             .unwrap_or(plain_rs::chat::enums::DeviceType::Other);
         if peer.name == device.name
             && peer.ip == ip
-            && peer.port == device.port
+            && peer.port == Some(device.port)
             && peer.device_type == device_type
         {
             return;
         }
-        let old_addr = format!("{}:{}", peer.best_ip(), peer.port);
+        let old_addr = peer.port.map(|port| format!("{}:{port}", peer.best_ip())).unwrap_or_default();
         log::info!(
             "update_known_peer: {} address {} -> {}",
             device.id,
@@ -655,7 +656,7 @@ impl NearbyDiscoverManager {
         );
         peer.name = device.name.clone();
         peer.ip = ip;
-        peer.port = device.port;
+        peer.port = Some(device.port);
         peer.device_type = device_type;
         peer.updated_at = now_iso();
         self.db.upsert_peer(&peer);
@@ -683,7 +684,7 @@ impl NearbyDiscoverManager {
     }
 }
 
-/// Equality over the stable fields of a discovered device — `last_seen` is
+/// Equality over the stable fields of a discovered device — `last_seen_at` is
 /// excluded so repeated mDNS announcements of unchanged data emit once.
 fn same_snapshot(a: &DiscoveredDevice, b: &DiscoveredDevice) -> bool {
     a.id == b.id
@@ -721,7 +722,7 @@ mod tests {
             device_type: "PHONE".to_string(),
             version: "1.0".to_string(),
             platform: "android".to_string(),
-            last_seen: String::new(),
+            last_seen_at: String::new(),
             status: status.to_string(),
             discovery_methods: vec!["LAN".to_string()],
         }
@@ -732,8 +733,8 @@ mod tests {
         let a = device("d1", "192.168.1.2", "UNPAIRED");
         let mut b = a.clone();
         assert!(same_snapshot(&a, &b));
-        b.last_seen = "2026-08-18T00:00:00Z".to_string();
-        assert!(same_snapshot(&a, &b), "last_seen alone must not re-emit");
+        b.last_seen_at = "2026-08-18T00:00:00Z".to_string();
+        assert!(same_snapshot(&a, &b), "last_seen_at alone must not re-emit");
         b.ips = vec!["192.168.1.3".to_string()];
         assert!(!same_snapshot(&a, &b), "ip change must re-emit");
         b.ips = a.ips.clone();
@@ -742,7 +743,7 @@ mod tests {
     }
 
     fn seed_peer(id: &str, ip: &str, paired: bool, token: &str) -> DPeer {
-        let mut peer = DPeer::new(id, id, ip, 8443, plain_rs::chat::enums::DeviceType::Phone);
+        let mut peer = DPeer::new(id, id, ip, Some(8443), plain_rs::chat::enums::DeviceType::Phone);
         if paired {
             peer.status = plain_rs::chat::enums::PeerStatus::Paired;
         }
@@ -811,7 +812,7 @@ mod tests {
             device_type: "PHONE".into(),
             version: "1.0".into(),
             platform: "android".into(),
-            last_seen: iso_from_unix_millis(now_millis() - 61_000),
+            last_seen_at: iso_from_unix_millis(now_millis() - 61_000),
         })
         .unwrap();
 

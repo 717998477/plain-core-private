@@ -10,10 +10,12 @@ pub struct Playback {
 }
 
 pub fn snapshot(db: &Db) -> DomainResult<Playback> {
+    db.restore_audio_current()?;
     Ok(db.audio().read(|state| state.playback.clone()))
 }
 
 pub fn invalidate(db: &Db) -> DomainResult<Playback> {
+    db.restore_audio_current()?;
     db.audio().update(|state| {
         state.advance()?;
         Ok(state.playback.clone())
@@ -21,15 +23,17 @@ pub fn invalidate(db: &Db) -> DomainResult<Playback> {
 }
 
 pub fn seek(db: &Db, position_ms: i64) -> DomainResult<Playback> {
+    db.restore_audio_current()?;
     if position_ms < 0 {
         return Err(DomainError::Other("negative audio position".into()));
     }
-    db.audio().update(|state| {
+    db.audio_transaction(|tx, state| {
         if state.playback.path.is_empty() {
             return Err(DomainError::Other("no selected audio".into()));
         }
         state.advance()?;
         state.playback.position_ms = position_ms;
+        save_position(tx, &state.playback.path, position_ms)?;
         Ok(state.playback.clone())
     })
 }
@@ -38,11 +42,12 @@ pub fn report(db: &Db, path: &str, revision: i64, position_ms: i64) -> DomainRes
     if revision < 0 || position_ms < 0 || path.is_empty() {
         return Err(DomainError::Other("invalid audio progress".into()));
     }
-    db.audio().update(|state| {
+    db.audio_transaction(|tx, state| {
         if state.playback.path != path || state.playback.revision != revision {
             return Ok(false);
         }
         state.playback.position_ms = position_ms;
+        save_position(tx, path, position_ms)?;
         Ok(true)
     })
 }
@@ -100,9 +105,19 @@ pub fn started(
             &track.artist,
             track.duration_ms,
         )?;
+        save_position(tx, &track.path, state.playback.position_ms)?;
         state.started_revision = revision;
         Ok(true)
     })
+}
+
+fn save_position(
+    conn: &rusqlite::Connection,
+    path: &str,
+    position_ms: i64,
+) -> rusqlite::Result<()> {
+    conn.execute("UPDATE media_play_history SET position_ms=?1,played_at=?2 WHERE media_id=(SELECT media_id FROM audio_media WHERE path=?3 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?3)",rusqlite::params![position_ms,crate::utils::dbtime::now_iso_millis(),path])?;
+    Ok(())
 }
 
 #[cfg(test)]

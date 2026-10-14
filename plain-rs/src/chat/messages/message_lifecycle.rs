@@ -48,7 +48,7 @@ pub fn create_many(db: &Db, targets: &[(String, String)], content: &str) -> Resu
         let tx=c.unchecked_transaction()?;
         for chat in &chats {
             crate::chat::attachments::app_file_store::content_refs::claim(&tx,refs.clone())?;
-            tx.execute("INSERT INTO chats(id,from_id,to_id,channel_id,content,status,status_data,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![chat.id,chat.from_id,chat.to_id,chat.channel_id,chat.content,chat.status,chat.status_data,chat.created_at,chat.updated_at])?;
+            tx.execute("INSERT INTO chats(id,from_id,to_id,channel_id,content,status,status_data,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![chat.id,chat.from_id,chat.to_id,chat.channel_id.as_deref().filter(|value|!value.is_empty()),chat.content,chat.status,chat.status_data.as_deref().filter(|value|!value.is_empty()),chat.created_at,chat.updated_at])?;
         }
         tx.commit()?; Ok(())
     })?;
@@ -85,11 +85,11 @@ pub fn receive(
             if channel.status!=ChannelStatus::Joined {bail!("Channel not joined");}Some(channel)
         };
         messages::validate_content(content)?;
-        tx.execute("DELETE FROM chat_receipts WHERE timestamp_ms<?1",[now.saturating_sub(crate::transport::auth::TIMESTAMP_WINDOW_MS as i64)])?;
-        if tx.execute("INSERT INTO chat_receipts(receipt_id,peer_id,timestamp_ms) VALUES(?1,?2,?3) ON CONFLICT(receipt_id) DO NOTHING",params![receipt,from_id,timestamp])?==0 {tx.commit()?;
+        tx.execute("DELETE FROM chat_receipts WHERE sent_at<?1",[crate::db::iso_from_unix_millis(now.saturating_sub(crate::transport::auth::TIMESTAMP_WINDOW_MS as i64))])?;
+        if tx.execute("INSERT INTO chat_receipts(receipt_id,peer_id,sent_at) VALUES(?1,?2,?3) ON CONFLICT(receipt_id) DO NOTHING",params![receipt,from_id,crate::db::iso_from_unix_millis(timestamp)])?==0 {tx.commit()?;
             return Ok(None);}
         let chat=DChat::new(from_id,if channel_id.is_empty(){"me"}else{""},channel_id,content);
-        tx.execute("INSERT INTO chats(id,from_id,to_id,channel_id,content,status,status_data,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![chat.id,chat.from_id,chat.to_id,chat.channel_id,chat.content,chat.status,chat.status_data,chat.created_at,chat.updated_at])?;
+        tx.execute("INSERT INTO chats(id,from_id,to_id,channel_id,content,status,status_data,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![chat.id,chat.from_id,chat.to_id,chat.channel_id.as_deref().filter(|value|!value.is_empty()),chat.content,chat.status,chat.status_data.as_deref().filter(|value|!value.is_empty()),chat.created_at,chat.updated_at])?;
         tx.commit()?;
         Ok(Some(Received{chat,peer,channel}))
     })
@@ -145,8 +145,8 @@ fn delivery_impl(
             {
                 bail!("Invalid delivery recipients");
             }
-            if retry && !chat.status_data.is_empty() {
-                let old: StatusData = serde_json::from_str(&chat.status_data)?;
+            if let Some(data) = chat.status_data.as_deref().filter(|_| retry) {
+                let old: StatusData = serde_json::from_str(data)?;
                 let mut merged: Vec<_> = old
                     .results
                     .unwrap_or_default()
@@ -161,11 +161,11 @@ fn delivery_impl(
             (ChatStatus::Failed, String::new())
         };
         chat.status = status;
-        chat.status_data = data;
+        chat.status_data = (!data.is_empty()).then_some(data);
         chat.updated_at = now_iso();
         tx.execute(
             "UPDATE chats SET status=?2,status_data=?3,updated_at=?4 WHERE id=?1",
-            params![chat.id, chat.status, chat.status_data, chat.updated_at],
+            params![chat.id, chat.status, chat.status_data.as_deref().filter(|value|!value.is_empty()), chat.updated_at],
         )?;
         tx.commit()?;
         Ok(Some(chat))

@@ -44,7 +44,7 @@ impl TagsQuery {
             .iter()
             .map(|row| TagRelation {
                 tag_id: async_graphql::ID::from(row.tag_id.clone()),
-                key: row.key.clone(),
+                key: row.target_key.clone(),
             })
             .collect())
     }

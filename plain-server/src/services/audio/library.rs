@@ -1,4 +1,5 @@
 use crate::host::bridge::Host;
+use plain_rs::db::{Db, audio_catalog::AudioMedia};
 use plain_rs::error::DomainError;
 use plain_rs::error::DomainResult;
 use plain_rs::media::audio::queue::AudioTrack;
@@ -9,15 +10,58 @@ use std::sync::Arc;
 
 pub struct HostLibrary {
     host: Arc<Host>,
+    db: Arc<Db>,
     runtime: tokio::runtime::Handle,
 }
 impl HostLibrary {
-    pub fn new(host: Arc<Host>) -> Self {
+    pub fn new(host: Arc<Host>, db: Arc<Db>) -> Self {
         Self {
             host,
+            db,
             runtime: tokio::runtime::Handle::current(),
         }
     }
+    pub fn refresh(&mut self) -> DomainResult<()> {
+        if cfg!(feature = "mobile") {
+            self.db.use_platform_audio_catalog()?;
+            let ids = self.db.audio_reference_ids()?;
+            let rows: Vec<AudioMedia> = if ids.is_empty() {
+                Vec::new()
+            } else {
+                self.call("audioLibraryResolve", json!({"ids":ids,"paths":[]}))?
+            };
+            self.db.cache_platform_audio(&rows, true)?;
+        }
+        self.db.restore_audio_current()?;
+        Ok(())
+    }
+
+    pub fn restore_current(&mut self) -> DomainResult<()> {
+        if cfg!(feature = "mobile") {
+            self.db.use_platform_audio_catalog()?;
+            if self.db.audio_restore_needed() {
+                let id = self.db.audio_current_media_id();
+                if let Some(id) = id.filter(|id| !id.is_empty()) {
+                    let rows: Vec<AudioMedia> =
+                        self.call("audioLibraryResolve", json!({"ids":[id],"paths":[]}))?;
+                    self.db.cache_platform_audio(&rows, false)?;
+                }
+            }
+        }
+        self.db.restore_audio_current()?;
+        Ok(())
+    }
+
+    pub fn cache_paths(&mut self, paths: &[String]) -> DomainResult<()> {
+        if cfg!(feature = "mobile") && !paths.is_empty() {
+            self.db.forget_platform_audio_paths(paths)?;
+            let rows: Vec<AudioMedia> =
+                self.call("audioLibraryResolve", json!({"ids":[],"paths":paths}))?;
+            self.db.cache_platform_audio(&rows, false)?;
+        }
+        Ok(())
+    }
+
     fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> DomainResult<T> {
         let result = self
             .runtime
@@ -43,10 +87,14 @@ impl LibraryTracks for HostLibrary {
         limit: usize,
         sort_by: &str,
     ) -> DomainResult<Vec<AudioTrack>> {
-        self.call(
+        let rows: Vec<AudioMedia> = self.call(
             "audioLibraryPage",
             json!({"offset":offset,"limit":limit,"sortBy":sort_by}),
-        )
+        )?;
+        if cfg!(feature = "mobile") {
+            self.db.cache_platform_audio(&rows, false)?;
+        }
+        Ok(rows.into_iter().map(|row| row.track).collect())
     }
     fn library_locate(&mut self, path: &str, sort_by: &str) -> DomainResult<i64> {
         self.call("audioLibraryLocate", json!({"path":path,"sortBy":sort_by}))
@@ -58,7 +106,14 @@ impl LibraryTracks for HostLibrary {
 
 impl plain_rs::media::audio::commands::Engine for HostLibrary {
     fn metadata(&mut self, path: &str) -> DomainResult<AudioTrack> {
-        self.call("audioMetadata", json!({"path":path}))
+        let row: AudioMedia = self.call("audioMetadata", json!({"path":path}))?;
+        if cfg!(feature = "mobile") {
+            self.db
+                .cache_platform_audio(std::slice::from_ref(&row), false)?;
+        }
+        let mut track = row.track;
+        track.path = path.to_owned();
+        Ok(track)
     }
     fn execute(
         &mut self,

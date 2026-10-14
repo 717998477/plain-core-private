@@ -36,14 +36,14 @@ fn update_known_peer_refreshes_paired_peers_only() {
     let dir = unique_tmp_dir("update-peer");
     let db = Db::open(&dir.join("plain.db")).unwrap();
 
-    let mut paired = DPeer::new("p1", "Phone", "203.0.113.1", 2443, DeviceType::Phone);
+    let mut paired = DPeer::new("p1", "Phone", "203.0.113.1", Some(2443), DeviceType::Phone);
     paired.status = PeerStatus::Paired;
     db.upsert_peer(&paired);
     db.upsert_peer(&DPeer::new(
         "p2",
         "Other",
         "203.0.113.2",
-        2443,
+        Some(2443),
         DeviceType::Computer,
     ));
 
@@ -60,7 +60,7 @@ fn update_known_peer_refreshes_paired_peers_only() {
     update_known_peer(&db, &device);
     let updated = db.get_peer_by_id("p1").unwrap();
     assert_eq!(updated.ip, "203.0.113.9");
-    assert_eq!(updated.port, 8443);
+    assert_eq!(updated.port, Some(8443));
 
     let device2 = FoundDevice {
         id: "p2".into(),

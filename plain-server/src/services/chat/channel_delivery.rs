@@ -55,11 +55,11 @@ async fn deliver(
         ChannelSystemMessageType::Invite
         | ChannelSystemMessageType::Update
         | ChannelSystemMessageType::Kick => ensure!(
-            channel.owner_id == actor,
+            channel.owner_id.as_deref() == Some(actor.as_str()),
             "Only owner can send channel updates"
         ),
         _ => ensure!(
-            !target.is_empty() && target == channel.owner_id,
+            !target.is_empty() && Some(target) == channel.owner_id.as_deref(),
             "Invalid channel owner destination"
         ),
     }

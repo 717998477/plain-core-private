@@ -25,7 +25,7 @@ pub use repositories::browse;
 #[cfg(feature = "sqlite_browse")]
 pub use repositories::devtools;
 #[cfg(feature = "library")]
-pub use repositories::{audio_queue, favorite_folder, image_editor_project, notes_feeds, tag};
+pub use repositories::{audio_catalog, audio_queue, media_play_history, favorite_folder, image_editor_project, notes_feeds, tag};
 #[cfg(feature = "chat")]
 pub use repositories::{bookmark, chat_store};
 
@@ -34,9 +34,9 @@ pub use crate::sqlite_browse::TableColumnMeta;
 #[cfg(feature = "library")]
 pub use models::{
     ArchivedConversationRow, AuditEventRow, ClipboardRow, FavoriteFolderRow, HISTORY_KEEP,
-    ImageEmbeddingRow, MediaItemRow, PlayHistory, Playlist, PlaylistItem, PomodoroItemRow,
-    QueueItem, QueueSource, QueueSourceKind, SessionRow, ShareRow, TagRelationRow, TagRow,
-    TrashedMessageRow, VideoPlayProgressRow,
+    ImageEmbeddingRow, MediaPlayHistoryRow, PlayHistory, Playlist, PlaylistItem, PomodoroItemRow, QueueItem,
+    QueueSource, QueueSourceKind, SessionRow, ShareRow, TagRelationRow, TagRow, TrashedMessageRow,
+    VideoPlayProgressRow,
 };
 #[cfg(feature = "chat")]
 pub use models::{DAppFile, DChannel, DChat, DNearbyDeviceCache, DPeer};
@@ -54,39 +54,25 @@ impl Db {
     pub fn open(db_path: &Path) -> rusqlite::Result<Self> {
         #[cfg(feature = "library")]
         {
-            if db_path == Path::new(":memory:") {
-                return Ok(Self(
-                    Arc::new(Mutex::new(Self::open_connection(db_path)?)),
-                    Arc::new(Mutex::new(())),
-                    Arc::new(crate::media::audio::state::Runtime::in_memory()),
-                ));
-            }
-            let directory = db_path.parent().unwrap_or(Path::new("."));
-            let prefs = Arc::new(
-                crate::prefs::Prefs::load(&crate::prefs::default_path(directory))
-                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
-            );
-            Self::open_with_prefs(db_path, prefs)
+            let prefs = if db_path == Path::new(":memory:") {
+                crate::prefs::Prefs::in_memory()
+            } else {
+                crate::prefs::Prefs::load(&crate::prefs::default_path(db_path.parent().unwrap_or(Path::new("."))))
+                    .map_err(|error|rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?
+            };
+            Self::open_with_prefs(db_path, Arc::new(prefs))
         }
         #[cfg(not(feature = "library"))]
-        Ok(Self(
-            Arc::new(Mutex::new(Self::open_connection(db_path)?)),
-            Arc::new(Mutex::new(())),
-        ))
+        { Ok(Self(Arc::new(Mutex::new(Self::open_connection(db_path)?)), Arc::new(Mutex::new(())))) }
     }
 
     #[cfg(feature = "library")]
-    pub fn open_with_prefs(
-        db_path: &Path,
-        prefs: Arc<crate::prefs::Prefs>,
-    ) -> rusqlite::Result<Self> {
+    pub fn open_with_prefs(db_path: &Path, prefs: Arc<crate::prefs::Prefs>) -> rusqlite::Result<Self> {
         Ok(Self(
             Arc::new(Mutex::new(Self::open_connection(db_path)?)),
             Arc::new(Mutex::new(())),
-            Arc::new(
-                crate::media::audio::state::Runtime::new(prefs)
-                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
-            ),
+            Arc::new(crate::media::audio::state::Runtime::new(prefs)
+                .map_err(|error|rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?),
         ))
     }
 
@@ -127,6 +113,8 @@ impl Db {
         )?;
         #[cfg(any(feature = "chat", feature = "library"))]
         schema::init(&conn)?;
+        #[cfg(feature = "library")]
+        repositories::audio_catalog::init(&conn)?;
         Ok(conn)
     }
 
@@ -179,3 +167,7 @@ pub use models::{
 
 #[cfg(feature = "library")]
 pub use repositories::media_file;
+
+#[cfg(all(test, feature = "chat", feature = "library"))]
+#[path = "../../tests/unit/db/design.rs"]
+mod design_tests;

@@ -264,7 +264,11 @@ async fn execute_download(
         cleanup(&message_id).await;
         return;
     }
-    let peer_port = peer.port;
+    let Some(peer_port) = peer.port.filter(|port| *port > 0) else {
+        set_failed(&ctx, &state, "Peer has no port").await;
+        cleanup(&message_id).await;
+        return;
+    };
 
     let mut downloaded_so_far: u64 = 0;
     let mut all_ok = true;

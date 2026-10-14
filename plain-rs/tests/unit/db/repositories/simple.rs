@@ -8,7 +8,6 @@ use fixtures::*;
 use crate::db::models::simple::ArchivedConversationRow;
 use crate::db::models::simple::ClipboardRow;
 use crate::db::models::simple::ImageEmbeddingRow;
-use crate::db::models::simple::MediaItemRow;
 use crate::db::models::simple::PomodoroItemRow;
 use crate::db::models::simple::SessionRow;
 use crate::db::models::simple::ShareRow;
@@ -30,9 +29,9 @@ fn clipboard(id: &str, created_at: &str) -> ClipboardRow {
 #[test]
 fn clipboard_round_trips_and_orders_by_created_at() {
     let db = test_db("clipboard");
-    db.clipboard_save(&clipboard("a", "2026-01-01T00:00:00Z"))
+    db.clipboard_save(&clipboard("a", "2026-01-01T00:00:00.000Z"))
         .unwrap();
-    db.clipboard_save(&clipboard("b", "2026-02-01T00:00:00Z"))
+    db.clipboard_save(&clipboard("b", "2026-02-01T00:00:00.000Z"))
         .unwrap();
 
     let got = db.clipboard_get("a").unwrap().expect("row a");
@@ -49,7 +48,7 @@ fn clipboard_round_trips_and_orders_by_created_at() {
     assert_eq!(by_hash.id, "a");
 
     // Saving the same id replaces rather than duplicating.
-    let mut updated = clipboard("a", "2026-01-01T00:00:00Z");
+    let mut updated = clipboard("a", "2026-01-01T00:00:00.000Z");
     updated.text = "edited".into();
     db.clipboard_save(&updated).unwrap();
     assert_eq!(db.clipboard_get("a").unwrap().unwrap().text, "edited");
@@ -59,7 +58,7 @@ fn clipboard_round_trips_and_orders_by_created_at() {
 #[test]
 fn clipboard_sensitive_flag_is_stored_as_a_boolean() {
     let db = test_db("clipboard_sensitive");
-    db.clipboard_save(&clipboard("sensitive", "2026-01-01T00:00:00Z"))
+    db.clipboard_save(&clipboard("sensitive", "2026-01-01T00:00:00.000Z"))
         .unwrap();
     assert!(db.clipboard_get("sensitive").unwrap().unwrap().sensitive);
 }
@@ -68,7 +67,7 @@ fn clipboard_sensitive_flag_is_stored_as_a_boolean() {
 fn clipboard_delete_by_ids_and_clear() {
     let db = test_db("clipboard_delete");
     for id in ["a", "b", "c"] {
-        db.clipboard_save(&clipboard(id, "2026-01-01T00:00:00Z"))
+        db.clipboard_save(&clipboard(id, "2026-01-01T00:00:00.000Z"))
             .unwrap();
     }
     assert_eq!(
@@ -96,9 +95,9 @@ fn session_save_get_and_touch() {
         browser_name: "Chrome".into(),
         browser_version: "120".into(),
         token: "tok".into(),
-        last_active_at: Some("2026-01-01T00:00:00Z".into()),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: "2026-01-01T00:00:00Z".into(),
+        last_seen_at: Some("2026-01-01T00:00:00.000Z".into()),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        updated_at: "2026-01-01T00:00:00.000Z".into(),
     };
     db.session_save(&row).unwrap();
 
@@ -106,12 +105,12 @@ fn session_save_get_and_touch() {
     assert_eq!(got.r#type, "WEB");
     assert_eq!(got.browser_name, "Chrome");
 
-    db.session_touch(&[("client-1".into(), "2026-03-01T00:00:00Z".into())])
+    db.session_touch(&[("client-1".into(), "2026-03-01T00:00:00.000Z".into())])
         .unwrap();
     let touched = db.session_get("client-1").unwrap().unwrap();
     assert_eq!(
-        touched.last_active_at.as_deref(),
-        Some("2026-03-01T00:00:00Z")
+        touched.last_seen_at.as_deref(),
+        Some("2026-03-01T00:00:00.000Z")
     );
     // Touching must not disturb the rest of the row.
     assert_eq!(touched.browser_version, "120");
@@ -125,9 +124,9 @@ fn session_save_get_and_touch() {
 fn session_list_orders_by_last_active_desc() {
     let db = test_db("session_order");
     for (id, at) in [
-        ("old", "2026-01-01T00:00:00Z"),
-        ("new", "2026-05-01T00:00:00Z"),
-        ("mid", "2026-03-01T00:00:00Z"),
+        ("old", "2026-01-01T00:00:00.000Z"),
+        ("new", "2026-05-01T00:00:00.000Z"),
+        ("mid", "2026-03-01T00:00:00.000Z"),
     ] {
         db.session_save(&SessionRow {
             client_id: id.into(),
@@ -139,7 +138,7 @@ fn session_list_orders_by_last_active_desc() {
             browser_name: String::new(),
             browser_version: String::new(),
             token: String::new(),
-            last_active_at: Some(at.into()),
+            last_seen_at: Some(at.into()),
             created_at: at.into(),
             updated_at: at.into(),
         })
@@ -162,17 +161,17 @@ fn share_round_trip() {
         name: "Photos".into(),
         password: String::new(),
         url_token: "url-token".into(),
-        expires_at: Some("2027-01-01T00:00:00Z".into()),
+        expires_at: Some("2027-01-01T00:00:00.000Z".into()),
         read_only: true,
         data: "[\"/a\"]".into(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: "2026-01-01T00:00:00Z".into(),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        updated_at: "2026-01-01T00:00:00.000Z".into(),
     };
     db.share_save(&row).unwrap();
     let got = db.share_get("share-1").unwrap().expect("share");
     assert!(got.read_only);
     assert_eq!(got.url_token, "url-token");
-    assert_eq!(got.expires_at.as_deref(), Some("2027-01-01T00:00:00Z"));
+    assert_eq!(got.expires_at.as_deref(), Some("2027-01-01T00:00:00.000Z"));
     assert_eq!(db.share_list().unwrap().len(), 1);
     assert_eq!(db.share_delete("share-1").unwrap(), 1);
 }
@@ -189,10 +188,10 @@ fn pomodoro_queries() {
             id: id.into(),
             date: date.into(),
             completed_count: completed,
-            total_work_seconds: 60,
-            total_break_seconds: 30,
-            created_at: "2026-01-01T00:00:00Z".into(),
-            updated_at: "2026-01-01T00:00:00Z".into(),
+            total_work_secs: 60,
+            total_break_secs: 30,
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            updated_at: "2026-01-01T00:00:00.000Z".into(),
         })
         .unwrap();
     }
@@ -215,47 +214,24 @@ fn pomodoro_queries() {
 }
 
 #[test]
-fn media_item_and_video_progress_cache() {
+fn video_progress_cache() {
     let db = test_db("media_cache");
-    db.media_item_upsert(&MediaItemRow {
-        media_type: "video".into(),
-        media_id: "42".into(),
-        duration_ms: 120_000,
-        updated_at: "2026-01-01T00:00:00Z".into(),
-    })
-    .unwrap();
-    let items = db.media_item_list().unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].duration_ms, 120_000);
-
-    // Re-upserting the same media id replaces instead of failing.
-    db.media_item_upsert(&MediaItemRow {
-        media_type: "video".into(),
-        media_id: "42".into(),
-        duration_ms: 240_000,
-        updated_at: "2026-01-02T00:00:00Z".into(),
-    })
-    .unwrap();
-    assert_eq!(db.media_item_list().unwrap().len(), 1);
-    assert_eq!(db.media_item_list().unwrap()[0].duration_ms, 240_000);
-    assert_eq!(db.media_item_delete("42").unwrap(), 1);
-
     db.video_progress_upsert(&VideoPlayProgressRow {
         media_id: "42".into(),
         position_ms: 5_000,
-        updated_at: "2026-01-01T00:00:00Z".into(),
+        updated_at: "2026-01-01T00:00:00.000Z".into(),
     })
     .unwrap();
     let progress = db.video_progress_get("42").unwrap().expect("progress");
     assert_eq!(progress.position_ms, 5_000);
     assert_eq!(
-        db.video_progress_recent("2026-01-01T00:00:00Z")
+        db.video_progress_recent("2026-01-01T00:00:00.000Z")
             .unwrap()
             .len(),
         1
     );
     assert!(
-        db.video_progress_recent("2027-01-01T00:00:00Z")
+        db.video_progress_recent("2027-01-01T00:00:00.000Z")
             .unwrap()
             .is_empty()
     );
@@ -272,8 +248,8 @@ fn image_embedding_blob_survives_the_base64_boundary() {
         id: "e1".into(),
         path: "/photos/a.jpg".into(),
         embedding_base64: encoded.clone(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: "2026-01-01T00:00:00Z".into(),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        updated_at: "2026-01-01T00:00:00.000Z".into(),
     })
     .unwrap();
 
@@ -295,9 +271,9 @@ fn image_embedding_delete_all() {
         db.embedding_save(&ImageEmbeddingRow {
             id: id.into(),
             path: format!("/{id}.jpg"),
-            embedding_base64: String::new(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            updated_at: "2026-01-01T00:00:00Z".into(),
+            embedding_base64: "P4AAAA==".into(),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            updated_at: "2026-01-01T00:00:00.000Z".into(),
         })
         .unwrap();
     }
@@ -310,7 +286,7 @@ fn archived_conversation_round_trip() {
     let db = test_db("archived");
     db.archived_conversation_save(&ArchivedConversationRow {
         conversation_id: "conv-1".into(),
-        conversation_date: "2026-01-01T00:00:00Z".into(),
+        archived_at: "2026-01-01T00:00:00.000Z".into(),
     })
     .unwrap();
     let rows = db.archived_conversation_list().unwrap();
@@ -327,12 +303,12 @@ fn trashed_messages_bulk_insert_and_retention_cleanup() {
         TrashedMessageRow {
             message_id: "1".into(),
             is_mms: false,
-            trashed_at: "2026-01-01T00:00:00Z".into(),
+            trashed_at: "2026-01-01T00:00:00.000Z".into(),
         },
         TrashedMessageRow {
-            message_id: "mms_2".into(),
+            message_id: "2".into(),
             is_mms: true,
-            trashed_at: "2026-06-01T00:00:00Z".into(),
+            trashed_at: "2026-06-01T00:00:00.000Z".into(),
         },
     ])
     .unwrap();
@@ -342,7 +318,7 @@ fn trashed_messages_bulk_insert_and_retention_cleanup() {
     assert_eq!(ids, vec!["1".to_string(), "mms_2".to_string()]);
 
     assert_eq!(
-        db.trashed_message_delete_older_than("2026-03-01T00:00:00Z")
+        db.trashed_message_delete_older_than("2026-03-01T00:00:00.000Z")
             .unwrap(),
         1
     );
@@ -365,7 +341,7 @@ fn rows_round_trip_through_serde() {
         source: "peer".into(),
         label: "label".into(),
         sensitive: true,
-        created_at: "2026-01-01T00:00:00Z".into(),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
     };
     let json = serde_json::to_string(&original).unwrap();
     let back: ClipboardRow = serde_json::from_str(&json).unwrap();
@@ -392,9 +368,9 @@ fn serialized_field_names_are_snake_case() {
         browser_name: String::new(),
         browser_version: String::new(),
         token: "t".into(),
-        last_active_at: None,
-        created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: "2026-01-01T00:00:00Z".into(),
+        last_seen_at: None,
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        updated_at: "2026-01-01T00:00:00.000Z".into(),
     };
     let value: serde_json::Value = serde_json::to_value(&row).unwrap();
     let object = value.as_object().unwrap();
@@ -405,7 +381,7 @@ fn serialized_field_names_are_snake_case() {
         "os_version",
         "browser_name",
         "browser_version",
-        "last_active_at",
+        "last_seen_at",
         "created_at",
         "updated_at",
     ] {

@@ -7,7 +7,7 @@ pub struct MediaFileMetadata {
     pub bucket_id: String,
     pub size_bytes: i64,
     pub duration_ms: i64,
-    pub album_file_id: String,
+    pub cover_image_id: Option<String>,
     pub width: i32,
     pub height: i32,
     pub rotation: i32,
@@ -23,7 +23,7 @@ pub struct MediaFileMetadataAvailability {
     pub dimensions: bool,
     pub rotation: bool,
     pub taken_at: bool,
-    pub album_file_id: bool,
+    pub cover_image_id: bool,
 }
 
 impl MediaFileMetadataAvailability {
@@ -33,7 +33,7 @@ impl MediaFileMetadataAvailability {
         dimensions: true,
         rotation: true,
         taken_at: true,
-        album_file_id: true,
+        cover_image_id: true,
     };
 }
 
@@ -53,14 +53,14 @@ pub struct MediaFileRow {
     pub bucket_id: String,
     pub size_bytes: i64,
     pub duration_ms: i64,
-    pub album_file_id: String,
+    pub cover_image_id: Option<String>,
     pub width: i32,
     pub height: i32,
     pub rotation: i32,
     pub taken_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
-    pub is_favorite: bool,
-    pub is_trashed: bool,
+    pub favorited: bool,
+    pub trashed: bool,
     pub original_path: Option<String>,
 }

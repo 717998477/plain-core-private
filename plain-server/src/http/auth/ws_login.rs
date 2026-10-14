@@ -261,7 +261,7 @@ fn persist(state: &ServerState, request: &Pending, token: &str) -> anyhow::Resul
         .db
         .session_get(&request.client_id)
         .map_err(|error| anyhow::Error::msg(error.to_string()))?;
-    let now = now_ms().to_string();
+    let now = plain_rs::utils::dbtime::now_iso();
     let row = SessionRow {
         client_id: request.client_id.clone(),
         name: existing
@@ -278,9 +278,9 @@ fn persist(state: &ServerState, request: &Pending, token: &str) -> anyhow::Resul
         browser_name: text(&request.request, "browserName"),
         browser_version: text(&request.request, "browserVersion"),
         token: token.to_owned(),
-        last_active_at: existing
+        last_seen_at: existing
             .as_ref()
-            .and_then(|row| row.last_active_at.clone())
+            .and_then(|row| row.last_seen_at.clone())
             .or_else(|| Some(now.clone())),
         created_at: existing
             .as_ref()

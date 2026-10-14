@@ -58,7 +58,7 @@ impl PeerTransport for Transport {
 fn setup() -> (Db, Vec<u8>) {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     for id in ["peer", "offline", "unpaired"] {
-        let mut peer = DPeer::new(id, id, "", 0, DeviceType::Phone);
+        let mut peer = DPeer::new(id, id, "", None, DeviceType::Phone);
         peer.key = base64_encode(&[7; 32]);
         peer.status = if id == "unpaired" {
             PeerStatus::Unpaired
@@ -169,7 +169,7 @@ async fn routing_uses_current_db_and_retries_only_current_joined_members() {
         .unwrap();
     assert_eq!(retry.status, ChatStatus::Partial);
     assert_eq!(
-        serde_json::from_str::<Value>(&retry.status_data).unwrap()["results"]
+        serde_json::from_str::<Value>(retry.status_data.as_deref().unwrap()).unwrap()["results"]
             .as_array()
             .unwrap()
             .len(),

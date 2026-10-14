@@ -59,7 +59,7 @@ fn device_facts() -> Value {
             "bootloader": "b", "fingerprint": "fp", "hardware": "hw", "radioVersion": "rv",
             "board": "bd", "buildBrand": "google", "buildNumber": "UQ1A", "device": "shiba",
             "javaVmVersion": "17", "glEsVersion": "3.2",
-            "buildTime": "2024-01-01T00:00:00Z",
+            "buildTime": "2024-01-01T00:00:00.000Z",
         },
     })
 }

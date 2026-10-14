@@ -7,7 +7,7 @@
 //! SQLite file; only the media-library resolution seam
 //! ([`crate::media::audio::queue::LibraryTracks`]) is implemented per platform.
 
-pub mod metadata;
+pub mod duration_cache;
 
 pub mod actions;
 

@@ -17,7 +17,8 @@ pub struct Device {
     pub device_type: String,
     pub version: String,
     pub platform: String,
-    pub last_seen: String,
+    #[serde(rename = "lastSeen")]
+    pub last_seen_at: String,
     #[serde(default)]
     pub discovery_methods: Vec<String>,
 }
@@ -37,7 +38,7 @@ impl Device {
             "Invalid nearby facts"
         );
         ensure!(
-            chrono::DateTime::parse_from_rfc3339(&self.last_seen).is_ok(),
+            chrono::DateTime::parse_from_rfc3339(&self.last_seen_at).is_ok(),
             "Invalid nearby time"
         );
         serde_json::from_value::<crate::chat::enums::DeviceType>(serde_json::json!(
@@ -54,7 +55,7 @@ impl Device {
             device_type: self.device_type.clone(),
             version: self.version.clone(),
             platform: self.platform.clone(),
-            last_seen: self.last_seen.clone(),
+            last_seen_at: self.last_seen_at.clone(),
         }
     }
 }
@@ -128,7 +129,7 @@ impl Devices {
         if s.entries.is_empty() && (lan || ble) {
             let now = Instant::now();
             for d in cached.into_iter().take(512) {
-                let age = chrono::DateTime::parse_from_rfc3339(&d.last_seen)
+                let age = chrono::DateTime::parse_from_rfc3339(&d.last_seen_at)
                     .map(|t| {
                         (chrono::Utc::now() - t.with_timezone(&chrono::Utc))
                             .num_seconds()
@@ -144,7 +145,7 @@ impl Devices {
                     device_type: d.device_type,
                     version: d.version,
                     platform: d.platform,
-                    last_seen: d.last_seen,
+                    last_seen_at: d.last_seen_at,
                     discovery_methods: vec!["LAN".into()],
                 };
                 s.order.push(device.id.clone());
@@ -192,10 +193,10 @@ impl Devices {
                 }
             }
             device.discovery_methods = methods;
-            if chrono::DateTime::parse_from_rfc3339(&old.device.last_seen)?
-                > chrono::DateTime::parse_from_rfc3339(&device.last_seen)?
+            if chrono::DateTime::parse_from_rfc3339(&old.device.last_seen_at)?
+                > chrono::DateTime::parse_from_rfc3339(&device.last_seen_at)?
             {
-                device.last_seen = old.device.last_seen.clone();
+                device.last_seen_at = old.device.last_seen_at.clone();
             }
         } else {
             if s.entries.len() >= 512 {
@@ -244,7 +245,7 @@ impl Devices {
         }
         let cached: HashMap<_, _> = crate::db::chat_store::nearby::all(db)?
             .into_iter()
-            .map(|d| (d.id, d.last_seen))
+            .map(|d| (d.id, d.last_seen_at))
             .collect();
         Ok(s.entries
             .values()
@@ -272,7 +273,7 @@ impl Devices {
         let cached = crate::db::chat_store::nearby::all(db)?
             .into_iter()
             .find(|d| d.id == probe.device.id);
-        if cached.as_ref().map(|d| &d.last_seen) != probe.cache_seen.as_ref() {
+        if cached.as_ref().map(|d| &d.last_seen_at) != probe.cache_seen.as_ref() {
             return Ok(false);
         }
         if alive {
@@ -288,7 +289,7 @@ impl Devices {
             let e = s.entries.get_mut(&probe.device.id).unwrap();
             e.seen = Instant::now();
             e.age = Duration::ZERO;
-            e.device.last_seen = now;
+            e.device.last_seen_at = now;
             e.generation = uuid::Uuid::new_v4().to_string();
         } else {
             let updated = db.delete_cached_nearby_device_if_last_seen_matches(

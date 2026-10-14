@@ -3,7 +3,7 @@ use crate::db::chat_store::SaveMode;
 use crate::db::chat_store::messages;
 fn fixture() -> (Db, DChat, Card) {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    let card:Card=serde_json::from_value(serde_json::json!({"shareId":"fixture","urlToken":"token","peerInfo":{"id":"peer","ip":"old","port":443},"name":"old","itemCount":3,"totalSize":42,"expiresAt":"2030-01-01T00:00:00Z"})).unwrap();
+    let card:Card=serde_json::from_value(serde_json::json!({"shareId":"fixture","urlToken":"token","peerInfo":{"id":"peer","ip":"old","port":443},"name":"old","itemCount":3,"totalSize":42,"expiresAt":"2030-01-01T00:00:00.000Z"})).unwrap();
     let mut value = serde_json::to_value(&card).unwrap();
     value["futureMetadata"] = serde_json::json!("preserved");
     let row = DChat::new(
@@ -43,7 +43,7 @@ fn refresh_is_atomic_preserves_message_state_and_clears_removed_expiry() {
     assert_eq!(updated.channel_id, row.channel_id);
     assert_eq!(updated.created_at, row.created_at);
     assert_eq!(updated.updated_at, row.updated_at);
-    assert_eq!(updated.status_data, "{\"results\":[]}");
+    assert_eq!(updated.status_data.as_deref(), Some("{\"results\":[]}"));
     let value: Value = serde_json::from_str(&updated.content).unwrap();
     assert_eq!(value["value"]["futureMetadata"], "preserved");
     assert!(

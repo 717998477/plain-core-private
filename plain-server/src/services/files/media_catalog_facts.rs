@@ -28,13 +28,13 @@ pub fn row_facts(row: &MediaFileRow) -> Result<Value, String> {
         "bucketId": row.bucket_id,
         "createdAt": row.created_at,
         "updatedAt": row.updated_at,
-        "isFavorite": row.is_favorite,
+        "isFavorite": row.favorited,
     });
     match media_type(row.data_type)? {
         DataType::Audio => {
             facts["artist"] = json!(row.artist);
             facts["durationMs"] = json!(row.duration_ms);
-            facts["albumFileId"] = json!(row.album_file_id);
+            facts["albumFileId"] = json!(row.cover_image_id.as_deref().unwrap_or_default());
         }
         _ => {
             facts["durationMs"] = json!(row.duration_ms);

@@ -141,6 +141,9 @@ impl FileTasks {
             } else {
                 Vec::new()
             };
+            self.hooks
+                .duration_cache
+                .invalidate_paths(&removed_paths, &roots)?;
             let prefs = self.hooks.prefs.clone();
             let index = self.hooks.index.clone();
             self.hooks

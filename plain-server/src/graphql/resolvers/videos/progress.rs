@@ -59,6 +59,18 @@ impl VideoProgressMutation {
             position_ms.0,
         )?)
     }
+    async fn record_video_play(
+        &self,
+        ctx: &Context<'_>,
+        media_id: ID,
+        position_ms: Long,
+    ) -> async_graphql::Result<VideoPlayProgress> {
+        record(plain_rs::media::videos::progress::started(
+            ctx.data::<Arc<Db>>()?,
+            media_id.as_str(),
+            position_ms.0,
+        )?)
+    }
     async fn delete_video_play_progress(
         &self,
         ctx: &Context<'_>,

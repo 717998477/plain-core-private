@@ -6,7 +6,7 @@ fn fixture(count: usize) -> (tempfile::TempDir, Db, Queue) {
         "peer",
         "fixture",
         "127.0.0.1",
-        443,
+        Some(443),
         crate::chat::enums::DeviceType::Phone,
     );
     peers::save(&db, &[peer], crate::db::chat_store::SaveMode::Insert).unwrap();

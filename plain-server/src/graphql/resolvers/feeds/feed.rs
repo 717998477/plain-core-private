@@ -91,7 +91,7 @@ fn feed_model(_ctx: &Context<'_>, row: FeedRow) -> GqlResult<Feed> {
         id: ID(row.id),
         name: row.name,
         url: row.url,
-        fetch_content: row.fetch_content,
+        fetch_content: row.fetch_full_content,
         logo: row.logo,
         last_sync_at: row
             .last_sync_at
@@ -121,8 +121,8 @@ fn entry_model(ctx: &Context<'_>, row: FeedEntryRow) -> GqlResult<FeedEntry> {
         description: row.description,
         author: row.author,
         content: row.content,
-        raw_id: row.raw_id,
-        read: row.read,
+        raw_id: row.source_entry_id,
+        read: row.is_read,
         published_at: content_common::instant(&row.published_at)?,
         created_at: content_common::instant(&row.created_at)?,
         updated_at: content_common::instant(&row.updated_at)?,

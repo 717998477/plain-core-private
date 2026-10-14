@@ -60,8 +60,8 @@ fn creation_mutations_and_invite_validation_preserve_credentials_and_version_rul
         )
         .is_err()
     );
-    let owner = DPeer::new("owner", "owner", "", 1, DeviceType::Phone);
-    let guest = DPeer::new("guest", "guest", "", 1, DeviceType::Phone);
+    let owner = DPeer::new("owner", "owner", "", Some(1), DeviceType::Phone);
+    let guest = DPeer::new("guest", "guest", "", Some(1), DeviceType::Phone);
     peers::save(&db, &[owner, guest], SaveMode::Insert).unwrap();
     let resent = apply(
         &db,

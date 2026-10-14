@@ -20,7 +20,7 @@ fn signing_current_peer_and_channel_keys_and_authenticated_crypto_roundtrip() {
         .set("signature_key_pair", base64_encode(&key))
         .unwrap();
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    let mut peer = DPeer::new("peer", "peer", "127.0.0.1", 1, DeviceType::Phone);
+    let mut peer = DPeer::new("peer", "peer", "127.0.0.1", Some(1), DeviceType::Phone);
     peer.key = base64_encode(&[7; 32]);
     peers::save(&db, &[peer.clone()], SaveMode::Insert).unwrap();
     let content = r#"{"type":"TEXT","value":{"text":"中文 %_ | quoted"}}"#;

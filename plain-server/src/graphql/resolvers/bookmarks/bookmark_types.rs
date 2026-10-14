@@ -31,7 +31,7 @@ impl From<DBookmark> for Bookmark {
             url: b.url,
             title: b.title,
             favicon_path: b.favicon_path,
-            group_id: b.group_id.into(),
+            group_id: b.group_id.unwrap_or_default().into(),
             pinned: b.pinned,
             click_count: b.click_count,
             last_clicked_at: b.last_clicked_at,

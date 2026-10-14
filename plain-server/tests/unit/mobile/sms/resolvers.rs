@@ -39,7 +39,7 @@ fn schema_host(schema: &PublicSchema) -> Arc<Host> {
 
 fn sms_fact(id: &str) -> Value {
     json!({
-        "id": id, "body": "hi", "address": "+1555", "date": "2026-10-05T00:00:00Z",
+        "id": id, "body": "hi", "address": "+1555", "date": "2026-10-05T00:00:00.000Z",
         "serviceCenter": "+1999", "read": true, "threadId": "t1", "type": 1,
         "subscriptionId": 2, "isMms": false,
         "attachments": [{"path":"/a.png","contentType":"image/png","name":"a.png"}],
@@ -190,7 +190,7 @@ async fn archiving_a_conversation_stores_the_last_message_date() {
     let records = db.archived_conversation_list().unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].conversation_id, "t1");
-    let stored = chrono::DateTime::parse_from_rfc3339(&records[0].conversation_date).unwrap();
+    let stored = chrono::DateTime::parse_from_rfc3339(&records[0].archived_at).unwrap();
     assert!(
         chrono::Utc::now()
             .signed_duration_since(stored)
@@ -198,7 +198,7 @@ async fn archiving_a_conversation_stores_the_last_message_date() {
             .abs()
             < 120,
         "stored {} is not 'now'",
-        records[0].conversation_date
+        records[0].archived_at
     );
 }
 

@@ -6,6 +6,7 @@ rust-version = "1.99"
 description = "Shared Plain protocol, crypto, persistence and domain primitives"
 
 [features]
+"kv" = ["dep:fjall", "dep:anyhow"]
 "default" = ["crypto"]
 "crypto" = ["dep:chacha20poly1305", "dep:p256", "dep:ed25519-dalek"]
 "ble" = ["dep:anyhow"]
@@ -13,7 +14,7 @@ description = "Shared Plain protocol, crypto, persistence and domain primitives"
 "mdns" = ["dep:socket2"]
 "tls" = ["dep:rcgen", "dep:p12-keystore"]
 "chat" = ["crypto", "mdns", "dep:chrono", "dep:anyhow", "dep:serde_json", "dep:rusqlite", "sqlite_browse", "tokio/sync", "tokio/rt", "tokio/fs", "tokio/time"]
-"library" = ["dep:regex", "dep:rusqlite", "dep:chrono", "dep:anyhow", "prefs", "events", "tokio/rt", "tokio/fs", "tokio/time"]
+"library" = ["kv", "dep:regex", "dep:rusqlite", "dep:chrono", "dep:anyhow", "prefs", "events", "tokio/rt", "tokio/fs", "tokio/time"]
 "sqlite_browse" = ["dep:rusqlite", "dep:serde_json", "dep:anyhow"]
 "prefs" = ["crypto", "dep:serde_json", "dep:anyhow"]
 "filesystem" = ["library", "dep:anyhow", "tokio/fs", "tokio/rt", "tokio/time", "tokio/sync"]
@@ -36,6 +37,7 @@ description = "Shared Plain protocol, crypto, persistence and domain primitives"
 "linux-platform" = ["linux-system", "dep:nix", "prefs", "filesystem", "storage-platform", "unix-platform", "tokio/process", "tokio/macros", "tokio/io-util"]
 
 [dependencies]
+"fjall" = { "version" = "=3.1.10", "optional" = true }
 "sysinfo" = { version = "0.32", default-features = false, features = ["disk"], optional = true }
 "tempfile" = { "version" = "3", "optional" = true }
 "reqwest" = { version = "0.12", default-features = false, features = ["stream"], optional = true }

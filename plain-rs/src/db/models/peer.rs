@@ -14,7 +14,7 @@ pub struct DPeer {
     /// Base64-encoded raw Ed25519 public key (32 bytes).
     pub public_key: String,
     pub status: PeerStatus,
-    pub port: u16,
+    pub port: Option<u16>,
     pub device_type: DeviceType,
     /// Login session token (XChaCha20 shared key, base64). Empty when logged out.
     pub token: String,
@@ -23,7 +23,7 @@ pub struct DPeer {
 }
 
 impl DPeer {
-    pub fn new(id: &str, name: &str, ip: &str, port: u16, device_type: DeviceType) -> Self {
+    pub fn new(id: &str, name: &str, ip: &str, port: Option<u16>, device_type: DeviceType) -> Self {
         let now = now_iso();
         Self {
             id: id.to_string(),
@@ -55,15 +55,17 @@ impl DPeer {
         crate::transport::lan::best(&ips, &crate::transport::lan::local_interfaces())
     }
 
-    pub fn base_url(&self) -> String {
-        build_url("https", &self.best_ip(), self.port, "")
+    pub fn base_url(&self) -> Option<String> {
+        let port = self.port.filter(|port| *port > 0)?;
+        let ip = self.best_ip();
+        (!ip.is_empty()).then(|| build_url("https", &ip, port, ""))
     }
 
-    pub fn peer_graphql_url(&self) -> String {
-        format!("{}/peer_graphql", self.base_url())
+    pub fn peer_graphql_url(&self) -> Option<String> {
+        self.base_url().map(|url| format!("{url}/peer_graphql"))
     }
 
-    pub fn file_url(&self, file_id: &str) -> String {
-        format!("{}/fs?id={}", self.base_url(), file_id)
+    pub fn file_url(&self, file_id: &str) -> Option<String> {
+        self.base_url().map(|url| format!("{url}/fs?id={file_id}"))
     }
 }

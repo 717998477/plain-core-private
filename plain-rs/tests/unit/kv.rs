@@ -1,9 +1,5 @@
-//! Unit tests for `src/db/mod.rs` — moved out-of-line; compiled
-//! as the `tests` child module via `#[cfg(test)] #[path]` there.
 use super::*;
 
-// Nanos-unique temp dir so repeated `cargo test` runs never reopen a
-// database left behind by an earlier run.
 fn tmp_dir(tag: &str) -> std::path::PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -51,4 +47,32 @@ fn batch_is_atomic_staging_area() {
     db.apply_batch(batch).unwrap();
     assert_eq!(db.get("k1").unwrap(), None);
     assert_eq!(db.get("k2").unwrap().as_deref(), Some(&b"v2"[..]));
+}
+
+#[test]
+fn opening_the_same_directory_shares_one_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = Db::open(dir.path()).unwrap();
+    let second = Db::open(&dir.path().join(".")).unwrap();
+    assert!(Arc::ptr_eq(&first.0, &second.0));
+    first.insert("shared", "value").unwrap();
+    assert_eq!(
+        second.get("shared").unwrap().as_deref(),
+        Some(&b"value"[..])
+    );
+}
+
+#[test]
+fn pending_batch_keeps_the_shared_engine_alive() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = Db::open(directory.path()).unwrap();
+    let mut batch = first.batch();
+    batch.insert("pending", "value");
+    drop(first);
+    let second = Db::open(directory.path()).unwrap();
+    second.apply_batch(batch).unwrap();
+    assert_eq!(
+        second.get("pending").unwrap().as_deref(),
+        Some(&b"value"[..])
+    );
 }

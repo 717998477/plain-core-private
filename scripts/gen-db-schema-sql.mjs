@@ -23,11 +23,15 @@ export function generateDatabaseSql() {
       .join('\n')
       .trim() + ';',
   )
+  const schemaSource = readFileSync(join(ROOT, 'plain-rs/src/db/schema/mod.rs'), 'utf8')
+  const version = schemaSource.match(/const VERSION: i32 = (\d+);/)[1]
   const header = [
     '-- plain-core SQLite DDL (SQLite, WAL mode)',
     '-- Generated; do not edit manually. Source: plain-rs/src/db/schema/*.rs',
     '-- Generate: node scripts/gen-db-schema-sql.mjs --write',
     '-- Check: node scripts/gen-db-schema-sql.mjs',
+    '',
+    `PRAGMA user_version=${version};`,
     '',
   ]
   return header.join('\n') + stmts.join('\n') + '\n'

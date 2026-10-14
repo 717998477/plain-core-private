@@ -32,7 +32,7 @@ struct ParsedFeed {
 
 #[derive(Default)]
 struct ParsedEntry {
-    raw_id: String,
+    source_entry_id: String,
     title: String,
     url: String,
     url_from_attribute: bool,
@@ -87,7 +87,7 @@ fn parse_feed(xml: &str) -> DomainResult<ParsedFeed> {
                     && let Some(mut item) = entry.take()
                 {
                     item.url = item.url.trim().to_string();
-                    item.raw_id = item.raw_id.trim().to_string();
+                    item.source_entry_id = item.source_entry_id.trim().to_string();
                     item.author = item.author.trim().to_string();
                     item.published_at = item.published_at.trim().to_string();
                     feed.entries.push(item);
@@ -146,7 +146,7 @@ fn assign_text(
     if let Some(item) = entry {
         match name {
             "title" => item.title.push_str(text),
-            "guid" | "id" => item.raw_id.push_str(text),
+            "guid" | "id" => item.source_entry_id.push_str(text),
             "link" => {
                 if !item.url_from_attribute {
                     item.url.push_str(text);
@@ -201,9 +201,9 @@ fn article_html(html: &str) -> String {
 
 fn item_to_row(feed: &FeedRow, item: ParsedEntry) -> FeedEntryRow {
     let at = now();
-    let fallback = uuid::Uuid::new_v4().to_string();
-    let raw_key = if !item.raw_id.is_empty() {
-        item.raw_id.as_str()
+    let fallback = plain_rs::utils::hex::bytes_to_hex(&Sha256::digest(serde_json::to_vec(&(&item.title,&item.author,&item.content,&item.description,&item.published_at,&item.image)).expect("feed fields serialize")));
+    let raw_key = if !item.source_entry_id.is_empty() {
+        item.source_entry_id.as_str()
     } else if !item.url.is_empty() {
         item.url.as_str()
     } else if !item.title.is_empty() {
@@ -211,7 +211,7 @@ fn item_to_row(feed: &FeedRow, item: ParsedEntry) -> FeedEntryRow {
     } else {
         fallback.as_str()
     };
-    let raw_id = plain_rs::utils::hex::bytes_to_hex(&Sha256::digest(
+    let source_entry_id = plain_rs::utils::hex::bytes_to_hex(&Sha256::digest(
         format!("{}_{}", feed.id, raw_key).as_bytes(),
     ));
     let image = assets::absolute_url(&feed.url, &item.image)
@@ -232,9 +232,9 @@ fn item_to_row(feed: &FeedRow, item: ParsedEntry) -> FeedEntryRow {
         description: html_to_markdown(&assets::normalize_html(description, &feed.url)),
         author: item.author,
         content: String::new(),
-        raw_id,
+        source_entry_id,
         published_at: parse_date(&item.published_at, &at),
-        read: false,
+        is_read: false,
         created_at: at.clone(),
         updated_at: at,
     }
@@ -287,13 +287,13 @@ pub(crate) async fn fetch_text(url: &str, max_bytes: usize) -> DomainResult<Stri
 pub async fn create(
     db: Arc<Db>,
     url: &str,
-    fetch_content: bool,
+    fetch_full_content: bool,
     events: broadcast::Sender<WsEvent>,
 ) -> DomainResult<FeedRow> {
     if db.feed_get_by_url(url)?.is_some() {
         return Err(error("feed_already_exists"));
     }
-    let feed = create_without_sync(&db, url, fetch_content).await?;
+    let feed = create_without_sync(&db, url, fetch_full_content).await?;
     let id = feed.id.clone();
     queue_sync(db, events, Some(id));
     Ok(feed)
@@ -343,7 +343,7 @@ async fn sync_one(db: &Db, feed: &FeedRow, assets: Option<&FeedAssets>) -> Domai
         .map(|item| item_to_row(feed, item))
         .collect();
     let inserted = db.feed_entries_insert(&rows)?;
-    if feed.fetch_content {
+    if feed.fetch_full_content {
         stream::iter(inserted)
             .for_each_concurrent(4, |entry| async move {
                 let _ = sync_entry_content_with_assets(db, &entry.id, assets).await;
@@ -476,7 +476,7 @@ mod tests;
 use plain_rs::feeds::date;
 mod sync_service;
 pub use sync_service::{FeedSyncState, SyncService};
-pub async fn create_without_sync(db: &Db, url: &str, fetch_content: bool) -> DomainResult<FeedRow> {
+pub async fn create_without_sync(db: &Db, url: &str, fetch_full_content: bool) -> DomainResult<FeedRow> {
     if db.feed_get_by_url(url)?.is_some() {
         return Err(error("feed_already_exists"));
     }
@@ -486,7 +486,7 @@ pub async fn create_without_sync(db: &Db, url: &str, fetch_content: bool) -> Dom
         &uuid::Uuid::new_v4().to_string(),
         &title,
         url,
-        fetch_content,
+        fetch_full_content,
         &now(),
     )?)
 }

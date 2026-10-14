@@ -114,7 +114,7 @@ fn replace(
         if let Some(suffix) = item["uri"].as_str().and_then(|v| v.strip_prefix("fid:")) {
             let file_id = suffix.split('.').next().unwrap_or_default();
             let size: i64 =
-                tx.query_row("SELECT size FROM app_files WHERE id=?1", [file_id], |r| {
+                tx.query_row("SELECT size_bytes FROM app_files WHERE id=?1", [file_id], |r| {
                     r.get(0)
                 })?;
             item["size"] = json!(size);
@@ -140,12 +140,12 @@ fn replace(
     content_refs::claim(tx, added)?;
     content_refs::release(tx, directory, removed, staged)?;
     row.content = content.to_string();
-    row.status = if row.channel_id.is_empty() && (row.to_id.is_empty() || row.to_id == "local") {
+    row.status = if row.channel_id.is_none() && (row.to_id.is_empty() || row.to_id == "local") {
         ChatStatus::Sent
     } else {
         ChatStatus::Pending
     };
-    row.status_data.clear();
+    row.status_data = None;
     row.updated_at = now_iso();
     tx.execute(
         "UPDATE chats SET content=?2,status=?3,status_data='',updated_at=?4 WHERE id=?1",

@@ -13,6 +13,7 @@ use plain_rs::prefs::Prefs;
 use serde_json::json;
 use std::sync::Arc;
 pub struct MediaActions {
+    duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     db: Arc<Db>,
     host: Arc<Host>,
     audio: Arc<Audio>,
@@ -32,8 +33,10 @@ impl MediaActions {
         index: Arc<ImageIndex>,
         prefs: Arc<Prefs>,
         events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
+        duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     ) -> Self {
         Self {
+            duration_cache,
             db,
             host,
             audio,
@@ -149,6 +152,9 @@ impl MediaActions {
                         && !before.path.is_empty()
                         && successful.iter().any(|item| item.path == before.path)
                     {
+                        if action==Action::Move {
+                            audio_commands::clear_engine(db,&prefs,engine)?;
+                        } else {
                         audio_commands::command(
                             db,
                             &prefs,
@@ -157,6 +163,7 @@ impl MediaActions {
                             0,
                             1.0,
                         )?;
+                        }
                     }
                     Ok(count)
                 })
@@ -173,6 +180,10 @@ impl MediaActions {
             })
             .await??
         };
+        if matches!(r#type, DataType::Audio | DataType::Video) {
+            self.duration_cache
+                .remove(r#type.media_type_str().unwrap(), &completed_ids)?;
+        }
         if !completed_ids.is_empty() {
             let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
                 plain_rs::events::MEDIA_ACTION_FINISHED,

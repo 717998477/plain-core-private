@@ -13,7 +13,7 @@ pub struct Peer {
     pub ip: String,
     pub status: PeerStatus,
     pub online: bool,
-    pub port: i32,
+    pub port: Option<i32>,
     pub device_type: DeviceType,
     #[graphql(skip)]
     pub token: String,
@@ -36,7 +36,7 @@ impl Peer {
             ip: p.ip,
             status: p.status.into(),
             online,
-            port: p.port as i32,
+            port: p.port.map(i32::from),
             device_type: p.device_type.into(),
             token: p.token,
             public_key: p.public_key,

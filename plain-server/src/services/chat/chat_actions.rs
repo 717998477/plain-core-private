@@ -14,7 +14,7 @@ pub(crate) fn committed(state: &ServerState, chat: &DChat, event: &'static str) 
     ));
 }
 pub(crate) async fn deliver(state: &ServerState, row: DChat) -> Result<DChat> {
-    if row.channel_id.is_empty() && (row.to_id.is_empty() || row.to_id == "local") {
+    if row.channel_id.is_none() && (row.to_id.is_empty() || row.to_id == "local") {
         return Ok(row);
     }
     crate::services::chat::chat_delivery::deliver(state, &row.id, None)

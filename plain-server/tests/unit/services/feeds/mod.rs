@@ -13,7 +13,7 @@ fn parses_rss_and_atom_entries() {
     let parsed = parse_feed(rss).unwrap();
     assert_eq!(parsed.title, "News");
     assert_eq!(parsed.entries[0].url, "https://example.org/1");
-    let atom = r#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom</title><entry><title>Two</title><link href="https://example.org/2" rel="alternate"/><summary>Summary</summary><published>2026-10-01T12:00:00Z</published></entry></feed>"#;
+    let atom = r#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom</title><entry><title>Two</title><link href="https://example.org/2" rel="alternate"/><summary>Summary</summary><published>2026-10-01T12:00:00.000Z</published></entry></feed>"#;
     let parsed = parse_feed(atom).unwrap();
     assert_eq!(parsed.title, "Atom");
     assert_eq!(parsed.entries[0].url, "https://example.org/2");
@@ -38,7 +38,7 @@ fn opml_roundtrip_and_filtered_entry_counts() {
     let feeds = db.feeds_list().unwrap();
     assert_eq!(feeds.len(), 1);
     assert_eq!(feeds[0].name, "Name");
-    assert!(feeds[0].fetch_content);
+    assert!(feeds[0].fetch_full_content);
     let export = export_opml(&db).unwrap();
     assert!(export.contains("xmlUrl=\"https://example.org/rss\""));
     let now = now();
@@ -51,9 +51,9 @@ fn opml_roundtrip_and_filtered_entry_counts() {
         description: String::new(),
         author: String::new(),
         content: String::new(),
-        raw_id: "hash".into(),
+        source_entry_id: "hash".into(),
         published_at: now.clone(),
-        read: false,
+        is_read: false,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -177,7 +177,7 @@ fn the_channel_link_is_the_site_url_and_the_image_link_is_not() {
 fn feed_dates_cover_the_formats_publishers_emit() {
     let expected = [
         // Strict RFC 3339 / RFC 2822.
-        ("2024-09-10T12:00:00Z", "2024-09-10T12:00:00.000Z"),
+        ("2024-09-10T12:00:00.000Z", "2024-09-10T12:00:00.000Z"),
         ("2024-09-10T12:00:00.000Z", "2024-09-10T12:00:00.000Z"),
         ("2024-09-10T12:00:00+02:00", "2024-09-10T10:00:00.000Z"),
         ("Tue, 10 Sep 2024 12:00:00 GMT", "2024-09-10T12:00:00.000Z"),
@@ -212,7 +212,7 @@ fn feed_dates_cover_the_formats_publishers_emit() {
     // a future date would otherwise pin the entry to the top forever.
     assert_eq!(parse_date("not a date", "fallback"), "fallback");
     assert_eq!(parse_date("", "fallback"), "fallback");
-    assert_eq!(parse_date("2999-01-01T00:00:00Z", "fallback"), "fallback");
+    assert_eq!(parse_date("2999-01-01T00:00:00.000Z", "fallback"), "fallback");
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn opml_import_keeps_the_valid_outlines_when_one_url_is_broken() {
     assert!(
         feeds
             .iter()
-            .any(|feed| feed.url == "https://example.org/a" && feed.fetch_content)
+            .any(|feed| feed.url == "https://example.org/a" && feed.fetch_full_content)
     );
     assert!(feeds.iter().any(|feed| feed.url == "https://example.org/b"));
     // Group outlines carry no xmlUrl and must not become subscriptions.
@@ -258,7 +258,7 @@ fn opml_export_escapes_names_and_round_trips_through_the_parser() {
     let feeds = other.feeds_list().unwrap();
     assert_eq!(feeds.len(), 1);
     assert_eq!(feeds[0].name, "A & B <news>");
-    assert!(feeds[0].fetch_content);
+    assert!(feeds[0].fetch_full_content);
 }
 
 #[test]

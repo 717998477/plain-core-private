@@ -10,15 +10,15 @@ fn row(data_type: DataType) -> MediaFileRow {
         bucket_id: "bucket".into(),
         size_bytes: 30,
         duration_ms: 10,
-        album_file_id: "album".into(),
+        cover_image_id: Some("album".into()),
         width: 4,
         height: 3,
         rotation: 90,
-        taken_at: Some("2026-10-12T00:00:00Z".into()),
-        created_at: "2026-10-12T00:00:00Z".into(),
-        updated_at: "2026-10-13T00:00:00Z".into(),
-        is_favorite: true,
-        is_trashed: false,
+        taken_at: Some("2026-10-12T00:00:00.000Z".into()),
+        created_at: "2026-10-12T00:00:00.000Z".into(),
+        updated_at: "2026-10-13T00:00:00.000Z".into(),
+        favorited: true,
+        trashed: false,
         original_path: Some("/trash/one".into()),
     }
 }
@@ -38,8 +38,8 @@ fn every_row_carries_the_shared_library_fields() {
     assert_eq!(facts["path"], json!("/media/one"));
     assert_eq!(facts["size"], json!(30));
     assert_eq!(facts["bucketId"], json!("bucket"));
-    assert_eq!(facts["createdAt"], json!("2026-10-12T00:00:00Z"));
-    assert_eq!(facts["updatedAt"], json!("2026-10-13T00:00:00Z"));
+    assert_eq!(facts["createdAt"], json!("2026-10-12T00:00:00.000Z"));
+    assert_eq!(facts["updatedAt"], json!("2026-10-13T00:00:00.000Z"));
     assert_eq!(facts["isFavorite"], json!(true));
 }
 
@@ -59,7 +59,7 @@ fn video_image_and_doc_share_the_dimension_fields() {
     for data_type in [DataType::Video, DataType::Image, DataType::Doc] {
         let facts = row_facts(&row(data_type)).unwrap();
         assert_eq!(facts["durationMs"], json!(10));
-        assert_eq!(facts["takenAt"], json!("2026-10-12T00:00:00Z"));
+        assert_eq!(facts["takenAt"], json!("2026-10-12T00:00:00.000Z"));
         assert_eq!(facts["width"], json!(4));
         assert_eq!(facts["height"], json!(3));
         assert_eq!(facts["rotation"], json!(90));
@@ -109,7 +109,7 @@ fn trashed_rows_project_the_same_shape_as_live_rows() {
     for data_type in LIBRARY_TYPES {
         let live = row_facts(&row(data_type)).unwrap();
         let mut trashed = row(data_type);
-        trashed.is_trashed = true;
+        trashed.trashed = true;
         assert_eq!(row_facts(&trashed).unwrap(), live);
     }
 }

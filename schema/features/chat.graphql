@@ -138,7 +138,7 @@ type Peer {
 	ip: String!
 	status: PeerStatus!
 	online: Boolean!
-	port: Int!
+	port: Int
 	deviceType: DeviceType!
 	createdAt: Instant!
 	updatedAt: Instant!

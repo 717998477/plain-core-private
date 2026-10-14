@@ -16,9 +16,9 @@ fn row(id: &str, text: &str, source: &str, label: &str, at: &str) -> ClipboardRo
 fn literal_search_count_pagination_and_order() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     for item in [
-        row("a", "100%_a", "", "", "2026-10-01T00:00:00Z"),
-        row("b", "100xxxa", "peer%_", "", "2026-10-02T00:00:00Z"),
-        row("c", "other", "", "100%_a", "2026-10-02T00:00:00Z"),
+        row("a", "100%_a", "", "", "2026-10-01T00:00:00.000Z"),
+        row("b", "100xxxa", "peer%_", "", "2026-10-02T00:00:00.000Z"),
+        row("c", "other", "", "100%_a", "2026-10-02T00:00:00.000Z"),
     ] {
         db.clipboard_save(&item).unwrap();
     }
@@ -29,7 +29,7 @@ fn literal_search_count_pagination_and_order() {
     assert!(db.clipboard_page("", 1, 99).unwrap().is_empty());
     assert_eq!(db.clipboard_page("", 0, -1).unwrap().len(), 1);
     assert_eq!(db.clipboard_count("text:other").unwrap(), 0);
-    db.clipboard_save(&row("d", "a\\b' OR 1=1 --", "", "", "2026-10-03T00:00:00Z"))
+    db.clipboard_save(&row("d", "a\\b' OR 1=1 --", "", "", "2026-10-03T00:00:00.000Z"))
         .unwrap();
     assert_eq!(db.clipboard_count("a\\b' OR 1=1 --").unwrap(), 1);
 }
@@ -37,9 +37,9 @@ fn literal_search_count_pagination_and_order() {
 #[test]
 fn destructive_queries_require_explicit_valid_target() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    db.clipboard_save(&row("a", "100%_a", "peer", "", "2026-10-01T00:00:00Z"))
+    db.clipboard_save(&row("a", "100%_a", "peer", "", "2026-10-01T00:00:00.000Z"))
         .unwrap();
-    db.clipboard_save(&row("b", "100xxxa", "peer", "", "2026-10-02T00:00:00Z"))
+    db.clipboard_save(&row("b", "100xxxa", "peer", "", "2026-10-02T00:00:00.000Z"))
         .unwrap();
     for invalid in ["", "  ", "source:peer", "all:false", "all:true unknown:bad"] {
         assert!(db.clipboard_delete_query(invalid).is_err(), "{invalid}");

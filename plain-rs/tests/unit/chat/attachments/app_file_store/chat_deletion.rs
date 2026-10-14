@@ -89,7 +89,7 @@ fn entity_removal_is_atomic_retains_channel_peer_and_returns_removed_channel_sna
     let db = Db::open(&root.join("plain.db")).unwrap();
     let file = import_bytes(&db, &root, b"entity fixture", "text/plain").unwrap();
     import_bytes(&db, &root, b"entity fixture", "text/plain").unwrap();
-    let mut peer = DPeer::new("peer", "peer", "", 1, DeviceType::Phone);
+    let mut peer = DPeer::new("peer", "peer", "", Some(1), DeviceType::Phone);
     peer.status = PeerStatus::Paired;
     peer.key = "pair-key".into();
     peer.token = "login-token".into();
@@ -156,7 +156,7 @@ fn discovery_and_unpair_update_only_owned_fields_and_require_paired_peer() {
     use crate::db::DPeer;
     use crate::db::chat_store::peers;
     let db = Db::open(Path::new(":memory:")).unwrap();
-    let mut peer = DPeer::new("peer", "old", "old-ip", 1, DeviceType::Phone);
+    let mut peer = DPeer::new("peer", "old", "old-ip", Some(1), DeviceType::Phone);
     peer.status = PeerStatus::Paired;
     peer.key = "current-key".into();
     peer.token = "session".into();

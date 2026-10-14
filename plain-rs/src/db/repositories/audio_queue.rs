@@ -1,7 +1,3 @@
-//! Row IO for the audio tables and settings. The playback-order state machine
-//! Row IO for the audio queue tables. The playback-order state machine
-//! lives in [`crate::media::audio::queue`].
-
 use crate::db::Db;
 pub use crate::db::models::audio_queue::HISTORY_KEEP;
 pub use crate::db::models::audio_queue::PlayHistory;
@@ -18,32 +14,29 @@ pub(crate) mod io {
         c: &Connection,
         state: &crate::media::audio::state::State,
     ) -> rusqlite::Result<QueueSource> {
-        Ok(c.query_row(
-            "SELECT source,playlist_id,current_index,sort_by FROM audio_queue_source WHERE id=1",
-            [],
-            |r| {
-                Ok(QueueSource {
-                    source: QueueSourceKind::parse_stored(&r.get::<_, String>(0)?),
-                    playlist_id: r.get(1)?,
-                    current_path: state.playback.path.clone(),
-                    current_index: r.get(2)?,
-                    sort_by: r.get(3)?,
-                })
-            },
-        )
-        .optional()?
-        .unwrap_or_else(|| QueueSource {
-            current_path: state.playback.path.clone(),
-            ..QueueSource::default()
-        }))
+        let mut source = state.source.clone();
+        source.current_path = audio_by_path(c, &state.playback.path)?
+            .map(|track| track.path).unwrap_or_else(|| state.playback.path.clone());
+        Ok(source)
     }
     pub fn save_source(
         c: &Connection,
         src: &QueueSource,
         state: &mut crate::media::audio::state::State,
     ) -> crate::error::DomainResult<()> {
-        c.execute("INSERT INTO audio_queue_source (id,source,playlist_id,current_index,sort_by) VALUES (1,?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET source=?1,playlist_id=?2,current_index=?3,sort_by=?4", params![src.source.as_str(),src.playlist_id,src.current_index,src.sort_by])?;
-        state.select(&src.current_path)?;
+        state.source = src.clone();
+        save_current(c, &src.current_path, state)?;
+        state.select(&src.current_path)
+    }
+    pub fn audio_by_path(
+        c: &Connection,
+        path: &str,
+    ) -> rusqlite::Result<Option<crate::media::audio::queue::AudioTrack>> {
+        c.query_row("SELECT m.path,m.title,m.artist,m.duration_ms,m.album_id FROM audio_media m WHERE m.media_id IN (SELECT media_id FROM audio_media WHERE path=?1 UNION SELECT media_id FROM platform_audio_aliases WHERE path=?1)",[path],|row|Ok(crate::media::audio::queue::AudioTrack { path:row.get(0)?,title:row.get(1)?,artist:row.get(2)?,duration_ms:row.get(3)?,album_id:row.get(4)? })).optional()
+    }
+
+    pub fn save_current(c: &Connection, path: &str, state: &mut crate::media::audio::state::State) -> rusqlite::Result<()> {
+        state.current_media_id = c.query_row("SELECT media_id FROM audio_media WHERE path=?1 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?1", [path], |row|row.get(0)).optional()?;
         Ok(())
     }
     fn queue_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<QueueItem> {
@@ -56,11 +49,11 @@ pub(crate) mod io {
         })
     }
     pub fn all_queue_items(c: &Connection) -> rusqlite::Result<Vec<QueueItem>> {
-        c.prepare("SELECT path,sort_order,title,artist,duration_ms FROM audio_queue_items ORDER BY sort_order ASC")?.query_map([],queue_row)?.collect()
+        c.prepare("SELECT m.path,q.sort_order,m.title,m.artist,m.duration_ms FROM audio_queue_items q JOIN audio_media m USING(media_id) ORDER BY q.sort_order ASC,q.media_id ASC")?.query_map([],queue_row)?.collect()
     }
     pub fn queue_item_by_path(c: &Connection, path: &str) -> rusqlite::Result<Option<QueueItem>> {
         c.query_row(
-            "SELECT path,sort_order,title,artist,duration_ms FROM audio_queue_items WHERE path=?",
+            "SELECT m.path,q.sort_order,m.title,m.artist,m.duration_ms FROM audio_queue_items q JOIN audio_media m USING(media_id) WHERE m.path=?",
             [path],
             queue_row,
         )
@@ -68,20 +61,14 @@ pub(crate) mod io {
     }
     pub fn replace_queue_items(c: &Connection, items: &[QueueItem]) -> rusqlite::Result<()> {
         c.execute("DELETE FROM audio_queue_items", [])?;
-        let mut insert=c.prepare("INSERT INTO audio_queue_items (path,sort_order,title,artist,duration_ms) VALUES (?1,?2,?3,?4,?5)")?;
+        let mut insert=c.prepare("INSERT INTO audio_queue_items (media_id,sort_order) SELECT media_id,?2 FROM audio_media WHERE media_id IN (SELECT media_id FROM audio_media WHERE path=?1 UNION SELECT media_id FROM platform_audio_aliases WHERE path=?1)")?;
         for (i, item) in items.iter().enumerate() {
-            insert.execute(params![
-                item.path,
-                i as i64,
-                item.title,
-                item.artist,
-                item.duration_ms
-            ])?;
+            insert.execute(params![item.path, i as i64])?;
         }
         Ok(())
     }
     pub fn remove_queue_item(c: &Connection, path: &str) -> rusqlite::Result<()> {
-        c.execute("DELETE FROM audio_queue_items WHERE path=?", [path])?;
+        c.execute("DELETE FROM audio_queue_items WHERE media_id IN (SELECT media_id FROM audio_media WHERE path=?)", [path])?;
         Ok(())
     }
     fn playlist_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Playlist> {
@@ -135,11 +122,11 @@ pub(crate) mod io {
         })
     }
     pub fn playlist_items(c: &Connection, id: &str) -> rusqlite::Result<Vec<PlaylistItem>> {
-        c.prepare("SELECT id,playlist_id,audio_path,title,artist,duration_ms,sort_order,added_at,album_id FROM audio_playlist_items WHERE playlist_id=? ORDER BY sort_order")?.query_map([id],item_row)?.collect()
+        c.prepare("SELECT p.id,p.playlist_id,m.path,m.title,m.artist,m.duration_ms,p.sort_order,p.added_at,m.album_id FROM audio_playlist_items p JOIN audio_media m USING(media_id) WHERE playlist_id=? ORDER BY sort_order,p.id")?.query_map([id],item_row)?.collect()
     }
     pub fn playlist_count(c: &Connection, id: &str) -> rusqlite::Result<usize> {
         c.query_row(
-            "SELECT COUNT(*) FROM audio_playlist_items WHERE playlist_id=?",
+            "SELECT COUNT(*) FROM audio_playlist_items p JOIN audio_media m USING(media_id) WHERE playlist_id=?",
             [id],
             |r| r.get(0),
         )
@@ -149,7 +136,7 @@ pub(crate) mod io {
         id: &str,
         path: &str,
     ) -> rusqlite::Result<Option<i64>> {
-        c.query_row("SELECT (SELECT COUNT(*) FROM audio_playlist_items AS earlier WHERE earlier.playlist_id=item.playlist_id AND earlier.sort_order<item.sort_order) FROM audio_playlist_items AS item WHERE item.playlist_id=?1 AND item.audio_path=?2",params![id,path],|r|r.get(0)).optional()
+        c.query_row("SELECT (SELECT COUNT(*) FROM audio_playlist_items AS earlier WHERE earlier.playlist_id=item.playlist_id AND earlier.sort_order<item.sort_order) FROM audio_playlist_items AS item WHERE item.playlist_id=?1 AND item.media_id=(SELECT media_id FROM audio_media WHERE path=?2 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?2)",params![id,path],|r|r.get(0)).optional()
     }
     pub fn playlist_items_page(
         c: &Connection,
@@ -157,13 +144,13 @@ pub(crate) mod io {
         offset: i64,
         limit: i64,
     ) -> rusqlite::Result<Vec<PlaylistItem>> {
-        c.prepare("SELECT id,playlist_id,audio_path,title,artist,duration_ms,sort_order,added_at,album_id FROM audio_playlist_items WHERE playlist_id=?1 ORDER BY sort_order LIMIT ?2 OFFSET ?3")?.query_map(params![id,limit,offset],item_row)?.collect()
+        c.prepare("SELECT p.id,p.playlist_id,m.path,m.title,m.artist,m.duration_ms,p.sort_order,p.added_at,m.album_id FROM audio_playlist_items p JOIN audio_media m USING(media_id) WHERE playlist_id=?1 ORDER BY sort_order,p.id LIMIT ?2 OFFSET ?3")?.query_map(params![id,limit,offset],item_row)?.collect()
     }
     pub fn all_playlist_items(c: &Connection) -> rusqlite::Result<Vec<PlaylistItem>> {
-        c.prepare("SELECT id,playlist_id,audio_path,title,artist,duration_ms,sort_order,added_at,album_id FROM audio_playlist_items")?.query_map([],item_row)?.collect()
+        c.prepare("SELECT p.id,p.playlist_id,m.path,m.title,m.artist,m.duration_ms,p.sort_order,p.added_at,m.album_id FROM audio_playlist_items p JOIN audio_media m USING(media_id)")?.query_map([],item_row)?.collect()
     }
     pub fn insert_playlist_item(c: &Connection, p: &PlaylistItem) -> rusqlite::Result<()> {
-        c.execute("INSERT INTO audio_playlist_items (id,playlist_id,audio_path,title,artist,duration_ms,sort_order,added_at,album_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![p.id,p.playlist_id,p.audio_path,p.title,p.artist,p.duration_ms,p.sort_order,p.added_at,p.album_id])?;
+        c.execute("INSERT INTO audio_playlist_items (id,playlist_id,media_id,sort_order,added_at) SELECT ?1,?2,media_id,?3,?4 FROM audio_media WHERE media_id IN (SELECT media_id FROM audio_media WHERE path=?5 UNION SELECT media_id FROM platform_audio_aliases WHERE path=?5)",params![p.id,p.playlist_id,p.sort_order,p.added_at,p.audio_path])?;
         Ok(())
     }
     pub fn delete_playlist_items(c: &Connection, id: &str) -> rusqlite::Result<()> {
@@ -172,7 +159,7 @@ pub(crate) mod io {
     }
     pub fn remove_playlist_item(c: &Connection, id: &str, path: &str) -> rusqlite::Result<()> {
         c.execute(
-            "DELETE FROM audio_playlist_items WHERE playlist_id=?1 AND audio_path=?2",
+            "DELETE FROM audio_playlist_items WHERE playlist_id=?1 AND media_id IN (SELECT media_id FROM audio_media WHERE path=?2 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?2)",
             params![id, path],
         )?;
         Ok(())
@@ -180,7 +167,7 @@ pub(crate) mod io {
     pub fn playlist_item_counts(
         c: &Connection,
     ) -> rusqlite::Result<std::collections::HashMap<String, usize>> {
-        c.prepare("SELECT playlist_id,COUNT(*) FROM audio_playlist_items GROUP BY playlist_id")?
+        c.prepare("SELECT playlist_id,COUNT(*) FROM audio_playlist_items p JOIN audio_media m USING(media_id) GROUP BY playlist_id")?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect()
     }
@@ -195,36 +182,36 @@ pub(crate) mod io {
         })
     }
     pub fn all_history(c: &Connection) -> rusqlite::Result<Vec<PlayHistory>> {
-        c.prepare("SELECT path,title,artist,duration_ms,play_count,played_at FROM audio_play_history ORDER BY played_at DESC,rowid DESC")?.query_map([],history_row)?.collect()
+        c.prepare("SELECT m.path,m.title,m.artist,m.duration_ms,h.play_count,h.played_at FROM media_play_history h JOIN audio_media m USING(media_id) ORDER BY h.played_at DESC,h.rowid DESC")?.query_map([],history_row)?.collect()
     }
     pub fn upsert_history(c: &Connection, p: &PlayHistory) -> rusqlite::Result<()> {
-        c.execute("INSERT INTO audio_play_history (path,title,artist,duration_ms,play_count,played_at) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(path) DO UPDATE SET title=?2,artist=?3,duration_ms=?4,play_count=?5,played_at=?6",params![p.path,p.title,p.artist,p.duration_ms,p.play_count,p.played_at])?;
+        c.execute("INSERT INTO media_play_history (media_id,position_ms,play_count,played_at) SELECT media_id,0,?2,?3 FROM audio_media WHERE path=?1 ON CONFLICT(media_id) DO UPDATE SET play_count=excluded.play_count,played_at=excluded.played_at",params![p.path,p.play_count,p.played_at])?;
         Ok(())
     }
     pub fn history_by_path(c: &Connection, path: &str) -> rusqlite::Result<Option<PlayHistory>> {
-        c.query_row("SELECT path,title,artist,duration_ms,play_count,played_at FROM audio_play_history WHERE path=?",[path],history_row).optional()
+        c.query_row("SELECT m.path,m.title,m.artist,m.duration_ms,h.play_count,h.played_at FROM media_play_history h JOIN audio_media m USING(media_id) WHERE m.path=?",[path],history_row).optional()
     }
     pub fn trim_history(c: &Connection, keep: usize) -> rusqlite::Result<()> {
-        c.execute("DELETE FROM audio_play_history WHERE path NOT IN (SELECT path FROM audio_play_history ORDER BY played_at DESC,rowid DESC LIMIT ?1)",[keep as i64])?;
+        c.execute("DELETE FROM media_play_history WHERE media_id IN (SELECT media_id FROM audio_media) AND media_id NOT IN (SELECT h.media_id FROM media_play_history h JOIN audio_media m USING(media_id) ORDER BY h.played_at DESC,h.rowid DESC LIMIT ?1)",[keep as i64])?;
         Ok(())
     }
     pub fn remove_playlist_items_by_paths(
         c: &Connection,
         paths: &[String],
     ) -> rusqlite::Result<()> {
-        c.execute("DELETE FROM audio_playlist_items WHERE audio_path IN (SELECT value FROM json_each(?1))",[serde_json::to_string(paths).unwrap()])?;
+        c.execute("DELETE FROM audio_playlist_items WHERE media_id IN (SELECT media_id FROM audio_media WHERE path IN (SELECT value FROM json_each(?1)))",[serde_json::to_string(paths).unwrap()])?;
         Ok(())
     }
     pub fn remove_history(c: &Connection, paths: &[String]) -> rusqlite::Result<()> {
         c.execute(
-            "DELETE FROM audio_play_history WHERE path IN (SELECT value FROM json_each(?1))",
+            "DELETE FROM media_play_history WHERE media_id IN (SELECT media_id FROM audio_media WHERE path IN (SELECT value FROM json_each(?1)))",
             [serde_json::to_string(paths).unwrap()],
         )?;
         Ok(())
     }
     pub fn remove_queue_paths(c: &Connection, paths: &[String]) -> rusqlite::Result<()> {
         c.execute(
-            "DELETE FROM audio_queue_items WHERE path IN (SELECT value FROM json_each(?1))",
+            "DELETE FROM audio_queue_items WHERE media_id IN (SELECT media_id FROM audio_media WHERE path IN (SELECT value FROM json_each(?1)))",
             [serde_json::to_string(paths).unwrap()],
         )?;
         Ok(())
@@ -232,6 +219,8 @@ pub(crate) mod io {
 }
 
 pub fn get_source(db: &Db) -> rusqlite::Result<QueueSource> {
+    db.restore_audio_current()
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     db.audio()
         .read(|state| db.with_conn(|c| io::get_source(c, state)))
 }

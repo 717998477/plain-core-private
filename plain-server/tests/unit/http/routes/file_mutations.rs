@@ -15,7 +15,7 @@ async fn strict_rename_rebinds_and_delete_cleans_confirmed_metadata_through_shar
     prefs.set("client_id", &"owner").unwrap();
     let server = ContentServer::start(&path, &token, prefs).unwrap();
     let db = plain_rs::db::Db::open(&path).unwrap();
-    db.with_conn(|c|{c.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES('image','old',3,'first',9,'image')",[])?;c.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES('file',?1,22,'first',9,'file')",[source.to_str().unwrap()])?;Ok::<_,rusqlite::Error>(())}).unwrap();
+    db.with_conn(|c|{c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('image','old',3,'first')",[])?;c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('file',?1,22,'first')",[source.to_str().unwrap()])?;Ok::<_,rusqlite::Error>(())}).unwrap();
     let mut socket = crate::host::events::TestHost::new(&server);
     let worker = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = socket.next().await {
@@ -83,7 +83,7 @@ async fn strict_rename_rebinds_and_delete_cleans_confirmed_metadata_through_shar
     db.with_conn(|c| {
         assert_eq!(
             c.query_row(
-                "SELECT key FROM tag_relations WHERE tag_id='image'",
+                "SELECT target_key FROM tag_relations WHERE tag_id='image'",
                 [],
                 |r| r.get::<_, String>(0)
             )?,
@@ -91,7 +91,7 @@ async fn strict_rename_rebinds_and_delete_cleans_confirmed_metadata_through_shar
         );
         assert_eq!(
             c.query_row(
-                "SELECT key FROM tag_relations WHERE tag_id='file'",
+                "SELECT target_key FROM tag_relations WHERE tag_id='file'",
                 [],
                 |r| r.get::<_, String>(0)
             )?,
@@ -140,7 +140,7 @@ async fn failed_rename_postprocessing_is_visible_and_is_not_replayed_after_core_
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&temp.path().join("prefs.json")).unwrap());
     prefs.set("client_id", "owner").unwrap();
     let db = plain_rs::db::Db::open(&db_path).unwrap();
-    db.with_conn(|c| c.execute("INSERT INTO tag_relations(tag_id,key,type,created_at,size,title) VALUES('tag',?1,22,'first',7,'file')", [source.to_str().unwrap()])).unwrap();
+    db.with_conn(|c| c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('tag',?1,22,'first')", [source.to_str().unwrap()])).unwrap();
     async fn host(server: &ContentServer, fail: bool) -> tokio::task::JoinHandle<()> {
         let mut socket = crate::host::events::TestHost::new(server);
         tokio::spawn(async move {
@@ -188,7 +188,7 @@ async fn failed_rename_postprocessing_is_visible_and_is_not_replayed_after_core_
     assert_eq!(failed.completed_ops[0].dst, destination.to_str().unwrap());
     db.with_conn(|c| {
         c.query_row(
-            "SELECT key FROM tag_relations WHERE tag_id='tag'",
+            "SELECT target_key FROM tag_relations WHERE tag_id='tag'",
             [],
             |row| row.get::<_, String>(0),
         )
@@ -211,7 +211,7 @@ async fn failed_rename_postprocessing_is_visible_and_is_not_replayed_after_core_
     );
     db.with_conn(|c| {
         c.query_row(
-            "SELECT key FROM tag_relations WHERE tag_id='tag'",
+            "SELECT target_key FROM tag_relations WHERE tag_id='tag'",
             [],
             |row| row.get::<_, String>(0),
         )

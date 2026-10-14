@@ -398,6 +398,9 @@ type MediaHostDuration {
 	type: DataType!
 	mediaId: ID!
 	durationMs: Long!
+	path: String!
+	sizeBytes: Long!
+	modifiedAt: Instant!
 	updatedAt: Instant!
 }
 
@@ -474,6 +477,7 @@ type Mutation {
 	audioPlayTrack(track: AudioHostTrackInput!, enqueue: Boolean!): AudioPlayback!
 	audioPlayPath(path: String!): AudioPlayback!
 	saveVideoPlayProgress(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
+	recordVideoPlay(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
 	deleteVideoPlayProgress(mediaId: ID!): Boolean!
 	createShare(name: String!, realPaths: [String!]!, readOnly: Boolean!, expiresAt: Instant): ShareRecord!
 	updateShare(id: ID!, name: String!, expiresAt: Instant, realPaths: [String!]): ShareRecord!
@@ -522,7 +526,7 @@ type Mutation {
 	tagHostRemoveKeys(type: DataType!, keys: [String!]!): Boolean!
 	tagHostClearType(type: DataType!): Boolean!
 	tagHostClearTag(id: ID!): Boolean!
-	mediaHostSaveDuration(type: DataType!, mediaId: ID!, durationMs: Long!): Boolean!
+	mediaHostSaveDuration(type: DataType!, mediaId: ID!, durationMs: Long!, path: String!, sizeBytes: Long!, modifiedAt: Instant!): Boolean!
 	mediaHostRemoveDurations(type: DataType!, mediaIds: [ID!]!): Long!
 	imageHostSaveEmbeddings(items: [ImageHostEmbeddingInput!]!): Boolean!
 	imageHostRemoveEmbeddings(ids: [ID!]!): Long!

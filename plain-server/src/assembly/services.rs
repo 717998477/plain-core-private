@@ -4,6 +4,7 @@ pub(crate) struct Services {
     pub archives: Arc<crate::services::files::archives::Archives>,
     pub app_files: Arc<plain_rs::files::app_files::FileStore>,
     pub shares: Arc<plain_rs::files::shares::Service>,
+    pub duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     pub media_actions: Arc<crate::services::files::media_actions::MediaActions>,
     pub files: Arc<crate::services::files::file_tasks::FileTasks>,
     pub audio: Arc<crate::services::audio::host::Audio>,
@@ -68,6 +69,9 @@ impl Services {
         directory: std::path::PathBuf,
         shared: crate::assembly::shared_services::SharedServices,
     ) -> Self {
+        let duration_cache = Arc::new(plain_rs::media::duration_cache::DurationCache::new(
+            &directory,
+        ));
         let audio = Arc::new(crate::services::audio::host::Audio::new(
             db.clone(),
             host.clone(),
@@ -82,6 +86,7 @@ impl Services {
             audio.clone(),
             index.clone(),
             prefs.clone(),
+            duration_cache.clone(),
         ));
         let app_files = plain_rs::files::app_files::FileStore::new(db.clone(), directory.clone());
         let shares = plain_rs::files::shares::Service::new(db.clone(), prefs.clone());
@@ -92,8 +97,10 @@ impl Services {
             index.clone(),
             prefs,
             events,
+            duration_cache.clone(),
         ));
         Self {
+            duration_cache,
             archives: Arc::new(crate::services::files::archives::Archives::new(
                 directory.join("archives"),
             )),
@@ -131,6 +138,7 @@ impl Services {
             .data(host)
             .data(prefs)
             .data(events)
+            .data(self.duration_cache)
             .data(self.app_files)
             .data(self.shares)
             .data(self.media_actions)

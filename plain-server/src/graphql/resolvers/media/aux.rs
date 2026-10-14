@@ -2,19 +2,21 @@ use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
 use async_graphql::{Context, ID, InputObject, Object, Result, SimpleObject};
 use plain_rs::db::Db;
-use plain_rs::db::MediaItemRow;
 use plain_rs::enums::DataType;
+use plain_rs::media::duration_cache::{Duration, DurationCache};
 use plain_rs::media::images::embeddings;
-use plain_rs::media::metadata;
 use std::sync::Arc;
 #[derive(SimpleObject)]
 struct MediaHostDuration {
     r#type: DataType,
     media_id: ID,
     duration_ms: Long,
+    path: String,
+    size_bytes: Long,
+    modified_at: Instant,
     updated_at: Instant,
 }
-fn duration(row: MediaItemRow) -> Result<MediaHostDuration> {
+fn duration(row: Duration) -> Result<MediaHostDuration> {
     let kind = match row.media_type.as_str() {
         "audio" => DataType::Audio,
         "video" => DataType::Video,
@@ -24,6 +26,9 @@ fn duration(row: MediaItemRow) -> Result<MediaHostDuration> {
         r#type: kind,
         media_id: row.media_id.into(),
         duration_ms: Long(row.duration_ms),
+        path: row.path,
+        size_bytes: Long(row.size_bytes),
+        modified_at: crate::graphql::resolvers::common::content_common::instant(&row.modified_at)?,
         updated_at: crate::graphql::resolvers::common::content_common::instant(&row.updated_at)?,
     })
 }
@@ -52,7 +57,8 @@ pub struct MediaAuxQuery;
 #[Object]
 impl MediaAuxQuery {
     async fn media_host_durations(&self, ctx: &Context<'_>) -> Result<Vec<MediaHostDuration>> {
-        metadata::all(ctx.data::<Arc<Db>>()?)?
+        ctx.data::<Arc<DurationCache>>()?
+            .all()?
             .into_iter()
             .map(duration)
             .collect()
@@ -97,13 +103,19 @@ impl MediaAuxMutation {
         r#type: DataType,
         media_id: ID,
         duration_ms: Long,
+        path: String,
+        size_bytes: Long,
+        modified_at: Instant,
     ) -> Result<bool> {
-        metadata::save(
-            ctx.data::<Arc<Db>>()?,
-            r#type.media_type_str().ok_or("invalid media type")?,
-            media_id.as_str(),
-            duration_ms.0,
-        )?;
+        ctx.data::<Arc<DurationCache>>()?.save(Duration {
+            media_type: r#type.media_type_str().ok_or("invalid media type")?.into(),
+            media_id: media_id.to_string(),
+            duration_ms: duration_ms.0,
+            path,
+            size_bytes: size_bytes.0,
+            modified_at: modified_at.0.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            updated_at: String::new(),
+        })?;
         Ok(true)
     }
     async fn media_host_remove_durations(
@@ -113,15 +125,15 @@ impl MediaAuxMutation {
         media_ids: Vec<ID>,
     ) -> Result<Long> {
         Ok(Long(
-            metadata::delete(
-                ctx.data::<Arc<Db>>()?,
-                r#type.media_type_str().ok_or("invalid media type")?,
-                &media_ids
-                    .into_iter()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<_>>(),
-            )?
-            .try_into()?,
+            ctx.data::<Arc<DurationCache>>()?
+                .remove(
+                    r#type.media_type_str().ok_or("invalid media type")?,
+                    &media_ids
+                        .into_iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>(),
+                )?
+                .try_into()?,
         ))
     }
     async fn image_host_save_embeddings(

@@ -40,7 +40,7 @@ pub(crate) fn prepare(
         ChannelSystemMessageType::InviteAccept
             | ChannelSystemMessageType::InviteDecline
             | ChannelSystemMessageType::Leave
-    ) && (target.is_empty() || target != channel.owner_id)
+    ) && (target.is_empty() || Some(target) != channel.owner_id.as_deref())
     {
         bail!("Invalid channel owner destination");
     }

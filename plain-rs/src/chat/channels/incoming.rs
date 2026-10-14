@@ -138,7 +138,7 @@ pub fn receive(db: &Db, actor: &str, from: &str, kind: Type, payload: &str) -> R
                 let new = current.is_none();
                 let mut channel = match current {
                     Some(channel) => {
-                        if channel.owner_id != from {
+                        if channel.owner_id.as_deref() != Some(from) {
                             bail!("Channel owner mismatch");
                         }
                         if !matches!(channel.status, ChannelStatus::Left | ChannelStatus::Kicked) {
@@ -178,7 +178,7 @@ pub fn receive(db: &Db, actor: &str, from: &str, kind: Type, payload: &str) -> R
             Type::Update => {
                 let msg: ChannelUpdate = serde_json::from_value(value)?;
                 let mut channel = current.ok_or_else(|| anyhow::anyhow!("Unknown channel"))?;
-                if channel.owner_id != from {
+                if channel.owner_id.as_deref() != Some(from) {
                     bail!("Update sender is not owner");
                 }
                 let owner = store::peer(&tx, from)?
@@ -227,7 +227,7 @@ pub fn receive(db: &Db, actor: &str, from: &str, kind: Type, payload: &str) -> R
                     )?;
                 }
                 if let Some(mut channel) = current {
-                    if channel.owner_id != from {
+                    if channel.owner_id.as_deref() != Some(from) {
                         bail!("Kick sender is not owner");
                     }
                     if msg.version < channel.version {
@@ -262,7 +262,7 @@ pub fn receive(db: &Db, actor: &str, from: &str, kind: Type, payload: &str) -> R
             }
             Type::InviteAccept | Type::InviteDecline | Type::Leave => {
                 let mut channel = current.ok_or_else(|| anyhow::anyhow!("Unknown channel"))?;
-                if channel.owner_id != actor || from == actor {
+                if channel.owner_id.as_deref() != Some(actor) || from == actor {
                     bail!("Invalid member message ownership");
                 }
                 let mut members = store::members(&channel.members)?;

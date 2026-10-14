@@ -9,13 +9,13 @@ fn metadata(path: &str) -> MediaFileMetadata {
         bucket_id: "photos".into(),
         size_bytes: 10,
         duration_ms: 0,
-        album_file_id: String::new(),
+        cover_image_id: None,
         width: 640,
         height: 480,
         rotation: 0,
         taken_at: None,
-        created_at: "2026-10-12T00:00:00Z".into(),
-        updated_at: "2026-10-12T00:00:00Z".into(),
+        created_at: "2026-10-12T00:00:00.000Z".into(),
+        updated_at: "2026-10-12T00:00:00.000Z".into(),
     }
 }
 
@@ -27,21 +27,21 @@ fn rescanning_preserves_identity_created_time_and_business_flags() {
     let original = db.record_media_files(&[file.clone()]).unwrap().remove(0);
     db.with_conn(|conn| {
         conn.execute(
-            "UPDATE media_files SET is_favorite=1,is_trashed=1,original_path=path WHERE id=?1",
+            "UPDATE media_items SET favorited=1,trashed=1,original_path=path WHERE id=?1",
             [&original.id],
         )
     })
     .unwrap();
     file.title = "Updated".into();
     file.size_bytes = 20;
-    file.created_at = "2026-10-13T00:00:00Z".into();
+    file.created_at = "2026-10-13T00:00:00.000Z".into();
     file.updated_at = file.created_at.clone();
     let updated = db.record_media_files(&[file]).unwrap().remove(0);
     assert_eq!(updated.id, original.id);
     assert_eq!(updated.created_at, original.created_at);
     assert_eq!(updated.title, "Updated");
     assert_eq!(updated.size_bytes, 20);
-    assert!(updated.is_favorite && updated.is_trashed);
+    assert!(updated.favorited && updated.trashed);
     assert_eq!(updated.original_path.as_deref(), Some("/photos/one.jpg"));
     assert_eq!(db.media_file_count(DataType::Image).unwrap(), 0);
     assert!(
@@ -82,15 +82,15 @@ fn unavailable_probe_fields_preserve_current_metadata_but_successful_empty_value
     let mut known = metadata("/photos/one.jpg");
     known.artist = "Artist".into();
     known.duration_ms = 12_000;
-    known.album_file_id = "album".into();
+    known.cover_image_id = Some("album".into());
     known.rotation = 90;
-    known.taken_at = Some("2026-10-11T00:00:00Z".into());
+    known.taken_at = Some("2026-10-11T00:00:00.000Z".into());
     let original = db.record_media_files(&[known.clone()]).unwrap().remove(0);
     let mut unknown = metadata(&known.path);
     unknown.title = "Filename fallback".into();
     unknown.artist.clear();
     unknown.duration_ms = 0;
-    unknown.album_file_id.clear();
+    unknown.cover_image_id = None;
     unknown.width = 0;
     unknown.height = 0;
     unknown.rotation = 0;
@@ -107,7 +107,7 @@ fn unavailable_probe_fields_preserve_current_metadata_but_successful_empty_value
     assert_eq!(preserved.title, known.title);
     assert_eq!(preserved.artist, known.artist);
     assert_eq!(preserved.duration_ms, known.duration_ms);
-    assert_eq!(preserved.album_file_id, known.album_file_id);
+    assert_eq!(preserved.cover_image_id, known.cover_image_id);
     assert_eq!(
         (preserved.width, preserved.height, preserved.rotation),
         (known.width, known.height, known.rotation)
@@ -124,7 +124,7 @@ fn unavailable_probe_fields_preserve_current_metadata_but_successful_empty_value
     assert_eq!(cleared.title, "Filename fallback");
     assert!(cleared.artist.is_empty());
     assert_eq!(cleared.duration_ms, 0);
-    assert!(cleared.album_file_id.is_empty());
+    assert!(cleared.cover_image_id.is_none());
     assert_eq!((cleared.width, cleared.height, cleared.rotation), (0, 0, 0));
     assert_eq!(cleared.taken_at, None);
     assert_eq!(cleared.id, original.id);

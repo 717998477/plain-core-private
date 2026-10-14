@@ -36,10 +36,10 @@ fn save(db: &Db, media: &scan::MediaFile) {
     .unwrap();
 }
 fn references(db: &SqlDb, media: &scan::MediaFile) {
+    fixtures::register_audio(db,&plain_rs::media::audio::queue::AudioTrack::from_path_stem(&media.path));
     db.with_conn(|c| {
-        c.execute("INSERT INTO audio_queue_items(path,sort_order,title,artist,duration_ms) VALUES(?1,0,'synthetic','',10)",[&media.path])?;
-        c.execute("INSERT INTO media_item(media_type,media_id,duration_ms,updated_at) VALUES('audio',?1,10,'now')",[&media.uuid])?;
-        c.execute("INSERT INTO tag_relations(tag_id,key,type,title,size,created_at) VALUES('synthetic',?1,1,'',1,'now'),('synthetic',?1,2,'',1,'now')",[&media.uuid])?;
+        c.execute("INSERT INTO audio_queue_items(media_id,sort_order) SELECT id,0 FROM media_items WHERE path=?1",[&media.path])?;
+        c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('synthetic',?1,1,'now'),('synthetic',?1,2,'now')",[&media.uuid])?;
         Ok::<_,rusqlite::Error>(())
     }).unwrap();
 }
@@ -73,14 +73,9 @@ async fn physical_failure_preserves_references_and_partial_success_is_visible() 
     library
         .with_conn(|c| {
             assert_eq!(
-                c.query_row("SELECT path FROM audio_queue_items", [], |r| r
+                c.query_row("SELECT m.path FROM audio_queue_items q JOIN audio_media m USING(media_id)", [], |r| r
                     .get::<_, String>(0))?,
                 failed.path
-            );
-            assert_eq!(
-                c.query_row("SELECT media_id FROM media_item", [], |r| r
-                    .get::<_, String>(0))?,
-                failed.uuid
             );
             assert_eq!(
                 c.query_row("SELECT count(*) FROM tag_relations WHERE type=1", [], |r| r

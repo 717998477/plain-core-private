@@ -400,7 +400,7 @@ impl<T: PeerTransport + 'static> PairingManager<T> {
                     }
                 };
                 log::info!(
-                    "local_pairing: inserting peer id={} name={} ip={} port={} device_type={}",
+                    "local_pairing: inserting peer id={} name={} ip={} port={:?} device_type={}",
                     peer.id,
                     peer.name,
                     peer.ip,

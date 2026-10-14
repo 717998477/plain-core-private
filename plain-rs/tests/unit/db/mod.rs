@@ -21,6 +21,13 @@ pub fn unique_tmp_dir(label: &str) -> std::path::PathBuf {
 #[test]
 fn open_creates_every_table_once() {
     let db = test_db("open_tables");
+    assert_eq!(
+        db.with_conn(
+            |conn| conn.pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+        )
+        .unwrap(),
+        1
+    );
     let tables: Vec<String> = db.with_conn(|conn| {
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -31,11 +38,10 @@ fn open_creates_every_table_once() {
             .collect()
     });
     for expected in [
-        "audio_queue_source",
         "audio_queue_items",
         "audio_playlists",
         "audio_playlist_items",
-        "audio_play_history",
+        "media_play_history",
         "tags",
         "tag_relations",
         "favorite_folders",
@@ -47,6 +53,7 @@ fn open_creates_every_table_once() {
     }
     assert!(!tables.iter().any(|t| t == "settings"));
     assert!(!tables.iter().any(|t| t == "audio_playback"));
+    for removed in ["audio_queue_source","audio_play_history","video_play_progress"] { assert!(!tables.iter().any(|table|table==removed)); }
     for removed in [
         "file_tasks",
         "file_deletions",

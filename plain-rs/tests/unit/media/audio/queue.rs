@@ -15,14 +15,14 @@ use fixtures::*;
 #[test]
 fn enqueue_appends_moves_and_never_duplicates() {
     let db = test_db("enqueue");
-    enqueue(
+    indexed_enqueue(
         &db,
         &[audio("/tq1/a.mp3", "A", 1), audio("/tq1/b.mp3", "B", 2)],
         false,
     )
     .unwrap();
     // Re-enqueueing an existing path re-appends it (dedup, no duplicate).
-    enqueue(
+    indexed_enqueue(
         &db,
         &[audio("/tq1/b.mp3", "B", 2), audio("/tq1/c.mp3", "C", 3)],
         false,
@@ -34,7 +34,7 @@ fn enqueue_appends_moves_and_never_duplicates() {
         ["/tq1/a.mp3", "/tq1/b.mp3", "/tq1/c.mp3"]
     );
     // play_next inserts at the front.
-    enqueue(&db, &[audio("/tq1/z.mp3", "Z", 9)], true).unwrap();
+    indexed_enqueue(&db, &[audio("/tq1/z.mp3", "Z", 9)], true).unwrap();
     let queued = crate::db::audio_queue::all_queue_items(&db).unwrap();
     assert_eq!(queued[0].path, "/tq1/z.mp3");
     // Positions stay dense.
@@ -46,7 +46,7 @@ fn enqueue_appends_moves_and_never_duplicates() {
 #[test]
 fn reorder_puts_known_first_and_keeps_unknown_at_end() {
     let db = test_db("reorder");
-    enqueue(
+    indexed_enqueue(
         &db,
         &[
             audio("/tq2/a.mp3", "A", 1),
@@ -75,22 +75,22 @@ fn reorder_puts_known_first_and_keeps_unknown_at_end() {
 #[test]
 fn remove_paths_prunes_queue_history_playlist_items_and_current() {
     let db = test_db("remove_paths");
-    enqueue(
+    indexed_enqueue(
         &db,
         &[audio("/tq3/a.mp3", "A", 1), audio("/tq3/b.mp3", "B", 2)],
         false,
     )
     .unwrap();
     let pl = create_playlist(&db, "PL").unwrap();
-    add_playlist_items(
+    indexed_add_playlist_items(
         &db,
         &pl.id,
         &[audio("/tq3/a.mp3", "A", 1), audio("/tq3/keep.mp3", "K", 5)],
     )
     .unwrap();
-    on_playing(&db, "/tq3/stay.mp3", "S", "A", 9).unwrap();
+    indexed_on_playing(&db, "/tq3/stay.mp3", "S", "A", 9).unwrap();
     // a.mp3 plays last → it is the current track when removed.
-    on_playing(&db, "/tq3/a.mp3", "A", "A", 1).unwrap();
+    indexed_on_playing(&db, "/tq3/a.mp3", "A", "A", 1).unwrap();
 
     remove_paths(&db, &["/tq3/a.mp3".to_string()]).unwrap();
 
@@ -124,7 +124,7 @@ fn playlist_crud_items_and_counts() {
     let pl = create_playlist(&db, "Roadtrip").unwrap();
     assert_eq!(pl.name, "Roadtrip");
     assert_eq!(
-        add_playlist_items(
+        indexed_add_playlist_items(
             &db,
             &pl.id,
             &[
@@ -173,7 +173,7 @@ fn playlist_crud_items_and_counts() {
 fn deleting_active_playlist_resets_source() {
     let db = test_db("delete_active_pl");
     let pl = create_playlist(&db, "P").unwrap();
-    add_playlist_items(&db, &pl.id, &[audio("/tq6/a.mp3", "A", 1)]).unwrap();
+    indexed_add_playlist_items(&db, &pl.id, &[audio("/tq6/a.mp3", "A", 1)]).unwrap();
     set_playlist_source(&db, &pl.id, None).unwrap();
     assert_eq!(
         active_playlist_id(&db).unwrap().as_deref(),
@@ -199,7 +199,8 @@ fn deleting_active_playlist_resets_source() {
 fn text_filter_precedes_pagination_on_queue_playlist_and_history() {
     let db = test_db("text_filter");
     let mut lib = FakeLibrary::new(&[]);
-    enqueue(
+    register_audio_tracks(&db,&lib.tracks);
+    indexed_enqueue(
         &db,
         &[
             audio("/tf/road song.mp3", "Road Song", 1),
@@ -229,7 +230,7 @@ fn text_filter_precedes_pagination_on_queue_playlist_and_history() {
 
     // Playlist items: same matching rules.
     let pl = create_playlist(&db, "mix").unwrap();
-    add_playlist_items(
+    indexed_add_playlist_items(
         &db,
         &pl.id,
         &[
@@ -248,8 +249,8 @@ fn text_filter_precedes_pagination_on_queue_playlist_and_history() {
     );
 
     // History: artist substring matches, empty needle keeps everything.
-    on_playing(&db, "/tf/road song.mp3", "Road Song", "Ferry", 1).unwrap();
-    on_playing(&db, "/tf/zzz.mp3", "Zzz", "Other", 3).unwrap();
+    indexed_on_playing(&db, "/tf/road song.mp3", "Road Song", "Ferry", 1).unwrap();
+    indexed_on_playing(&db, "/tf/zzz.mp3", "Zzz", "Other", 3).unwrap();
     let rows = history_page(&db, 0, 10, "ferry").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].path, "/tf/road song.mp3");
@@ -259,8 +260,8 @@ fn text_filter_precedes_pagination_on_queue_playlist_and_history() {
 #[test]
 fn history_upserts_play_count_and_trims_to_keep() {
     let db = test_db("history_trim");
-    on_playing(&db, "/tq7/a.mp3", "A", "X", 1).unwrap();
-    on_playing(&db, "/tq7/a.mp3", "A2", "X", 2).unwrap();
+    indexed_on_playing(&db, "/tq7/a.mp3", "A", "X", 1).unwrap();
+    indexed_on_playing(&db, "/tq7/a.mp3", "A2", "X", 2).unwrap();
     let h = crate::db::audio_queue::history_by_path(&db, "/tq7/a.mp3")
         .unwrap()
         .unwrap();
@@ -272,7 +273,7 @@ fn history_upserts_play_count_and_trims_to_keep() {
     // insert that crosses the threshold. 2 pre-existing rows + 252 inserts
     // end at 202 (the last insert lands at 202 ≤ 250, no further trim).
     for i in 0..(HISTORY_KEEP * 5 / 4 + 2) {
-        on_playing(&db, &format!("/tq7/x{i}.mp3"), "T", "X", 1).unwrap();
+        indexed_on_playing(&db, &format!("/tq7/x{i}.mp3"), "T", "X", 1).unwrap();
     }
     assert_eq!(
         crate::db::audio_queue::all_history(&db).unwrap().len(),
@@ -297,8 +298,9 @@ fn history_upserts_play_count_and_trims_to_keep() {
 fn queue_page_orders_head_manual_and_tail() {
     let db = test_db("order_head_tail");
     let mut lib = FakeLibrary::new(&[]);
+    register_audio_tracks(&db,&lib.tracks);
     let pl = create_playlist(&db, "P").unwrap();
-    add_playlist_items(
+    indexed_add_playlist_items(
         &db,
         &pl.id,
         &[
@@ -311,7 +313,7 @@ fn queue_page_orders_head_manual_and_tail() {
     .unwrap();
     // Start at p3: head p1..p3, then manual queue, then tail p4.
     set_playlist_source(&db, &pl.id, Some("/tq8/p3.mp3")).unwrap();
-    enqueue(&db, &[audio("/tq8/m1.mp3", "M1", 9)], false).unwrap();
+    indexed_enqueue(&db, &[audio("/tq8/m1.mp3", "M1", 9)], false).unwrap();
 
     let page = queue_page(&db, &mut lib, 0, 10, "").unwrap();
     assert_eq!(
@@ -344,8 +346,9 @@ fn queue_page_orders_head_manual_and_tail() {
 fn superseded_source_copy_hidden_from_queue() {
     let db = test_db("superseded");
     let mut lib = FakeLibrary::new(&[]);
+    register_audio_tracks(&db,&lib.tracks);
     let pl = create_playlist(&db, "P").unwrap();
-    add_playlist_items(
+    indexed_add_playlist_items(
         &db,
         &pl.id,
         &[
@@ -359,7 +362,7 @@ fn superseded_source_copy_hidden_from_queue() {
     // Manually queue the tail track: its source copy is superseded, the
     // manual slot plays — the queue renders it exactly once, right after
     // the head, and the superseded tail copy is hidden.
-    enqueue(&db, &[audio("/tq9/p3.mp3", "P3", 3)], false).unwrap();
+    indexed_enqueue(&db, &[audio("/tq9/p3.mp3", "P3", 3)], false).unwrap();
     let page = queue_page(&db, &mut lib, 0, 10, "").unwrap();
     assert_eq!(
         paths_of(&page),
@@ -372,8 +375,9 @@ fn superseded_source_copy_hidden_from_queue() {
 fn resolve_next_walks_order_and_skips_superseded() {
     let db = test_db("resolve_next");
     let mut lib = FakeLibrary::new(&[]);
+    register_audio_tracks(&db,&lib.tracks);
     let pl = create_playlist(&db, "P").unwrap();
-    add_playlist_items(
+    indexed_add_playlist_items(
         &db,
         &pl.id,
         &[
@@ -386,7 +390,7 @@ fn resolve_next_walks_order_and_skips_superseded() {
     set_playlist_source(&db, &pl.id, Some("/tqA/p2.mp3")).unwrap();
     // Manually queue a track that is NOT in the playlist: it plays right
     // after the head, then the source tail continues, then it wraps.
-    enqueue(&db, &[audio("/tqA/m9.mp3", "M9", 9)], false).unwrap();
+    indexed_enqueue(&db, &[audio("/tqA/m9.mp3", "M9", 9)], false).unwrap();
 
     let next = resolve_next(&db, &mut lib, true, false).unwrap().unwrap();
     assert_eq!(next.path, "/tqA/m9.mp3");
@@ -404,7 +408,7 @@ fn resolve_next_walks_order_and_skips_superseded() {
     assert_eq!(prev2.path, "/tqA/p2.mp3");
 
     let pl2 = create_playlist(&db, "Q").unwrap();
-    add_playlist_items(
+    indexed_add_playlist_items(
         &db,
         &pl2.id,
         &[
@@ -415,7 +419,7 @@ fn resolve_next_walks_order_and_skips_superseded() {
     )
     .unwrap();
     set_playlist_source(&db, &pl2.id, Some("/tqA/q2.mp3")).unwrap();
-    enqueue(&db, &[audio("/tqA/q3.mp3", "Q3", 3)], false).unwrap();
+    indexed_enqueue(&db, &[audio("/tqA/q3.mp3", "Q3", 3)], false).unwrap();
     assert_eq!(
         resolve_next(&db, &mut lib, true, false)
             .unwrap()
@@ -438,6 +442,7 @@ fn library_source_resolves_and_pages_in_order() {
         ("/tqB/t2.mp3", 10),
         ("/tqB/t3.mp3", 10),
     ]);
+    register_audio_tracks(&db,&lib.tracks);
 
     // No start path: first track.
     let start = set_library_source(&db, &mut lib, None, false, "DATE_DESC")
@@ -462,7 +467,7 @@ fn library_source_resolves_and_pages_in_order() {
     // A manually queued library track supersedes its source copy: the tail
     // renders without it and the manual slot carries it right after the
     // current track (t1, position 0).
-    enqueue(&db, &[audio("/tqB/t2.mp3", "T2", 2)], false).unwrap();
+    indexed_enqueue(&db, &[audio("/tqB/t2.mp3", "T2", 2)], false).unwrap();
     assert_eq!(queue_total(&db, &mut lib).unwrap(), 3);
     assert_eq!(
         paths_of(&queue_page(&db, &mut lib, 0, 10, "").unwrap()),
@@ -480,10 +485,11 @@ fn library_source_resolves_and_pages_in_order() {
 fn manual_jump_breaks_cached_library_position() {
     let db = test_db("manual_jump");
     let mut lib = FakeLibrary::new(&[("/tqF/a.mp3", 1), ("/tqF/b.mp3", 1), ("/tqF/c.mp3", 1)]);
+    register_audio_tracks(&db,&lib.tracks);
     set_library_source(&db, &mut lib, Some("/tqF/b.mp3"), false, "DATE_DESC").unwrap();
     assert_eq!(source(&db).unwrap().current_index, 1);
     // Manual jump to c: index marked unknown.
-    on_playing(&db, "/tqF/c.mp3", "C", "A", 1).unwrap();
+    indexed_on_playing(&db, "/tqF/c.mp3", "C", "A", 1).unwrap();
     assert_eq!(source(&db).unwrap().current_index, -1);
     assert_eq!(source(&db).unwrap().current_path, "/tqF/c.mp3");
     // The next order computation re-locates c lazily and persists pos 2.
@@ -575,8 +581,8 @@ fn state_survives_reopen() {
     {
         let db = crate::db::Db::open(&path).unwrap();
         let pl = create_playlist(&db, "Persist").unwrap();
-        add_playlist_items(&db, &pl.id, &[audio("/p/a.mp3", "A", 1)]).unwrap();
-        on_playing(&db, "/p/a.mp3", "A", "X", 1).unwrap();
+        indexed_add_playlist_items(&db, &pl.id, &[audio("/p/a.mp3", "A", 1)]).unwrap();
+        indexed_on_playing(&db, "/p/a.mp3", "A", "X", 1).unwrap();
     }
     let db = crate::db::Db::open(&path).unwrap();
     let listed = playlists(&db).unwrap();
@@ -587,16 +593,16 @@ fn state_survives_reopen() {
 }
 
 #[test]
-fn milliseconds_and_album_snapshot_survive_restart() {
+fn milliseconds_survive_restart_without_persisting_album_snapshots() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("audio.db");
     let db = crate::db::Db::open(&path).unwrap();
     let pl = create_playlist(&db, "Precise").unwrap();
     let mut item = audio("/precise.mp3", "Precise", 117_123);
     item.album_id = "album-42".into();
-    add_playlist_items(&db, &pl.id, std::slice::from_ref(&item)).unwrap();
-    enqueue(&db, std::slice::from_ref(&item), false).unwrap();
-    on_playing(&db, &item.path, &item.title, &item.artist, item.duration_ms).unwrap();
+    indexed_add_playlist_items(&db, &pl.id, std::slice::from_ref(&item)).unwrap();
+    indexed_enqueue(&db, std::slice::from_ref(&item), false).unwrap();
+    indexed_on_playing(&db, &item.path, &item.title, &item.artist, item.duration_ms).unwrap();
     drop(db);
     let db = crate::db::Db::open(&path).unwrap();
     assert_eq!(
@@ -607,7 +613,7 @@ fn milliseconds_and_album_snapshot_survive_restart() {
         .unwrap()
         .remove(0);
     assert_eq!(saved.duration_ms, 117_123);
-    assert_eq!(saved.album_id, "album-42");
+    assert_eq!(saved.album_id, "");
     assert_eq!(
         history_page(&db, 0, 10, "").unwrap()[0].duration_ms,
         117_123
@@ -617,8 +623,8 @@ fn milliseconds_and_album_snapshot_survive_restart() {
 #[test]
 fn duplicate_enqueue_uses_last_snapshot_and_preserves_other_tracks() {
     let db = test_db("queue_duplicates");
-    enqueue(&db, &[audio("/old", "Old", 1)], false).unwrap();
-    enqueue(
+    indexed_enqueue(&db, &[audio("/old", "Old", 1)], false).unwrap();
+    indexed_enqueue(
         &db,
         &[audio("/new", "First", 17), audio("/new", "Latest", 123)],
         true,
@@ -639,10 +645,10 @@ fn duplicate_enqueue_uses_last_snapshot_and_preserves_other_tracks() {
 #[test]
 fn failed_queue_and_playlist_batch_writes_roll_back() {
     let db = test_db("rollback_batch");
-    enqueue(&db, &[audio("/old", "Old", 1)], false).unwrap();
-    db.with_conn(|c|c.execute_batch("CREATE TRIGGER reject_queue BEFORE INSERT ON audio_queue_items WHEN NEW.path='/bad' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
+    indexed_enqueue(&db, &[audio("/old", "Old", 1)], false).unwrap();
+    db.with_conn(|c|c.execute_batch("CREATE TRIGGER reject_queue BEFORE INSERT ON audio_queue_items WHEN NEW.media_id='test:/bad' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
     assert!(
-        enqueue(
+        indexed_enqueue(
             &db,
             &[audio("/ok", "Ok", 2), audio("/bad", "Bad", 3)],
             false
@@ -658,9 +664,9 @@ fn failed_queue_and_playlist_batch_writes_roll_back() {
         vec!["/old"]
     );
     let pl = create_playlist(&db, "List").unwrap();
-    db.with_conn(|c|c.execute_batch("CREATE TRIGGER reject_playlist BEFORE INSERT ON audio_playlist_items WHEN NEW.audio_path='/bad' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
+    db.with_conn(|c|c.execute_batch("CREATE TRIGGER reject_playlist BEFORE INSERT ON audio_playlist_items WHEN NEW.media_id='test:/bad' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
     assert!(
-        add_playlist_items(
+        indexed_add_playlist_items(
             &db,
             &pl.id,
             &[audio("/ok", "Ok", 2), audio("/bad", "Bad", 3)]
@@ -668,14 +674,14 @@ fn failed_queue_and_playlist_batch_writes_roll_back() {
         .is_err()
     );
     assert_eq!(playlist_item_count(&db, &pl.id).unwrap(), 0);
-    assert!(add_playlist_items(&db, "unknown", &[audio("/ok", "Ok", 2)]).is_err());
+    assert!(indexed_add_playlist_items(&db, "unknown", &[audio("/ok", "Ok", 2)]).is_err());
 }
 
 #[test]
 fn failed_playback_and_playlist_deletion_preserve_source() {
     let db = test_db("rollback_source");
     let pl = create_playlist(&db, "List").unwrap();
-    add_playlist_items(
+    indexed_add_playlist_items(
         &db,
         &pl.id,
         &[audio("/one", "One", 123), audio("/two", "Two", 456)],
@@ -683,8 +689,8 @@ fn failed_playback_and_playlist_deletion_preserve_source() {
     .unwrap();
     set_playlist_source(&db, &pl.id, None).unwrap();
     let old = source(&db).unwrap();
-    db.with_conn(|c|c.execute_batch("CREATE TRIGGER reject_history BEFORE INSERT ON audio_play_history BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
-    assert!(on_playing(&db, "/two", "Two", "", 456).is_err());
+    db.with_conn(|c|c.execute_batch("CREATE TRIGGER reject_history BEFORE INSERT ON media_play_history BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
+    assert!(indexed_on_playing(&db, "/two", "Two", "", 456).is_err());
     assert_eq!(source(&db).unwrap(), old);
     let mut library = NoLibrary;
     assert!(resolve_next(&db, &mut library, true, false).is_err());
@@ -702,8 +708,8 @@ fn concurrent_queue_and_history_writes_do_not_lose_updates() {
         .map(|i| {
             let db = db.clone();
             std::thread::spawn(move || {
-                enqueue(&db, &[audio(&format!("/{i}"), "Track", 123)], false).unwrap();
-                on_playing(&db, "/shared", "Track", "Artist", 123).unwrap();
+                indexed_enqueue(&db, &[audio(&format!("/{i}"), "Track", 123)], false).unwrap();
+                indexed_on_playing(&db, "/shared", "Track", "Artist", 123).unwrap();
             })
         })
         .collect();
@@ -727,10 +733,10 @@ fn concurrent_queue_and_history_writes_do_not_lose_updates() {
 fn failed_media_cleanup_rolls_back_every_audio_table() {
     let db = test_db("cleanup_failure");
     let pl = create_playlist(&db, "List").unwrap();
-    add_playlist_items(&db, &pl.id, &[audio("/one", "One", 123)]).unwrap();
+    indexed_add_playlist_items(&db, &pl.id, &[audio("/one", "One", 123)]).unwrap();
     set_playlist_source(&db, &pl.id, None).unwrap();
-    enqueue(&db, &[audio("/one", "One", 123)], false).unwrap();
-    db.with_conn(|c|c.execute_batch("CREATE TRIGGER reject_history_delete BEFORE DELETE ON audio_play_history BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
+    indexed_enqueue(&db, &[audio("/one", "One", 123)], false).unwrap();
+    db.with_conn(|c|c.execute_batch("CREATE TRIGGER reject_history_delete BEFORE DELETE ON media_play_history BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
     assert!(remove_paths(&db, &["/one".into()]).is_err());
     assert_eq!(
         crate::db::audio_queue::all_queue_items(&db).unwrap().len(),
@@ -750,7 +756,7 @@ fn failed_media_cleanup_rolls_back_every_audio_table() {
 fn superseded_source_copies_are_removed_before_pagination() {
     let db = test_db("visible_pagination");
     let pl = create_playlist(&db, "List").unwrap();
-    add_playlist_items(
+    indexed_add_playlist_items(
         &db,
         &pl.id,
         &[
@@ -762,7 +768,7 @@ fn superseded_source_copies_are_removed_before_pagination() {
     )
     .unwrap();
     set_playlist_source(&db, &pl.id, None).unwrap();
-    enqueue(&db, &[audio("/b", "B", 2)], true).unwrap();
+    indexed_enqueue(&db, &[audio("/b", "B", 2)], true).unwrap();
     let mut library = NoLibrary;
     assert_eq!(
         paths_of(&queue_page(&db, &mut library, 0, 3, "").unwrap()),
@@ -783,8 +789,9 @@ fn superseded_source_copies_are_removed_before_pagination() {
 fn selecting_a_manual_track_retains_the_source_cursor_and_does_not_record_playback() {
     let db = test_db("manual_source_cursor");
     let mut lib = FakeLibrary::new(&[("/a", 1), ("/b", 2), ("/c", 3), ("/d", 4)]);
+    register_audio_tracks(&db,&lib.tracks);
     select_library_source(&db, &mut lib, Some("/a"), false, "DATE_DESC").unwrap();
-    enqueue(&db, &[audio("/d", "Manual", 4)], true).unwrap();
+    indexed_enqueue(&db, &[audio("/d", "Manual", 4)], true).unwrap();
     assert_eq!(
         select_next(&db, &mut lib, true, false)
             .unwrap()
@@ -801,6 +808,6 @@ fn selecting_a_manual_track_retains_the_source_cursor_and_does_not_record_playba
         "/b"
     );
     assert!(history_page(&db, 0, 20, "").unwrap().is_empty());
-    on_playing(&db, "/b", "B", "", 2).unwrap();
+    indexed_on_playing(&db, "/b", "B", "", 2).unwrap();
     assert_eq!(history_page(&db, 0, 20, "").unwrap()[0].play_count, 1);
 }

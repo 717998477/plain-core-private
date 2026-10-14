@@ -154,7 +154,7 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
             let channel = chat_deletion::remove_channel(&state.db, &state.directory, &id)?
                 .ok_or_else(|| anyhow::anyhow!("Channel not found"))?;
             notify_changed(state)?;
-            if channel.owner_id == actor {
+            if channel.owner_id.as_deref() == Some(actor.as_str()) {
                 send(state, &channel, ChannelSystemMessageType::Kick, "", true).await;
             }
             (None, Value::Null)
@@ -162,14 +162,14 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
         Request::Decline { id } => {
             let channel = get(state, &id)?;
             ensure!(
-                peers::get(&state.db, &channel.owner_id)?.is_some(),
+                peers::get(&state.db, channel.owner_id.as_deref().ok_or_else(|| anyhow::anyhow!("Channel owner missing"))?)?.is_some(),
                 "Owner peer not found"
             );
             send(
                 state,
                 &channel,
                 ChannelSystemMessageType::InviteDecline,
-                &channel.owner_id,
+                channel.owner_id.as_deref().ok_or_else(|| anyhow::anyhow!("Channel owner missing"))?,
                 false,
             )
             .await;
@@ -238,7 +238,7 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
                 notify_changed(state)?;
             }
             let target = if target.is_empty() {
-                channel.owner_id.clone()
+                channel.owner_id.clone().ok_or_else(|| anyhow::anyhow!("Channel owner missing"))?
             } else {
                 target
             };
@@ -247,7 +247,7 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
             } else {
                 Value::Null
             };
-            if broadcast && channel.owner_id == actor {
+            if broadcast && channel.owner_id.as_deref() == Some(actor.as_str()) {
                 send(state, &channel, ChannelSystemMessageType::Update, "", false).await;
             }
             (channels::get(&state.db, &id)?, response)

@@ -8,7 +8,7 @@ use serde_json::json;
 
 impl<T: PeerTransport + 'static> ChatService<T> {
     pub(crate) fn spawn_delivery(&self, chat: &DChat) {
-        if chat.to_id == "local" || (chat.to_id.is_empty() && chat.channel_id.is_empty()) {
+        if chat.to_id == "local" || (chat.to_id.is_empty() && chat.channel_id.is_none()) {
             return;
         }
         let delivery = self.delivery.clone();

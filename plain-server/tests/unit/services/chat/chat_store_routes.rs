@@ -13,7 +13,7 @@ use std::sync::Arc;
 #[test]
 fn checked_chat_storage_is_atomic_literal_and_preserves_unrelated_conversations_and_login_tokens() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    let mut peer = DPeer::new("peer", "name", "127.0.0.1", 443, DeviceType::Phone);
+    let mut peer = DPeer::new("peer", "name", "127.0.0.1", Some(443), DeviceType::Phone);
     peer.token = "session".into();
     peers::save(&db, std::slice::from_ref(&peer), SaveMode::Insert).unwrap();
     peer.name = "renamed".into();
@@ -29,7 +29,7 @@ fn checked_chat_storage_is_atomic_literal_and_preserves_unrelated_conversations_
         peers::patch(&db, &before, &after).unwrap().unwrap().key,
         "new-key"
     );
-    let missing = DPeer::new("missing", "", "", 0, DeviceType::Unknown);
+    let missing = DPeer::new("missing", "", "", None, DeviceType::Unknown);
     peer.name = "must rollback".into();
     assert!(peers::save(&db, &[peer.clone(), missing], SaveMode::Update).is_err());
     assert_eq!(peers::get(&db, "peer").unwrap().unwrap().name, "renamed");
@@ -54,7 +54,7 @@ fn checked_chat_storage_is_atomic_literal_and_preserves_unrelated_conversations_
         r#"{"type":"TEXT","value":{"text":"literal %_\\' 中文"}}"#,
     );
     one.id = "one".into();
-    one.created_at = "2026-10-04T00:00:00Z".into();
+    one.created_at = "2026-10-04T00:00:00.000Z".into();
     let mut two = DChat::new(
         "peer",
         "me",
@@ -62,7 +62,7 @@ fn checked_chat_storage_is_atomic_literal_and_preserves_unrelated_conversations_
         r#"{"type":"TEXT","value":{"text":"second"}}"#,
     );
     two.id = "two".into();
-    two.created_at = "2026-10-04T00:00:01Z".into();
+    two.created_at = "2026-10-04T00:00:01.000Z".into();
     let mut group = DChat::new(
         "peer",
         "me",
@@ -141,11 +141,11 @@ fn nearby_cache_keeps_newest_facts_and_all_records_survive_reopening() {
         device_type: "PHONE".into(),
         version: "1".into(),
         platform: "Android".into(),
-        last_seen: "2026-10-04T00:00:02Z".into(),
+        last_seen_at: "2026-10-04T00:00:02.000Z".into(),
     };
     nearby::save(&db, &item).unwrap();
     item.name = "stale".into();
-    item.last_seen = "2026-10-04T00:00:01Z".into();
+    item.last_seen_at = "2026-10-04T00:00:01.000Z".into();
     nearby::save(&db, &item).unwrap();
     drop(db);
     let db = Db::open(&path).unwrap();
@@ -180,7 +180,7 @@ async fn private_http_chat_store_authenticates_and_reports_database_errors() {
             .status(),
         401
     );
-    let peer = DPeer::new("http-peer", "http", "127.0.0.1", 443, DeviceType::Phone);
+    let peer = DPeer::new("http-peer", "http", "127.0.0.1", Some(443), DeviceType::Phone);
     let response = client
         .post(&url)
         .bearer_auth(&token)

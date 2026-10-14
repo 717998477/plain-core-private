@@ -77,33 +77,33 @@ impl Db {
         .ok()
     }
 
-    pub fn insert_channel(&self, channel: &DChannel) {
+    pub fn insert_channel(&self, channel: &DChannel) -> rusqlite::Result<()> {
         let conn = self.0.lock().unwrap();
-        let _ = conn.execute(
+        conn.execute(
             "INSERT INTO chat_channels (id,name,owner_id,members,key,version,status,created_at,updated_at) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
-                channel.id, channel.name, channel.owner_id, channel.members,
+                channel.id, channel.name, channel.owner_id.as_deref().filter(|value|!value.is_empty()), channel.members,
                 channel.key, channel.version, channel.status,
-                channel.created_at, channel.updated_at
+                crate::utils::dbtime::normalize(&channel.created_at)?, crate::utils::dbtime::normalize(&channel.updated_at)?
             ],
-        );
+        ).map(|_| ())
     }
 
-    pub fn update_channel(&self, channel: &DChannel) {
+    pub fn update_channel(&self, channel: &DChannel) -> rusqlite::Result<()> {
         let conn = self.0.lock().unwrap();
-        let _ = conn.execute(
+        conn.execute(
             "UPDATE chat_channels SET name=?1,owner_id=?2,members=?3,key=?4,version=?5,status=?6,updated_at=?7 WHERE id=?8",
             params![
-                channel.name, channel.owner_id, channel.members, channel.key,
-                channel.version, channel.status, channel.updated_at, channel.id
+                channel.name, channel.owner_id.as_deref().filter(|value|!value.is_empty()), channel.members, channel.key,
+                channel.version, channel.status, crate::utils::dbtime::normalize(&channel.updated_at)?, channel.id
             ],
-        );
+        ).map(|_| ())
     }
 
-    pub fn upsert_channel(&self, channel: &DChannel) {
+    pub fn upsert_channel(&self, channel: &DChannel) -> rusqlite::Result<()> {
         let conn = self.0.lock().unwrap();
-        let _ = conn.execute(
+        conn.execute(
             "INSERT INTO chat_channels (id,name,owner_id,members,key,version,status,created_at,updated_at) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) \
              ON CONFLICT(id) DO UPDATE SET \
@@ -111,11 +111,11 @@ impl Db {
                key=excluded.key, version=excluded.version, status=excluded.status, \
                updated_at=excluded.updated_at",
             params![
-                channel.id, channel.name, channel.owner_id, channel.members,
+                channel.id, channel.name, channel.owner_id.as_deref().filter(|value|!value.is_empty()), channel.members,
                 channel.key, channel.version, channel.status,
-                channel.created_at, channel.updated_at
+                crate::utils::dbtime::normalize(&channel.created_at)?, crate::utils::dbtime::normalize(&channel.updated_at)?
             ],
-        );
+        ).map(|_| ())
     }
 
     pub fn delete_channel(&self, id: &str) {

@@ -27,7 +27,7 @@ fn record(file: DAppFile) -> async_graphql::Result<AppFileRecord> {
     Ok(AppFileRecord {
         file_name: name,
         id: file.id,
-        size: Long(file.size),
+        size: Long(file.size_bytes),
         mime_type: file.mime_type,
         real_path: file.real_path,
         ref_count: file.ref_count,

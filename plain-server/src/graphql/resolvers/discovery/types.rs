@@ -30,7 +30,7 @@ impl NearbyDevice {
             device_type: device.device_type,
             version: device.version,
             platform: device.platform,
-            last_seen: device.last_seen,
+            last_seen: device.last_seen_at,
             discovery_methods: device.discovery_methods,
             best_ip,
             status: "UNPAIRED".to_string(),

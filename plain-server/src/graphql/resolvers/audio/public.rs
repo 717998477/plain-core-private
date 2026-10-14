@@ -349,7 +349,10 @@ impl AudioMutation {
         audio(ctx)?
             .run({
                 let path = item.path.clone();
-                move |db, _| domain::save_audio_current(db, &path)
+                move |db, lib| {
+                    lib.cache_paths(std::slice::from_ref(&path))?;
+                    domain::save_audio_current(db, &path)
+                }
             })
             .await?;
         Ok(item)
@@ -420,7 +423,15 @@ impl AudioMutation {
         .await?;
         let tracks = crate::graphql::types::facts::rows(&facts, |item| track(item));
         audio(ctx)?
-            .run(move |db, _| domain::enqueue(db, &tracks, false))
+            .run(move |db, lib| {
+                lib.cache_paths(
+                    &tracks
+                        .iter()
+                        .map(|track| track.path.clone())
+                        .collect::<Vec<_>>(),
+                )?;
+                domain::enqueue(db, &tracks, false)
+            })
             .await?;
         Ok(true)
     }
@@ -495,7 +506,15 @@ impl AudioMutation {
         let facts = host_call(ctx, "systemAudioPlaylistTracks", json!({ "paths": paths })).await?;
         let tracks = crate::graphql::types::facts::rows(&facts, |item| track(item));
         audio(ctx)?
-            .run(move |db, _| domain::add_playlist_items(db, id.as_str(), &tracks))
+            .run(move |db, lib| {
+                lib.cache_paths(
+                    &tracks
+                        .iter()
+                        .map(|track| track.path.clone())
+                        .collect::<Vec<_>>(),
+                )?;
+                domain::add_playlist_items(db, id.as_str(), &tracks)
+            })
             .await?;
         Ok(true)
     }

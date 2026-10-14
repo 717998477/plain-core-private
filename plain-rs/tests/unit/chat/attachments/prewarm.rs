@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn db() -> Db {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    let mut peer = DPeer::new("peer", "Fixture", "", 1, DeviceType::Phone);
+    let mut peer = DPeer::new("peer", "Fixture", "", Some(1), DeviceType::Phone);
     peer.status = PeerStatus::Paired;
     peer.key = crate::base64_encode(&[7; 32]);
     peer.public_key = crate::base64_encode(&[8; 32]);

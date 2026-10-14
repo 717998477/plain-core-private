@@ -63,7 +63,7 @@ impl BookmarkQuery {
         let counts = bookmark_db::get_bookmarks(db).into_iter().fold(
             std::collections::HashMap::new(),
             |mut acc, b| {
-                *acc.entry(b.group_id).or_insert(0i32) += 1;
+                if let Some(group_id) = b.group_id { *acc.entry(group_id).or_insert(0i32) += 1; }
                 acc
             },
         );
@@ -113,7 +113,7 @@ impl BookmarkMutation {
             .ok_or_else(|| async_graphql::Error::new("bookmark not found"))?;
         bookmark.url = input.url;
         bookmark.title = input.title;
-        bookmark.group_id = input.group_id.to_string();
+        bookmark.group_id = (!input.group_id.is_empty()).then(|| input.group_id.to_string());
         bookmark.pinned = input.pinned;
         bookmark.sort_order = input.sort_order;
         bookmark.updated_at = now_iso();
@@ -195,7 +195,7 @@ impl BookmarkMutation {
             let updated = affected
                 .into_iter()
                 .map(|mut b| {
-                    b.group_id.clear();
+                    b.group_id = None;
                     b.updated_at = now_iso();
                     b
                 })

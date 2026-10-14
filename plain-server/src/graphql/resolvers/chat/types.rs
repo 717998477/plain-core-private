@@ -29,16 +29,12 @@ impl From<DChat> for ChatItem {
             id: c.id.into(),
             from_id: c.from_id.into(),
             to_id: c.to_id.into(),
-            channel_id: if c.channel_id.is_empty() {
-                None
-            } else {
-                Some(c.channel_id.into())
-            },
+            channel_id: c.channel_id.map(ID),
             created_at: c.created_at,
             updated_at: c.updated_at,
             content: c.content,
             status: c.status.into(),
-            status_data: c.status_data,
+            status_data: c.status_data.unwrap_or_default(),
         }
     }
 }
@@ -76,7 +72,7 @@ impl From<DChannel> for ChatChannel {
         Self {
             id: ch.id.into(),
             name: ch.name,
-            owner_id: ch.owner_id.into(),
+            owner_id: ch.owner_id.unwrap_or_default().into(),
             members,
             version: Long(ch.version),
             status: ch.status.into(),

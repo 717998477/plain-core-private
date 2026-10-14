@@ -32,7 +32,7 @@ fn seed_peer(db: &Db, id: &str) {
         key: String::new(),
         public_key: String::new(),
         status: PeerStatus::Paired,
-        port: 0,
+        port: None,
         device_type: DeviceType::Unknown,
         token: String::new(),
         created_at: now.clone(),
@@ -101,14 +101,14 @@ fn load_keeps_most_recent_for_same_conversation() {
     // to guarantee ordering.
     let mut old = DChat::new("me", "local", "", "{}");
     old.id = "old".to_string();
-    old.created_at = "2026-01-01T00:00:01Z".to_string();
-    old.updated_at = "2026-01-01T00:00:01Z".to_string();
+    old.created_at = "2026-01-01T00:00:01.000Z".to_string();
+    old.updated_at = "2026-01-01T00:00:01.000Z".to_string();
     db.insert_chat(&old);
 
     let mut new = DChat::new("me", "local", "", "{}");
     new.id = "new".to_string();
-    new.created_at = "2026-01-01T00:00:02Z".to_string();
-    new.updated_at = "2026-01-01T00:00:02Z".to_string();
+    new.created_at = "2026-01-01T00:00:02.000Z".to_string();
+    new.updated_at = "2026-01-01T00:00:02.000Z".to_string();
     db.insert_chat(&new);
 
     let cacher = ChatCacher::new();

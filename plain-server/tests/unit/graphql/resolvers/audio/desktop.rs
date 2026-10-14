@@ -46,6 +46,7 @@ fn text_of_extracts_the_dsl_text_field() {
 fn play_audio_flow_on_the_resolver_seam() {
     let db = test_library();
     let track = AudioTrack::from_path_stem("/music/My Song.mp3");
+    db.with_conn(|conn|conn.execute("INSERT INTO media_items(id,data_type,path,mime_type,file_name,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,created_at,updated_at) VALUES('music',1,?1,'audio/mpeg','My Song.mp3',?2,'','',1,0,'',0,0,0,'now','now')",rusqlite::params![track.path,track.title])).unwrap();
     plain_rs::media::audio::queue::enqueue(&db, std::slice::from_ref(&track), false).unwrap();
     plain_rs::media::audio::queue::on_playing(&db, &track.path, &track.title, &track.artist, 0)
         .unwrap();

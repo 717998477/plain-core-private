@@ -45,7 +45,7 @@ impl<T: PeerTransport + 'static> ChatService<T> {
             crate::chat::channels::state::Action::Rename { name: name.into() },
         )
         .map_err(|e| e.to_string())?;
-        if ch.owner_id == self.identity.client_id {
+        if ch.owner_id.as_deref() == Some(self.identity.client_id.as_str()) {
             let kp_bytes = base64_decode(&self.identity.ed25519_keypair);
             let channel_key = base64_decode(&ch.key);
             sender::broadcast_update(
@@ -67,7 +67,7 @@ impl<T: PeerTransport + 'static> ChatService<T> {
 
     pub async fn delete_channel(&self, id: &str) -> bool {
         if let Some(ch) = self.db.get_channel_by_id(id) {
-            if ch.owner_id == self.identity.client_id {
+            if ch.owner_id.as_deref() == Some(self.identity.client_id.as_str()) {
                 let kp_bytes = base64_decode(&self.identity.ed25519_keypair);
                 let channel_key = base64_decode(&ch.key);
                 sender::broadcast_kick(
@@ -109,7 +109,7 @@ impl<T: PeerTransport + 'static> ChatService<T> {
                 return false;
             }
         };
-        if let Some(owner_peer) = self.db.get_peer_by_id(&ch.owner_id) {
+        if let Some(owner_peer) = ch.owner_id.as_deref().and_then(|id| self.db.get_peer_by_id(id)) {
             let kp_bytes = base64_decode(&self.identity.ed25519_keypair);
             let channel_key = base64_decode(&ch.key);
             let _ = sender::send_leave(
@@ -210,7 +210,7 @@ impl<T: PeerTransport + 'static> ChatService<T> {
             crate::chat::channels::state::Action::Accept,
         )
         .map_err(|e| e.to_string())?;
-        let Some(owner_peer) = self.db.get_peer_by_id(&ch.owner_id) else {
+        let Some(owner_peer) = ch.owner_id.as_deref().and_then(|id| self.db.get_peer_by_id(id)) else {
             return Err("Owner peer not found".to_string());
         };
         let kp_bytes = base64_decode(&self.identity.ed25519_keypair);
@@ -235,7 +235,7 @@ impl<T: PeerTransport + 'static> ChatService<T> {
         let Some(ch) = self.db.get_channel_by_id(id) else {
             return true;
         };
-        if let Some(owner_peer) = self.db.get_peer_by_id(&ch.owner_id) {
+        if let Some(owner_peer) = ch.owner_id.as_deref().and_then(|id| self.db.get_peer_by_id(id)) {
             let kp_bytes = base64_decode(&self.identity.ed25519_keypair);
             let channel_key = base64_decode(&ch.key);
             let _ = sender::send_invite_decline(

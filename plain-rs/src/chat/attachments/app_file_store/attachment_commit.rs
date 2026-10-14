@@ -38,7 +38,7 @@ pub(crate) fn commit(
                     let items=content["value"]["items"].as_array_mut().ok_or_else(||anyhow::anyhow!("Invalid attachment items"))?;
                     references=0;
                     for item in items.iter_mut().filter(|item|item["id"].as_str()==Some(id) && item["uri"].as_str()==Some(original_uri)) {
-                        if item["size"].as_i64()!=Some(file.size) {bail!("Incomplete attachment download");}
+                        if item["size"].as_i64()!=Some(file.size_bytes) {bail!("Incomplete attachment download");}
                         item["uri"]=Value::String(format!("fid:{suffix}"));references+=1;
                     }
                     if references==0 {bail!("Attachment changed or unavailable");}
@@ -54,13 +54,13 @@ pub(crate) fn commit(
                 },
             }
             row.content=content.to_string();row.updated_at=now_iso();
-            if tx.execute("UPDATE chats SET content=?2,updated_at=?3 WHERE id=?1",params![row.id,row.content,row.updated_at])?!=1 {bail!("Message update failed");}
+            if tx.execute("UPDATE chats SET content=?2,updated_at=?3 WHERE id=?1",params![row.id,row.content,crate::utils::dbtime::normalize(&row.updated_at)?])?!=1 {bail!("Message update failed");}
             chat=Some(row);
         }
         if exists {
-            if tx.execute("UPDATE app_files SET ref_count=ref_count+?2,updated_at=?3 WHERE id=?1",params![file.id,references,file.updated_at])?!=1 {bail!("App file unavailable");}
+            if tx.execute("UPDATE app_files SET ref_count=ref_count+?2,updated_at=?3 WHERE id=?1",params![file.id,references,crate::utils::dbtime::normalize(&file.updated_at)?])?!=1 {bail!("App file unavailable");}
         } else {
-            tx.execute("INSERT INTO app_files(id,size,mime_type,real_path,ref_count,weak_hash,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![file.id,file.size,file.mime_type,file.real_path,references,file.weak_hash,file.created_at,file.updated_at])?;
+            tx.execute("INSERT INTO app_files(id,size_bytes,mime_type,real_path,ref_count,weak_hash,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![file.id,file.size_bytes,file.mime_type,file.real_path,references,file.weak_hash,crate::utils::dbtime::normalize(&file.created_at)?,crate::utils::dbtime::normalize(&file.updated_at)?])?;
         }
         tx.commit()?;Ok(chat)
     })

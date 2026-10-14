@@ -25,6 +25,8 @@ pub mod tls;
 pub mod sqlite_browse {
     pub use crate::db::browse::*;
 }
+#[cfg(feature = "kv")]
+pub mod kv;
 #[cfg(any(
     feature = "linux-platform",
     feature = "linux-system",

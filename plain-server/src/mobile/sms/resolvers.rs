@@ -237,7 +237,7 @@ impl SmsMutation {
             .map(Value::from)
             .unwrap_or(Value::Null);
         let date = if date.is_null() {
-            chrono::Utc::now().to_rfc3339()
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
         } else {
             date.as_str().unwrap_or_default().to_owned()
         };

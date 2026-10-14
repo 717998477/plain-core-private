@@ -7,5 +7,5 @@ pub struct DNearbyDeviceCache {
     pub device_type: String,
     pub version: String,
     pub platform: String,
-    pub last_seen: String,
+    pub last_seen_at: String,
 }

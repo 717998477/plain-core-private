@@ -18,7 +18,7 @@ async fn public_status_auth_scoped_connections_key_rotation_and_stop_use_rust_wi
     let db = Db::open(&path).unwrap();
     let key = [8; 32];
     let (kp, pk) = plain_rs::crypto::ed25519_generate();
-    let mut peer = DPeer::new("peer", "phone", "127.0.0.1", 443, DeviceType::Phone);
+    let mut peer = DPeer::new("peer", "phone", "127.0.0.1", Some(443), DeviceType::Phone);
     peer.status = PeerStatus::Paired;
     peer.key = plain_rs::utils::base64::base64_encode(&key);
     peer.public_key = plain_rs::utils::base64::base64_encode(&pk);
@@ -188,7 +188,7 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
     let b_path = b_dir.path().join("plain.db");
     let a_db = Db::open(&a_path).unwrap();
     let b_db = Db::open(&b_path).unwrap();
-    let mut a_peer = DPeer::new("a", "a", "127.0.0.1", 443, DeviceType::Phone);
+    let mut a_peer = DPeer::new("a", "a", "127.0.0.1", Some(443), DeviceType::Phone);
     a_peer.key = shared.clone();
     a_peer.public_key = plain_rs::utils::base64::base64_encode(&a_pk);
     a_peer.status = PeerStatus::Paired;
@@ -209,7 +209,7 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
         )
         .await
         .unwrap();
-    let mut b_peer = DPeer::new("b", "b", "127.0.0.1", b_https, DeviceType::Phone);
+    let mut b_peer = DPeer::new("b", "b", "127.0.0.1", Some(b_https), DeviceType::Phone);
     b_peer.key = shared;
     b_peer.public_key = plain_rs::utils::base64::base64_encode(&b_pk);
     b_peer.status = PeerStatus::Paired;

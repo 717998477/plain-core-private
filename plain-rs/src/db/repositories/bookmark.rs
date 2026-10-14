@@ -40,7 +40,7 @@ const BOOKMARK_COLUMNS: &str = "id,url,title,favicon_path,group_id,pinned,click_
 pub fn get_bookmarks(db: &Db) -> Vec<DBookmark> {
     db.with_conn(|conn| {
         let mut stmt = match conn.prepare(&format!(
-            "SELECT {BOOKMARK_COLUMNS} FROM bookmarks ORDER BY pinned DESC, sort_order ASC, created_at ASC"
+            "SELECT {BOOKMARK_COLUMNS} FROM bookmarks ORDER BY pinned DESC, sort_order ASC, id ASC"
         )) {
             Ok(s) => s,
             Err(_) => return vec![],
@@ -66,12 +66,12 @@ pub fn get_bookmark_by_id(db: &Db, id: &str) -> Option<DBookmark> {
 pub fn get_bookmarks_by_group_id(db: &Db, group_id: &str) -> Vec<DBookmark> {
     db.with_conn(|conn| {
         let mut stmt = match conn.prepare(&format!(
-            "SELECT {BOOKMARK_COLUMNS} FROM bookmarks WHERE group_id=? ORDER BY pinned DESC, sort_order ASC, created_at ASC"
+            "SELECT {BOOKMARK_COLUMNS} FROM bookmarks WHERE group_id IS ? ORDER BY pinned DESC, sort_order ASC, id ASC"
         )) {
             Ok(s) => s,
             Err(_) => return vec![],
         };
-        stmt.query_map(params![group_id], row_to_bookmark)
+        stmt.query_map(params![(!group_id.is_empty()).then_some(group_id)], row_to_bookmark)
             .ok()
             .map(|iter| iter.filter_map(|r| r.ok()).collect())
             .unwrap_or_default()
@@ -91,10 +91,10 @@ pub fn insert_bookmark(db: &Db, bookmark: &DBookmark) -> rusqlite::Result<usize>
                 bookmark.group_id,
                 bookmark.pinned as i32,
                 bookmark.click_count,
-                bookmark.last_clicked_at,
+                bookmark.last_clicked_at.as_deref().map(crate::utils::dbtime::normalize).transpose()?,
                 bookmark.sort_order,
-                bookmark.created_at,
-                bookmark.updated_at
+                crate::utils::dbtime::normalize(&bookmark.created_at)?,
+                crate::utils::dbtime::normalize(&bookmark.updated_at)?
             ],
         )
     })
@@ -111,9 +111,9 @@ pub fn update_bookmark(db: &Db, bookmark: &DBookmark) -> rusqlite::Result<usize>
                 bookmark.group_id,
                 bookmark.pinned as i32,
                 bookmark.click_count,
-                bookmark.last_clicked_at,
+                bookmark.last_clicked_at.as_deref().map(crate::utils::dbtime::normalize).transpose()?,
                 bookmark.sort_order,
-                bookmark.updated_at,
+                crate::utils::dbtime::normalize(&bookmark.updated_at)?,
                 bookmark.id
             ],
         )
@@ -153,7 +153,7 @@ pub fn delete_bookmarks_with_rows(db: &Db, ids: &[String]) -> rusqlite::Result<V
 pub fn get_bookmark_groups(db: &Db) -> Vec<DBookmarkGroup> {
     db.with_conn(|conn| {
         let mut stmt = match conn.prepare(
-            "SELECT id,name,collapsed,sort_order,created_at,updated_at FROM bookmark_groups ORDER BY sort_order ASC, created_at ASC",
+            "SELECT id,name,collapsed,sort_order,created_at,updated_at FROM bookmark_groups ORDER BY sort_order ASC, id ASC",
         ) {
             Ok(s) => s,
             Err(_) => return vec![],
@@ -212,7 +212,7 @@ pub fn delete_bookmark_group(db: &Db, id: &str) -> rusqlite::Result<usize> {
         let tx = conn.unchecked_transaction()?;
         let count = tx.execute("DELETE FROM bookmark_groups WHERE id=?", params![id])?;
         tx.execute(
-            "UPDATE bookmarks SET group_id='', updated_at=?1 WHERE group_id=?2",
+            "UPDATE bookmarks SET group_id=NULL, updated_at=?1 WHERE group_id=?2",
             params![now_iso(), id],
         )?;
         tx.commit()?;

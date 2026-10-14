@@ -58,10 +58,10 @@ fn seed(db: &Arc<Db>, id: &str, from: &str, to: &str, channel: &str, content: &s
         id: id.to_string(),
         from_id: from.to_string(),
         to_id: to.to_string(),
-        channel_id: channel.to_string(),
+        channel_id: (!channel.is_empty()).then(||channel.to_string()),
         content: content.to_string(),
         status: plain_rs::chat::enums::ChatStatus::Sent,
-        status_data: String::new(),
+        status_data: None,
         created_at: at.to_string(),
         updated_at: at.to_string(),
     });

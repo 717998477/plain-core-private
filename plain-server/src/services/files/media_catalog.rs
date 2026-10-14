@@ -35,7 +35,7 @@ fn selection_with_trash(
         Value::Integer(i64::from(from_trash || plan.trash.unwrap_or(false))),
     ];
     args.extend(plan.args.into_iter().map(Value::Text));
-    let mut clauses = vec!["is_trashed=?".to_string()];
+    let mut clauses = vec!["trashed=?".to_string()];
     clauses.extend(plan.clauses);
     if plan.ids_column.is_some() {
         if plan.ids.is_empty() {
@@ -45,7 +45,7 @@ fn selection_with_trash(
             args.extend(plan.ids.into_iter().map(Value::Text));
         }
     }
-    let sql = "WITH selected AS (SELECT *,id AS _id,path AS _data,file_name AS _display_name,size_bytes AS _size FROM media_files WHERE data_type=?)";
+    let sql = "WITH selected AS (SELECT *,id AS _id,path AS _data,file_name AS _display_name,size_bytes AS _size FROM media_items WHERE data_type=?)";
     Ok((
         format!(
             "{sql} SELECT {{columns}} FROM selected WHERE {}",

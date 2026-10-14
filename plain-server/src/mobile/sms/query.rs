@@ -178,7 +178,7 @@ fn plans(
         .find(|a| a.conversation_id == thread)
     {
         let millis =
-            chrono::DateTime::parse_from_rfc3339(&archive.conversation_date)?.timestamp_millis();
+            chrono::DateTime::parse_from_rfc3339(&archive.archived_at)?.timestamp_millis();
         let op = if fields
             .iter()
             .any(|f| f.name == "archived" && f.value == "1")
@@ -297,7 +297,7 @@ fn conversation_models(
             rows.iter()
                 .find(|row| row.id == archive.conversation_id)
                 .and_then(
-                    |row| match (instant(&row.date), instant(&archive.conversation_date)) {
+                    |row| match (instant(&row.date), instant(&archive.archived_at)) {
                         (Ok(date), Ok(saved)) if date <= saved => Some(archive.conversation_id),
                         _ => None,
                     },
@@ -570,7 +570,7 @@ pub(crate) async fn execute(
                 .map(|r| {
                     Ok((
                         r.conversation_id.clone(),
-                        instant(&r.conversation_date)?.timestamp_millis(),
+                        instant(&r.archived_at)?.timestamp_millis(),
                     ))
                 })
                 .collect::<anyhow::Result<std::collections::HashMap<_, _>>>()?;
@@ -587,13 +587,13 @@ pub(crate) async fn execute(
                 .map(|r| (r.id.clone(), r))
                 .collect::<std::collections::HashMap<_, _>>();
             let items=records.into_iter().filter_map(|record|by_id.get(&record.conversation_id).map(|row|{
-                let date=instant(&record.conversation_date).ok()?;
+                let date=instant(&record.archived_at).ok()?;
                 let snippet=if let Some(value)=facts["snippets"][&row.id].as_str(){value.to_owned()}else{row.snippet.clone()};
                 let addresses = addresses(row.addresses.clone(),&[]);
                 if !archived_matches(&addresses, &snippet, &query) {
                     return None;
                 }
-                Some(json!({"id":row.id,"address":addresses.first().cloned().unwrap_or_default(),"addresses":addresses,"snippet":snippet,"date":date.to_rfc3339(),"messageCount":row.message_count,"read":row.read}))
+                Some(json!({"id":row.id,"address":addresses.first().cloned().unwrap_or_default(),"addresses":addresses,"snippet":snippet,"date":date.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),"messageCount":row.message_count,"read":row.read}))
             }).flatten()).collect::<Vec<_>>();
             json!({"items":items.into_iter().skip(offset.max(0) as usize).take(limit.max(0) as usize).collect::<Vec<_>>()})
         }

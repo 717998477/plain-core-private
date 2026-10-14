@@ -18,7 +18,7 @@ fn nearby_cache_survives_reopen_and_preserves_newer_sightings() {
         device_type: "PHONE".into(),
         version: "1".into(),
         platform: "android".into(),
-        last_seen: "1970-01-01T00:00:00.100Z".into(),
+        last_seen_at: "1970-01-01T00:00:00.100Z".into(),
     };
     let db = Db::open(&path).unwrap();
     db.save_cached_nearby_device(&device).unwrap();
@@ -31,12 +31,12 @@ fn nearby_cache_survives_reopen_and_preserves_newer_sightings() {
     let mut updated = device.clone();
     updated.ips = vec!["203.0.113.3".into()];
     let updated = DNearbyDeviceCache {
-        last_seen: "1970-01-01T00:00:00.150Z".into(),
+        last_seen_at: "1970-01-01T00:00:00.150Z".into(),
         ..updated
     };
     db.save_cached_nearby_device(&updated).unwrap();
     assert!(
-        !db.delete_cached_nearby_device_if_last_seen_matches(&device.id, &device.last_seen)
+        !db.delete_cached_nearby_device_if_last_seen_matches(&device.id, &device.last_seen_at)
             .unwrap()
     );
     let fresh = db.get_cached_nearby_devices().unwrap().remove(0);
@@ -44,18 +44,18 @@ fn nearby_cache_survives_reopen_and_preserves_newer_sightings() {
     assert!(
         db.refresh_cached_nearby_device_if_last_seen_matches(
             &fresh.id,
-            &fresh.last_seen,
+            &fresh.last_seen_at,
             "1970-01-01T00:00:00.200Z"
         )
         .unwrap()
     );
     assert!(
-        !db.delete_cached_nearby_device_if_last_seen_matches(&fresh.id, &fresh.last_seen)
+        !db.delete_cached_nearby_device_if_last_seen_matches(&fresh.id, &fresh.last_seen_at)
             .unwrap()
     );
     let latest = db.get_cached_nearby_devices().unwrap().remove(0);
     assert!(
-        db.delete_cached_nearby_device_if_last_seen_matches(&latest.id, &latest.last_seen)
+        db.delete_cached_nearby_device_if_last_seen_matches(&latest.id, &latest.last_seen_at)
             .unwrap()
     );
     assert!(db.get_cached_nearby_devices().unwrap().is_empty());

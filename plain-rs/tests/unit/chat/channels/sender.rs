@@ -79,7 +79,7 @@ fn build_member_peers_includes_owner_alongside_members() {
         member_id,
         "Pixel",
         "203.0.113.5",
-        8443,
+        Some(8443),
         DeviceType::Phone,
     ));
 
@@ -111,7 +111,7 @@ fn build_member_peers_includes_owner_even_when_not_in_members() {
         member_id,
         "Pixel",
         "203.0.113.5",
-        8443,
+        Some(8443),
         DeviceType::Phone,
     ));
 

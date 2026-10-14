@@ -70,7 +70,9 @@ fn candidates(state: &ServerState, card: &Card, discovered: bool) -> Result<Vec<
         card,
     );
     if let Some(peer) = plain_rs::db::chat_store::peers::get(&state.db, &card.peer_info.id)? {
-        add_addresses(&mut links, &mut seen, &peer.ip, peer.port, card);
+        if let Some(port) = peer.port {
+            add_addresses(&mut links, &mut seen, &peer.ip, port, card);
+        }
     }
     if discovered {
         discovery_candidates(&mut links, &mut seen, &state.mdns.snapshot(), card);

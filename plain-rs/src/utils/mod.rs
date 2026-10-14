@@ -23,3 +23,5 @@ pub mod html_to_markdown;
 
 #[cfg(any(feature = "graphql", feature = "filesystem"))]
 pub mod keyed_locks;
+
+pub mod vector;

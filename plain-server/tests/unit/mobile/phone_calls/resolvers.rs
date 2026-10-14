@@ -40,7 +40,7 @@ fn schema_host(schema: &PublicSchema) -> Arc<Host> {
 fn call_fact(id: &str, kind: i64) -> Value {
     json!({
         "id": id, "number": "+8618012345678", "name": "Ada", "photoUri": "",
-        "startedAt": "2026-10-05T00:00:00Z", "durationSec": 42, "type": kind,
+        "startedAt": "2026-10-05T00:00:00.000Z", "durationSec": 42, "type": kind,
         "accountId": "acc-1",
         "geo": {"country":"US","numberType":"MOBILE","carrier":"Test","description":"mobile"},
     })

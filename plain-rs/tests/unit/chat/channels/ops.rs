@@ -61,7 +61,7 @@ async fn create_channel_sets_owner_member_and_key() {
     let ch = svc.create_channel("Team").unwrap();
 
     assert_eq!(ch.name, "Team");
-    assert_eq!(ch.owner_id, "me-nas");
+    assert_eq!(ch.owner_id.as_deref(), Some("me-nas"));
     // Owner is a JOINED member from the start (invite-rejection guard).
     assert_eq!(ch.members, r#"[{"peerId":"me-nas","status":"JOINED"}]"#);
     // Channel key is a base64 32-byte value.
@@ -132,7 +132,7 @@ async fn delete_peer_demotes_channel_members() {
         "peer-x",
         "X",
         "203.0.113.9",
-        8443,
+        Some(8443),
         DeviceType::Phone,
     ));
     let mut chat = crate::db::DChat::new("me", "peer-x", "", "{}");

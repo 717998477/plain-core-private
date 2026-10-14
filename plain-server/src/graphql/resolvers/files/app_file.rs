@@ -39,7 +39,7 @@ impl AppFile {
     pub fn from_dappfile(f: DAppFile, file_name: String) -> Self {
         Self {
             id: f.id,
-            size: Long(f.size),
+            size: Long(f.size_bytes),
             mime_type: f.mime_type,
             real_path: f.real_path,
             file_name,

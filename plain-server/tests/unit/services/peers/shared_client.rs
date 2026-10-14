@@ -20,7 +20,7 @@ fn root() -> (tempfile::TempDir, ContentServer, String) {
     (dir, server, token)
 }
 fn card(port: u16) -> Card {
-    serde_json::from_value(json!({"shareId":"fixture","urlToken":plain_rs::utils::base64::base64_encode_url_safe(&[7;32]),"peerInfo":{"id":"peer","ip":"127.0.0.1","port":port},"name":"old","itemCount":2,"totalSize":8,"expiresAt":"2030-01-01T00:00:00Z"})).unwrap()
+    serde_json::from_value(json!({"shareId":"fixture","urlToken":plain_rs::utils::base64::base64_encode_url_safe(&[7;32]),"peerInfo":{"id":"peer","ip":"127.0.0.1","port":port},"name":"old","itemCount":2,"totalSize":8,"expiresAt":"2030-01-01T00:00:00.000Z"})).unwrap()
 }
 fn save_card(state: &ServerState, card: &Card) -> DChat {
     let row = DChat::new(
@@ -157,7 +157,7 @@ async fn discovery_retry_rereads_peer_address_and_late_response_cannot_replace_c
         "peer",
         "peer",
         "",
-        1,
+        Some(1),
         plain_rs::chat::enums::DeviceType::Phone,
     );
     peers::save(&state.db, &[peer.clone()], SaveMode::Insert).unwrap();
@@ -170,7 +170,7 @@ async fn discovery_retry_rereads_peer_address_and_late_response_cannot_replace_c
     tokio::time::sleep(Duration::from_millis(100)).await;
     let mut peer = peer;
     peer.ip = "invalid,127.0.0.1".into();
-    peer.port = port;
+    peer.port = Some(port);
     peers::save(&state.db, &[peer], SaveMode::Update).unwrap();
     let result = tokio::time::timeout(Duration::from_secs(5), task)
         .await

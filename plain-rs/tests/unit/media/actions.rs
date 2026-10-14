@@ -12,7 +12,7 @@ fn item(id: &str, path: &str) -> Item {
 #[test]
 fn only_acknowledged_successes_are_cleaned_and_type_isolated() {
     let db = test_db("media_action_success");
-    db.with_conn(|c|c.execute_batch("INSERT INTO tags(id,name,type,count,created_at,updated_at) VALUES('audio','audio',1,0,'now','now'),('video','video',2,0,'now','now'); INSERT INTO tag_relations(tag_id,key,type,title,size,created_at) VALUES('audio','one',1,'one',1,'now'),('audio','failed',1,'failed',1,'now'),('video','one',2,'one',1,'now'); INSERT INTO media_item(media_type,media_id,duration_ms,updated_at) VALUES('audio','one',123,'now'),('video','one',456,'now'); INSERT INTO audio_queue_items(path,sort_order,title,artist,duration_ms) VALUES('/one',0,'one','',123),('/failed',1,'failed','',123);")).unwrap();
+    db.with_conn(|c|c.execute_batch("INSERT INTO tags(id,name,type,created_at,updated_at) VALUES('audio','audio',1,'now','now'),('video','video',2,'now','now'); INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('audio','one',1,'now'),('audio','failed',1,'now'),('video','one',2,'now'); INSERT INTO media_items(id,data_type,path,mime_type,file_name,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,created_at,updated_at) VALUES('test:/one',1,'/one','audio/mpeg','song','one','','',1,123,'',0,0,0,'now','now'),('test:/failed',1,'/failed','audio/mpeg','song','failed','','',1,123,'',0,0,0,'now','now'); INSERT INTO audio_queue_items(media_id,sort_order) VALUES('test:/one',0),('test:/failed',1);")).unwrap();
     let outcome = Outcome {
         successful: vec![item("one", "/one")],
         failed_ids: vec!["failed".into()],
@@ -35,12 +35,7 @@ fn only_acknowledged_successes_are_cleaned_and_type_isolated() {
             2
         );
         assert_eq!(
-            c.query_row("SELECT duration_ms FROM media_item", [], |r| r
-                .get::<_, i64>(0))?,
-            456
-        );
-        assert_eq!(
-            c.query_row("SELECT path FROM audio_queue_items", [], |r| r
+            c.query_row("SELECT m.path FROM audio_queue_items q JOIN audio_media m USING(media_id)", [], |r| r
                 .get::<_, String>(0))?,
             "/failed"
         );
@@ -65,7 +60,7 @@ fn malformed_or_incomplete_receipts_are_rejected() {
 #[test]
 fn cleanup_transaction_failure_preserves_all_references() {
     let db = test_db("media_action_rollback");
-    db.with_conn(|c|c.execute_batch("INSERT INTO tags(id,name,type,count,created_at,updated_at) VALUES('audio','audio',1,0,'now','now'); INSERT INTO tag_relations(tag_id,key,type,title,size,created_at) VALUES('audio','one',1,'one',1,'now'); INSERT INTO audio_queue_items(path,sort_order,title,artist,duration_ms) VALUES('/one',0,'one','',123); CREATE TRIGGER reject_queue BEFORE DELETE ON audio_queue_items BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
+    db.with_conn(|c|c.execute_batch("INSERT INTO tags(id,name,type,created_at,updated_at) VALUES('audio','audio',1,'now','now'); INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('audio','one',1,'now'); INSERT INTO media_items(id,data_type,path,mime_type,file_name,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,created_at,updated_at) VALUES('test:/one',1,'/one','audio/mpeg','song','one','','',1,123,'',0,0,0,'now','now'); INSERT INTO audio_queue_items(media_id,sort_order) VALUES('test:/one',0); CREATE TRIGGER reject_queue BEFORE DELETE ON audio_queue_items BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
     assert!(cleanup(&db, DataType::Audio, Action::Delete, &[item("one", "/one")]).is_err());
     db.with_conn(|c| {
         assert_eq!(
@@ -86,7 +81,7 @@ fn cleanup_transaction_failure_preserves_all_references() {
 #[test]
 fn video_cleanup_keeps_other_types_and_move_keeps_user_tags() {
     let db = test_db("media_action_video_image");
-    db.with_conn(|c|c.execute_batch("INSERT INTO tags(id,name,type,count,created_at,updated_at) VALUES('image','image',3,0,'now','now'); INSERT INTO tag_relations(tag_id,key,type,title,size,created_at) VALUES('image','one',3,'one',1,'now'); INSERT INTO video_play_progress(media_id,position_ms,updated_at) VALUES('one',456,'now'); INSERT INTO media_item(media_type,media_id,duration_ms,updated_at) VALUES('video','one',123,'now'),('audio','one',456,'now'); INSERT INTO image_embeddings(id,path,embedding,created_at,updated_at) VALUES('one','/one',X'3f800000','now','now');")).unwrap();
+    db.with_conn(|c|c.execute_batch("INSERT INTO tags(id,name,type,created_at,updated_at) VALUES('image','image',3,'now','now'); INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('image','one',3,'now'); INSERT INTO media_play_history(media_id,position_ms,played_at,play_count) VALUES('one',456,'now',0); INSERT INTO image_embeddings(id,path,embedding,created_at,updated_at) VALUES('one','/one',X'3f800000','now','now');")).unwrap();
     let item = Item {
         id: "one".into(),
         path: "/one".into(),
@@ -127,14 +122,9 @@ fn video_cleanup_keeps_other_types_and_move_keeps_user_tags() {
             1
         );
         assert_eq!(
-            c.query_row("SELECT count(*) FROM video_play_progress", [], |r| r
+            c.query_row("SELECT count(*) FROM media_play_history", [], |r| r
                 .get::<_, i64>(0))?,
             0
-        );
-        assert_eq!(
-            c.query_row("SELECT duration_ms FROM media_item", [], |r| r
-                .get::<_, i64>(0))?,
-            456
         );
         Ok::<_, rusqlite::Error>(())
     })
@@ -150,13 +140,13 @@ fn catalog_file(path: &str) -> crate::db::MediaFileMetadata {
         bucket_id: "/library".into(),
         size_bytes: 10,
         duration_ms: 0,
-        album_file_id: String::new(),
+        cover_image_id: None,
         width: 0,
         height: 0,
         rotation: 0,
         taken_at: None,
-        created_at: "created".into(),
-        updated_at: "updated".into(),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        updated_at: "2026-01-01T00:00:00.000Z".into(),
     }
 }
 
@@ -169,7 +159,7 @@ fn confirmed_actions_preserve_catalog_identity_and_restore_the_original_path() {
         .remove(0);
     db.with_conn(|conn| {
         conn.execute(
-            "UPDATE media_files SET is_favorite=1 WHERE id=?1",
+            "UPDATE media_items SET favorited=1 WHERE id=?1",
             [&original.id],
         )
     })
@@ -181,8 +171,8 @@ fn confirmed_actions_preserve_catalog_identity_and_restore_the_original_path() {
         .media_file_by_path(DataType::Doc, &receipt.destination_path)
         .unwrap()
         .unwrap();
-    assert!(trash.is_trashed);
-    assert!(trash.is_favorite);
+    assert!(trash.trashed);
+    assert!(trash.favorited);
     assert_eq!(trash.id, original.id);
     assert_eq!(trash.original_path, Some(original.path.clone()));
     cleanup(
@@ -196,7 +186,7 @@ fn confirmed_actions_preserve_catalog_identity_and_restore_the_original_path() {
         .media_file_by_path(DataType::Doc, &original.path)
         .unwrap()
         .unwrap();
-    assert!(!restored.is_trashed);
+    assert!(!restored.trashed);
     assert_eq!(restored.original_path, None);
     assert_eq!(restored.created_at, original.created_at);
     receipt.path = restored.path;
@@ -208,7 +198,7 @@ fn confirmed_actions_preserve_catalog_identity_and_restore_the_original_path() {
         .unwrap();
     assert_eq!(moved.id, original.id);
     assert_eq!(moved.bucket_id, "/other");
-    assert!(moved.is_favorite);
+    assert!(moved.favorited);
     cleanup(
         &db,
         DataType::Doc,
@@ -256,9 +246,9 @@ fn stale_receipts_and_catalog_sql_failures_do_not_commit_partial_updates() {
         !db.media_file_by_path(DataType::Doc, &files[0].path)
             .unwrap()
             .unwrap()
-            .is_trashed
+            .trashed
     );
-    db.with_conn(|conn| conn.execute_batch("CREATE TRIGGER reject_catalog_delete BEFORE DELETE ON media_files BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
+    db.with_conn(|conn| conn.execute_batch("CREATE TRIGGER reject_catalog_delete BEFORE DELETE ON media_items BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;")).unwrap();
     assert!(
         cleanup(
             &db,

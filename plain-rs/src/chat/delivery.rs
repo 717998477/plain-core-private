@@ -85,7 +85,7 @@ impl Delivery {
             bail!("Only outgoing messages can be sent");
         }
         let retry = recipients.is_some();
-        if chat.channel_id.is_empty() && (chat.to_id.is_empty() || chat.to_id == "local") {
+        if chat.channel_id.is_none() && (chat.to_id.is_empty() || chat.to_id == "local") {
             if retry {
                 bail!("Targeted retry requires a channel");
             }
@@ -95,13 +95,13 @@ impl Delivery {
             });
         }
         let content = crate::chat::messages::content::peer_content(&chat.content, url_token)?;
-        let targets = if chat.channel_id.is_empty() {
+        let targets = if chat.channel_id.is_none() {
             if retry {
                 bail!("Targeted retry requires a channel");
             }
             vec![chat.to_id.clone()]
         } else {
-            let Some(channel) = channels::get(&self.db, &chat.channel_id)? else {
+            let Some(channel) = channels::get(&self.db, chat.channel_id.as_deref().unwrap_or_default())? else {
                 return self.finish(&chat, None, retry, true);
             };
             let members: Vec<ChannelMember> = serde_json::from_str(&channel.members)?;
@@ -153,7 +153,7 @@ impl Delivery {
             let error = match peer {
                 None => Some("Peer not found in database".into()),
                 Some(peer) => {
-                    let key = if chat.channel_id.is_empty() {
+                    let key = if chat.channel_id.is_none() {
                         if !peer.is_paired() {
                             results.push(ChannelDeliveryResult {
                                 peer_id: target,
@@ -165,7 +165,7 @@ impl Delivery {
                         peer.key.clone()
                     } else {
                         let channel =
-                            channels::get(&self.db, &chat.channel_id)?.ok_or_else(|| {
+                            channels::get(&self.db, chat.channel_id.as_deref().unwrap_or_default())?.ok_or_else(|| {
                                 anyhow::anyhow!("Channel unavailable during delivery")
                             })?;
                         let members: Vec<ChannelMember> = serde_json::from_str(&channel.members)?;
@@ -187,7 +187,7 @@ impl Delivery {
                             chat_item_request(signing_key, &content).map_err(anyhow::Error::msg)?;
                         match tokio::time::timeout(
                             Duration::from_secs(20),
-                            transport.message(&peer, client_id, &chat.channel_id, &key, &body),
+                            transport.message(&peer, client_id, chat.channel_id.as_deref().unwrap_or_default(), &key, &body),
                         )
                         .await
                         {

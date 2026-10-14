@@ -128,13 +128,13 @@ async fn bucket_dispatch_uses_the_same_core_catalog_as_rows_and_count() {
             bucket_id: directory.0.to_str().unwrap().into(),
             size_bytes: 12,
             duration_ms: 0,
-            album_file_id: String::new(),
+            cover_image_id: None,
             width: 0,
             height: 0,
             rotation: 0,
             taken_at: None,
-            created_at: "2026-10-13 00:00:00".into(),
-            updated_at: "2026-10-13 00:00:00".into(),
+            created_at: "2026-10-13T00:00:00.000Z".into(),
+            updated_at: "2026-10-13T00:00:00.000Z".into(),
         }])
         .unwrap();
     let runtime = Runtime::new(core.clone(), vec![]);

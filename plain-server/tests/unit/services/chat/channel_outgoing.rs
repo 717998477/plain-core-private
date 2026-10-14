@@ -21,10 +21,10 @@ fn private_prepare_uses_persisted_signing_identity_and_current_peer_keys() {
         .set("signature_key_pair", base64_encode(&key))
         .unwrap();
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    let mut paired = DPeer::new("paired", "paired", "127.0.0.1", 1, DeviceType::Phone);
+    let mut paired = DPeer::new("paired", "paired", "127.0.0.1", Some(1), DeviceType::Phone);
     paired.key = base64_encode(&[8; 32]);
     paired.status = PeerStatus::Paired;
-    let group = DPeer::new("group", "group", "127.0.0.1", 1, DeviceType::Phone);
+    let group = DPeer::new("group", "group", "127.0.0.1", Some(1), DeviceType::Phone);
     peers::save(&db, &[paired.clone(), group], SaveMode::Insert).unwrap();
     let mut channel = DChannel::new("中文 group", "actor");
     channel.key = base64_encode(&[7; 32]);

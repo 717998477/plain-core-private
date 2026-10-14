@@ -42,3 +42,8 @@ pub mod chat_store;
 
 #[cfg(feature = "library")]
 pub mod media_file;
+
+#[cfg(feature = "library")]
+pub mod audio_catalog;
+#[cfg(feature = "library")]
+pub mod media_play_history;

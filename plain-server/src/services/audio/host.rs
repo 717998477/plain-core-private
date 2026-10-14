@@ -24,6 +24,21 @@ impl Audio {
         &self,
         operation: impl FnOnce(&Db, &mut HostLibrary) -> DomainResult<T> + Send + 'static,
     ) -> async_graphql::Result<T> {
+        self.execute(true, operation).await
+    }
+
+    pub async fn run_playback<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&Db, &mut HostLibrary) -> DomainResult<T> + Send + 'static,
+    ) -> async_graphql::Result<T> {
+        self.execute(false, operation).await
+    }
+
+    async fn execute<T: Send + 'static>(
+        &self,
+        resolve_references: bool,
+        operation: impl FnOnce(&Db, &mut HostLibrary) -> DomainResult<T> + Send + 'static,
+    ) -> async_graphql::Result<T> {
         let db = self.db.clone();
         let permit = self
             .capacity
@@ -31,10 +46,15 @@ impl Audio {
             .try_acquire_owned()
             .map_err(|_| async_graphql::Error::new("audio request capacity exceeded"))?;
         let guard = self.lock.clone().lock_owned().await;
-        let mut library = HostLibrary::new(self.host.clone());
+        let mut library = HostLibrary::new(self.host.clone(), db.clone());
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let _guard = guard;
+            if resolve_references {
+                library.refresh()?;
+            } else {
+                library.restore_current()?;
+            }
             operation(&db, &mut library)
         })
         .await
@@ -42,3 +62,7 @@ impl Audio {
         .map_err(|e| async_graphql::Error::new(e.to_string()))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/audio/host.rs"]
+mod tests;

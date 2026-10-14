@@ -4,7 +4,6 @@ use rusqlite::{OptionalExtension, params, params_from_iter};
 use crate::db::Db;
 use crate::db::models::simple::ArchivedConversationRow;
 use crate::db::models::simple::ImageEmbeddingRow;
-use crate::db::models::simple::MediaItemRow;
 use crate::db::models::simple::PomodoroItemRow;
 use crate::db::models::simple::SessionRow;
 use crate::db::models::simple::ShareRow;
@@ -12,13 +11,12 @@ use crate::db::models::simple::TrashedMessageRow;
 use crate::db::models::simple::VideoPlayProgressRow;
 
 const SESSION_COLUMNS: &str = "client_id, name, type, client_ip, os_name, os_version, \
-     browser_name, browser_version, token, last_active_at, created_at, updated_at";
+     browser_name, browser_version, token, last_seen_at, created_at, updated_at";
 const SHARE_COLUMNS: &str = "id, name, password, url_token, expires_at, read_only, data, \
      created_at, updated_at";
 const POMODORO_COLUMNS: &str =
-    "id, date, completed_count, total_work_seconds, total_break_seconds, created_at, updated_at";
-const MEDIA_ITEM_COLUMNS: &str = "media_type, media_id, duration_ms, updated_at";
-const VIDEO_PROGRESS_COLUMNS: &str = "media_id, position_ms, updated_at";
+    "id, date, completed_count, total_work_secs, total_break_secs, created_at, updated_at";
+const VIDEO_PROGRESS_COLUMNS: &str = "media_id, position_ms, played_at";
 const EMBEDDING_COLUMNS: &str = "id, path, embedding, created_at, updated_at";
 
 fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
@@ -32,7 +30,7 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         browser_name: row.get(6)?,
         browser_version: row.get(7)?,
         token: row.get(8)?,
-        last_active_at: row.get(9)?,
+        last_seen_at: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
     })
@@ -57,19 +55,10 @@ fn pomodoro_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroItemRo
         id: row.get(0)?,
         date: row.get(1)?,
         completed_count: row.get(2)?,
-        total_work_seconds: row.get(3)?,
-        total_break_seconds: row.get(4)?,
+        total_work_secs: row.get(3)?,
+        total_break_secs: row.get(4)?,
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
-    })
-}
-
-fn media_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItemRow> {
-    Ok(MediaItemRow {
-        media_type: row.get(0)?,
-        media_id: row.get(1)?,
-        duration_ms: row.get(2)?,
-        updated_at: row.get(3)?,
     })
 }
 
@@ -107,7 +96,7 @@ impl Db {
     pub fn session_list(&self) -> rusqlite::Result<Vec<SessionRow>> {
         self.with_conn(|c| {
             let mut stmt = c.prepare(&format!(
-                "SELECT {SESSION_COLUMNS} FROM sessions ORDER BY last_active_at DESC"
+                "SELECT {SESSION_COLUMNS} FROM sessions ORDER BY last_seen_at DESC"
             ))?;
             stmt.query_map([], session_from_row)?.collect()
         })
@@ -128,7 +117,7 @@ impl Db {
         self.with_conn(|c| {
             c.execute(
                 "INSERT OR REPLACE INTO sessions (client_id, name, type, client_ip, os_name,
-                     os_version, browser_name, browser_version, token, last_active_at,
+                     os_version, browser_name, browser_version, token, last_seen_at,
                      created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
@@ -141,25 +130,25 @@ impl Db {
                     row.browser_name,
                     row.browser_version,
                     row.token,
-                    row.last_active_at,
-                    row.created_at,
-                    row.updated_at
+                    row.last_seen_at.as_deref().map(crate::utils::dbtime::normalize).transpose()?,
+                    crate::utils::dbtime::normalize(&row.created_at)?,
+                    crate::utils::dbtime::normalize(&row.updated_at)?
                 ],
             )?;
             Ok(())
         })
     }
 
-    /// Bumps only `last_active_at` for the listed clients (the `updateTs` DAO).
+    /// Bumps only `last_seen_at` for the listed clients (the `updateTs` DAO).
     pub fn session_touch(&self, items: &[(String, String)]) -> rusqlite::Result<usize> {
         self.with_conn(|c| {
             let tx = c.unchecked_transaction()?;
             let mut updated = 0;
             {
                 let mut stmt =
-                    tx.prepare("UPDATE sessions SET last_active_at=?2 WHERE client_id=?1")?;
+                    tx.prepare("UPDATE sessions SET last_seen_at=?2 WHERE client_id=?1")?;
                 for (client_id, at) in items {
-                    updated += stmt.execute(params![client_id, at])?;
+                    updated += stmt.execute(params![client_id, crate::utils::dbtime::normalize(at)?])?;
                 }
             }
             tx.commit()?;
@@ -202,11 +191,11 @@ impl Db {
                     row.name,
                     row.password,
                     row.url_token,
-                    row.expires_at,
+                    row.expires_at.as_deref().map(crate::utils::dbtime::normalize).transpose()?,
                     row.read_only as i64,
                     row.data,
-                    row.created_at,
-                    row.updated_at
+                    crate::utils::dbtime::normalize(&row.created_at)?,
+                    crate::utils::dbtime::normalize(&row.updated_at)?
                 ],
             )?;
             Ok(())
@@ -276,16 +265,16 @@ impl Db {
         self.with_conn(|c| {
             c.execute(
                 "INSERT OR REPLACE INTO pomodoro_items (id, date, completed_count,
-                     total_work_seconds, total_break_seconds, created_at, updated_at)
+                     total_work_secs, total_break_secs, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     row.id,
                     row.date,
                     row.completed_count,
-                    row.total_work_seconds,
-                    row.total_break_seconds,
-                    row.created_at,
-                    row.updated_at
+                    row.total_work_secs,
+                    row.total_break_secs,
+                    crate::utils::dbtime::normalize(&row.created_at)?,
+                    crate::utils::dbtime::normalize(&row.updated_at)?
                 ],
             )?;
             Ok(())
@@ -296,40 +285,13 @@ impl Db {
         self.with_conn(|c| c.execute("DELETE FROM pomodoro_items WHERE id=?1", [id]))
     }
 
-    pub fn media_item_list(&self) -> rusqlite::Result<Vec<MediaItemRow>> {
-        self.with_conn(|c| {
-            let mut stmt = c.prepare(&format!("SELECT {MEDIA_ITEM_COLUMNS} FROM media_item"))?;
-            stmt.query_map([], media_item_from_row)?.collect()
-        })
-    }
-
-    pub fn media_item_upsert(&self, row: &MediaItemRow) -> rusqlite::Result<()> {
-        self.with_conn(|c| {
-            c.execute(
-                "INSERT OR REPLACE INTO media_item (media_type, media_id, duration_ms, updated_at)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    row.media_type,
-                    row.media_id,
-                    row.duration_ms,
-                    row.updated_at
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn media_item_delete(&self, media_id: &str) -> rusqlite::Result<usize> {
-        self.with_conn(|c| c.execute("DELETE FROM media_item WHERE media_id=?1", [media_id]))
-    }
-
     pub fn video_progress_recent(
         &self,
         since: &str,
     ) -> rusqlite::Result<Vec<VideoPlayProgressRow>> {
         self.with_conn(|c| {
             let mut stmt = c.prepare(&format!(
-                "SELECT {VIDEO_PROGRESS_COLUMNS} FROM video_play_progress WHERE updated_at >= ?1"
+                "SELECT {VIDEO_PROGRESS_COLUMNS} FROM media_play_history WHERE played_at >= ?1 AND media_id NOT IN (SELECT media_id FROM audio_media)"
             ))?;
             stmt.query_map([since], video_progress_from_row)?.collect()
         })
@@ -342,7 +304,7 @@ impl Db {
         self.with_conn(|c| {
             c.query_row(
                 &format!(
-                    "SELECT {VIDEO_PROGRESS_COLUMNS} FROM video_play_progress WHERE media_id=?1"
+                    "SELECT {VIDEO_PROGRESS_COLUMNS} FROM media_play_history WHERE media_id=?1"
                 ),
                 [media_id],
                 video_progress_from_row,
@@ -354,9 +316,9 @@ impl Db {
     pub fn video_progress_upsert(&self, row: &VideoPlayProgressRow) -> rusqlite::Result<()> {
         self.with_conn(|c| {
             c.execute(
-                "INSERT OR REPLACE INTO video_play_progress (media_id, position_ms, updated_at)
-                 VALUES (?1, ?2, ?3)",
-                params![row.media_id, row.position_ms, row.updated_at],
+                "INSERT INTO media_play_history (media_id, position_ms, play_count, played_at)
+                 VALUES (?1, ?2, 0, ?3) ON CONFLICT(media_id) DO UPDATE SET position_ms=excluded.position_ms,played_at=excluded.played_at",
+                params![row.media_id, row.position_ms, crate::utils::dbtime::normalize(&row.updated_at)?],
             )?;
             Ok(())
         })
@@ -365,7 +327,7 @@ impl Db {
     pub fn video_progress_delete(&self, media_id: &str) -> rusqlite::Result<usize> {
         self.with_conn(|c| {
             c.execute(
-                "DELETE FROM video_play_progress WHERE media_id=?1",
+                "DELETE FROM media_play_history WHERE media_id=?1",
                 [media_id],
             )
         })
@@ -393,11 +355,12 @@ impl Db {
     pub fn embedding_save(&self, row: &ImageEmbeddingRow) -> rusqlite::Result<()> {
         let blob = crate::utils::base64::base64_decode_checked(&row.embedding_base64)
             .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        crate::utils::vector::decode_f32_be(&blob).map_err(rusqlite::Error::InvalidParameterName)?;
         self.with_conn(|c| {
             c.execute(
                 "INSERT OR REPLACE INTO image_embeddings (id, path, embedding, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![row.id, row.path, blob, row.created_at, row.updated_at],
+                params![row.id, row.path, blob, crate::utils::dbtime::normalize(&row.created_at)?, crate::utils::dbtime::normalize(&row.updated_at)?],
             )?;
             Ok(())
         })
@@ -420,11 +383,11 @@ impl Db {
     pub fn archived_conversation_list(&self) -> rusqlite::Result<Vec<ArchivedConversationRow>> {
         self.with_conn(|c| {
             let mut stmt =
-                c.prepare("SELECT conversation_id, conversation_date FROM archived_conversations")?;
+                c.prepare("SELECT conversation_id, archived_at FROM archived_sms_conversations")?;
             stmt.query_map([], |r| {
                 Ok(ArchivedConversationRow {
                     conversation_id: r.get(0)?,
-                    conversation_date: r.get(1)?,
+                    archived_at: r.get(1)?,
                 })
             })?
             .collect()
@@ -437,9 +400,9 @@ impl Db {
     ) -> rusqlite::Result<()> {
         self.with_conn(|c| {
             c.execute(
-                "INSERT OR REPLACE INTO archived_conversations (conversation_id, conversation_date)
+                "INSERT OR REPLACE INTO archived_sms_conversations (conversation_id, archived_at)
                  VALUES (?1, ?2)",
-                params![row.conversation_id, row.conversation_date],
+                params![row.conversation_id, crate::utils::dbtime::normalize(&row.archived_at)?],
             )?;
             Ok(())
         })
@@ -448,7 +411,7 @@ impl Db {
     pub fn archived_conversation_delete(&self, conversation_id: &str) -> rusqlite::Result<usize> {
         self.with_conn(|c| {
             c.execute(
-                "DELETE FROM archived_conversations WHERE conversation_id=?1",
+                "DELETE FROM archived_sms_conversations WHERE conversation_id=?1",
                 [conversation_id],
             )
         })
@@ -456,7 +419,7 @@ impl Db {
 
     pub fn trashed_message_ids(&self) -> rusqlite::Result<Vec<String>> {
         self.with_conn(|c| {
-            let mut stmt = c.prepare("SELECT message_id FROM trashed_sms")?;
+            let mut stmt = c.prepare("SELECT CASE WHEN is_mms=1 THEN 'mms_' || message_id ELSE message_id END FROM trashed_sms")?;
             stmt.query_map([], |r| r.get(0))?.collect()
         })
     }
@@ -467,12 +430,12 @@ impl Db {
             let mut inserted = 0;
             {
                 let mut stmt = tx.prepare(
-                    "INSERT OR REPLACE INTO trashed_sms (message_id, is_mms, trashed_at)
+                    "INSERT OR IGNORE INTO trashed_sms (message_id, is_mms, trashed_at)
                      VALUES (?1, ?2, ?3)",
                 )?;
                 for row in rows {
                     inserted +=
-                        stmt.execute(params![row.message_id, row.is_mms as i64, row.trashed_at])?;
+                        stmt.execute(params![row.message_id, row.is_mms as i64, crate::utils::dbtime::normalize(&row.trashed_at)?])?;
                 }
             }
             tx.commit()?;
@@ -481,12 +444,15 @@ impl Db {
     }
 
     pub fn trashed_message_delete_by_ids(&self, ids: &[String]) -> rusqlite::Result<usize> {
-        let (clause, values) = in_clause("message_id", ids);
         self.with_conn(|c| {
-            c.execute(
-                &format!("DELETE FROM trashed_sms WHERE {clause}"),
-                params_from_iter(values),
-            )
+            let tx = c.unchecked_transaction()?;
+            let mut count = 0;
+            for id in ids {
+                let (message_id, is_mms) = match id.strip_prefix("mms_") { Some(id)=>(id,true), None=>(id.as_str(),false) };
+                count += tx.execute("DELETE FROM trashed_sms WHERE message_id=?1 AND is_mms=?2",params![message_id,is_mms])?;
+            }
+            tx.commit()?;
+            Ok(count)
         })
     }
 

@@ -72,12 +72,20 @@ pub(crate) async fn prepare(host: &Host, source: &str) -> Result<Value> {
     }
     Ok(serde_json::to_value(Snapshot { root, items })?)
 }
-pub(crate) struct Migration {
+pub(crate) struct MediaMoveBindings {
     pub bindings: Vec<Binding>,
     pub source_root: String,
     pub destination_root: String,
 }
-pub(crate) async fn resolve(host: &Host, destination: &str, snapshot: &Value) -> Result<Migration> {
+pub(crate) fn source_root(snapshot: &Value) -> Result<String> {
+    Ok(serde_json::from_value::<Snapshot>(snapshot.clone())?.root)
+}
+
+pub(crate) async fn resolve(
+    host: &Host,
+    destination: &str,
+    snapshot: &Value,
+) -> Result<MediaMoveBindings> {
     let snapshot: Snapshot = serde_json::from_value(snapshot.clone())?;
     let destination = normalized(Path::new(destination)).await?;
     let mut bindings = Vec::new();
@@ -112,7 +120,7 @@ pub(crate) async fn resolve(host: &Host, destination: &str, snapshot: &Value) ->
             });
         }
     }
-    Ok(Migration {
+    Ok(MediaMoveBindings {
         bindings,
         source_root: snapshot.root,
         destination_root: destination,

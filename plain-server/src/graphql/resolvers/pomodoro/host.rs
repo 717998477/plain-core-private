@@ -52,8 +52,8 @@ fn record(r: plain_rs::db::PomodoroItemRow) -> async_graphql::Result<PomodoroRec
         id: r.id.into(),
         date: r.date,
         completed_count: r.completed_count,
-        total_work_sec: Long(r.total_work_seconds as i64),
-        total_break_sec: Long(r.total_break_seconds as i64),
+        total_work_sec: Long(r.total_work_secs as i64),
+        total_break_sec: Long(r.total_break_secs as i64),
         created_at: crate::graphql::resolvers::common::content_common::instant(&r.created_at)?,
         updated_at: crate::graphql::resolvers::common::content_common::instant(&r.updated_at)?,
     })

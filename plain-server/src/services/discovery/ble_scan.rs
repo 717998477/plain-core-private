@@ -124,7 +124,7 @@ async fn run(state: ServerState, pending: Pending) {
         device_type: reply.device_type.as_str().to_string(),
         version: reply.version,
         platform: reply.platform,
-        last_seen: now_iso(),
+        last_seen_at: now_iso(),
         discovery_methods: vec!["BLE".to_string()],
     };
     if let Err(error) = Context::from(&state).seen(device, true, false) {

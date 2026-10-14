@@ -652,7 +652,7 @@ impl NativeMediaCatalog {
             .db
             .with_conn(|conn| {
                 let mut statement = conn.prepare(
-                    "SELECT path,is_trashed FROM media_files WHERE id=?1 AND data_type=?2",
+                    "SELECT path,trashed FROM media_items WHERE id=?1 AND data_type=?2",
                 )?;
                 request
                     .ids

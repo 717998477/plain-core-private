@@ -13,7 +13,7 @@ fn setup() -> (Db, Vec<u8>, String) {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     let (private, public) = ed25519_generate();
     let public = base64_encode(&public);
-    let mut owner = DPeer::new("owner", "Owner", "127.0.0.1", 1, DeviceType::Phone);
+    let mut owner = DPeer::new("owner", "Owner", "127.0.0.1", Some(1), DeviceType::Phone);
     owner.public_key = public.clone();
     owner.key = "pairing-secret".into();
     owner.token = "login-secret".into();
@@ -210,7 +210,7 @@ fn accept_key_conflicts_and_version_overflow_preserve_peer_and_roster() {
     let (db, _, public) = setup();
     let ch = DChannel {
         id: "channel".into(),
-        owner_id: "actor".into(),
+        owner_id: Some("actor".into()),
         members: serde_json::to_string(&vec![
             ChannelMember::new("actor"),
             ChannelMember::pending("owner"),

@@ -74,7 +74,7 @@ pub fn channel_to_json(ch: &crate::db::DChannel) -> serde_json::Value {
         .into_iter()
         .map(|m| serde_json::json!({"peerId":m.peer_id,"status":m.status.to_string()}))
         .collect();
-    serde_json::json!({"id":ch.id,"name":ch.name,"ownerId":ch.owner_id,"members":members,
+    serde_json::json!({"id":ch.id,"name":ch.name,"ownerId":ch.owner_id.as_deref().unwrap_or_default(),"members":members,
         "version":ch.version,"status":ch.status.to_string(),"createdAt":ch.created_at,"updatedAt":ch.updated_at})
 }
 

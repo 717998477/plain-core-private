@@ -73,7 +73,7 @@ impl Service {
         expires: Option<String>,
     ) -> anyhow::Result<ShareRow> {
         validate_expiry(expires.as_deref())?;
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let row = ShareRow {
             id: crate::short_uuid::short_uuid(),
             name,
@@ -103,7 +103,7 @@ impl Service {
                 name,
                 expires.as_deref(),
                 data.as_deref(),
-                &chrono::Utc::now().to_rfc3339()
+                &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
             )?,
             "share not found"
         );

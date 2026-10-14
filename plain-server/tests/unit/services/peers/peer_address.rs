@@ -15,10 +15,10 @@ async fn root_peer_views_addresses_and_file_urls_use_current_record_without_host
         "fixture",
         " ",
         "bad, 127.0.0.1",
-        443,
+        Some(443),
         plain_rs::chat::enums::DeviceType::Tablet,
     );
-    peer.port = 443;
+    peer.port = Some(443);
     plain_rs::db::chat_store::peers::save(
         &state.db,
         &[peer.clone()],
@@ -66,7 +66,7 @@ async fn root_peer_views_addresses_and_file_urls_use_current_record_without_host
     );
     let old = peer.clone();
     peer.ip = "::1".into();
-    peer.port = 2443;
+    peer.port = Some(2443);
     plain_rs::db::chat_store::peers::save(
         &state.db,
         &[peer.clone()],

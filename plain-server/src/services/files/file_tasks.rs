@@ -31,6 +31,7 @@ impl FileTasks {
         audio: Arc<crate::services::audio::host::Audio>,
         index: Arc<crate::services::images::index::ImageIndex>,
         prefs: Arc<plain_rs::prefs::Prefs>,
+        duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     ) -> Self {
         Self {
             hooks: Arc::new(NativeHooks {
@@ -38,6 +39,7 @@ impl FileTasks {
                 audio,
                 index,
                 prefs,
+                duration_cache,
             }),
             deletion_lock: tokio::sync::Mutex::new(()),
             events,
@@ -128,6 +130,7 @@ impl Events for Changes {
     }
 }
 struct NativeHooks {
+    duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     host: Arc<Host>,
     audio: Arc<crate::services::audio::host::Audio>,
     index: Arc<crate::services::images::index::ImageIndex>,
@@ -183,6 +186,18 @@ impl NativeHooks {
         snapshot: &'a serde_json::Value,
     ) -> HookResult<'a> {
         Box::pin(async move {
+            if kind == FileTaskType::Move {
+                let source = crate::services::files::file_task_media::source_root(snapshot)?;
+                let destination = crate::services::files::file_task_media::normalized(
+                    std::path::Path::new(&op.dst),
+                )
+                .await?;
+                self.duration_cache.invalidate_paths(
+                    &[],
+                    &[op.src.clone(), op.dst.clone(), source, destination],
+                )?;
+            }
+
             self.completed(kind, op).await?;
             if kind == FileTaskType::Move {
                 let change =
@@ -218,8 +233,8 @@ impl NativeHooks {
                         };
                         index.update_cache(rebind)?;
                         if moved_audio {
-                            use plain_rs::media::audio::commands::{self, Action};
-                            commands::command(db, &prefs, engine, Action::Clear, 0, 1.0)?;
+                            use plain_rs::media::audio::commands;
+                            commands::clear_engine(db,&prefs,engine)?;
                         }
                         Ok(())
                     })

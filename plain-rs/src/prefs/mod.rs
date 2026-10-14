@@ -127,6 +127,10 @@ pub fn default_path(data_dir: &Path) -> PathBuf {
 }
 
 impl Prefs {
+    pub fn in_memory() -> Self {
+        Self { system: PrefsStore::in_memory(), user: PrefsStore::in_memory() }
+    }
+
     /// Load the preferences at `path`. A missing file starts empty; a
     /// malformed file is an error (the file is hand-editable, so parse
     /// failures should be loud, not silently discarded).
@@ -244,6 +248,10 @@ struct PrefsStore {
 }
 
 impl PrefsStore {
+    fn in_memory() -> Self {
+        Self { path: PathBuf::new(), inner: RwLock::new(Map::new()) }
+    }
+
     fn load(path: &Path) -> Result<Self> {
         let inner = match std::fs::read_to_string(path) {
             Ok(text) => serde_json::from_str(&text).map_err(|source| PrefsError::Parse {
@@ -336,6 +344,7 @@ impl PrefsStore {
     }
 
     fn save(&self, inner: &Map<String, Value>) -> Result<bool> {
+        if self.path.as_os_str().is_empty() { return Ok(true); }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| PrefsError::Write {
                 path: parent.to_path_buf(),

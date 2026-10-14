@@ -31,10 +31,10 @@ pub fn save(db: &Db, facts: Facts) -> Result<DPeer> {
             [&facts.id], row_to_peer,
         ).optional()?;
         let new = existing.is_none();
-        let mut peer = existing.unwrap_or_else(|| DPeer::new(&facts.id, &facts.name, "", facts.port, facts.device_type));
+        let mut peer = existing.unwrap_or_else(|| DPeer::new(&facts.id, &facts.name, "", Some(facts.port), facts.device_type));
         peer.name = facts.name;
         peer.ip = crate::peers::pairing::prefer_sender_ip(&facts.ips, "");
-        peer.port = facts.port;
+        peer.port = Some(facts.port);
         peer.device_type = facts.device_type;
         peer.key = facts.key;
         peer.public_key = facts.public_key;

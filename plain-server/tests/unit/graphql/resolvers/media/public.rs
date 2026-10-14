@@ -65,8 +65,8 @@ fn image_row(id: &str, path: &str) -> Value {
     json!({
         "id": id, "title": id, "path": path, "size": 2048,
         "width": 4000, "height": 3000, "rotation": 0, "bucketId": "b1",
-        "createdAt": "2026-01-02T03:04:05Z", "updatedAt": "2026-02-03T04:05:06Z",
-        "takenAt": "2026-01-01T00:00:00Z", "isFavorite": true,
+        "createdAt": "2026-01-02T03:04:05.000Z", "updatedAt": "2026-02-03T04:05:06.000Z",
+        "takenAt": "2026-01-01T00:00:00.000Z", "isFavorite": true,
     })
 }
 
@@ -237,8 +237,8 @@ async fn videos_carry_the_duration_and_the_taken_time() {
             json!([{
                 "id": "v1", "title": "clip", "path": "/storage/Movies/clip.mp4",
                 "durationMs": 61000, "size": 900, "width": 1920, "height": 1080,
-                "rotation": 0, "bucketId": "b2", "createdAt": "2026-01-02T03:04:05Z",
-                "updatedAt": "2026-02-03T04:05:06Z", "takenAt": Value::Null,
+                "rotation": 0, "bucketId": "b2", "createdAt": "2026-01-02T03:04:05.000Z",
+                "updatedAt": "2026-02-03T04:05:06.000Z", "takenAt": Value::Null,
                 "isFavorite": false,
             }])
         }
@@ -265,9 +265,9 @@ async fn doc_extensions_come_from_the_path() {
     let (_dir, schema) = fixture_with(GRANTED, true, |method, _| match method {
         "systemMediaRows" => json!([
             {"id":"d1","title":"a","path":"/storage/Docs/a.pdf","durationMs":0,"size":10,
-             "bucketId":"b3","createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-02T03:04:05Z"},
+             "bucketId":"b3","createdAt":"2026-01-02T03:04:05.000Z","updatedAt":"2026-01-02T03:04:05.000Z"},
             {"id":"d2","title":"b","path":"/storage/Docs/noext","durationMs":0,"size":10,
-             "bucketId":"b3","createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-02T03:04:05Z"},
+             "bucketId":"b3","createdAt":"2026-01-02T03:04:05.000Z","updatedAt":"2026-01-02T03:04:05.000Z"},
         ]),
         other => panic!("unexpected host call {other}"),
     });
@@ -379,7 +379,7 @@ async fn all_media_lists_accept_the_original_shared_interface_fragment() {
         "systemMediaRows" => json!([{
             "id":"media-1", "title":"Media", "artist":"Artist", "path":"/media/file",
             "size":2048, "durationMs":1000, "bucketId":"bucket-1",
-            "createdAt":"2026-01-02T03:04:05Z", "updatedAt":"2026-02-03T04:05:06Z"
+            "createdAt":"2026-01-02T03:04:05.000Z", "updatedAt":"2026-02-03T04:05:06.000Z"
         }]),
         other => panic!("unexpected host call {other}"),
     });

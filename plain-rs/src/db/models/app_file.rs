@@ -3,7 +3,7 @@
 pub struct DAppFile {
     /// Full SHA-256 hex digest (64 chars) — primary key.
     pub id: String,
-    pub size: i64,
+    pub size_bytes: i64,
     pub mime_type: String,
     pub real_path: String,
     pub ref_count: i32,
