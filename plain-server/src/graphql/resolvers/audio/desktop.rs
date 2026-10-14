@@ -1,5 +1,5 @@
 //! Audio playback queue, user playlists and play history — the shared
-//! plain-rs `library` core (`the shared SQLite database`), the same behavior the NAS
+//! plain-rs `library` core (`the shared SQLite database`), the same behavior the server
 //! server runs. The desktop local server has no media index yet, so the
 //! LIBRARY source resolves to zero tracks (playAllAudios returns null);
 //! the manual queue, playlists and history work in full.
@@ -351,7 +351,7 @@ impl AudioMutation {
 }
 
 /// The DSL `text:` field of a page query — extracted with the shared
-/// parser (plain-rs `utils::search_dsl`), same as the NAS server.
+/// parser (plain-rs `utils::search_dsl`), same as the the server.
 fn text_of(query: &str) -> String {
     plain_rs::utils::search_dsl::field_value(query, "text").unwrap_or_default()
 }

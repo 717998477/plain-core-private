@@ -8,6 +8,8 @@
 //!
 //! Embedding the bundle in the crate instead would duplicate 11 MB in every
 //! `.so`/framework and force a full plain-rs rebuild on every web-only change.
+//! That is why the embed lives in the headless CLI: `WebBundle` carries the
+//! same bytes here without any consumer paying for them unless it asks.
 
 use axum::{
     body::Body,
@@ -16,6 +18,8 @@ use axum::{
     response::Response,
 };
 use std::path::{Component, Path, PathBuf};
+
+use super::web_bundle::SharedWebBundle;
 
 /// Assets under these prefixes are content-hashed by the bundler.
 const IMMUTABLE_PREFIXES: &[&str] = &["assets/", "ficons/", "icons/"];
@@ -112,13 +116,20 @@ fn has_extension(relative: &Path) -> bool {
         .is_some_and(|name| name.contains('.'))
 }
 
-/// The SPA shell, which is itself subject to the boundary check so a
-/// symlinked `index.html` cannot export a file from outside the bundle.
-fn shell(root: &Path) -> Option<(PathBuf, String)> {
-    Some((
-        bundle_file(root, Path::new("index.html"))?,
-        "index.html".to_string(),
-    ))
+const SHELL: &str = "index.html";
+
+/// Where the bundle comes from. `read` applies the same boundary check to
+/// both, so a shell reached through a symlink cannot export a file outside it.
+enum Source<'a> {
+    Disk(PathBuf),
+    Memory(&'a SharedWebBundle),
+}
+
+async fn read(source: &Source<'_>, relative: &Path) -> Option<Vec<u8>> {
+    match source {
+        Source::Disk(root) => tokio::fs::read(bundle_file(root, relative)?).await.ok(),
+        Source::Memory(bundle) => bundle.read(relative.to_str()?).map(<[u8]>::to_vec),
+    }
 }
 
 /// The SPA shell must learn the server time before the app boots, so the
@@ -144,6 +155,7 @@ fn now_ms() -> i64 {
 pub(crate) async fn serve(
     prefs: &plain_rs::prefs::Prefs,
     root: Option<&Path>,
+    embedded: Option<&SharedWebBundle>,
     method: &Method,
     path: &str,
 ) -> Option<Response> {
@@ -153,21 +165,24 @@ pub(crate) async fn serve(
     if !(prefs.get_user_or("desktop_access", true)) {
         return None;
     }
-    let root = canonical_root(root?)?;
+    let source = match (root, embedded) {
+        (Some(_), _) => Source::Disk(canonical_root(root?)?),
+        (None, Some(bundle)) => Source::Memory(bundle),
+        (None, None) => return None,
+    };
     let requested = path.split(['?', '#']).next().unwrap_or_default();
     let requested = requested.strip_prefix('/').unwrap_or(requested);
     // Anything that is not a real file, and any extension-less path, is a
     // client-side route and must fall back to the SPA shell.
-    let (served, resource) = match classify(requested) {
+    let (bytes, resource) = match classify(requested) {
         Requested::Rejected => return None,
-        Requested::Root => shell(&root)?,
-        Requested::Relative(relative) => match bundle_file(&root, &relative) {
-            Some(path) => (path, requested.to_owned()),
+        Requested::Root => (read(&source, Path::new(SHELL)).await?, SHELL.to_owned()),
+        Requested::Relative(relative) => match read(&source, &relative).await {
+            Some(bytes) => (bytes, requested.to_owned()),
             None if has_extension(&relative) => return None,
-            None => shell(&root)?,
+            None => (read(&source, Path::new(SHELL)).await?, SHELL.to_owned()),
         },
     };
-    let bytes = tokio::fs::read(&served).await.ok()?;
     let (body, cache) = if resource.ends_with(".html") {
         (
             inject_server_time(&String::from_utf8_lossy(&bytes), now_ms()).into_bytes(),
@@ -194,9 +209,15 @@ pub(crate) async fn fallback(
     request: Request,
 ) -> Response {
     let root = state.web_root.read().ok().and_then(|guard| guard.clone());
+    let embedded = state
+        .web_bundle
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone());
     serve(
         &state.prefs,
         root.as_deref(),
+        embedded.as_ref(),
         request.method(),
         request.uri().path(),
     )

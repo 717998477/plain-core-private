@@ -26,7 +26,7 @@ fn valid_custom_bearer(value: &str, session_token: &str) -> bool {
 }
 
 /// Answer a development request: the literal client id `dev`, plaintext in
-/// and out. Mirrors the NAS dev branch the legacy router provided, so the
+/// and out. Mirrors the server dev branch the legacy router provided, so the
 /// NAS keeps this entry point after moving to the public router.
 async fn run_development(state: &ServerState, body: Bytes) -> Result<Response, StatusCode> {
     let request = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -42,7 +42,7 @@ async fn run_development(state: &ServerState, body: Bytes) -> Result<Response, S
     Ok(result.into_response())
 }
 
-/// Does this `Authorization` header present the NAS development token?
+/// Does this `Authorization` header present the server development token?
 /// An unset token never matches, and the comparison is constant time so a
 /// wrong guess cannot learn the real one from response timing.
 pub(crate) fn dev_bearer_matches(state: &ServerState, authorization: &str) -> Result<bool, ()> {
@@ -86,7 +86,7 @@ async fn execute(
     if !state.prefs.get_user_or("desktop_access", true) {
         return Err(StatusCode::NOT_FOUND);
     }
-    // The NAS development bearer. It stands in for a session so the NAS
+    // The server development bearer. It stands in for a session so the server
     // can be driven before setup, and it answers in plaintext for the same
     // reason — no session key to encrypt with.
     let dev_bearer = match authorization {

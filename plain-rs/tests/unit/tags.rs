@@ -1,4 +1,4 @@
-//! Behavior locks for `src/library/tags.rs` — ported from plain-nas's
+//! Behavior locks for `src/library/tags.rs` — ported from the previous Go implementation's
 //! `tests/unit/db/tags.rs` minus the KV-era migration tests (SQLite
 //! starts clean; there is nothing to migrate).
 

@@ -15,7 +15,7 @@ fn fresh_db() {
     // threads reading the env). Tests run with no other readers
     // contending for this var, so the unsafe block is fine.
     unsafe {
-        std::env::set_var("PLAIN_NAS_DATA_DIR", &path);
+        std::env::set_var("PLAINAPP_DATA_DIR", &path);
     }
 }
 
@@ -44,7 +44,7 @@ fn unique_path_appends_index() {
 #[test]
 fn round_trip_store_load() {
     fresh_db();
-    // Note: this requires db::get_default() to be opened with PLAIN_NAS_DATA_DIR
+    // Note: this requires db::get_default() to be opened with PLAINAPP_DATA_DIR
     // before the test is run. Cargo runs tests in parallel; for simplicity we
     // just exercise the serializer.
     let item = TrashItem {

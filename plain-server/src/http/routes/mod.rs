@@ -11,6 +11,9 @@ pub mod cors_host;
 pub mod static_host;
 
 #[cfg(feature = "core")]
+pub mod web_bundle;
+
+#[cfg(feature = "core")]
 pub mod graphql;
 
 #[cfg(feature = "core")]

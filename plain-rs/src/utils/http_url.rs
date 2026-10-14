@@ -1,5 +1,5 @@
 //! Tiny HTTP URL parser tailored for the small set of URL operations the
-//! Plain* projects actually do. Ported from plain-nas `src/http_url.rs`
+//! Plain* projects actually do. Ported from the previous Go implementation `src/http_url.rs`
 //! (which replaced the `url` crate there).
 //!
 //! Why not `url`?

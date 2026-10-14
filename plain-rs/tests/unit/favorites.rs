@@ -1,5 +1,5 @@
 //! Behavior locks for `src/library/favorite_folders.rs` — ported 1:1
-//! from plain-nas's `tests/unit/favorites.rs` (the prefs-backed
+//! from the previous Go implementation's `tests/unit/favorites.rs` (the prefs-backed
 //! implementation these functions were moved from).
 
 use super::*;

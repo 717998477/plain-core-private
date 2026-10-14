@@ -1,6 +1,6 @@
 //! Adapter from `tokio::io::AsyncRead` to `futures_core::Stream<Item = Result<Bytes, io::Error>>`.
 //!
-//! Ported from plain-nas `src/async_read_stream.rs`, which replaced its
+//! Ported from the previous Go implementation `src/async_read_stream.rs`, which replaced its
 //! single use of `tokio_util::io::ReaderStream` to avoid pulling in
 //! `tokio-util` (and its dependency fan-out) for one call site.
 //!

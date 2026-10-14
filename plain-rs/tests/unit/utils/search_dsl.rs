@@ -1,4 +1,4 @@
-//! Unit tests for `src/utils/search_dsl.rs` — ported 1:1 from plain-nas's
+//! Unit tests for `src/utils/search_dsl.rs` — ported 1:1 from the previous Go implementation's
 //! `tests/unit/search.rs` parser tests (the parser these lock moved here).
 use super::*;
 

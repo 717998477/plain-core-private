@@ -2,7 +2,7 @@
 //! preserve spaces, `\` escapes), each token `field:op_value`; bare
 //! tokens become `text:` fields, `NOT` inverts the next field's op.
 //! 1:1 port of the Go `internal/search/search.go` parser, shared by
-//! plain-nas (fs search) and plain-desktop (tag/queue query fields).
+//! the server (fs search) and plain-desktop (tag/queue query fields).
 
 // ---------------------------------------------------------------------------
 // FilterField model

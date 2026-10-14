@@ -1,13 +1,13 @@
 //! `/fs` — serve a file, ONE handler for both hosts.
 //!
 //! Mirrors `plain-app` `web/routes/FilesRoutes.kt::addFilesRoutes().get("/fs")`
-//! plus the plain-nas `fs.go` additions the shared web client exercises:
+//! plus the the server `fs.go` additions the shared web client exercises:
 //!
 //!   1. Parse query params; `?id=` is required (400 when missing).
 //!   2. Base64-decode + XChaCha20-decrypt the id with the local server's
 //!      URL token (this is how the web client delivers the path — see
 //!      `getFileId` in `lib/api/file.ts`). Decrypt failure is a 403 on
-//!      the nas host, a 401 on the desktop host (each host's previous
+//!      the server host, a 401 on the desktop host (each host's previous
 //!      contract).
 //!   3. Parse the decrypted payload: either a JSON object
 //!      `{"path":"…","name":"…"}` or a plain URI string
@@ -60,7 +60,7 @@ pub async fn fs_handler(State(state): State<ServerState>, req: Request) -> Respo
 }
 
 /// Host-appropriate error for an id that fails token decryption: the
-/// nas contract answers 403 ("File is expired or does not exist."),
+/// server contract answers 403 ("File is expired or does not exist."),
 /// the desktop contract a bare 401.
 #[cfg_attr(not(feature = "system"), allow(unused_variables))]
 fn forbidden(_state: &ServerState) -> Response {
@@ -87,12 +87,12 @@ pub async fn serve_file(
         Some(s) if !s.is_empty() => s.clone(),
         _ => return bad_request(state, b"missing id"),
     };
-    // Some URL parsers turn '+' into ' ' in query strings (plain-nas
+    // Some URL parsers turn '+' into ' ' in query strings (the server
     // `path_from_file_id` parity).
     let id_encoded = id_encoded.replace(' ', "+");
 
     // 2. Decrypt the id with the URL token (both hosts encrypt /fs ids
-    //    with it — the desktop's ctx.token and the nas prefs url_token
+    //    with it — the desktop's ctx.token and the server prefs url_token
     //    are the same value).
     let id_bytes = plain_rs::utils::base64::base64_decode(&id_encoded);
     let Some(plaintext) = xchacha_decrypt(&ctx.token, &id_bytes) else {
@@ -145,7 +145,7 @@ pub async fn serve_file(
     // 7. Display filename + MIME + Content-Disposition (RFC 5987).
     //    `?name=` overrides, `preview=pdf` rewrites the extension so
     //    browser viewers don't try to inline raw DOC. The MIME source
-    //    stays per-host: the nas contract guesses from the on-disk path
+    //    stays per-host: the server contract guesses from the on-disk path
     //    (charset-appended for text/*), the desktop from the display
     //    name (no charset).
     let preview = params
@@ -577,7 +577,7 @@ async fn serve_thumbnail(
     }
 }
 
-/// Serve a PDF preview (generated on demand via LibreOffice, nas host).
+/// Serve a PDF preview (generated on demand via LibreOffice, server host).
 async fn serve_pdf_preview(
     path: &Path,
     meta: &std::fs::Metadata,

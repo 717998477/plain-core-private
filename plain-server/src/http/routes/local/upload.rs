@@ -178,7 +178,7 @@ pub async fn upload_handler(State(state): State<ServerState>, req: Request) -> R
 
                 let file_name = field.file_name().unwrap_or("").to_string();
                 let content_type = field.content_type().map(|s| s.to_owned());
-                // The nas contract requires an explicit target dir; the
+                // The server contract requires an explicit target dir; the
                 // desktop contract also accepts an empty dir (chat flows
                 // default to the app data dir).
                 if file_name.is_empty() {
@@ -273,7 +273,7 @@ pub async fn upload_handler(State(state): State<ServerState>, req: Request) -> R
 
                     saved_filename = file_name;
                     last_dest_path = dest_path.to_string_lossy().to_string();
-                    // Index the uploaded file (fire-and-forget, nas parity).
+                    // Index the uploaded file (fire-and-forget, server parity).
                     spawn_media_index(&state, last_dest_path.clone());
                 }
             }
@@ -468,7 +468,7 @@ fn now_ms() -> u64 {
 }
 
 /// Fire-and-forget media indexing for a completed non-app upload
-/// (feature `media`; nas parity — the desktop gains it too).
+/// (feature `media`; server parity — the desktop gains it too).
 fn spawn_media_index(state: &ServerState, path: String) {
     #[cfg(feature = "media")]
     {

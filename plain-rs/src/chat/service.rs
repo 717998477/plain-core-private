@@ -93,7 +93,7 @@ pub struct ChatService<T: PeerTransport> {
     /// Shared with PairingManager so a device-name update propagates.
     pub identity: std::sync::Arc<ChatIdentity>,
     /// Device type advertised in channel wire traffic
-    /// (COMPUTER on desktop, NAS on plain-nas).
+    /// (COMPUTER on desktop, NAS on the server).
     pub wire_device_type: DeviceType,
     /// App data directory (app-file store root).
     pub data_dir: PathBuf,

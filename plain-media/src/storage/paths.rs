@@ -1,9 +1,9 @@
 //! Process-global media paths (data dir + cache dir) for the media
-//! stack. Hosts install once at startup via [`set`] (plain-nas with its
+//! stack. Hosts install once at startup via [`set`] (the server with its
 //! `AppPaths::detect()` values, plain-desktop with its app-data dir).
 //! Before that, [`detect`] falls back to the `PLAIN_RS_DATA_DIR` /
 //! `PLAIN_RS_CACHE_DIR` env vars, then `~/.plainrs` defaults — the same
-//! shape plain-nas's `consts::AppPaths` had, so ported tests keep a
+//! shape the previous Go implementation's `consts::AppPaths` had, so ported tests keep a
 //! seam.
 
 use std::path::PathBuf;
@@ -58,7 +58,7 @@ fn default_cache_dir() -> PathBuf {
 }
 
 /// Test seam: pin `PLAIN_RS_DATA_DIR` for the whole test binary to a
-/// fixed, never-deleted directory, mirroring plain-nas's
+/// fixed, never-deleted directory, mirroring the previous Go implementation's
 /// `AppPaths::pin_test_data_dir`. Tests that pointed this var at a
 /// per-test `TempDir` poisoned the process-global media search index:
 /// whichever value the env var held when the index first initialized

@@ -1,8 +1,8 @@
 //! Media-library resolution seam over the media stack, shared by every
-//! host that runs the audio queue (plain-nas and the desktop local API):
+//! host that runs the audio queue (the server and the desktop local API):
 //! implements `plain_rs::media::audio::queue::LibraryTracks` on top of
 //! the tantivy index + fjall media rows, and resolves a single track
-//! from a path. Ported from plain-nas's `NasLibraryTracks`.
+//! from a path. Ported from the previous Go implementation's `NasLibraryTracks`.
 //!
 //! Storage and behavior (queue ordering, supersede, playlists, history)
 //! all live in `plain_rs::media`; only what touches the media index lives

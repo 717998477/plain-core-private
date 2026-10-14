@@ -30,9 +30,9 @@ fn image_metadata_uses_photo_class() {
 }
 
 #[test]
-fn empty_title_falls_back_to_plainnas() {
+fn empty_title_falls_back_to_the_app_name() {
     let xml = didl_lite_metadata("http://x/y", "   ", "video/mp4", MediaType::Video);
-    assert!(xml.contains("<dc:title>PlainNAS</dc:title>"));
+    assert!(xml.contains("<dc:title>PlainApp</dc:title>"));
 }
 
 #[test]

@@ -13,6 +13,7 @@ pub(crate) mod storage;
 pub struct Options {
     pub media_directories: Vec<PathBuf>,
     pub web_root: Option<PathBuf>,
+    pub web_bundle: Option<crate::http::routes::web_bundle::SharedWebBundle>,
     pub automount: bool,
 }
 
@@ -111,6 +112,9 @@ impl HeadlessService {
                 root.display()
             );
             self.core.set_web_root(&root.to_string_lossy());
+        }
+        if let Some(bundle) = options.web_bundle {
+            self.core.set_web_bundle(bundle);
         }
         let ports = self
             .core

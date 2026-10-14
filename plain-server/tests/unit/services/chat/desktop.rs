@@ -1,4 +1,4 @@
-//! NAS assembly of the shared `ChatState` (moved from the plainnas
+//! server assembly of the shared `ChatState` (moved from the previous Go implementation
 //! crate's `src/chat` — one chat assembly in plain-rs now).
 
 use super::*;
@@ -8,7 +8,7 @@ fn unique_tmp_dir(label: &str) -> std::path::PathBuf {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "plain-rs-chat-nas-{label}-{}-{seq}-{}",
+        "plain-rs-chat-server-{label}-{}-{seq}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

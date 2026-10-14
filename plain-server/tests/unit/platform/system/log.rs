@@ -85,7 +85,7 @@ fn tmp_log(tag: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("plain-nas-log-{tag}-{nanos}.log"))
+    std::env::temp_dir().join(format!("plainapp-log-{tag}-{nanos}.log"))
 }
 
 fn write_lines(path: &std::path::Path, lines: &[&str]) {
@@ -232,7 +232,7 @@ fn set_file_creates_missing_parent_dirs() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("plain-nas-log-mkdir-{nanos}"));
+    let root = std::env::temp_dir().join(format!("plainapp-log-mkdir-{nanos}"));
     let path = root.join("logs").join("latest.log");
 
     set_file(&path);

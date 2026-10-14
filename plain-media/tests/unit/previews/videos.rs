@@ -165,7 +165,7 @@ fn probe_reads_fourcc_from_real_fixtures() {
 async fn iso_bmff_probe_never_spawns_ffprobe() {
     // Performance contract: MP4/MOV probes must answer from the
     // in-process walker. A spawn here costs ~0.5 s per first view on a
-    // weak NAS CPU (ffprobe parsing a 4K file pegs a core) — this is
+    // weak CPU (ffprobe parsing a 4K file pegs a core) — this is
     // the regression the walker exists to prevent.
     use std::sync::atomic::{AtomicBool, Ordering};
     let called = std::sync::Arc::new(AtomicBool::new(false));

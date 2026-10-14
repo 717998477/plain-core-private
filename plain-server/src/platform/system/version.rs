@@ -1,4 +1,4 @@
-//! App version metadata surfaced by the NAS `deviceInfo` / `appUpdate`
+//! App version metadata surfaced by the server `deviceInfo` / `appUpdate`
 //! queries. plain-rs carries no build-time git/build info of its own —
 //! the shell binary (whose build.rs knows the commit and build time)
 //! injects its values via [`set`] at startup, before any resolver reads

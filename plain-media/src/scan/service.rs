@@ -1,7 +1,7 @@
 //! Host bootstrap for the media stack: one call that installs the
 //! process-global media paths, opens the fjall store and hands the host
 //! everything the media GraphQL roots and the thumbnail-serving `/fs`
-//! branch need. plain-nas wires this at `cmd::run`; the desktop's local
+//! branch need. the server wires this at `cmd::run`; the desktop's local
 //! server wires it at startup.
 
 use std::path::Path;
@@ -18,7 +18,7 @@ impl MediaService {
     /// Install media paths (`data_dir` + `cache_dir`) and open the fjall
     /// store at `<data_dir>/fjall` — also installing it as the
     /// process-global kv default so every `kv::get_default()` caller
-    /// (file tasks, trash, event logs, the nas automount watcher) shares
+    /// (file tasks, trash, event logs, the server automount watcher) shares
     /// this one handle. Also warms the thumbnail engine with default
     /// budgets; hosts that load a config file can additionally call
     /// [`crate::previews::images::init_from_config`].

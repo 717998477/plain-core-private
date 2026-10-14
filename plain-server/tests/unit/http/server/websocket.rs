@@ -1,5 +1,5 @@
-//! Unit tests for the nas `/` root handler and the login-handshake
-//! crypto chain (moved from plain-nas).
+//! Unit tests for the server `/` root handler and the login-handshake
+//! crypto chain (moved from the server).
 use crate::http::server::build_router;
 use crate::http::server::test_support::nas_state;
 use axum::body::Body;

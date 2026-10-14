@@ -25,12 +25,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PlainNAS</title>
+<title>PlainApp</title>
 <style>body{font-family:system-ui,sans-serif;background:#fff;color:#111;display:grid;place-items:center;height:100vh;margin:0}main{text-align:center}code{background:#f2f2f2;padding:2px 6px;border-radius:4px}</style>
 </head>
 <body>
 <main>
-<h1>PlainNAS</h1>
+<h1>PlainApp</h1>
 <p>Web UI is not built yet. Run <code>bash build-web.sh</code> and restart.</p>
 </main>
 </body>

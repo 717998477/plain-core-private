@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use std::io::Write;
 use std::process::Command;
 
-pub const UNIX_USER: &str = "nas";
+pub const UNIX_USER: &str = "plainapp";
 pub const SMB_CONF_PATH: &str = "/etc/samba/smb.conf";
 
 pub use crate::prefs::samba::{
@@ -209,7 +209,7 @@ pub fn render_smb_conf<F: Fn(&str) -> bool>(
     xattr_ok: F,
 ) -> String {
     let mut b = String::new();
-    b.push_str("# Managed by PlainNAS.\n");
+    b.push_str("# Managed by PlainApp.\n");
     b.push_str("# Manual edits may be overwritten from the Web Settings page.\n\n");
     b.push_str("[global]\n");
     b.push_str("  workgroup = WORKGROUP\n");
@@ -346,7 +346,7 @@ pub fn supports_xattrs(dir: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
         use std::ffi::CString;
-        const ATTR: &str = "user.plainnas_xattr_probe";
+        const ATTR: &str = "user.plainapp_xattr_probe";
 
         fn try_setxattr(path: &str, attr: &str) -> bool {
             let Ok(c_path) = CString::new(path) else {
@@ -373,7 +373,7 @@ pub fn supports_xattrs(dir: &str) -> bool {
         }
 
         let tmp_path =
-            std::path::Path::new(dir).join(format!(".plainnas-xattr-{}", std::process::id()));
+            std::path::Path::new(dir).join(format!(".plainapp-xattr-{}", std::process::id()));
         match std::fs::File::create(&tmp_path) {
             Ok(_f) => {
                 let path = tmp_path.to_string_lossy().to_string();

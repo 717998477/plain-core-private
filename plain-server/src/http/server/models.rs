@@ -87,7 +87,7 @@ pub(crate) mod test_support {
             8080,
             8443,
         )
-        .expect("nas app ctx");
+        .expect("plainapp app ctx");
         crate::test_tempdirs::retain(dir);
         ServerState::new(
             Arc::new(crate::graphql::schemas::desktop::build_schema()),

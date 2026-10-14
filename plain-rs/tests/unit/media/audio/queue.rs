@@ -1,5 +1,5 @@
 //! Behavior locks for `src/library/audio_queue.rs` — ported 1:1 from
-//! plain-nas's `tests/unit/db/audio_queue.rs` (the fjall implementation
+//! the previous Go implementation's `tests/unit/db/audio_queue.rs` (the fjall implementation
 //! these functions were moved from), with the tantivy index replaced by
 //! the deterministic `FakeLibrary`.
 

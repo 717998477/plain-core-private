@@ -1,6 +1,6 @@
 //! Self-signed TLS certificate management for the local HTTPS servers.
 //!
-//! Shared by plain-desktop (`local/tls.rs`) and plain-nas (`cmd/run.rs`):
+//! Shared by plain-desktop (`local/tls.rs`) and the server (`cmd/run.rs`):
 //! load `cert.pem` / `key.pem` from disk if both exist, otherwise generate
 //! a self-signed certificate via `rcgen` and persist it. PEM bytes are
 //! returned so each project can build its own TLS acceptor (desktop:
@@ -134,7 +134,7 @@ mod tests {
         let dir = tmp_dir("partial");
         let cert = dir.join("cert.pem");
         let key = dir.join("key.pem");
-        let sans = vec!["plainnas.local".to_string()];
+        let sans = vec!["plainapp.local".to_string()];
         let (c1, _) = ensure_self_signed_pem(&cert, &key, &sans).unwrap();
         std::fs::remove_file(&key).unwrap();
         let (c2, _) = ensure_self_signed_pem(&cert, &key, &sans).unwrap();

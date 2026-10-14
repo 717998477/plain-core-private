@@ -1,5 +1,5 @@
 //! Nas auth handlers: `/auth` (login), `/auth/status`, `/auth/setup`
-//! and the nas branch of `/init` (`needsSetup` triage + signature key).
+//! and the server branch of `/init` (`needsSetup` triage + signature key).
 //!
 //! Mirrors Go `cmd/services/api/auth.go` / `init.go`, aligned with
 //! plain-app (`SystemRoutes.kt`): `/init` never requires authentication
@@ -217,12 +217,12 @@ struct InitResponse {
     signature_public_key: String,
 }
 
-/// `POST /init` (nas branch) — the only pre-login API. Aligned with
+/// `POST /init` (server branch) — the only pre-login API. Aligned with
 /// plain-app (`SystemRoutes.kt` `post("/init")`): it never requires
 /// authentication and never answers 401 — an initialized server answers
 /// `needsSetup: false` and the client triages between auto-login
 /// (stored token) and the login form. `needsSetup: true` is the
-/// plain-nas extension for first-run setup (plain-app instead hands out
+/// the server extension for first-run setup (plain-app instead hands out
 /// a generated password). `signaturePublicKey` is the server's stable
 /// Ed25519 public key (base64), used by clients for TOFU verification
 /// of signed login responses. Like plain-app, a missing `c-id` header

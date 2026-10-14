@@ -141,20 +141,20 @@ async fn the_development_bearer_only_admits_the_exact_configured_token() {
 
     let prefs = core.shared_preferences().unwrap();
     prefs
-        .set(plain_rs::prefs::system::keys::DEV_TOKEN, "nas-dev")
+        .set(plain_rs::prefs::system::keys::DEV_TOKEN, "plainapp-dev")
         .unwrap();
     let state = core.runtime_state();
-    assert!(dev_bearer_matches(&state, "Bearer nas-dev").unwrap());
+    assert!(dev_bearer_matches(&state, "Bearer plainapp-dev").unwrap());
     assert!(!dev_bearer_matches(&state, "Bearer wrong").unwrap());
     assert!(!dev_bearer_matches(&state, "Bearer ").unwrap());
     // A prefix of the real token is not the token, and the scheme is required.
-    assert!(!dev_bearer_matches(&state, "Bearer nas-de").unwrap());
-    assert!(!dev_bearer_matches(&state, "nas-dev").unwrap());
+    assert!(!dev_bearer_matches(&state, "Bearer plainapp-d").unwrap());
+    assert!(!dev_bearer_matches(&state, "plainapp-dev").unwrap());
 
     // Clearing it takes the entry point away again.
     prefs
         .remove(plain_rs::prefs::system::keys::DEV_TOKEN)
         .unwrap();
-    assert!(!dev_bearer_matches(&state, "Bearer nas-dev").unwrap());
+    assert!(!dev_bearer_matches(&state, "Bearer plainapp-dev").unwrap());
     core.stop_core().await;
 }

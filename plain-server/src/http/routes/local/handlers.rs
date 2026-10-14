@@ -1,7 +1,7 @@
 //! Request handlers for the shared API routes (`/init`, `/graphql`,
 //! `/peer_graphql`, `/nearby`, health) plus the desktop DLNA/WS/404
 //! fallback dispatch — a direct port of the old `http_handler::handle`
-//! route table onto axum extractors, merged with plain-nas's graphql
+//! route table onto axum extractors, merged with the previous Go implementation's graphql
 //! transport (session keys, dev bearer, replay wrapper).
 
 use axum::body::Body;
@@ -269,7 +269,7 @@ fn header_string(headers: &axum::http::HeaderMap, name: &str) -> String {
 
 /// Strip the `"TIMESTAMP|NONCE|"` replay-protection prefix from the
 /// decrypted payload (plain-desktop `wrapWithReplayProtection`). The
-/// stricter plain-nas variant: only a numeric `TS|NONCE|` prefix is
+/// stricter the server variant: only a numeric `TS|NONCE|` prefix is
 /// stripped, timestamps >10 min off warn, anything else passes through
 /// unchanged.
 fn strip_replay_wrapper(body: &[u8]) -> String {

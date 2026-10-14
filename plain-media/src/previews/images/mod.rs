@@ -268,7 +268,7 @@ fn decode_to_target(path: &str, s: Sniffed, rw: u32, rh: u32) -> Result<Bitmap> 
     decode::image_full(p)
 }
 
-#[allow(dead_code)] // parity with plain-nas: kept for parity tests
+#[allow(dead_code)] // parity with the server: kept for parity tests
 fn downscale_ratio(w: u32, h: u32, tw: u32, th: u32) -> f64 {
     let rw = if tw > 0 {
         f64::from(w) / f64::from(tw)

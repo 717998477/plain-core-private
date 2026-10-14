@@ -1,6 +1,6 @@
 //! Unit tests for the merged /nearby + /peer_graphql handlers (moved
-//! from plain-nas; driven through the desktop branch whose peer schema
-//! lives in plain-rs — the nas branch's own schema is exercised by the
+//! from the server; driven through the desktop branch whose peer schema
+//! lives in plain-rs — the server branch's own schema is exercised by the
 //! nas crate's router test).
 use crate::http::server::test_support::as_desktop;
 use crate::http::server::test_support::nas_state;

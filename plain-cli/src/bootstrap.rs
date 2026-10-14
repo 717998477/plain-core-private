@@ -36,6 +36,7 @@ pub fn run() -> Result<()> {
                 plain_server::assembly::headless::Options {
                     media_directories,
                     web_root,
+                    web_bundle: Some(std::sync::Arc::new(crate::web_bundle::EmbeddedBundle)),
                     automount,
                 },
             ))

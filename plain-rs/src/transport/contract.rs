@@ -3,7 +3,7 @@
 //! The wire protocol (Ed25519-signed GraphQL JSON, XChaCha20-Poly1305
 //! body, `c-id`/`c-cid` headers, encrypted response) lives here; the
 //! actual HTTP POST is the app's job via the [`PeerTransport`] trait —
-//! plain-desktop uses an async reqwest client, plain-nas uses ureq.
+//! plain-desktop uses an async reqwest client, the server uses ureq.
 
 use serde_json::json;
 

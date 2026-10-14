@@ -2,7 +2,7 @@
 /// `application/octet-stream` for unknown / extensionless inputs.
 ///
 /// Merged table (2026-09-04): union of the former plain-rs table and the
-/// richer plain-nas `fsx::guess_mime` table (which mirrored the Go NAS),
+/// richer the server `fsx::guess_mime` table (which mirrored the the Go implementation),
 /// plus plain-app conventions where they overlapped. Charset handling is
 /// deliberately excluded — callers append `; charset=utf-8` for `text/*`
 /// if their transport wants it.
@@ -174,7 +174,7 @@ mod tests {
         for ext in [
             "jpg", "png", "gif", "webp", "svg", "bmp", "tif", "heic", "avif", "mp4", "webm", "mov",
             "mkv", "3gp", "mp3", "m4a", "wav", "ogg", "pdf", "zip", "json", "txt", "html", "md",
-            // from the plain-nas table merge
+            // from the the server table merge
             "css", "js", "xml", "csv", "tsv", "ico", "avi", "ogv", "ts", "flac", "opus", "aac",
             "bz2", "xz",
         ] {
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn merged_table_covers_former_nas_entries() {
-        // Spot-check the entries that came from plain-nas's table.
+        // Spot-check the entries that came from the previous Go implementation's table.
         assert_eq!(mime_from_ext("index.htm"), "text/html");
         assert_eq!(mime_from_ext("app.mjs"), "application/javascript");
         assert_eq!(mime_from_ext("data.tsv"), "text/tab-separated-values");

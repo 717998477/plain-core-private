@@ -1,4 +1,4 @@
-//! Unit tests for the CORS policy (moved from plain-nas).
+//! Unit tests for the CORS policy (moved from the server).
 use super::*;
 use plain_media::config::Config;
 

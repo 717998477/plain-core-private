@@ -43,7 +43,7 @@ pub struct WatcherHandle {
 /// Build missing indexes at startup. Mirrors Go's `cmd/services/watcher/run.go`.
 /// `default_roots` is the host's policy for which directories the file
 /// search index should cover when it needs building from scratch
-/// (plain-nas: its /mnt/usb* mounts; desktop: the media source dirs).
+/// (the server: its /mnt/usb* mounts; desktop: the media source dirs).
 pub fn build_missing_indexes(
     data_dir: &Path,
     db: &crate::storage::kv::Db,

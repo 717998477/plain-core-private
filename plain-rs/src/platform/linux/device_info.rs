@@ -47,7 +47,7 @@ pub fn collect(app_version: &str, app_full_version: &str) -> Result<DeviceInfo> 
     let cpu = read_cpuinfo();
     let (uptime, boot_time) = read_uptime_and_boottime();
 
-    let ips = std::env::var("PLAIN_NAS_IPS")
+    let ips = std::env::var("PLAINAPP_IPS")
         .ok()
         .map(|v| {
             v.split(',')
@@ -82,7 +82,7 @@ pub fn collect(app_version: &str, app_full_version: &str) -> Result<DeviceInfo> 
         model: {
             let dmi = dmi_model();
             if dmi.is_empty() {
-                std::env::var("PLAIN_NAS_MODEL").unwrap_or_default()
+                std::env::var("PLAINAPP_MODEL").unwrap_or_default()
             } else {
                 dmi
             }

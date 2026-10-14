@@ -162,7 +162,7 @@ impl IdentitySource {
                 let pair = plain_rs::tls::ensure_self_signed_pem(
                     certificate,
                     key,
-                    &["plainnas.local".into(), "localhost".into()],
+                    &["plainapp.local".into(), "localhost".into()],
                 )
                 .map_err(|error| error.to_string())?;
                 crate::http::listeners::tls_config(&pair.0, &pair.1)?;

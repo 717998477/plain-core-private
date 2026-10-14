@@ -73,7 +73,7 @@ type Audio implements MediaItem {
 	createdAt: Instant!
 	updatedAt: Instant!
 	"""
-	plain-app serves the per-track favorite flag; the NAS has no
+	plain-app serves the per-track favorite flag; the server has no
 	per-media favorites (folders only), so this is always false.
 	"""
 	isFavorite: Boolean!
@@ -495,7 +495,7 @@ type File {
 	"""
 	childCount: Int!
 	"""
-	Android MediaStore id elsewhere; a NAS has no media store so null.
+	Android MediaStore id elsewhere; the server has no media store so null.
 	"""
 	mediaId: ID
 }
@@ -565,7 +565,7 @@ type Image implements MediaItem {
 	createdAt: Instant!
 	updatedAt: Instant!
 	"""
-	No per-media favorites on NAS — always false (plain-app parity).
+	No per-media favorites on the server — always false (plain-app parity).
 	"""
 	isFavorite: Boolean!
 	tags: [Tag!]!
@@ -1407,7 +1407,7 @@ type QueryRoot {
 	"""
 	scanProgress: ScanProgress!
 	"""
-	AI image search is a phone-app capability (on-device CLIP); the NAS
+	AI image search is a phone-app capability (on-device CLIP); the server
 	answers with a well-formed `UNAVAILABLE` so probing clients render
 	their "not available" path instead of a GraphQL error.
 	"""
@@ -1778,7 +1778,7 @@ type Video implements MediaItem {
 	createdAt: Instant!
 	updatedAt: Instant!
 	"""
-	No per-media favorites on NAS — always false (plain-app parity).
+	No per-media favorites on the server — always false (plain-app parity).
 	"""
 	isFavorite: Boolean!
 	tags: [Tag!]!

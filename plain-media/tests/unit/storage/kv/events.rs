@@ -8,7 +8,7 @@ static SEQ: AtomicUsize = AtomicUsize::new(0);
 /// Isolated Db for this test (same pattern as tests/unit/db/tags.rs).
 fn fresh() -> EventLog<'static> {
     let n = SEQ.fetch_add(1, Ordering::SeqCst);
-    let p = env::temp_dir().join(format!("plain-nas-events-{n}"));
+    let p = env::temp_dir().join(format!("plainapp-events-{n}"));
     let _ = std::fs::remove_dir_all(&p);
     let db = Box::leak(Box::new(Db::open(&p).unwrap()));
     EventLog::new(db)

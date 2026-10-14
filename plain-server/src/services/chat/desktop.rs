@@ -1,5 +1,5 @@
 //! Chat wiring over the shared `plain_rs::chat` stack — the single
-//! assembly both hosts (desktop Tauri shell, plain-nas server) use.
+//! assembly both hosts (desktop Tauri shell, the server server) use.
 //!
 //! One place assembles everything the plain-app chat contract needs:
 //! * `plain.db` — the plain-app-schema SQLite store (chats / channels /
@@ -15,7 +15,7 @@
 //!   `LinkPreviewFn` seam (NAS passes the no-op).
 //!
 //! Hosts pick their flavor through [`ChatOptions`] ([`ChatState::new`]
-//! for the desktop defaults, [`ChatState::nas_init`] for the NAS).
+//! for the desktop defaults, [`ChatState::nas_init`] for the server).
 //! GraphQL resolvers, `/nearby` and `/peer_graphql` handlers reach the
 //! service and pairing manager through [`ChatState`].
 
@@ -285,7 +285,7 @@ impl ChatState {
     }
 }
 
-/// Delivery-failure hook for the NAS: kick an mDNS re-browse so a failed
+/// Delivery-failure hook for the server: kick an mDNS re-browse so a failed
 /// peer delivery (usually a changed IP/port) refreshes the peer row for
 /// the next attempt. The discovery handle is filled by
 /// [`ChatState::start_discovery`] — before that the hook is a no-op.
@@ -306,8 +306,8 @@ impl ChatHooks for NasChatHooks {
 
 #[cfg(feature = "system")]
 impl ChatState {
-    /// NAS assembly — open (or create) `plain.db` under `data_dir` and
-    /// build the stack from the NAS's existing identity primitives
+    /// server assembly — open (or create) `plain.db` under `data_dir` and
+    /// build the stack from the server's existing identity primitives
     /// (`client_id`, signature keypair, URL token, display name).
     pub fn nas_init(
         data_dir: &std::path::Path,
@@ -379,7 +379,7 @@ struct DPairingResult<'a> {
 ///   `{ deviceId, deviceName, error }`
 ///
 /// Shared by the desktop WS bridge and hosts that re-publish pairing
-/// events on their own buses (plain-nas's eventbus).
+/// events on their own buses (the previous Go implementation's eventbus).
 pub fn pairing_event_ws_payload(ev: &PairingEvent) -> Option<(&'static str, String)> {
     let result = DPairingResult {
         device_id: &ev.device_id,

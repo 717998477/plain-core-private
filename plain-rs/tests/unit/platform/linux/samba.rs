@@ -36,7 +36,7 @@ fn default_when_no_record() {
     let s = get_samba_settings(&prefs).unwrap();
     assert!(!s.enabled);
     assert!(s.shares.is_empty());
-    assert_eq!(s.username, "nas");
+    assert_eq!(s.username, "plainapp");
     assert_eq!(s.service_name, "smbd");
 }
 
@@ -103,7 +103,7 @@ fn render_disabled_has_no_share_sections() {
         NO_VFS,
         |_| false,
     );
-    assert!(conf.starts_with("# Managed by PlainNAS."));
+    assert!(conf.starts_with("# Managed by PlainApp."));
     assert!(conf.contains("[global]"));
     assert!(!conf.contains("[x]"));
 }
@@ -121,7 +121,7 @@ fn render_guest_readonly_share() {
     assert!(conf.contains("[photos]\n  path = /mnt/photos"));
     assert!(conf.contains("  guest ok = yes\n  guest only = yes\n"));
     assert!(conf.contains("  read only = yes\n"));
-    assert!(conf.contains("  force user = nas\n"));
+    assert!(conf.contains("  force user = plainapp\n"));
     assert!(!conf.contains("valid users"));
 }
 
@@ -141,7 +141,7 @@ fn render_password_readwrite_share() {
         |_| false,
     );
     assert!(conf.contains("  guest ok = no\n"));
-    assert!(conf.contains("  valid users = nas\n"));
+    assert!(conf.contains("  valid users = plainapp\n"));
     assert!(conf.contains("  read only = no\n"));
 }
 

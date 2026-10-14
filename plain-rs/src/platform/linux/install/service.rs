@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 
-pub const SERVICE_PATH: &str = "/etc/systemd/system/plain-nas.service";
+pub const SERVICE_PATH: &str = "/etc/systemd/system/plainapp.service";
 pub const BINARY_PATH: &str = "/usr/local/bin/plainapp";
 
 pub fn require_root() -> Result<()> {
@@ -78,7 +78,7 @@ pub fn uninstall(
 
 pub fn restart() -> Result<()> {
     let status = std::process::Command::new("systemctl")
-        .args(["restart", "plain-nas.service"])
+        .args(["restart", "plainapp.service"])
         .status()?;
     anyhow::ensure!(status.success(), "service restart failed");
     Ok(())

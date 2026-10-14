@@ -237,7 +237,7 @@ impl MediaQueryRoot {
         })
     }
 
-    /// AI image search is a phone-app capability (on-device CLIP); the NAS
+    /// AI image search is a phone-app capability (on-device CLIP); the server
     /// answers with a well-formed `UNAVAILABLE` so probing clients render
     /// their "not available" path instead of a GraphQL error.
     async fn image_search_status(&self) -> FieldResult<ImageSearchStatus> {
