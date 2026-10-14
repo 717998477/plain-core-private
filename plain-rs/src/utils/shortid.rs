@@ -1,4 +1,4 @@
-//! Short ID generator. Port of the Go NAS `internal/pkg/shortid`.
+//! Short ID generator. Port of the Go implementation `internal/pkg/shortid`.
 //!
 //! 16 bytes from `rand::thread_rng` (CSPRNG) → bigint → base57 → padded to 22
 //! chars. Removes ambiguous chars (0/O/1/I/l) so it can be used in URLs
@@ -6,7 +6,7 @@
 //! legacy consumers can still detect the format if they care).
 //!
 //! Distinct from [`crate::utils::short_uuid`] (base36, Kotlin-derived): this one
-//! is the 22-char URL-safe format used by the plain-nas API (trash item
+//! is the 22-char URL-safe format used by the server API (trash item
 //! ids, task ids, tag ids).
 
 use rand::RngCore;

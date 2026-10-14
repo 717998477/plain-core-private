@@ -56,7 +56,7 @@ pub fn app_update() -> AppUpdate {
     let req = agent
         .get(GITHUB_URL)
         .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", "plainnas");
+        .set("User-Agent", "plainapp");
     if let Ok(resp) = req.call() {
         if resp.status() == 200 {
             if let Ok(body) = resp.into_string() {
@@ -76,11 +76,11 @@ pub fn app_update() -> AppUpdate {
     res
 }
 
-/// Strip `PlainNAS`, `v`, build metadata (`+...`), prerelease (`-...`).
+/// Strip `PlainApp`, `v`, build metadata (`+...`), prerelease (`-...`).
 /// Mirrors Go `normalizeVersion`.
 pub fn normalize_version(v: &str) -> String {
     let trimmed = v.trim();
-    let stripped = trimmed.strip_prefix("PlainNAS").unwrap_or(trimmed).trim();
+    let stripped = trimmed.strip_prefix("PlainApp").unwrap_or(trimmed).trim();
     let no_v = stripped.strip_prefix('v').unwrap_or(stripped).trim();
     if let Some(i) = no_v.find(|c: char| c == '+' || c == '-') {
         no_v[..i].to_string()

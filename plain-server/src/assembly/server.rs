@@ -32,6 +32,9 @@ pub(crate) struct ServerState {
     #[cfg(feature = "http_transport")]
     pub(crate) web_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
     #[cfg(feature = "http_transport")]
+    pub(crate) web_bundle:
+        Arc<std::sync::RwLock<Option<crate::http::routes::web_bundle::SharedWebBundle>>>,
+    #[cfg(feature = "http_transport")]
     pub(crate) tls_identity: Arc<std::sync::RwLock<crate::http::tls_identity::IdentitySource>>,
     pub(crate) schema: ContentSchema,
     /// The contract schema the public `/graphql` executes. Built once next
@@ -492,6 +495,8 @@ impl ContentServer {
             #[cfg(feature = "http_transport")]
             web_root: Arc::new(std::sync::RwLock::new(None)),
             #[cfg(feature = "http_transport")]
+            web_bundle: Arc::new(std::sync::RwLock::new(None)),
+            #[cfg(feature = "http_transport")]
             tls_identity: Arc::new(std::sync::RwLock::new(
                 crate::http::tls_identity::IdentitySource::Json(
                     directory.join("tls-identity.json"),
@@ -915,6 +920,14 @@ impl ContentServer {
     pub fn set_web_root(&self, root: &str) {
         if let Ok(mut guard) = self.state.web_root.write() {
             *guard = (!root.is_empty()).then(|| PathBuf::from(root));
+        }
+    }
+    /// The bundle compiled into this executable, used only when no web root
+    /// is set.
+    #[cfg(feature = "http_transport")]
+    pub fn set_web_bundle(&self, bundle: crate::http::routes::web_bundle::SharedWebBundle) {
+        if let Ok(mut guard) = self.state.web_bundle.write() {
+            *guard = Some(bundle);
         }
     }
     pub async fn stop_core(&self) {

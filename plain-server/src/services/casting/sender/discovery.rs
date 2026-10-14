@@ -96,7 +96,7 @@ pub fn start_renderer_discovery(client_id: &str) {
     // for the `set_read_timeout` we drive in a poll loop). This keeps
     // the code 1:1 with the Go version.
     let _ = std::thread::Builder::new()
-        .name("plain-nas-dlna-discovery".into())
+        .name("plainapp-dlna-discovery".into())
         .spawn(run_discovery_task);
 }
 

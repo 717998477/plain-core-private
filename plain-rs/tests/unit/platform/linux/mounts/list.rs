@@ -51,7 +51,7 @@ fn classify_skips_zram_and_loop() {
 
 #[test]
 fn classify_detects_remote_mounts() {
-    let ml = classify_mount_line("nas:/export /mnt/nfs nfs4 rw 0 0").unwrap();
+    let ml = classify_mount_line("server:/export /mnt/nfs nfs4 rw 0 0").unwrap();
     assert!(ml.is_remote);
     assert!(!ml.is_block);
     let ml = classify_mount_line("//192.0.2.5/share /mnt/smb cifs rw 0 0").unwrap();

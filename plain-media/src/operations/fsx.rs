@@ -163,7 +163,7 @@ pub fn percent_decode_path(s: &str) -> String {
 /// `application/octet-stream` for anything we don't recognise.
 ///
 /// We don't try to be comprehensive — the Go side uses Go's `mime`
-/// package which carries ~1000 entries, but for a NAS front-end the
+/// package which carries ~1000 entries, but for the server front-end the
 /// ~50 entries below cover 99% of served files. Adding the rest is
 /// trivial when the need arises.
 pub fn guess_mime(path: &std::path::Path) -> String {

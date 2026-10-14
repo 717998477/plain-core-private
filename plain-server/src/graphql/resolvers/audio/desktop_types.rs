@@ -70,7 +70,7 @@ pub struct Audio {
     pub album_file_id: String,
     pub created_at: Instant,
     pub updated_at: Instant,
-    /// plain-app serves the per-track favorite flag; the NAS has no
+    /// plain-app serves the per-track favorite flag; the server has no
     /// per-media favorites (folders only), so this is always false.
     pub is_favorite: bool,
 }

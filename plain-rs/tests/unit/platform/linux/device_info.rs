@@ -7,7 +7,7 @@ use std::fs;
 
 fn fixture_root(name: &str) -> PathBuf {
     let dir =
-        std::env::temp_dir().join(format!("plain-nas-devinfo-{}-{}", name, std::process::id()));
+        std::env::temp_dir().join(format!("plainapp-devinfo-{}-{}", name, std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -143,7 +143,7 @@ fn thermal_zones_read_type_and_millidegrees_and_skip_broken() {
 
 #[test]
 fn thermal_zones_missing_root_is_empty() {
-    assert!(thermal_zones(Path::new("/nonexistent-plain-nas-test")).is_empty());
+    assert!(thermal_zones(Path::new("/nonexistent-plainapp-test")).is_empty());
 }
 
 #[test]

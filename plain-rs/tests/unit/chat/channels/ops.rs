@@ -42,7 +42,7 @@ fn service(dir_label: &str) -> ChatService<TestTransport> {
     let dir = unique_tmp_dir(dir_label);
     let db = Db::open(&dir.join("plain.db")).unwrap();
     let (kp, _vk) = crate::ed25519_generate();
-    let identity = ChatIdentity::new("me-nas", "nas-box", crate::base64_encode(&kp));
+    let identity = ChatIdentity::new("me-server", "plainapp-box", crate::base64_encode(&kp));
     ChatService::new(
         db,
         crate::base64_encode(&[5u8; 32]),
@@ -61,9 +61,9 @@ async fn create_channel_sets_owner_member_and_key() {
     let ch = svc.create_channel("Team").unwrap();
 
     assert_eq!(ch.name, "Team");
-    assert_eq!(ch.owner_id.as_deref(), Some("me-nas"));
+    assert_eq!(ch.owner_id.as_deref(), Some("me-server"));
     // Owner is a JOINED member from the start (invite-rejection guard).
-    assert_eq!(ch.members, r#"[{"peerId":"me-nas","status":"JOINED"}]"#);
+    assert_eq!(ch.members, r#"[{"peerId":"me-server","status":"JOINED"}]"#);
     // Channel key is a base64 32-byte value.
     assert_eq!(crate::base64_decode(&ch.key).len(), 32);
     // WS_CHANNELS_UPDATED fired with the joined-channel payload.
@@ -125,7 +125,7 @@ async fn delete_peer_demotes_channel_members() {
     let svc = service("del-peer");
     let mut ch = svc.create_channel("Team").unwrap();
     // peer-x as a joined channel member.
-    ch.members = r#"[{"peerId":"me-nas","status":"JOINED"},{"peerId":"peer-x","status":"JOINED"}]"#
+    ch.members = r#"[{"peerId":"me-server","status":"JOINED"},{"peerId":"peer-x","status":"JOINED"}]"#
         .to_string();
     svc.db.update_channel(&ch);
     svc.db.upsert_peer(&DPeer::new(
@@ -163,7 +163,7 @@ async fn leave_channel_as_member_removes_self_and_marks_left() {
     let mut ch = crate::db::DChannel::new("Team", "owner-1");
     ch.id = "ch-foreign".to_string();
     ch.members =
-        r#"[{"peerId":"owner-1","status":"JOINED"},{"peerId":"me-nas","status":"JOINED"}]"#
+        r#"[{"peerId":"owner-1","status":"JOINED"},{"peerId":"me-server","status":"JOINED"}]"#
             .to_string();
     ch.key = crate::base64_encode(&[7u8; 32]);
     svc.db.insert_channel(&ch);
@@ -172,5 +172,5 @@ async fn leave_channel_as_member_removes_self_and_marks_left() {
     let after = svc.db.get_channel_by_id("ch-foreign").expect("row kept");
     assert_eq!(after.status, ChannelStatus::Left);
     let members = crate::chat::channels::messages::decode_members(&after.members);
-    assert!(members.iter().all(|m| m.peer_id != "me-nas"));
+    assert!(members.iter().all(|m| m.peer_id != "me-server"));
 }

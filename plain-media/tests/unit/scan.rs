@@ -8,7 +8,7 @@ use super::*;
 fn tree() -> tempfile::TempDir {
     let base = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     tempfile::Builder::new()
-        .prefix("plainnas-test-")
+        .prefix("plainapp-test-")
         .tempdir_in(base)
         .unwrap()
 }
@@ -22,8 +22,8 @@ fn tmp_db() -> Arc<crate::storage::kv::Db> {
 
 #[test]
 fn media_exclusions() {
-    let data = Path::new("/opt/plainnas/data");
-    let cache = Path::new("/opt/plainnas/cache");
+    let data = Path::new("/opt/plainapp/data");
+    let cache = Path::new("/opt/plainapp/cache");
     let extra = vec!["/home/u/old".to_string()];
     let excl = |p: &str| is_media_excluded_name_or_root(p, data, cache, &extra);
 
@@ -63,8 +63,8 @@ fn media_exclusions() {
         "prefix must respect boundaries"
     );
     // The app's own dirs (thumb cache pollution source).
-    assert!(excl("/opt/plainnas/cache/thumbs/ab/x.webp"));
-    assert!(excl("/opt/plainnas/data/fjall/000001.sst"));
+    assert!(excl("/opt/plainapp/cache/thumbs/ab/x.webp"));
+    assert!(excl("/opt/plainapp/data/fjall/000001.sst"));
 }
 
 #[test]
@@ -1218,7 +1218,7 @@ fn hydrate_page_bench() {
     // 30 copies under $HOME (tempdir under /var/folders is scan-excluded;
     // irrelevant here, but keeps paths realistic).
     let base = std::path::PathBuf::from(std::env::var("HOME").unwrap())
-        .join(format!("plainnas-hydrate-bench-{}", std::process::id()));
+        .join(format!("plainapp-hydrate-bench-{}", std::process::id()));
     std::fs::create_dir_all(&base).unwrap();
     let mut rows = Vec::new();
     for i in 0..30 {

@@ -5,7 +5,7 @@ fn tmp_dir(tag: &str) -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("plain-nas-devtools-{tag}-{nanos}"));
+    let dir = std::env::temp_dir().join(format!("plainapp-devtools-{tag}-{nanos}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir

@@ -1,5 +1,5 @@
-//! Unit tests for the nas `/fs` behaviors merged into the shared file
-//! server (moved from plain-nas): range handling, recent-file tracking,
+//! Unit tests for the server `/fs` behaviors merged into the shared file
+//! server (moved from the server): range handling, recent-file tracking,
 //! codec probe and chat-attachment `fid:` resolution.
 use crate::http::server::ServerState;
 use crate::http::server::test_support::as_desktop;

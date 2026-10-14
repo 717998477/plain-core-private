@@ -589,7 +589,7 @@ pub fn global() -> Arc<MediaSearchIndex> {
                         "[media-index] open {data_dir:?} failed: {e} — using temp fallback"
                     );
                     let tmp = std::env::temp_dir().join(format!(
-                        "plainnas-media-idx-fallback-{}",
+                        "plainapp-media-idx-fallback-{}",
                         std::process::id()
                     ));
                     let _ = std::fs::remove_dir_all(&tmp);

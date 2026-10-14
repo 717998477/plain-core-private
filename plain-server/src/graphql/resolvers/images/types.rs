@@ -45,7 +45,7 @@ pub struct Image {
     pub created_at: Instant,
     #[graphql(name = "updatedAt")]
     pub updated_at: Instant,
-    /// No per-media favorites on NAS — always false (plain-app parity).
+    /// No per-media favorites on the server — always false (plain-app parity).
     #[graphql(name = "isFavorite")]
     pub is_favorite: bool,
 }

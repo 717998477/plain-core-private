@@ -1,4 +1,4 @@
-//! Unit tests for `src/library.rs` — the NAS media-index seam over the
+//! Unit tests for `src/library.rs` — the server media-index seam over the
 //! shared plain-rs library core (track hydration + library-source
 //! resolution). The cross-platform behavior locks live in plain-rs.
 use super::*;
@@ -6,14 +6,14 @@ use crate::media_scan::MediaFile;
 use std::sync::Arc;
 
 fn test_db(tag: &str) -> plain_rs::db::Db {
-    let p = std::env::temp_dir().join(format!("plain-nas-lib-{tag}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("plainapp-lib-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     plain_rs::db::Db::open(&p.join("fjall")).unwrap()
 }
 
 fn tmp_library(tag: &str) -> Db {
-    let p = std::env::temp_dir().join(format!("plain-nas-libdb-{tag}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("plainapp-libdb-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     Db::open(&p.join("plain.db")).unwrap()

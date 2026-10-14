@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-const PLAINNAS_MOUNT_ROOT: &str = "/mnt";
+const MOUNT_ROOT: &str = "/mnt";
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const USB_PREFIX: &str = "usb";
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -107,7 +107,7 @@ fn mount_by_uuid(fs_uuid: &str, target: &str) -> Result<()> {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn parse_usb_slot(mountpoint: &str) -> Option<usize> {
     let rest = mountpoint
-        .strip_prefix(PLAINNAS_MOUNT_ROOT)?
+        .strip_prefix(MOUNT_ROOT)?
         .strip_prefix('/')?;
     let num = rest.strip_prefix(USB_PREFIX)?;
     if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
@@ -249,7 +249,7 @@ pub fn ensure_mounted_usb_volumes(prefs: &Prefs, emit_event: &EventSink) -> Resu
     }
     #[cfg(target_os = "linux")]
     {
-        std::fs::create_dir_all(PLAINNAS_MOUNT_ROOT)?;
+        std::fs::create_dir_all(MOUNT_ROOT)?;
 
         let filesystems = scan_filesystems()?;
         let persisted = get_slot_map(prefs);
@@ -263,7 +263,7 @@ pub fn ensure_mounted_usb_volumes(prefs: &Prefs, emit_event: &EventSink) -> Resu
             let Some(fs) = by_uuid.get(pm.fsuuid.as_str()) else {
                 continue;
             };
-            let target = format!("{PLAINNAS_MOUNT_ROOT}/{USB_PREFIX}{}", pm.slot);
+            let target = format!("{MOUNT_ROOT}/{USB_PREFIX}{}", pm.slot);
             if let Err(e) = std::fs::create_dir_all(&target) {
                 log::error!("mount: mkdir {target} failed: {e}");
                 emit_event("mount_failed", &format!("mkdir {target}: {e}"));

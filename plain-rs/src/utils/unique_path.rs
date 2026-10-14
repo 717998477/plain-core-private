@@ -1,6 +1,6 @@
-//! Filesystem naming helper shared by plain-nas and plain-desktop: pick a
+//! Filesystem naming helper shared by the server and plain-desktop: pick a
 //! non-conflicting sibling path for a target that already exists, using the
-//! `name_1.ext` convention (unified 2026-09-04 — plain-nas previously used
+//! `name_1.ext` convention (unified 2026-09-04 — the server previously used
 //! `name (1).ext`).
 
 use std::path::{Path, PathBuf};

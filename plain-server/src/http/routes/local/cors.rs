@@ -15,7 +15,7 @@
 //! On startup the layer reads an allow-list from config keys:
 //!
 //!   * `server.allowed_origins` — comma-separated origin list
-//!     (e.g. `https://nas.local:8443,https://192.168.1.10:8443`).
+//!     (e.g. `https://plainapp.local:8443,https://192.0.2.10:8443`).
 //!     Default: `https://<hostname>`, `https://localhost`,
 //!     `http://localhost:<http_port>`, `http://127.0.0.1:<http_port>`,
 //!     `https://127.0.0.1:<https_port>` (computed from the current host
@@ -70,12 +70,12 @@ impl CorsPolicy {
         // In non-root dev mode, automatically enable wildcard CORS so any
         // frontend dev server (Vite on :3000 / :5173 / etc.) works without
         // config editing.
-        if std::env::var("PLAIN_NAS_ALLOW_NONROOT").is_ok() && !p.wildcard {
+        if std::env::var("PLAINAPP_ALLOW_NONROOT").is_ok() && !p.wildcard {
             p.wildcard = true;
         }
 
         // Explicit allow-list (CSV).
-        if let Some(raw) = std::env::var("PLAIN_NAS_CORS_ALLOWED_ORIGINS").ok() {
+        if let Some(raw) = std::env::var("PLAINAPP_CORS_ALLOWED_ORIGINS").ok() {
             for o in raw.split(',') {
                 p.allowed.insert(o.trim().to_string());
             }
@@ -167,7 +167,7 @@ pub fn layer(policy: &CorsPolicy) -> CorsLayer {
     // `allow_credentials(true)` with `allow_headers(Any)` is rejected by
     // the CORS spec (and by tower-http at construction time).
     //
-    // `c-id` is the custom session header the NAS uses alongside
+    // `c-id` is the custom session header the server uses alongside
     // `Authorization` — see `src/auth.rs` / Go `requireAuth`.
     // `c-platform` / `c-version` are the client self-identification headers
     // plain-desktop sends on every API call (see its `getApiHeaders`).

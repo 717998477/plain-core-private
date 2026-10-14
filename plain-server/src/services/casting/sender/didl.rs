@@ -33,7 +33,7 @@ pub fn metadata(
     };
 
     let title = if title.trim().is_empty() {
-        "PlainNAS"
+        "PlainApp"
     } else {
         title
     };

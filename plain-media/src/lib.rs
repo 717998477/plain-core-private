@@ -1,9 +1,9 @@
-//! Media stack shared by plain-nas and the plain-desktop local API:
+//! Media stack shared by the server and the plain-desktop local API:
 //! fjall KV storage, file/media indexes, the media scanner, thumbnail
 //! engine, metadata extraction, file-management helpers, and the
-//! watcher. Ported from plain-nas so every desktop platform
+//! watcher. Ported from the previous Go implementation so every desktop platform
 //! (macOS / Windows / Linux) can browse local files through the same
-//! GraphQL surface the NAS serves.
+//! GraphQL surface the server serves.
 
 pub mod catalog;
 pub mod config;

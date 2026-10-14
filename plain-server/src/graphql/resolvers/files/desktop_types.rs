@@ -109,7 +109,7 @@ pub struct File {
     pub is_dir: bool,
     /// Direct-children count for dirs, 0 for files (plain-app contract name).
     pub child_count: i32,
-    /// Android MediaStore id elsewhere; a NAS has no media store so null.
+    /// Android MediaStore id elsewhere; the server has no media store so null.
     pub media_id: Option<ID>,
 }
 

@@ -1,4 +1,4 @@
-//! Unit tests for the nas auth handlers (moved from plain-nas).
+//! Unit tests for the server auth handlers (moved from the server).
 use super::init_session;
 use crate::http::server::test_support::nas_state;
 use axum::http::{HeaderMap, StatusCode};

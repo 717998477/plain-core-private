@@ -1,6 +1,6 @@
 //! Enumerate local network interfaces via `getifaddrs(3)`.
 //!
-//! Ported from plain-nas `src/ifaddr_local.rs`; the dependency-free
+//! Ported from the previous Go implementation `src/ifaddr_local.rs`; the dependency-free
 //! replacement for the `if-addrs` crate, which wrapped the same syscall. The
 //! Unix implementation calls `getifaddrs(3)` via `libc`. That is a POSIX API
 //! with no Windows equivalent in `libc`, so on non-Unix targets the lists come

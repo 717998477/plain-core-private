@@ -1,18 +1,18 @@
 //! WebSocket handlers for the shared router.
 //!
-//! * The chat event socket (nas `/`, desktop any non-`/status` path):
-//!   cid from `?cid=`; the key is the nas session token or the desktop
+//! * The chat event socket (server `/`, desktop any non-`/status` path):
+//!   cid from `?cid=`; the key is the server session token or the desktop
 //!   URL token; the first Binary frame must XChaCha20-decrypt with it
 //!   (failure closes with 1013 `invalid_request`, the plain-app
 //!   contract close code). Afterwards broadcast events stream until
 //!   disconnect — `WsEvent`s with a `target_cid` reach only the
 //!   matching socket. Mirrors Android's `WebSocket.kt` non-`auth=1`
-//!   flow plus the nas event channel.
+//!   flow plus the server event channel.
 //! * `/status` (desktop) — peer online/offline socket: the first Binary
 //!   frame is XChaCha20-decrypted with the peer shared key and the
 //!   plaintext must carry an Ed25519 signature over
 //!   `{timestamp}{cid}`.
-//! * `auth=1` (nas `/`) — the login/setup handshake from plain-desktop
+//! * `auth=1` (server `/`) — the login/setup handshake from plain-desktop
 //!   (`login-handshake.ts`): the first frame is a XChaCha20-Poly1305
 //!   blob encrypted with the password-hash key containing the auth
 //!   request plus the client's ECDH public key. We verify the password,
@@ -56,11 +56,11 @@ pub async fn chat_socket(socket: WebSocket, path: String, state: ServerState) {
     chat_socket_cid(socket, cid, state).await;
 }
 
-/// The chat event socket once the cid is known (the nas `/` handler has
+/// The chat event socket once the cid is known (the server `/` handler has
 /// it from the upgrade query, the desktop fallback extracts it from the
 /// raw path).
 pub async fn chat_socket_cid(socket: WebSocket, cid: String, state: ServerState) {
-    // Resolve the connection key per host: the nas session token for
+    // Resolve the connection key per host: the server session token for
     // this cid, the desktop URL token.
     let key = if matches!(
         state.settings.auth,

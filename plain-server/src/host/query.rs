@@ -195,7 +195,7 @@ pub(crate) fn plan(
                     // argument — MediaProvider parses a legacy selection with a
                     // strict grammar and answers `is_trashed` with
                     // `Invalid token`, which reaches the app as a fatal throw.
-                    // The `.plain-trash` tree belongs to the NAS store, which no
+                    // The `.plain-trash` tree belongs to the server store, which no
                     // phone process creates, so matching its path here could only
                     // ever filter every row out.
                     plan.trash = Some(flag);

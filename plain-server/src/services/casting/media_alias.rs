@@ -153,7 +153,7 @@ pub fn safe_media_url_with_prefs(
     if host.is_empty() {
         return input_url.to_string();
     }
-    let http_port = std::env::var("PLAIN_NAS_HTTP_PORT")
+    let http_port = std::env::var("PLAINAPP_HTTP_PORT")
         .ok()
         .and_then(|s| s.parse::<u16>().ok());
     let host_port = match (http_port, parsed.scheme.as_str(), parsed.port) {

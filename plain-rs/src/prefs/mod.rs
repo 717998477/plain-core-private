@@ -1,6 +1,6 @@
 //! Unified preferences storage for the Plain* apps — separate flat
 //! string→JSON maps in `<data_dir>/system_prefs.json` and
-//! `<data_dir>/user_prefs.json`, shared by plain-nas, plain-desktop,
+//! `<data_dir>/user_prefs.json`, shared by the server, plain-desktop,
 //! and plain-app. System state and user-configurable settings have
 //! independent files and key spaces.
 //!

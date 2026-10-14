@@ -1,5 +1,5 @@
-//! NAS LAN discovery over the shared plain_rs mDNS stack — port of
-//! plain-desktop's NearbyDiscoverManager, NAS-scoped:
+//! server LAN discovery over the shared plain_rs mDNS stack — port of
+//! plain-desktop's NearbyDiscoverManager, server-scoped:
 //!
 //! * advertise `_plainapp._tcp.local` (device type `NAS`) so phones and
 //!   desktops find this server for pairing;

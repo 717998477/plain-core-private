@@ -60,7 +60,7 @@ pub struct PairingManager<T: PeerTransport> {
     pub db: Db,
     pub identity: Arc<ChatIdentity>,
     /// Wire device type this device advertises ("COMPUTER" on desktop,
-    /// "NAS" on plain-nas).
+    /// "NAS" on the server).
     pub local_device_type: &'static str,
     transport: Arc<T>,
     sessions: Arc<Sessions>,

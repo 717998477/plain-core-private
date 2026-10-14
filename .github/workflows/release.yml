@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or replace"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plain-core-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  web:
+    name: Build the web bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the frontend
+        uses: actions/checkout@v4
+        with:
+          repository: plainhub/plain-desktop
+          path: plain-desktop
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: plain-desktop/yarn.lock
+
+      - name: Build
+        working-directory: plain-desktop
+        run: |
+          corepack enable
+          yarn install --immutable
+          VITE_APP_API_HOST="" yarn build
+
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: plain-desktop/dist
+          retention-days: 1
+
+  binary:
+    name: plainapp ${{ matrix.arch }}
+    needs: web
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev python3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Unpack the web bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: plain-cli/src/web_dist
+
+      - name: Build plainapp with the embedded UI
+        run: cargo build --release --locked --target ${{ matrix.target }} -p plainapp
+
+      - name: Package
+        run: tar -czf plainapp-linux-${{ matrix.arch }}.tar.gz -C target/${{ matrix.target }}/release plainapp
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" plainapp-linux-${{ matrix.arch }}.tar.gz --clobber

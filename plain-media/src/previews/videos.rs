@@ -5,7 +5,7 @@
 //! and switches to `/fs?tr=1` on browsers without an HEVC decoder. plain-app
 //! runs its probe in-process (Android `MediaExtractor`); the equivalent here
 //! is an in-tree ISO-BMFF walker — spawning `ffprobe` cost ~0.5s of CPU on a
-//! weak NAS box per first view, which dominated video start latency. The
+//! weak the box per first view, which dominated video start latency. The
 //! `ffmpeg` CLI remains the fallback for non-ISO containers (Matroska, WebM)
 //! and the transcode path.
 

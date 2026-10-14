@@ -169,10 +169,10 @@ pub fn bind_list() -> Vec<LocalIpv4Addr> {
     out
 }
 
-/// Read extra destinations from `PLAINNAS_DLNA_SSDP_EXTRA_DESTS`. Each
+/// Read extra destinations from `PLAINAPP_DLNA_SSDP_EXTRA_DESTS`. Each
 /// entry is `IP[:port]` (port defaults to 1900).
 pub fn ssdp_extra_destinations() -> Vec<SocketAddrV4> {
-    let Ok(v) = std::env::var("PLAINNAS_DLNA_SSDP_EXTRA_DESTS") else {
+    let Ok(v) = std::env::var("PLAINAPP_DLNA_SSDP_EXTRA_DESTS") else {
         return Vec::new();
     };
     let mut out = Vec::new();

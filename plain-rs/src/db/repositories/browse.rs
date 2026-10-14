@@ -1,5 +1,5 @@
 //! SQLite table browsing for developer/debug UIs (the `/developer/database`
-//! page on plain-nas and plain-desktop). Everything operates on one
+//! page on the server and plain-desktop). Everything operates on one
 //! `&Connection` so any wrapper with a `with_conn` accessor can reuse it:
 //!
 //! - [`tables`] / [`table_exists`] — user tables from `sqlite_master`

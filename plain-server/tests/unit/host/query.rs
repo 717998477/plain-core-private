@@ -281,7 +281,7 @@ fn media_trash_rides_the_query_argument_and_builds_no_clause() {
     // The phone trashes through MediaStore, and MediaStore answers a
     // trashed-only read with the `QUERY_ARG_MATCH_TRASHED` argument. None of
     // that is a selection, so the plan carries the flag alone. It must build no
-    // clause: a clause here would be a path match on the NAS store's
+    // clause: a clause here would be a path match on the server store's
     // `.plain-trash` tree, which no phone process creates, and `trash:false`
     // producing one is exactly how a bulk ask read as narrowed when it was
     // really the whole table.

@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn normalize_strips_prefix_and_meta() {
     assert_eq!(normalize_version("v1.2.3"), "1.2.3");
-    assert_eq!(normalize_version("PlainNAS 1.2.3"), "1.2.3");
+    assert_eq!(normalize_version("PlainApp 1.2.3"), "1.2.3");
     assert_eq!(normalize_version("1.2.3-beta.1"), "1.2.3");
     assert_eq!(normalize_version("1.2.3+abc"), "1.2.3");
     assert_eq!(normalize_version("  v1.2.3  "), "1.2.3");

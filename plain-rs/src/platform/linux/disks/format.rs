@@ -232,7 +232,7 @@ pub fn format_disk_single_partition<F: FnMut(&str)>(
     let part_path = first_partition_path(p);
     wait_for_path(&part_path, Duration::from_secs(3))?;
 
-    run_cmd("mkfs.ext4", &["-F", "-L", "plainnas", &part_path])?;
+    run_cmd("mkfs.ext4", &["-F", "-L", "plainapp", &part_path])?;
 
     drop(release_auto_mount);
     crate::platform::linux::mounts::automount::ensure_mounted_usb_volumes(prefs, events)?;

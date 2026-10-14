@@ -105,7 +105,7 @@ fn mime_unknown_falls_back_to_octet_stream() {
 }
 
 fn write_temp_file(name: &str, bytes: &[u8]) -> PathBuf {
-    let dir = std::env::temp_dir().join("plainnas-fsx-tests");
+    let dir = std::env::temp_dir().join("plainapp-fsx-tests");
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join(name);
     std::fs::write(&p, bytes).unwrap();

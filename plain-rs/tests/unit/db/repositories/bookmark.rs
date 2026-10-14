@@ -23,7 +23,7 @@ fn bookmark_store_survives_reopen_and_ungroups_on_group_delete() {
 }
 
 /// Phone Room DAO listing order, locked: pinned first, then sort_order,
-/// then creation (2026-09-26 — plain-nas switched to this store and the
+/// then creation (2026-09-26 — the server switched to this store and the
 /// order must not drift from the phone contract).
 #[test]
 fn listing_order_pins_first_then_sort_then_created() {
