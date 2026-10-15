@@ -26,3 +26,22 @@ fn mount_facts_preserve_existing_wire_fields() {
     assert!(is_remote_filesystem("SMBFS"));
     assert!(!is_remote_filesystem("apfs"));
 }
+
+#[test]
+fn macos_data_volume_is_not_listed_as_a_second_internal_drive() {
+    assert!(should_include_mount("/"));
+    assert!(should_include_mount("/Volumes/External"));
+    assert_eq!(
+        should_include_mount("/System/Volumes/Data"),
+        !cfg!(target_os = "macos")
+    );
+}
+
+#[test]
+fn remote_filesystems_are_case_insensitive() {
+    for name in ["nfs4", "SMBFS", "cifs", "sshfs", "webdav"] {
+        assert!(is_remote_filesystem(name), "{name}");
+    }
+    assert!(!is_remote_filesystem("apfs"));
+    assert!(!is_remote_filesystem("ext4"));
+}

@@ -1,8 +1,3 @@
-//! Public `/graphql` contact roots.
-//!
-//! The search DSL stays owned by Rust: the host turns the query into the
-//! same `WHERE` clause the app's own contact provider view uses.
-
 use crate::graphql::types::ActionResult;
 use crate::graphql::types::facts::instant;
 use crate::graphql::types::facts::integer;
@@ -35,6 +30,10 @@ impl ContactsQuery {
         limit: i32,
     ) -> async_graphql::Result<Vec<Contact>> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[READ])?;
+        if public_gate::is_local(ctx) && !public_gate::require_granted(ctx, &[READ]).await? {
+            return Ok(Vec::new());
+        }
+
         let facts = host_json(
             ctx,
             "systemContactFacts",
@@ -52,8 +51,42 @@ impl ContactsQuery {
 
     /// plain-app degrades this to 0 rather than erroring when the web client
     /// was not granted the contact permission.
+    async fn contact_ids(
+        &self,
+        ctx: &Context<'_>,
+        query: String,
+    ) -> async_graphql::Result<Vec<ID>> {
+        if !public_gate::require_granted(ctx, &[READ]).await? {
+            return Ok(Vec::new());
+        }
+        let params = provider_params(
+            ctx,
+            crate::host::query::Provider::Contact,
+            &query,
+            json!({}),
+        )
+        .await?;
+        let facts = ctx
+            .data_unchecked::<Arc<Host>>()
+            .call("systemContactIds", params)
+            .await
+            .map_err(async_graphql::Error::new)?;
+        serde_json::from_value::<Vec<String>>(facts)
+            .map(|ids| ids.into_iter().map(ID::from).collect())
+            .map_err(|error| async_graphql::Error::new(error.to_string()))
+    }
+
     async fn contact_count(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<i32> {
-        if !public_gate::require_granted(ctx, &[WRITE]).await? {
+        if !public_gate::require_granted(
+            ctx,
+            &[if public_gate::is_local(ctx) {
+                READ
+            } else {
+                WRITE
+            }],
+        )
+        .await?
+        {
             return Ok(0);
         }
         let count = ctx
@@ -304,32 +337,38 @@ fn contact(fact: &Value) -> Contact {
         nickname: text(fact, "nickname"),
         photo_id: text(fact, "photoId"),
         phone_numbers: list(fact, "phoneNumbers", |item| ContactPhoneNumber {
+            type_code: integer(item, "type") as i32,
             value: text(item, "value"),
             r#type: PhoneType::from_android(integer(item, "type")),
             label: text(item, "label"),
             normalized_number: text(item, "normalizedNumber"),
         }),
         emails: list(fact, "emails", |item| ContactEmail {
+            type_code: integer(item, "type") as i32,
             value: text(item, "value"),
             r#type: EmailType::from_android(integer(item, "type")),
             label: text(item, "label"),
         }),
         addresses: list(fact, "addresses", |item| ContactAddress {
+            type_code: integer(item, "type") as i32,
             value: text(item, "value"),
             r#type: PostalType::from_android(integer(item, "type")),
             label: text(item, "label"),
         }),
         events: list(fact, "events", |item| ContactEvent {
+            type_code: integer(item, "type") as i32,
             value: text(item, "value"),
             r#type: EventType::from_android(integer(item, "type")),
             label: text(item, "label"),
         }),
         websites: list(fact, "websites", |item| ContactWebsite {
+            type_code: integer(item, "type") as i32,
             value: text(item, "value"),
             r#type: WebsiteType::from_android(integer(item, "type")),
             label: text(item, "label"),
         }),
         ims: list(fact, "ims", |item| ContactIm {
+            type_code: integer(item, "type") as i32,
             value: text(item, "value"),
             protocol: ImProtocol::from_android(integer(item, "type")),
             custom_protocol: text(item, "label"),

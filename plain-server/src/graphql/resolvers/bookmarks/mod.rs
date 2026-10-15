@@ -1,7 +1,7 @@
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "core")]
 pub mod bookmark;
 
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "core")]
 pub mod bookmark_types;
 
 #[cfg(feature = "core")]

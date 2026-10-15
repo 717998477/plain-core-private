@@ -56,23 +56,23 @@ struct ImageHostSearchResult {
 pub struct MediaAuxQuery;
 #[Object]
 impl MediaAuxQuery {
-    async fn media_host_durations(&self, ctx: &Context<'_>) -> Result<Vec<MediaHostDuration>> {
+    async fn media_durations(&self, ctx: &Context<'_>) -> Result<Vec<MediaHostDuration>> {
         ctx.data::<Arc<DurationCache>>()?
             .all()?
             .into_iter()
             .map(duration)
             .collect()
     }
-    async fn image_host_embedding_ids(&self, ctx: &Context<'_>) -> Result<Vec<ID>> {
+    async fn image_embedding_ids(&self, ctx: &Context<'_>) -> Result<Vec<ID>> {
         Ok(embeddings::ids(ctx.data::<Arc<Db>>()?)?
             .into_iter()
             .map(ID)
             .collect())
     }
-    async fn image_host_embedding_count(&self, ctx: &Context<'_>) -> Result<Long> {
+    async fn image_embedding_count(&self, ctx: &Context<'_>) -> Result<Long> {
         Ok(Long(embeddings::count(ctx.data::<Arc<Db>>()?)?))
     }
-    async fn image_host_search(
+    async fn search_image_embeddings(
         &self,
         ctx: &Context<'_>,
         embedding_base64: String,
@@ -97,28 +97,7 @@ impl MediaAuxQuery {
 pub struct MediaAuxMutation;
 #[Object]
 impl MediaAuxMutation {
-    async fn media_host_save_duration(
-        &self,
-        ctx: &Context<'_>,
-        r#type: DataType,
-        media_id: ID,
-        duration_ms: Long,
-        path: String,
-        size_bytes: Long,
-        modified_at: Instant,
-    ) -> Result<bool> {
-        ctx.data::<Arc<DurationCache>>()?.save(Duration {
-            media_type: r#type.media_type_str().ok_or("invalid media type")?.into(),
-            media_id: media_id.to_string(),
-            duration_ms: duration_ms.0,
-            path,
-            size_bytes: size_bytes.0,
-            modified_at: modified_at.0.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            updated_at: String::new(),
-        })?;
-        Ok(true)
-    }
-    async fn media_host_remove_durations(
+    async fn remove_media_durations(
         &self,
         ctx: &Context<'_>,
         r#type: DataType,
@@ -136,7 +115,7 @@ impl MediaAuxMutation {
                 .try_into()?,
         ))
     }
-    async fn image_host_save_embeddings(
+    async fn save_image_embeddings(
         &self,
         ctx: &Context<'_>,
         items: Vec<ImageHostEmbeddingInput>,
@@ -147,14 +126,14 @@ impl MediaAuxMutation {
         )?;
         Ok(true)
     }
-    async fn image_host_remove_embeddings(&self, ctx: &Context<'_>, ids: Vec<ID>) -> Result<Long> {
+    async fn remove_image_embeddings(&self, ctx: &Context<'_>, ids: Vec<ID>) -> Result<Long> {
         Ok(Long(
             ctx.data::<Arc<crate::services::images::index::ImageIndex>>()?
                 .remove(&ids.into_iter().map(|id| id.to_string()).collect::<Vec<_>>())?
                 .try_into()?,
         ))
     }
-    async fn image_host_clear_embeddings(&self, ctx: &Context<'_>) -> Result<Long> {
+    async fn clear_image_embeddings(&self, ctx: &Context<'_>) -> Result<Long> {
         Ok(Long(
             ctx.data::<Arc<crate::services::images::index::ImageIndex>>()?
                 .clear()?

@@ -1,12 +1,6 @@
 use crate::assembly::server::ServerState;
 use crate::services::discovery::pairing;
 use crate::services::discovery::pairing::Device;
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
 use plain_rs::discovery::nearby_http;
 use plain_rs::discovery::nearby_http::Message;
 use plain_rs::peers::pairing::protocol::PairingCancel;
@@ -80,19 +74,11 @@ impl Runtime {
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Request {
     States,
-    PendingRequest {
-        id: String,
-        signature: String,
-    },
     Start {
         target: Target,
         ips: Vec<String>,
         methods: Vec<String>,
         ble: bool,
-        device: Device,
-    },
-    StartBle {
-        target: Target,
         device: Device,
     },
     StartLan {
@@ -218,9 +204,6 @@ pub(crate) async fn respond_device(
 pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Result<Value> {
     Ok(match request {
         Request::States=>json!(state.pairing.states().into_iter().map(|(ticket,phase)|json!({"deviceId":ticket.target.device_id,"generation":ticket.generation,"phase":phase})).collect::<Vec<_>>()),
-        Request::PendingRequest { id, signature } => {
-            json!(state.pairing.incoming_target(&id, &signature).is_some())
-        }
         Request::Start {
             target,
             ips,
@@ -245,7 +228,6 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                 Value::Null
             }
         }
-        Request::StartBle { target, device } => crate::services::discovery::ble_pairing::start(state, target, device)?,
         Request::StartLan {
             mut target,
             ips,
@@ -497,22 +479,37 @@ pub(crate) async fn handle_nearby_post(
     }
     Ok(true)
 }
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    match execute(&state, request).await {
-        Ok(value) => Json(json!({"result":value})).into_response(),
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":error.to_string()})),
-        )
-            .into_response(),
-    }
+pub(crate) async fn accept_report(
+    state: &ServerState,
+    kind: &str,
+    payload: &str,
+) -> anyhow::Result<bool> {
+    let request = match kind {
+        "PAIRING_REQUEST_REPORTED" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Report {
+                request: PairingRequest,
+                address: String,
+            }
+            let report: Report = serde_json::from_str(payload)?;
+            Request::ReceiveRequest {
+                request: report.request,
+                address: report.address,
+                ble: true,
+            }
+        }
+        "PAIRING_RESPONSE_REPORTED" => Request::Complete {
+            response: serde_json::from_str(payload)?,
+            sender_ip: String::new(),
+        },
+        "PAIRING_CANCEL_REPORTED" => Request::ReceiveCancel {
+            cancel: serde_json::from_str(payload)?,
+        },
+        _ => return Ok(false),
+    };
+    execute(state, request).await?;
+    Ok(true)
 }
 #[cfg(test)]
 #[path = "../../../tests/unit/services/discovery/pairing_runtime.rs"]

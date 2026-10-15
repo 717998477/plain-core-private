@@ -181,3 +181,42 @@ fn action_ids_share_filters_and_explicit_from_trash_overrides_the_query_mode() {
     assert!(ids(&db, DataType::Contact, "", false).is_err());
     assert!(ids(&db, DataType::Doc, "unknown:filter", false).is_err());
 }
+
+#[test]
+fn bulk_selection_includes_every_row_beyond_ten_thousand_and_deduplicates_ids() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(&directory.path().join("plain.db")).unwrap();
+    let rows = db
+        .record_media_files(
+            &(0..10003)
+                .map(|index| {
+                    file(
+                        DataType::Image,
+                        &format!("/catalog/select-{index}.jpg"),
+                        "selected",
+                        1,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+    assert_eq!(
+        ids(&db, DataType::Image, "text:select", false)
+            .unwrap()
+            .len(),
+        10003
+    );
+    assert!(
+        ids(&db, DataType::Audio, "text:select", false)
+            .unwrap()
+            .is_empty()
+    );
+    let selected = ids(
+        &db,
+        DataType::Image,
+        &format!("ids:{},{}", rows[0].id, rows[0].id),
+        false,
+    )
+    .unwrap();
+    assert_eq!(selected, vec![rows[0].id.clone()]);
+}

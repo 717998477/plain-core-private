@@ -1,22 +1,8 @@
-//! The public `/graphql` schema — the contract LAN clients (the web console)
-//! query.
-//!
-//! Deliberately separate from [`crate::graphql::schemas::host::ContentSchema`]: that one is
-//! the app's own host-facing API and carries internal roots
-//! (`audioHostQueueItems`, `fileHostTasks`, …) that must never reach the
-//! network. Here only the contract's root fields exist, so anything missing
-//! from [`crate::graphql::types`] is a gap to fill rather than a leak.
-#[cfg(feature = "mobile")]
-use crate::mobile::graphql::MobileMutation as MobileMutationImpl;
-#[cfg(feature = "mobile")]
-use crate::mobile::graphql::MobileQuery as MobileQueryImpl;
-#[cfg(not(feature = "mobile"))]
-type MobileQueryImpl = async_graphql::MergedObjectTail;
-#[cfg(not(feature = "mobile"))]
-type MobileMutationImpl = async_graphql::MergedObjectTail;
 use crate::graphql::resolvers::docs::public::DocsQuery;
 use crate::graphql::resolvers::images::public::ImagesQuery;
 use crate::graphql::resolvers::videos::public::VideosQuery;
+use crate::mobile::graphql::MobileMutation as MobileMutationImpl;
+use crate::mobile::graphql::MobileQuery as MobileQueryImpl;
 
 use crate::graphql::resolvers::audio::public::AudioMutation;
 use crate::graphql::resolvers::audio::public::AudioQuery;
@@ -35,7 +21,7 @@ use crate::graphql::resolvers::favorites::favorite_folder::{
 use crate::graphql::resolvers::feeds::feed::FeedMutation;
 use crate::graphql::resolvers::feeds::feed::FeedQuery;
 use crate::graphql::resolvers::files::operations::FileOpsMutation;
-use crate::graphql::resolvers::files::operations::MediaActionMutation;
+use crate::graphql::resolvers::files::operations::MediaItemsMutation;
 use crate::graphql::resolvers::files::operations::UploadQuery;
 use crate::graphql::resolvers::files::public::FilesQuery;
 use crate::graphql::resolvers::images::public_index::ImageIndexMutation;
@@ -62,7 +48,30 @@ use std::sync::Arc;
 
 #[derive(MergedObject, Default)]
 pub struct Query(
-    #[cfg(feature = "media")] crate::graphql::resolvers::media::scan::MediaScanPublicQuery,
+    crate::graphql::resolvers::settings::tls::TlsQuery,
+    crate::graphql::resolvers::peers::records::PeerRecordQuery,
+    crate::graphql::resolvers::chat::records::ChatChannelRecordQuery,
+    crate::graphql::resolvers::shares::queue::SharedDownloadQuery,
+    crate::graphql::resolvers::downloads::queue::ChatDownloadQuery,
+    crate::graphql::resolvers::peers::transport::PeerTransportQuery,
+    crate::graphql::resolvers::discovery::mdns::MdnsQuery,
+    crate::graphql::resolvers::shares::client::SharedClientQuery,
+    crate::graphql::resolvers::files::trash::TrashQuery,
+    crate::graphql::resolvers::casting::sender::DlnaSenderQuery,
+    crate::graphql::resolvers::images::models::ImageModelsQuery,
+    crate::graphql::resolvers::discovery::host::DiscoveryHostQuery,
+    crate::graphql::resolvers::chat::host::ChatHostQuery,
+    crate::graphql::resolvers::files::tasks::FileTaskQuery,
+    crate::graphql::resolvers::audio::host::AudioHostQuery,
+    crate::graphql::resolvers::videos::progress::VideoProgressQuery,
+    crate::graphql::resolvers::shares::host::ShareHostQuery,
+    crate::graphql::resolvers::tags::access::TagHostQuery,
+    crate::graphql::resolvers::media::aux::MediaAuxQuery,
+    crate::graphql::resolvers::images::host_index::ImageIndexTaskQuery,
+    crate::graphql::resolvers::pomodoro::host::PomodoroRecordQuery,
+    crate::graphql::resolvers::images::editor_host::ImageEditorItemsQuery,
+    crate::graphql::resolvers::device::sessions::SessionsQuery,
+    crate::graphql::resolvers::media::scan::MediaScanQuery,
     crate::graphql::resolvers::app::platform::PlatformQuery,
     crate::graphql::resolvers::settings::state::PreferencesQuery,
     MobileQueryImpl,
@@ -94,8 +103,31 @@ pub struct Query(
 
 #[derive(MergedObject, Default)]
 pub struct Mutation(
+    crate::graphql::resolvers::settings::tls::TlsMutation,
+    crate::graphql::resolvers::peers::records::PeerRecordMutation,
+    crate::graphql::resolvers::shares::queue::SharedDownloadMutation,
+    crate::graphql::resolvers::downloads::queue::ChatDownloadMutation,
+    crate::graphql::resolvers::discovery::mdns::MdnsMutation,
+    crate::graphql::resolvers::shares::client::SharedClientMutation,
+    crate::graphql::resolvers::files::trash::TrashMutation,
+    crate::graphql::resolvers::casting::sender::DlnaSenderMutation,
+    crate::graphql::resolvers::images::models::ImageModelsMutation,
+    crate::graphql::resolvers::audio::commands::AudioCommandsMutation,
+    crate::graphql::resolvers::chat::host::ChatHostMutation,
+    crate::graphql::resolvers::files::tasks::FileTaskMutation,
+    crate::graphql::resolvers::videos::progress::VideoProgressMutation,
+    crate::graphql::resolvers::shares::host::ShareHostMutation,
+    crate::graphql::resolvers::files::app_files_host::AppFileHostMutation,
+    crate::graphql::resolvers::tags::access::TagHostMutation,
+    crate::graphql::resolvers::media::aux::MediaAuxMutation,
+    crate::graphql::resolvers::media::actions::MediaActionMutation,
+    crate::graphql::resolvers::images::host_index::ImageIndexTaskMutation,
+    crate::graphql::resolvers::clipboard::host::ClipboardHostMutation,
+    crate::graphql::resolvers::bookmarks::metadata::BookmarkMetadataMutation,
+    crate::graphql::resolvers::pomodoro::host::PomodoroHostMutation,
+    crate::graphql::resolvers::device::sessions::SessionsMutation,
     crate::graphql::resolvers::app::platform::PlatformMutation,
-    #[cfg(feature = "media")] crate::graphql::resolvers::media::scan::MediaScanPublicMutation,
+    crate::graphql::resolvers::media::scan::MediaScanMutation,
     crate::graphql::resolvers::settings::state::PreferencesMutation,
     MobileMutationImpl,
     crate::graphql::resolvers::bookmarks::bookmark::BookmarkMutation,
@@ -116,7 +148,7 @@ pub struct Mutation(
     PrefsMutation,
     DbMutation,
     FileOpsMutation,
-    MediaActionMutation,
+    MediaItemsMutation,
     DeviceMutation,
     DownloadMutation,
 );
@@ -144,7 +176,6 @@ pub fn build(
         services.index.clone(),
         events.clone(),
     );
-    #[cfg(feature = "mobile")]
     let mobile = crate::mobile::Runtime::new(
         host.clone(),
         prefs.clone(),
@@ -152,16 +183,7 @@ pub fn build(
         directory.clone(),
         events.clone(),
     );
-    build_with_runtime(
-        host,
-        events,
-        prefs,
-        db,
-        services,
-        models,
-        #[cfg(feature = "mobile")]
-        mobile,
-    )
+    build_with_runtime(host, events, prefs, db, services, models, mobile)
 }
 pub(crate) fn build_with_runtime(
     host: Arc<Host>,
@@ -170,13 +192,12 @@ pub(crate) fn build_with_runtime(
     db: Arc<Db>,
     services: crate::assembly::services::Services,
     models: Arc<crate::services::images::models::Runtime>,
-    #[cfg(feature = "mobile")] mobile: Arc<crate::mobile::Runtime>,
+    mobile: Arc<crate::mobile::Runtime>,
 ) -> PublicSchema {
     let builder = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .register_output_type::<crate::graphql::resolvers::media::item::MediaItem>()
         .data(models);
     let builder = services.configure_schema(builder, db, host, prefs, events);
-    #[cfg(feature = "mobile")]
     let builder = crate::mobile::graphql::configure(builder, mobile);
     builder.finish()
 }

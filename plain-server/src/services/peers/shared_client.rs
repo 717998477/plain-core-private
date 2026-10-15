@@ -1,11 +1,5 @@
 use crate::assembly::server::ServerState;
 use anyhow::{Result, ensure};
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
 use plain_rs::chat::messages::share_card;
 use plain_rs::chat::messages::share_card::Card;
 use plain_rs::files::shares::client::Info;
@@ -217,18 +211,9 @@ pub(crate) enum Request {
         zip: bool,
     },
 }
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
+pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Value> {
     let mut stop = state.stop.clone();
-    if *stop.borrow() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
+    ensure!(!*stop.borrow(), "Core stopped");
     let work = async {
         match request {
             Request::Plan {
@@ -302,14 +287,7 @@ pub(crate) async fn call(
         }
     };
     let result = tokio::select! { _=stop.changed()=>Err(anyhow::anyhow!("Core stopped")), result=tokio::time::timeout(Duration::from_secs(120),work)=>result.unwrap_or_else(|_|Err(anyhow::anyhow!("Share request timed out"))) };
-    match result {
-        Ok(value) => Json(json!({"result":value})).into_response(),
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":error.to_string()})),
-        )
-            .into_response(),
-    }
+    result
 }
 #[cfg(all(test, feature = "http_transport"))]
 #[path = "../../../tests/unit/services/peers/shared_client.rs"]

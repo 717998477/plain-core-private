@@ -62,6 +62,8 @@ pub struct PhoneGeo {
 #[derive(SimpleObject, Clone, Debug)]
 #[graphql(complex)]
 pub struct Call {
+    pub type_code: i32,
+    pub photo_uri: String,
     pub id: ID,
     pub number: String,
     pub name: String,
@@ -102,6 +104,10 @@ impl CallsQuery {
         limit: i32,
     ) -> async_graphql::Result<Vec<Call>> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[READ])?;
+        if public_gate::is_local(ctx) && !public_gate::require_granted(ctx, &[READ]).await? {
+            return Ok(Vec::new());
+        }
+
         let facts = host_json(
             ctx,
             "systemCallFacts",
@@ -115,13 +121,17 @@ impl CallsQuery {
         )
         .await?;
         let host = ctx.data_unchecked::<Arc<Host>>();
-        let locale = host
-            .call("systemPhoneLocaleFacts", serde_json::json!({}))
-            .await
-            .ok()
-            .and_then(|facts| {
-                serde_json::from_value::<crate::mobile::phone_calls::geo::LocaleFacts>(facts).ok()
-            });
+        let locale = if ctx.look_ahead().field("geo").exists() {
+            host.call("systemPhoneLocaleFacts", serde_json::json!({}))
+                .await
+                .ok()
+                .and_then(|facts| {
+                    serde_json::from_value::<crate::mobile::phone_calls::geo::LocaleFacts>(facts)
+                        .ok()
+                })
+        } else {
+            None
+        };
         let runtime = ctx.data_unchecked::<Arc<crate::mobile::phone_calls::geo::Runtime>>();
         let prefs = ctx.data_unchecked::<Arc<Prefs>>();
         let mut calls = Vec::with_capacity(facts.len());
@@ -148,6 +158,27 @@ impl CallsQuery {
     }
 
     /// plain-app degrades this to 0 rather than erroring.
+    async fn call_ids(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<Vec<ID>> {
+        if !public_gate::require_granted(ctx, &[READ]).await? {
+            return Ok(Vec::new());
+        }
+        let params = provider_params(
+            ctx,
+            crate::host::query::Provider::Call,
+            &query,
+            serde_json::json!({}),
+        )
+        .await?;
+        let facts = ctx
+            .data_unchecked::<Arc<Host>>()
+            .call("systemCallIds", params)
+            .await
+            .map_err(async_graphql::Error::new)?;
+        serde_json::from_value::<Vec<String>>(facts)
+            .map(|ids| ids.into_iter().map(ID::from).collect())
+            .map_err(|error| async_graphql::Error::new(error.to_string()))
+    }
+
     async fn call_count(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<i32> {
         if !public_gate::require_granted(ctx, &[WRITE]).await? {
             return Ok(0);
@@ -257,6 +288,8 @@ fn call(fact: &Value) -> Call {
         started_at: instant(fact, "startedAt"),
         duration_sec: integer(fact, "durationSec") as i32,
         r#type: CallType::from_android(integer(fact, "type")),
+        type_code: integer(fact, "type") as i32,
+        photo_uri: text(fact, "photoUri"),
         account_id: ID::from(text(fact, "accountId")),
         geo: None,
     }

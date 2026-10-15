@@ -259,3 +259,20 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
     server.shutdown().await;
     responder.abort();
 }
+
+#[test]
+fn peer_schema_matches_the_committed_contract() {
+    let actual = schema().sdl();
+    if std::env::var_os("UPDATE_PEER_SCHEMA").is_some() {
+        std::fs::write(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../schema/peer_scheme.graphql"),
+            &actual,
+        )
+        .unwrap();
+    } else {
+        assert_eq!(
+            actual,
+            include_str!("../../../../../schema/peer_scheme.graphql")
+        );
+    }
+}

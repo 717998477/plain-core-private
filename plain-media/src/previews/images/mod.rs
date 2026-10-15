@@ -128,18 +128,30 @@ fn bump_generations(key: &str) {
 
 /// Entry point used by `/fs`.
 pub async fn get_thumbnail(spec: ThumbSpec) -> Result<ThumbOutcome> {
+    get_thumbnail_with_cache(spec, &cache_dir()).await
+}
+
+pub async fn get_thumbnail_with_cache(
+    spec: ThumbSpec,
+    cache: &std::path::Path,
+) -> Result<ThumbOutcome> {
     let head = read_head(&spec.path).await;
     let sniffed = sniff::sniff_header(&head)
         .ok()
         .filter(|s| s.kind.decodable());
 
     match sniffed {
-        Some(s) => get_image_thumbnail(&spec, &head, s).await,
-        None => dispatch_non_image(&spec).await,
+        Some(s) => get_image_thumbnail(&spec, &head, s, cache).await,
+        None => dispatch_non_image(&spec, cache).await,
     }
 }
 
-async fn get_image_thumbnail(spec: &ThumbSpec, head: &[u8], s: Sniffed) -> Result<ThumbOutcome> {
+async fn get_image_thumbnail(
+    spec: &ThumbSpec,
+    head: &[u8],
+    s: Sniffed,
+    cache: &std::path::Path,
+) -> Result<ThumbOutcome> {
     // EXIF orientation first: the *upright* dimensions decide the target box
     // so rotated photos produce correctly-proportioned thumbnails.
     let orientation = if s.kind == ImageKind::Jpeg {
@@ -167,7 +179,7 @@ async fn get_image_thumbnail(spec: &ThumbSpec, head: &[u8], s: Sniffed) -> Resul
     }
 
     let cache_path = thumb_cache_path(
-        &cache_dir(),
+        cache,
         &spec.path,
         spec.w,
         spec.h,
@@ -302,12 +314,12 @@ fn estimated_decoded_bytes(s: Sniffed, rw: u32, rh: u32) -> u64 {
 // Non-image dispatch: cover art, then pure-Rust video frame extraction
 // ---------------------------------------------------------------------------
 
-async fn dispatch_non_image(spec: &ThumbSpec) -> Result<ThumbOutcome> {
+async fn dispatch_non_image(spec: &ThumbSpec, cache: &std::path::Path) -> Result<ThumbOutcome> {
     // Covers and video frames cache under the same deterministic key scheme
     // as images — the old path wrote this cache but never read it, so every
     // request regenerated (a fresh ffmpeg spawn / cover decode per GET).
     let cache_path = thumb_cache_path(
-        &cache_dir(),
+        cache,
         &spec.path,
         spec.w,
         spec.h,

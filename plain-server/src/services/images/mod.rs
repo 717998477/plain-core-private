@@ -9,3 +9,6 @@ pub mod search;
 
 #[cfg(feature = "core")]
 pub mod thumbnails;
+
+#[cfg(feature = "core")]
+pub(crate) mod thumbnail_decoder;

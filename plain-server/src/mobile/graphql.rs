@@ -1,11 +1,11 @@
+use crate::graphql::resolvers::packages::public::PackagesMutation;
+use crate::graphql::resolvers::packages::public::PackagesQuery;
+use crate::graphql::resolvers::sms::SmsMutation;
+use crate::graphql::resolvers::sms::SmsQuery;
 use crate::mobile::contacts::resolvers::ContactsMutation;
 use crate::mobile::contacts::resolvers::ContactsQuery;
-use crate::mobile::packages::resolvers::PackagesMutation;
-use crate::mobile::packages::resolvers::PackagesQuery;
 use crate::mobile::phone_calls::resolvers::CallsMutation;
 use crate::mobile::phone_calls::resolvers::CallsQuery;
-use crate::mobile::sms::resolvers::SmsMutation;
-use crate::mobile::sms::resolvers::SmsQuery;
 use async_graphql::{EmptySubscription, MergedObject, SchemaBuilder};
 // Not named `Query`: async-graphql derives a merged object's GraphQL name
 // from its Rust type name, and this one is merged into `public::Query`.

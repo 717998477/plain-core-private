@@ -63,6 +63,18 @@ pub(crate) fn is_local(ctx: &Context<'_>) -> bool {
         .is_some_and(|origin| *origin == crate::graphql::executor::RequestOrigin::Local)
 }
 
+pub(crate) struct LocalOwner;
+
+impl async_graphql::Guard for LocalOwner {
+    async fn check(&self, ctx: &Context<'_>) -> async_graphql::Result<()> {
+        if is_local(ctx) {
+            Ok(())
+        } else {
+            Err(async_graphql::Error::new("no_permission"))
+        }
+    }
+}
+
 pub(crate) fn require(
     ctx: &async_graphql::Context<'_>,
     prefs: &Prefs,

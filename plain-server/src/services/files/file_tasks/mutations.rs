@@ -71,9 +71,7 @@ impl FileTasks {
     pub async fn delete(&self, path: String) -> Result<Outcome> {
         let _guard = self.deletion_lock.lock().await;
         plain_rs::files::filesystem::deletion::validate(std::path::Path::new(&path))?;
-        self.hooks
-            .call("fileTaskAuthorize", json!({"paths":[path]}))
-            .await?;
+        self.hooks.platform.authorize(&path, true).await?;
         match tokio::fs::symlink_metadata(&path).await {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Outcome {
@@ -92,14 +90,12 @@ impl FileTasks {
             tokio::task::spawn_blocking(move || Plan::inspect(std::path::Path::new(&checked)))
                 .await??;
         let snapshot = crate::services::files::file_task_media::deletion_snapshot(
-            &self.hooks.host,
+            &self.hooks.platform,
             root.clone(),
             &plan.files,
         )
         .await?;
-        self.hooks
-            .call("fileTaskAuthorize", json!({"paths":[root]}))
-            .await?;
+        self.hooks.platform.authorize(&root, true).await?;
         let outcome = tokio::task::spawn_blocking(move || plan.execute()).await?;
         self.finish_deletion(&path, &root, &snapshot, &outcome)
             .await?;
@@ -186,9 +182,7 @@ impl FileTasks {
                 .events
                 .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()));
             for paths in outcome.paths.chunks(128) {
-                self.hooks
-                    .call("fileTaskScan", json!({"paths":paths}))
-                    .await?;
+                self.hooks.platform.scan(paths).await?;
             }
         }
         Ok(())
@@ -202,3 +196,7 @@ fn require_absent(path: &str) -> Result<()> {
         Ok(_) => bail!("deleted path reappeared: {path}"),
     }
 }
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+#[path = "../../../../tests/unit/services/files/file_tasks/mutations.rs"]
+mod tests;

@@ -130,14 +130,13 @@ pub(crate) fn plan(
     if matches!(provider, Provider::Doc) {
         plan.add(
             "(mime_type LIKE ? OR mime_type IN (?,?,?,?,?))".into(),
-            vec![
-                "text/%".into(),
-                "application/pdf".into(),
-                "application/msword".into(),
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into(),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
-                "application/javascript".into(),
-            ],
+            std::iter::once("text/%".to_owned())
+                .chain(
+                    plain_rs::media::documents::MIME_TYPES
+                        .iter()
+                        .map(|value| (*value).to_owned()),
+                )
+                .collect(),
         );
         plan.add("_size > 0".into(), vec![]);
     }
@@ -182,16 +181,6 @@ pub(crate) fn plan(
             (Provider::File, "ids") => plan.ids("_id", field.value.split(',').map(str::to_owned).collect()),
             (Provider::Audio | Provider::Video | Provider::Image | Provider::Doc, "trash") => {
                 if let Some(flag) = field.value.parse::<bool>().ok() {
-                    // The phone's trash is MediaStore's own: `IS_TRASHED` is what
-                    // `NativeMediaActions` writes, and MediaStore answers a
-                    // trashed-only read with the `QUERY_ARG_MATCH_TRASHED`
-                    // argument instead of a selection clause. It has to be an
-                    // argument — MediaProvider parses a legacy selection with a
-                    // strict grammar and answers `is_trashed` with
-                    // `Invalid token`, which reaches the app as a fatal throw.
-                    // The `.plain-trash` tree belongs to the server store, which no
-                    // phone process creates, so matching its path here could only
-                    // ever filter every row out.
                     plan.trash = Some(flag);
                 }
             }
@@ -245,14 +234,7 @@ pub(crate) async fn prepare(
     let fields = fields(db, query)?;
     let dates = dates(host, &fields).await?;
     if matches!(provider, Provider::Call | Provider::Contact) {
-        #[cfg(feature = "mobile")]
-        {
-            return crate::mobile::query::plan(provider, &fields, &dates);
-        }
-        #[cfg(not(feature = "mobile"))]
-        {
-            anyhow::bail!("unsupported provider");
-        }
+        return crate::mobile::query::plan(provider, &fields, &dates);
     }
     plan(
         provider,

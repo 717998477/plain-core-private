@@ -2,8 +2,7 @@ pub mod bind;
 
 use axum::{Extension, Router};
 
-#[derive(Clone)]
-pub struct ConnectionScheme(pub &'static str);
+use crate::http::ConnectionScheme;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use std::{net::SocketAddr, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
@@ -191,22 +190,9 @@ impl Drop for ListenerTaskGuard {
 }
 
 pub fn tls_config(certificate_pem: &[u8], private_key_pem: &[u8]) -> Result<RustlsConfig, String> {
-    let certificates = rustls_pemfile::certs(&mut std::io::Cursor::new(certificate_pem))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(private_key_pem))
-        .map_err(|e| e.to_string())?
-        .ok_or("TLS private key is missing")?;
-    let mut config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|e| e.to_string())?
-    .with_no_client_auth()
-    .with_single_cert(certificates, key)
-    .map_err(|e| e.to_string())?;
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    Ok(RustlsConfig::from_config(std::sync::Arc::new(config)))
+    Ok(RustlsConfig::from_config(std::sync::Arc::new(
+        crate::services::tls_identity::config(certificate_pem, private_key_pem)?,
+    )))
 }
 
 #[cfg(test)]

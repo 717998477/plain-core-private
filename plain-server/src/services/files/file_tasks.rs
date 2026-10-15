@@ -1,4 +1,4 @@
-use crate::host::bridge::Host;
+use super::platform::FilePlatform;
 use anyhow::{Result, anyhow, bail};
 use plain_rs::db::Db;
 use plain_rs::events::WsEvent;
@@ -12,21 +12,22 @@ use plain_rs::files::tasks::HookResult;
 use plain_rs::files::tasks::Hooks;
 use plain_rs::files::tasks::PrepareResult;
 use plain_rs::files::tasks::Service;
-use serde_json::json;
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 use tokio::sync::broadcast;
 pub struct FileTasks {
+    store: Arc<plain_rs::kv::LazyDb>,
     deletion_lock: tokio::sync::Mutex<()>,
     events: broadcast::Sender<WsEvent>,
     service: Mutex<Option<Arc<Service>>>,
     hooks: Arc<NativeHooks>,
 }
 impl FileTasks {
-    pub fn new(
-        host: Arc<Host>,
+    pub(crate) fn new(
+        store: Arc<plain_rs::kv::LazyDb>,
+        platform: Arc<FilePlatform>,
         events: broadcast::Sender<WsEvent>,
         audio: Arc<crate::services::audio::host::Audio>,
         index: Arc<crate::services::images::index::ImageIndex>,
@@ -34,8 +35,9 @@ impl FileTasks {
         duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     ) -> Self {
         Self {
+            store,
             hooks: Arc::new(NativeHooks {
-                host: host.clone(),
+                platform,
                 audio,
                 index,
                 prefs,
@@ -131,31 +133,16 @@ impl Events for Changes {
 }
 struct NativeHooks {
     duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
-    host: Arc<Host>,
+    platform: Arc<FilePlatform>,
     audio: Arc<crate::services::audio::host::Audio>,
     index: Arc<crate::services::images::index::ImageIndex>,
     prefs: Arc<plain_rs::prefs::Prefs>,
-}
-impl NativeHooks {
-    async fn call(&self, method: &str, params: serde_json::Value) -> Result<()> {
-        if self
-            .host
-            .call(method, params)
-            .await
-            .map_err(anyhow::Error::msg)?
-            .as_bool()
-            != Some(true)
-        {
-            bail!("invalid file host receipt");
-        }
-        Ok(())
-    }
 }
 impl Hooks for NativeHooks {
     fn prepare<'a>(&'a self, kind: FileTaskType, op: &'a FileTaskOp) -> PrepareResult<'a> {
         Box::pin(async move {
             if kind == FileTaskType::Move {
-                crate::services::files::file_task_media::prepare(&self.host, &op.src).await
+                crate::services::files::file_task_media::prepare(&self.platform, &op.src).await
             } else {
                 Ok(serde_json::Value::Null)
             }
@@ -170,9 +157,7 @@ impl Hooks for NativeHooks {
         self.apply_completed(kind, op, snapshot)
     }
     fn authorize<'a>(&'a self, kind: FileTaskType, ops: &'a [FileTaskOp]) -> HookResult<'a> {
-        Box::pin(async move {
-            self.call("fileTaskAuthorize",json!({"type":kind,"paths":ops.iter().flat_map(|op| [&op.src,&op.dst]).collect::<Vec<_>>()})).await
-        })
+        Box::pin(async move { self.platform.authorize_task(kind, ops).await })
     }
     fn completed<'a>(&'a self, kind: FileTaskType, op: &'a CompletedOp) -> HookResult<'a> {
         self.scan_completed(kind, op)
@@ -200,9 +185,17 @@ impl NativeHooks {
 
             self.completed(kind, op).await?;
             if kind == FileTaskType::Move {
-                let change =
-                    crate::services::files::file_task_media::resolve(&self.host, &op.dst, snapshot)
-                        .await?;
+                let change = crate::services::files::file_task_media::resolve(
+                    &self.platform,
+                    &op.dst,
+                    snapshot,
+                )
+                .await?;
+                let removed_sources = change
+                    .bindings
+                    .iter()
+                    .map(|binding| binding.source_path.clone())
+                    .collect::<Vec<_>>();
                 let raw_source = op.src.clone();
                 let raw_destination = op.dst.clone();
                 let prefs = self.prefs.clone();
@@ -234,12 +227,13 @@ impl NativeHooks {
                         index.update_cache(rebind)?;
                         if moved_audio {
                             use plain_rs::media::audio::commands;
-                            commands::clear_engine(db,&prefs,engine)?;
+                            commands::clear_engine(db, &prefs, engine)?;
                         }
                         Ok(())
                     })
                     .await
                     .map_err(|e| anyhow!(e.message))?;
+                self.platform.forget_removed(removed_sources).await?;
             }
             Ok(())
         })
@@ -272,13 +266,13 @@ impl NativeHooks {
                         );
                     }
                     if batch.len() >= 128 {
-                        self.call("fileTaskScan", json!({"paths":batch})).await?;
+                        self.platform.scan(&batch).await?;
                         batch.clear();
                     }
                 }
             }
             if !batch.is_empty() {
-                self.call("fileTaskScan", json!({"paths":batch})).await?;
+                self.platform.scan(&batch).await?;
             }
             Ok(())
         })
@@ -290,3 +284,5 @@ mod tests;
 
 #[cfg(feature = "core")]
 pub mod mutations;
+
+mod trash;

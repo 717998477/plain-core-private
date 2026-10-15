@@ -28,6 +28,7 @@ async fn native_receiver_uses_core_state_and_refuses_stopped_operations() {
 /// The desktop bootstrap starts the receiver through this call once the
 /// public listener is up, so the receiver has to come up on the port that
 /// listener actually bound — not on a configured or preferred one.
+#[cfg(feature = "http_transport")]
 #[tokio::test]
 async fn enabling_the_receiver_starts_it_on_the_public_port() {
     let directory = tempfile::tempdir().unwrap();

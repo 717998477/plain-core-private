@@ -8,24 +8,10 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 fn prefs<'a>(ctx: &'a Context<'_>) -> Result<&'a Arc<Prefs>> {
-    if let Some(prefs) = ctx.data_opt::<Arc<Prefs>>() {
-        return Ok(prefs);
-    }
-    #[cfg(feature = "api")]
-    if let Some(context) = ctx.data_opt::<Arc<crate::assembly::context::AppCtx>>() {
-        return Ok(&context.prefs);
-    }
     Ok(ctx.data::<Arc<Prefs>>()?)
 }
 fn events<'a>(ctx: &'a Context<'_>) -> Option<&'a broadcast::Sender<WsEvent>> {
-    if let Some(events) = ctx.data_opt::<broadcast::Sender<WsEvent>>() {
-        return Some(events);
-    }
-    #[cfg(feature = "api")]
-    if let Some(context) = ctx.data_opt::<Arc<crate::assembly::context::AppCtx>>() {
-        return Some(&context.event_tx);
-    }
-    None
+    ctx.data_opt::<broadcast::Sender<WsEvent>>()
 }
 fn notify(ctx: &Context<'_>, changed: bool) {
     if changed {
@@ -302,9 +288,6 @@ pub(crate) struct UserPatchEnv<'a> {
     /// Host (mobile/JNI) side: mDNS advertisement and desktop-access teardown.
     #[cfg(feature = "core")]
     server: Option<&'a crate::assembly::server::ServerState>,
-    /// Desktop side: nearby-discover and chat identity follow a rename.
-    #[cfg(feature = "api")]
-    app: Option<&'a Arc<crate::assembly::context::AppCtx>>,
 }
 
 impl<'a> UserPatchEnv<'a> {
@@ -314,8 +297,6 @@ impl<'a> UserPatchEnv<'a> {
             events: events(ctx),
             #[cfg(feature = "core")]
             server: ctx.data_opt::<crate::assembly::server::ServerState>(),
-            #[cfg(feature = "api")]
-            app: ctx.data_opt::<Arc<crate::assembly::context::AppCtx>>(),
         })
     }
 
@@ -328,8 +309,6 @@ impl<'a> UserPatchEnv<'a> {
             prefs: &state.prefs,
             events: Some(&state.events),
             server: Some(state),
-            #[cfg(feature = "api")]
-            app: None,
         }
     }
 }
@@ -358,11 +337,6 @@ pub(crate) async fn apply_user_patch(
         #[cfg(feature = "core")]
         if let Some(state) = env.server {
             state.mdns.update_hostname(state).await?;
-        }
-        #[cfg(feature = "api")]
-        if let Some(app) = env.app {
-            app.discover_manager.apply_device_rename(&after.device_name);
-            app.chat.identity.set_device_name(&after.device_name);
         }
     }
     emit_user_events(env.events, &before, &after)?;

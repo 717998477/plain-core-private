@@ -41,3 +41,6 @@ pub mod status_outgoing;
 
 #[cfg(feature = "core")]
 pub mod status_socket;
+
+#[cfg(feature = "core")]
+pub(crate) mod shared_transfer;

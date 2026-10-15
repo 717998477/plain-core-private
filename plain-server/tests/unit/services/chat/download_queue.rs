@@ -1,6 +1,6 @@
 #![cfg(feature = "http_transport")]
 use super::*;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::sync::Arc;
 fn fixture() -> (
     tempfile::TempDir,
@@ -102,10 +102,37 @@ async fn root_ble_chunks_commit_exact_bytes_and_reject_short_and_overlong_reads(
         }
     });
     seed_chat(&state, "exact", payload.len());
-    state.downloads.enqueue("exact", "exact", "peer").unwrap();
+    let native = server.native_graphql().unwrap();
+    let response = native
+        .execute(async_graphql::Request::new(
+            r#"mutation { enqueueChatDownload(messageId:"exact", fileId:"exact", peerId:"peer") }"#,
+        ))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["enqueueChatDownload"],
+        true
+    );
+
     let row = terminal(&state, "exact").await;
     assert_eq!(row["status"], "COMPLETED");
     assert_eq!(row["downloaded"], payload.len());
+    let response = native.execute(async_graphql::Request::new("{ chatDownloadQueue { runtimeId revision tasks { id status downloaded file { id: fileId uri durationMs } peer { id createdAt updatedAt } } } }")).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let projected = response.data.into_json().unwrap();
+    assert_eq!(
+        projected["chatDownloadQueue"]["runtimeId"],
+        state.downloads.snapshot()["runtimeId"]
+    );
+    assert_eq!(
+        projected["chatDownloadQueue"]["tasks"][0]["status"],
+        "COMPLETED"
+    );
+    assert_eq!(
+        projected["chatDownloadQueue"]["tasks"][0]["downloaded"],
+        payload.len()
+    );
+
     let chat = plain_rs::db::chat_store::messages::get(&state.db, "exact")
         .unwrap()
         .unwrap();

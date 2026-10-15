@@ -411,7 +411,7 @@ async fn buckets_collapse_rows_into_folders() {
         |method, _| panic!("unexpected host call {method}"),
     );
     let response = schema
-        .execute(r#"query { mediaBuckets(type:VIDEO) { id name itemCount topItemPaths } }"#)
+        .execute(r#"query { mediaBuckets(type:VIDEO) { id name itemCount size topItemPaths } }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
@@ -420,8 +420,10 @@ async fn buckets_collapse_rows_into_folders() {
     // Camera sorts before Movies.
     assert_eq!(buckets[0]["id"], "b1");
     assert_eq!(buckets[0]["itemCount"], 1);
+    assert_eq!(buckets[0]["size"], 10);
     assert_eq!(buckets[1]["id"], "b2");
     assert_eq!(buckets[1]["itemCount"], 5);
+    assert_eq!(buckets[1]["size"], 50);
     // Five rows in, but only four samples out — the grid never needs more.
     assert_eq!(buckets[1]["topItemPaths"].as_array().unwrap().len(), 4);
 }
@@ -560,4 +562,63 @@ async fn all_media_lists_accept_the_original_shared_interface_fragment() {
             "{field}: {data}"
         );
     }
+}
+
+#[tokio::test]
+async fn media_tags_are_loaded_only_when_selected_and_batch_all_rows() {
+    use crate::graphql::resolvers::tags::loader::TagsLoader;
+    use async_graphql::dataloader::DataLoader;
+    use std::sync::atomic::Ordering;
+    let (_dir, schema, db) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[
+                media(DataType::Image, "/fixture/one.png", "one", 10, "images"),
+                media(DataType::Image, "/fixture/two.png", "two", 10, "images"),
+            ])
+            .unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
+    let rows = db.media_file_list(DataType::Image, 10, 0).unwrap();
+    let tag = plain_rs::tags::create_tag(&db, DataType::Image.kind(), "work").unwrap();
+    plain_rs::tags::add_relations(
+        &db,
+        &rows
+            .iter()
+            .map(|row| (tag.id.clone(), row.id.clone()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let loads = &schema
+        .data::<DataLoader<TagsLoader>>()
+        .unwrap()
+        .loader()
+        .loads;
+    let response = schema
+        .execute(r#"{ images(offset:0, limit:10, query:"", sortBy:NAME_ASC) { id } }"#)
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["images"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(loads.load(Ordering::Relaxed), 0);
+    let response = schema
+        .execute(
+            r#"{ images(offset:0, limit:10, query:"", sortBy:NAME_ASC) { id tags { name } } }"#,
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let rows = data["images"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row["tags"][0]["name"], "work");
+    }
+    assert_eq!(loads.load(Ordering::Relaxed), 1);
 }

@@ -202,3 +202,60 @@ fn registry_and_effect_capacity_are_bounded() {
     }
     assert!(count <= 250);
 }
+
+#[test]
+fn message_enqueue_and_control_use_one_owned_file_queue_and_one_revision_per_batch() {
+    let (_dir, _db, queue) = fixture(4);
+    assert!(queue.enqueue_message("message", "peer").unwrap());
+    assert_eq!(queue.snapshot()["revision"], 1);
+    assert_eq!(queue.snapshot()["tasks"].as_array().unwrap().len(), 4);
+    assert!(!queue.enqueue_message("message", "peer").unwrap());
+    assert_eq!(queue.snapshot()["revision"], 1);
+    assert!(
+        queue
+            .control_message("message", Some("other"), "pause")
+            .is_err()
+    );
+    assert_eq!(queue.snapshot()["revision"], 1);
+    assert!(
+        queue
+            .control_message("message", Some("peer"), "pause")
+            .unwrap()
+    );
+    assert_eq!(queue.snapshot()["revision"], 2);
+    assert!(
+        queue.snapshot()["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|task| task["status"] == "PAUSED")
+    );
+    assert!(
+        queue
+            .control_message("message", Some("peer"), "resume")
+            .unwrap()
+    );
+    assert_eq!(queue.snapshot()["revision"], 3);
+}
+
+#[test]
+fn oversized_message_enqueue_does_not_leave_partial_tasks_or_effects() {
+    let (_dir, _db, queue) = fixture(129);
+    assert!(queue.enqueue_message("message", "peer").is_err());
+    assert_eq!(queue.snapshot()["tasks"], json!([]));
+    assert_eq!(queue.snapshot()["revision"], 0);
+    assert!(queue.effect().is_none());
+}
+
+#[test]
+fn recreated_queue_has_distinct_runtime_identity_and_starts_at_revision_zero() {
+    let (dir, db, first) = fixture(1);
+    first.enqueue_message("message", "peer").unwrap();
+    let restarted = Queue::new(db, dir.path().to_path_buf(), Arc::new(Imports::default()));
+    assert_ne!(
+        first.snapshot()["runtimeId"],
+        restarted.snapshot()["runtimeId"]
+    );
+    assert_eq!(restarted.snapshot()["revision"], 0);
+    assert_eq!(restarted.snapshot()["tasks"], json!([]));
+}

@@ -38,3 +38,7 @@ impl CoreDependencies {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/assembly/core_dependencies.rs"]
+mod tests;

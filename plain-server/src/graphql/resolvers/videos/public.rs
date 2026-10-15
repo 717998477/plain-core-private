@@ -21,6 +21,9 @@ use crate::graphql::resolvers::media::public::row;
 #[derive(SimpleObject, Clone, Debug)]
 #[graphql(complex)]
 pub struct Video {
+    pub width: i32,
+    pub height: i32,
+    pub rotation: i32,
     pub id: async_graphql::ID,
     pub title: String,
     pub path: String,
@@ -83,7 +86,10 @@ impl VideosQuery {
         Ok(rows(&items, |item| {
             let row = row(item);
             Video {
-                id: row.id,
+                width: integer(item, "width") as i32,
+                height: integer(item, "height") as i32,
+                rotation: integer(item, "rotation") as i32,
+                id: row.id.into(),
                 title: row.title,
                 path: row.path,
                 duration_ms: Long(integer(item, "durationMs")),

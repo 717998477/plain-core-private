@@ -64,34 +64,18 @@ fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
         .collect()
 }
 
-async fn device_name(state: &ServerState) -> Result<String, String> {
-    let settings =
-        plain_rs::prefs::user::snapshot(&state.prefs).map_err(|error| error.to_string())?;
-    if !settings.device_name.is_empty() {
-        return Ok(settings.device_name);
-    }
-    let facts = state.host.call("systemCastAddressFacts", json!({})).await?;
-    facts
-        .get("defaultDeviceName")
-        .and_then(Value::as_str)
-        .filter(|name| !name.is_empty())
-        .map(String::from)
-        .ok_or_else(|| "Missing cast device name".to_string())
-}
+use crate::services::casting::address::device_name;
 
 /// The address the SSDP LOCATION points at and the device description
 /// advertises. Must agree with the one the advertiser used, or a control
 /// point fetches the description from an address the renderer never joined.
 fn local_ip() -> String {
-    plain_rs::protocols::mdns::host_responder::local_ipv4_strs()
-        .into_iter()
+    let ips = plain_rs::protocols::mdns::host_responder::local_ipv4_strs();
+    ips.iter()
         .find(|ip| !ip.starts_with("127."))
-        .or_else(|| {
-            plain_rs::protocols::mdns::host_responder::local_ipv4_strs()
-                .into_iter()
-                .next()
-        })
-        .unwrap_or_else(|| "127.0.0.1".to_string())
+        .or_else(|| ips.first())
+        .cloned()
+        .unwrap_or_else(|| "127.0.0.1".into())
 }
 
 /// Public DLNA receiver endpoint. One handler for every UPnP path — the
@@ -165,7 +149,6 @@ pub(crate) async fn receiver(
 
 /// The public router half. Grouped here so `start_public` only has to merge
 /// it; axum needs an explicit `MethodRouter` for SUBSCRIBE/UNSUBSCRIBE.
-#[cfg(feature = "http_transport")]
 pub(crate) fn router(state: ServerState) -> axum::Router {
     use axum::routing::{any, get};
     axum::Router::new()

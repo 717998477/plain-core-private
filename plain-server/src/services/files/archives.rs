@@ -6,6 +6,7 @@ use std::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 
 pub struct Archives {
+    previews: Arc<plain_rs::utils::keyed_locks::KeyedLocks>,
     directory: PathBuf,
     gate: Arc<Semaphore>,
 }
@@ -13,9 +14,43 @@ pub struct Archives {
 impl Archives {
     pub(crate) fn new(directory: PathBuf) -> Self {
         Self {
+            previews: Arc::new(plain_rs::utils::keyed_locks::KeyedLocks::new()),
             directory,
             gate: Arc::new(Semaphore::new(1)),
         }
+    }
+
+    pub(crate) async fn preview(
+        &self,
+        platform: &super::platform::FilePlatform,
+        reference: String,
+    ) -> Result<PathBuf, String> {
+        let (archive, _) = reference
+            .split_once("!zip!/")
+            .ok_or("Archive entry reference required")?;
+        platform
+            .authorize(archive, false)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (_, name) = reference
+            .split_once("!zip!/")
+            .ok_or("Archive entry reference required")?;
+        let reference = format!("{archive}!zip!/{}", name.trim_matches('/'));
+        let cache = self.directory.join("entries");
+        let previews = self.previews.clone();
+        tokio::spawn(async move {
+            previews
+                .with_lock(reference.clone(), async move {
+                    tokio::task::spawn_blocking(move || {
+                        super::zip_entries::extract(&cache, &reference)
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?
+                })
+                .await
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
 
     pub(crate) fn acquire(&self) -> Option<OwnedSemaphorePermit> {

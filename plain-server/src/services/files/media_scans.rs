@@ -45,9 +45,18 @@ pub(crate) struct MediaScans {
 }
 
 impl MediaScans {
-    pub(crate) fn new(events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>) -> Self {
+    pub(crate) fn new(
+        events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
+        cache_directory: std::path::PathBuf,
+    ) -> Self {
         Self {
-            state: Mutex::new(State::default()),
+            state: Mutex::new(State {
+                policy: Some(Arc::new(super::media_scan_policy::Policy {
+                    cache_directory,
+                    excluded_roots: Vec::new(),
+                })),
+                ..State::default()
+            }),
             events: Some(events),
         }
     }
@@ -183,6 +192,20 @@ impl MediaScans {
         }
         guard.policy = Some(Arc::new(policy));
         Ok(())
+    }
+
+    pub(crate) fn cache_directory(&self) -> Result<Option<std::path::PathBuf>, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "Media scan state unavailable")?;
+        if state.closed {
+            return Err("Rust core stopped".into());
+        }
+        Ok(state
+            .policy
+            .as_ref()
+            .map(|policy| policy.cache_directory.clone()))
     }
 
     pub(crate) fn policy(&self) -> Result<Arc<super::media_scan_policy::Policy>, String> {

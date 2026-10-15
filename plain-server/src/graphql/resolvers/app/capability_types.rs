@@ -12,15 +12,6 @@ pub struct Disk {
     pub model: Option<String>,
 }
 
-#[derive(SimpleObject, Clone, Debug)]
-pub struct Session {
-    pub client_id: String,
-    pub client_name: String,
-    pub last_active: Instant,
-    pub created_at: Instant,
-    pub updated_at: Instant,
-}
-
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 pub enum AuditEventType {

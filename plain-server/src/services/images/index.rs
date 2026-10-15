@@ -38,14 +38,20 @@ struct State {
 pub struct ImageIndex {
     db: Arc<Db>,
     host: Arc<Host>,
+    events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
     state: Arc<Mutex<State>>,
     encoder: Mutex<Option<Arc<dyn plain_inference::embedding::ImageEncoder>>>,
 }
 impl ImageIndex {
-    pub fn new(db: Arc<Db>, host: Arc<Host>) -> Self {
+    pub fn new(
+        db: Arc<Db>,
+        host: Arc<Host>,
+        events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
+    ) -> Self {
         Self {
             db,
             host,
+            events,
             state: Arc::new(Mutex::new(State::default())),
             encoder: Mutex::new(None),
         }
@@ -179,12 +185,8 @@ impl ImageIndex {
         s.status.indexed_images = 0;
         Ok(count)
     }
-    async fn publish(&self) {
-        let status = self.status();
-        let _ = self
-            .host
-            .call("imageIndexProgress", serde_json::to_value(status).unwrap())
-            .await;
+    fn publish(&self) {
+        publish_status(&self.events, self.status());
     }
     async fn work(self: Arc<Self>) {
         loop {
@@ -214,14 +216,13 @@ impl ImageIndex {
                 }
             };
             let Some((generation, job)) = next else {
-                self.publish().await;
+                self.publish();
                 return;
             };
             let control = IndexControl {
                 generation,
                 state: self.state.clone(),
-                host: self.host.clone(),
-                runtime: tokio::runtime::Handle::current(),
+                events: self.events.clone(),
             };
             let encoder = self.encoder.lock().unwrap().clone();
             let provider = HostProvider::new(self.host.clone(), generation.to_string(), encoder);
@@ -265,8 +266,7 @@ impl ImageIndex {
 struct IndexControl {
     generation: u64,
     state: Arc<Mutex<State>>,
-    host: Arc<Host>,
-    runtime: tokio::runtime::Handle,
+    events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
 }
 impl IndexControl {
     fn valid(&self, s: &State) -> DomainResult<()> {
@@ -303,13 +303,20 @@ impl Control for IndexControl {
             s.status.skipped_images = p.skipped;
             s.status.clone()
         };
-        let _ = self.runtime.block_on(
-            self.host
-                .call("imageIndexProgress", serde_json::to_value(status).unwrap()),
-        );
+        publish_status(&self.events, status);
     }
 }
 
 #[cfg(test)]
 #[path = "../../../tests/unit/services/images/index.rs"]
 mod tests;
+
+fn publish_status(
+    events: &tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
+    status: Status,
+) {
+    let _ = events.send(plain_rs::events::WsEvent::broadcast(
+        "IMAGE_INDEX_UPDATED",
+        serde_json::to_string(&status).unwrap(),
+    ));
+}

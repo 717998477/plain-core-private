@@ -1,11 +1,6 @@
 use crate::assembly::server::ServerState;
 use crate::services::casting::sender::types::DiscoveredDevice;
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
@@ -106,7 +101,6 @@ impl Runtime {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Command {
-    Snapshot {},
     StartScan,
     StopScan,
     Select {
@@ -138,35 +132,21 @@ pub(crate) enum Command {
     },
     Clear,
 }
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(command): Json<Command>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
+pub(crate) async fn run(state: &ServerState, command: Command) -> Result<Snapshot, String> {
     let runtime = state.cast.clone();
     let _guard = runtime.operations.lock().await;
-    let result = execute(&state, &runtime, command).await;
-    runtime.publish(&state);
-    match result {
-        Ok(()) => Json(json!({"result":runtime.snapshot()})).into_response(),
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":error,"result":runtime.snapshot()})),
-        )
-            .into_response(),
-    }
+    let result = execute(state, &runtime, command).await;
+    runtime.publish(state);
+    result?;
+    Ok(runtime.snapshot())
 }
-async fn execute(
+pub(crate) async fn execute(
     state: &ServerState,
     runtime: &Arc<Runtime>,
     command: Command,
 ) -> Result<(), String> {
     use Command::*;
     match command {
-        Snapshot {} => {}
         StartScan => {
             if runtime
                 .scan

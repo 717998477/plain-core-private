@@ -16,6 +16,14 @@ pub struct WsEvent {
 }
 
 pub const HOST_TEXT_TYPES: &[&str] = &[
+    "PAIRING_REQUEST_REPORTED",
+    "PAIRING_RESPONSE_REPORTED",
+    "PAIRING_CANCEL_REPORTED",
+    "NOTIFICATION_REPORTED",
+    "AUDIO_PROGRESS_REPORTED",
+    "AUDIO_STARTED_REPORTED",
+    "MEDIA_DURATION_REPORTED",
+    "IMAGE_INDEX_ERROR_REPORTED",
     "SCREEN_MIRRORING",
     "SCREEN_MIRROR_AUDIO_GRANTED",
     "SCREEN_MIRROR_VIDEO_CODEC",
@@ -41,6 +49,9 @@ impl WsEvent {
                 | "ONLINE_CLIENTS_UPDATED"
                 | "WEB_REQUEST_RECEIVED"
                 | "WEB_LOGIN_REQUESTED"
+                | "WEB_LOGIN_COMPLETED"
+                | "WEB_SOCKET_REGISTERED"
+                | "IMAGE_INDEX_UPDATED"
                 | "DLNA_SENDER_UPDATED"
                 | "IMAGE_MODELS_UPDATED"
                 | "PREFS_UPDATED"

@@ -11,28 +11,7 @@ async fn catalog_is_created_from_core_and_stopped_handles_reject_access() {
             .unwrap()
             .is_empty()
     );
-    assert!(
-        catalog
-            .bucket_item_facts(serde_json::json!({"dataType":"IMAGE"}))
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        catalog
-            .bucket_item_facts(serde_json::json!({"dataType":"CONTACT"}))
-            .is_err()
-    );
-    assert!(
-        catalog
-            .bucket_item_facts(serde_json::json!({"dataType":"IMAGE","extra":true}))
-            .is_err()
-    );
     core.stop_core().await;
-    assert!(
-        catalog
-            .bucket_item_facts(serde_json::json!({"dataType":"IMAGE"}))
-            .is_err()
-    );
     assert!(core.native_media_catalog().is_err());
     assert!(catalog.count(plain_rs::enums::DataType::Image).is_err());
     assert!(
@@ -48,27 +27,15 @@ async fn catalog_is_created_from_core_and_stopped_handles_reject_access() {
     assert!(catalog.record_files(&[]).is_err());
 }
 
-#[cfg(feature = "media")]
+#[cfg(all(feature = "media", not(any(target_os = "android", target_os = "ios"))))]
 #[tokio::test]
-async fn authorized_file_metadata_reaches_catalog_and_existing_facts_projection() {
+async fn native_file_metadata_reaches_catalog_without_any_host_request() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("report.txt");
     std::fs::write(&path, "document").unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let host = core.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
-    let authorization = tokio::spawn(async move {
-        for allow in [true, false] {
-            let request = requests.recv().await.unwrap();
-            assert_eq!(request["method"], "fileTaskAuthorize");
-            assert_eq!(request["params"]["operation"], "read");
-            host.reply(
-                generation,
-                serde_json::json!({"id":request["id"],"result":allow}),
-            )
-            .unwrap();
-        }
-    });
+    let (_generation, mut requests) = host.connect();
     let catalog = core.native_media_catalog().unwrap();
     let indexed = catalog
         .scan_file(plain_rs::enums::DataType::Doc, path.to_str().unwrap())
@@ -81,10 +48,23 @@ async fn authorized_file_metadata_reaches_catalog_and_existing_facts_projection(
             .unwrap(),
         1
     );
-    let rows = catalog.rows_facts(serde_json::json!({"dataType":"DOC","query":"ext:txt","sortBy":"NAME_ASC","limit":10,"offset":0})).unwrap();
+    let rows = catalog
+        .search(
+            plain_rs::enums::DataType::Doc,
+            "ext:txt",
+            crate::graphql::resolvers::files::types::FileSortBy::NameAsc,
+            10,
+            0,
+        )
+        .unwrap()
+        .iter()
+        .map(crate::services::files::media_catalog_facts::row_facts)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     assert_eq!(rows[0]["id"], indexed.id);
     assert_eq!(rows[0]["size"], 8);
     assert!(!rows[0].as_object().unwrap().contains_key("originalPath"));
+    std::fs::remove_file(&path).unwrap();
     assert!(
         catalog
             .scan_file(plain_rs::enums::DataType::Doc, path.to_str().unwrap())
@@ -92,7 +72,7 @@ async fn authorized_file_metadata_reaches_catalog_and_existing_facts_projection(
             .is_err()
     );
     assert_eq!(catalog.count(plain_rs::enums::DataType::Doc).unwrap(), 1);
-    authorization.await.unwrap();
+    assert!(requests.try_recv().is_err());
     core.stop_core().await;
     assert!(
         catalog
@@ -104,7 +84,7 @@ async fn authorized_file_metadata_reaches_catalog_and_existing_facts_projection(
 
 #[cfg(feature = "media")]
 #[tokio::test]
-async fn rescan_with_failed_probe_retains_current_known_metadata_after_authorization() {
+async fn rescan_with_failed_probe_retains_current_known_metadata_without_host_round_trips() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("damaged.mp3");
     std::fs::write(&path, b"unrecognized audio bytes").unwrap();
@@ -121,17 +101,7 @@ async fn rescan_with_failed_probe_retains_current_known_metadata_after_authoriza
     known.cover_image_id = Some("known-album".into());
     known.size_bytes = 999;
     let original = catalog.record_files(&[known]).unwrap().remove(0);
-    let host = core.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
-    let authorization = tokio::spawn(async move {
-        let request = requests.recv().await.unwrap();
-        assert_eq!(request["params"]["operation"], "read");
-        host.reply(
-            generation,
-            serde_json::json!({"id":request["id"],"result":true}),
-        )
-        .unwrap();
-    });
+    let (_generation, mut requests) = core.runtime_state().host.connect();
     let updated = catalog
         .scan_file(plain_rs::enums::DataType::Audio, path.to_str().unwrap())
         .await
@@ -145,22 +115,23 @@ async fn rescan_with_failed_probe_retains_current_known_metadata_after_authoriza
         updated.size_bytes,
         std::fs::metadata(path).unwrap().len() as i64
     );
-    authorization.await.unwrap();
+    assert!(requests.try_recv().is_err());
     core.stop_core().await;
     assert!(catalog.record_file_reads(&[]).is_err());
 }
 
 #[cfg(feature = "media")]
 #[tokio::test]
-async fn file_scan_cancel_aborts_pending_authorization_and_keeps_catalog_unchanged() {
+async fn file_scan_cancel_aborts_pending_reads_and_keeps_catalog_unchanged() {
     use crate::services::files::media_scans::Status;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("report.txt");
     std::fs::write(&path, "document").unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
-    let catalog = core.native_media_catalog().unwrap();
-    let host = core.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
+    let mut catalog = core.native_media_catalog().unwrap();
+    let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
+    catalog.read_gate = Some(gate.clone());
+    let (_generation, mut requests) = core.runtime_state().host.connect();
     let worker = tokio::spawn({
         let catalog = catalog.clone();
         let path = path.clone();
@@ -173,7 +144,9 @@ async fn file_scan_cancel_aborts_pending_authorization_and_keeps_catalog_unchang
                 .await
         }
     });
-    let request = requests.recv().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), gate.0.notified())
+        .await
+        .unwrap();
     assert_eq!(
         catalog.file_scan_status().unwrap().unwrap().status,
         Status::Running
@@ -191,11 +164,7 @@ async fn file_scan_cancel_aborts_pending_authorization_and_keeps_catalog_unchang
     let result = worker.await.unwrap().unwrap();
     assert_eq!(result.status, Status::Cancelled);
     assert_eq!(result.processed_files, 0);
-    host.reply(
-        generation,
-        serde_json::json!({"id":request["id"],"result":true}),
-    )
-    .unwrap();
+    assert!(requests.try_recv().is_err());
     assert_eq!(catalog.count(plain_rs::enums::DataType::Doc).unwrap(), 0);
     assert_eq!(
         catalog
@@ -218,9 +187,10 @@ async fn aborted_scan_future_releases_the_shared_job_and_failed_scans_report_par
     let path = directory.path().join("report.txt");
     std::fs::write(&path, "document").unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
-    let catalog = core.native_media_catalog().unwrap();
-    let host = core.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
+    let mut catalog = core.native_media_catalog().unwrap();
+    let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
+    catalog.read_gate = Some(gate.clone());
+    let (_generation, mut requests) = core.runtime_state().host.connect();
     let worker = tokio::spawn({
         let catalog = catalog.clone();
         let path = path.clone();
@@ -233,21 +203,16 @@ async fn aborted_scan_future_releases_the_shared_job_and_failed_scans_report_par
                 .await
         }
     });
-    requests.recv().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), gate.0.notified())
+        .await
+        .unwrap();
     worker.abort();
     assert!(worker.await.unwrap_err().is_cancelled());
     assert_eq!(
         catalog.file_scan_status().unwrap().unwrap().status,
         Status::Cancelled
     );
-    let authorization = tokio::spawn(async move {
-        let request = requests.recv().await.unwrap();
-        host.reply(
-            generation,
-            serde_json::json!({"id":request["id"],"result":true}),
-        )
-        .unwrap();
-    });
+    catalog.read_gate = None;
     let result = catalog
         .scan_files(
             plain_rs::enums::DataType::Doc,
@@ -260,7 +225,7 @@ async fn aborted_scan_future_releases_the_shared_job_and_failed_scans_report_par
     assert_eq!(result.processed_files, 1);
     assert!(result.error.is_some());
     assert_eq!(catalog.count(plain_rs::enums::DataType::Doc).unwrap(), 1);
-    authorization.await.unwrap();
+    assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }
 
@@ -317,10 +282,11 @@ async fn directory_scan_uses_core_policy_real_walker_and_existing_catalog() {
     std::fs::write(data.join("internal.txt"), b"internal").unwrap();
     let catalog = core.native_media_catalog().unwrap();
     assert!(
-        catalog
-            .scan_directory(root.to_str().unwrap())
-            .await
-            .is_err()
+        core.runtime_state()
+            .media_scans
+            .cache_directory()
+            .unwrap()
+            .is_some()
     );
     catalog
         .configure_scan_directories(&cache, Some(&config))
@@ -366,23 +332,29 @@ async fn directory_scan_uses_core_policy_real_walker_and_existing_catalog() {
 
 #[cfg(feature = "media")]
 #[tokio::test]
-async fn directory_scan_cancels_during_root_authorization_without_discovery_or_writes() {
+async fn directory_scan_cancels_during_the_first_read_without_catalog_writes() {
     use crate::services::files::media_scans::Status;
-    let directory = tempfile::tempdir().unwrap();
+    let directory = directory_scan_fixture();
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
-    let catalog = core.native_media_catalog().unwrap();
+    let mut catalog = core.native_media_catalog().unwrap();
     catalog
         .configure_scan_directories(&directory.path().join("cache"), None)
         .unwrap();
-    let host = core.runtime_state().host.clone();
-    let (_generation, mut requests) = host.connect();
+    let root = directory.path().join("files");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("visible.txt"), b"data").unwrap();
+    let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
+    catalog.read_gate = Some(gate.clone());
+    let (_generation, mut requests) = core.runtime_state().host.connect();
     let worker = tokio::spawn({
         let catalog = catalog.clone();
-        let root = directory.path().to_str().unwrap().to_owned();
+        let root = root.to_str().unwrap().to_owned();
         async move { catalog.scan_directory(&root).await }
     });
-    requests.recv().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), gate.0.notified())
+        .await
+        .unwrap();
     assert_eq!(
         catalog.file_scan_status().unwrap().unwrap().total_files,
         None
@@ -397,6 +369,7 @@ async fn directory_scan_cancels_during_root_authorization_without_discovery_or_w
     assert_eq!(result.status, Status::Cancelled);
     assert_eq!(result.processed_files, 0);
     assert_eq!(catalog.count(plain_rs::enums::DataType::Doc).unwrap(), 0);
+    assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }
 
@@ -413,34 +386,27 @@ async fn directory_scan_cancellation_releases_a_bounded_producer_without_committ
     }
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
-    let catalog = core.native_media_catalog().unwrap();
+    let mut catalog = core.native_media_catalog().unwrap();
     catalog
         .configure_scan_directories(&directory.path().join("cache"), None)
         .unwrap();
-    let host = core.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
+    let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
+    catalog.read_gate = Some(gate.clone());
+    let (_generation, mut requests) = core.runtime_state().host.connect();
     let worker = tokio::spawn({
         let catalog = catalog.clone();
         let root = root.to_str().unwrap().to_owned();
         async move { catalog.scan_directory(&root).await }
     });
-    let request = requests.recv().await.unwrap();
-    host.reply(
-        generation,
-        serde_json::json!({"id":request["id"],"result":true}),
-    )
-    .unwrap();
-    let pending = requests.recv().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), gate.0.notified())
+        .await
+        .unwrap();
     catalog.cancel_file_scan().unwrap();
     let result = worker.await.unwrap().unwrap();
     assert_eq!(result.status, Status::Cancelled);
     assert_eq!(result.processed_files, 0);
     assert_eq!(result.total_files, None);
-    host.reply(
-        generation,
-        serde_json::json!({"id":pending["id"],"result":true}),
-    )
-    .unwrap();
+    assert!(requests.try_recv().is_err());
     assert_eq!(catalog.count(plain_rs::enums::DataType::Doc).unwrap(), 0);
     core.stop_core().await;
 }
@@ -555,7 +521,7 @@ async fn source_directory_scan_keeps_one_session_across_roots_and_partial_failur
     }
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
-    let catalog = core.native_media_catalog().unwrap();
+    let mut catalog = core.native_media_catalog().unwrap();
     catalog
         .configure_scan_directories(&directory.path().join("cache"), None)
         .unwrap();
@@ -564,47 +530,35 @@ async fn source_directory_scan_keeps_one_session_across_roots_and_partial_failur
         .map(|root| root.to_str().unwrap().to_owned())
         .collect::<Vec<_>>();
     catalog.set_source_directories(&sources).unwrap();
-    let host = core.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
-    let observer = catalog.clone();
-    let (done, mut finish) = tokio::sync::oneshot::channel::<()>();
-    let authorize = tokio::spawn(async move {
-        let mut id = None;
-        loop {
-            tokio::select! {
-                _ = &mut finish => break,
-                request = requests.recv() => {
-                    let request = request.unwrap();
-                    let snapshot = observer.file_scan_status().unwrap().unwrap();
-                    assert_eq!(snapshot.status, Status::Running);
-                    assert_eq!(snapshot.total_files, None);
-                    if let Some(previous) = &id { assert_eq!(previous, &snapshot.id); }
-                    else { id = Some(snapshot.id); }
-                    host.reply(generation, serde_json::json!({"id":request["id"],"result":true})).unwrap();
-                }
-            }
-        }
+    let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
+    catalog.read_gate = Some(gate.clone());
+    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let worker = tokio::spawn({
+        let catalog = catalog.clone();
+        async move { catalog.scan_source_directories("/").await }
     });
-    let result = catalog.scan_source_directories("/").await.unwrap();
-    done.send(()).unwrap();
-    authorize.await.unwrap();
+    let mut session_id = None;
+    for _ in 0..2 {
+        tokio::time::timeout(std::time::Duration::from_secs(5), gate.0.notified())
+            .await
+            .unwrap();
+        let snapshot = catalog.file_scan_status().unwrap().unwrap();
+        assert_eq!(snapshot.status, Status::Running);
+        assert_eq!(snapshot.total_files, None);
+        if let Some(id) = &session_id {
+            assert_eq!(*id, snapshot.id);
+        } else {
+            session_id = Some(snapshot.id);
+        }
+        gate.1.add_permits(1);
+    }
+    let result = worker.await.unwrap().unwrap();
     assert_eq!(result.status, Status::Completed);
     assert_eq!(result.total_files, Some(2));
     assert_eq!(result.processed_files, 2);
     assert_eq!(catalog.count(plain_rs::enums::DataType::Doc).unwrap(), 2);
 
-    let host = core.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
-    let authorize = tokio::spawn(async move {
-        for _ in 0..3 {
-            let request = requests.recv().await.unwrap();
-            host.reply(
-                generation,
-                serde_json::json!({"id":request["id"],"result":true}),
-            )
-            .unwrap();
-        }
-    });
+    catalog.read_gate = None;
     let result = catalog
         .scan_directories(vec![
             sources[0].clone(),
@@ -617,7 +571,7 @@ async fn source_directory_scan_keeps_one_session_across_roots_and_partial_failur
         ])
         .await
         .unwrap();
-    authorize.await.unwrap();
+    assert!(requests.try_recv().is_err());
     assert_eq!(result.status, Status::Failed);
     assert_eq!(result.processed_files, 1);
     assert_eq!(result.total_files, None);
@@ -631,26 +585,28 @@ async fn source_directory_scan_keeps_one_session_across_roots_and_partial_failur
 
 #[cfg(feature = "media")]
 #[tokio::test]
-async fn background_source_scan_is_busy_before_authorization_and_core_stop_joins_it() {
+async fn background_source_scan_is_busy_before_the_first_read_and_core_stop_joins_it() {
     let directory = directory_scan_fixture();
     let root = directory.path().join("library");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("document.txt"), b"document").unwrap();
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
-    let catalog = core.native_media_catalog().unwrap();
+    let mut catalog = core.native_media_catalog().unwrap();
     catalog
         .configure_scan_directories(&directory.path().join("cache"), None)
         .unwrap();
     catalog
         .set_source_directories(&[root.to_str().unwrap().to_owned()])
         .unwrap();
-    let host = core.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
+    let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
+    catalog.read_gate = Some(gate.clone());
+    let (_generation, mut requests) = core.runtime_state().host.connect();
     let started = catalog.start_source_scan("/").unwrap();
     assert!(catalog.start_source_scan("/").is_err());
-    let request = requests.recv().await.unwrap();
-    assert_eq!(request["method"], "fileTaskAuthorize");
+    tokio::time::timeout(std::time::Duration::from_secs(5), gate.0.notified())
+        .await
+        .unwrap();
     assert_eq!(catalog.file_scan_status().unwrap().unwrap().id, started.id);
     core.stop_core().await;
     assert_eq!(
@@ -662,10 +618,7 @@ async fn background_source_scan_is_busy_before_authorization_and_core_stop_joins
             .status,
         crate::services::files::media_scans::Status::Cancelled
     );
-    let _ = host.reply(
-        generation,
-        serde_json::json!({"id":request["id"],"result":true}),
-    );
+    assert!(requests.try_recv().is_err());
     assert_eq!(
         crate::services::files::media_catalog::count(
             &core.runtime_state().db,
@@ -677,34 +630,9 @@ async fn background_source_scan_is_busy_before_authorization_and_core_stop_joins
     );
 }
 
-#[tokio::test]
-async fn action_id_requests_are_typed_and_stop_checked() {
-    let directory = tempfile::tempdir().unwrap();
-    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
-    let catalog = core.native_media_catalog().unwrap();
-    assert!(
-        catalog
-            .ids_facts(serde_json::json!({"dataType":"DOC","query":"","fromTrash":false}))
-            .unwrap()
-            .is_empty()
-    );
-    for params in [
-        serde_json::json!({"dataType":"DOC","query":""}),
-        serde_json::json!({"dataType":"DOC","query":"","fromTrash":"false"}),
-        serde_json::json!({"dataType":"DOC","query":"","fromTrash":false,"extra":true}),
-    ] {
-        assert!(catalog.ids_facts(params).is_err());
-    }
-    core.stop_core().await;
-    assert!(
-        catalog
-            .ids_facts(serde_json::json!({"dataType":"DOC","query":"","fromTrash":false}))
-            .is_err()
-    );
-}
-
 /// The watcher writes into the catalog, so it must not outlive the core
 /// that owns it: after `stop_core` no filesystem event can reach the store.
+#[cfg(feature = "media")]
 #[tokio::test]
 async fn the_watcher_stops_with_the_core_and_rejects_after_it() {
     let directory = tempfile::tempdir().unwrap();
@@ -715,12 +643,7 @@ async fn the_watcher_stops_with_the_core_and_rejects_after_it() {
     catalog
         .set_source_directories(&[source.to_string_lossy().into_owned()])
         .unwrap();
-    // The scan policy is what decides what counts as media, so the watcher
-    // cannot start before it is configured.
-    assert!(
-        catalog.watch_source_directories().is_err(),
-        "watching before the scan policy exists has nothing to exclude against"
-    );
+    assert!(catalog.watch_source_directories().unwrap());
     catalog
         .configure_scan_directories(&directory.path().join("cache"), None)
         .unwrap();
@@ -747,136 +670,6 @@ async fn the_watcher_stops_with_the_core_and_rejects_after_it() {
 }
 
 #[cfg(feature = "media")]
-#[tokio::test]
-async fn media_delete_returns_actual_os_receipts_and_keeps_failed_selection() {
-    use plain_rs::media::actions::{Action, cleanup, validate};
-    let directory = tempfile::tempdir().unwrap();
-    let core =
-        crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
-    let catalog = core.native_media_catalog().unwrap();
-    let paths = [
-        directory.path().join("one.txt"),
-        directory.path().join("two.txt"),
-    ];
-    let metadata = paths
-        .iter()
-        .map(|path| {
-            std::fs::write(path, b"document").unwrap();
-            plain_rs::db::MediaFileMetadata {
-                data_type: plain_rs::enums::DataType::Doc,
-                path: path.to_str().unwrap().into(),
-                title: "document".into(),
-                artist: String::new(),
-                bucket_id: directory.path().to_str().unwrap().into(),
-                size_bytes: 8,
-                duration_ms: 0,
-                cover_image_id: None,
-                width: 0,
-                height: 0,
-                rotation: 0,
-                taken_at: None,
-                created_at: "2026-01-01T00:00:00.000Z".into(),
-                updated_at: "2026-01-01T00:00:00.000Z".into(),
-            }
-        })
-        .collect::<Vec<_>>();
-    let rows = catalog.record_files(&metadata).unwrap();
-    core.runtime_state()
-        .db
-        .with_conn(|conn| {
-            conn.execute(
-                "UPDATE media_items SET trashed=1 WHERE id=?1",
-                [&rows[1].id],
-            )
-        })
-        .unwrap();
-    let ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
-    let outcome = catalog.delete_action_files(serde_json::json!({"type":24,"action":"DELETE","ids":ids,"fromTrash":false,"destDir":""})).unwrap();
-    validate(
-        plain_rs::enums::DataType::Doc,
-        Action::Delete,
-        &ids,
-        &outcome,
-    )
-    .unwrap();
-    assert_eq!(outcome.successful.len(), 1);
-    assert_eq!(outcome.failed_ids, vec![rows[1].id.clone()]);
-    assert!(!paths[0].exists());
-    assert!(paths[1].exists());
-    assert!(
-        catalog
-            .by_path(plain_rs::enums::DataType::Doc, paths[0].to_str().unwrap())
-            .unwrap()
-            .is_none()
-    );
-    cleanup(
-        &core.runtime_state().db,
-        plain_rs::enums::DataType::Doc,
-        Action::Delete,
-        &outcome.successful,
-    )
-    .unwrap();
-    assert!(
-        catalog
-            .by_path(plain_rs::enums::DataType::Doc, paths[0].to_str().unwrap())
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        catalog
-            .by_path(plain_rs::enums::DataType::Doc, paths[1].to_str().unwrap())
-            .unwrap()
-            .is_some()
-    );
-    assert!(catalog.delete_action_files(serde_json::json!({"type":24,"action":"MOVE","ids":[],"fromTrash":false,"destDir":"/other"})).is_err());
-    core.stop_core().await;
-    assert!(catalog.delete_action_files(serde_json::json!({"type":24,"action":"DELETE","ids":[],"fromTrash":false,"destDir":""})).is_err());
-}
-
-#[cfg(feature = "media")]
-#[tokio::test]
-async fn image_delete_updates_index_before_any_parent_consumes_the_receipt() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("photo.jpg");
-    std::fs::write(&path, b"image").unwrap();
-    let core =
-        crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
-    let catalog = core.native_media_catalog().unwrap();
-    let rows = catalog
-        .record_files(&[plain_rs::db::MediaFileMetadata {
-            data_type: plain_rs::enums::DataType::Image,
-            path: path.to_str().unwrap().into(),
-            title: "photo".into(),
-            artist: String::new(),
-            bucket_id: directory.path().to_str().unwrap().into(),
-            size_bytes: 5,
-            duration_ms: 0,
-            cover_image_id: None,
-            width: 0,
-            height: 0,
-            rotation: 0,
-            taken_at: None,
-            created_at: "2026-01-01T00:00:00.000Z".into(),
-            updated_at: "2026-01-01T00:00:00.000Z".into(),
-        }])
-        .unwrap();
-    let index = core.runtime_state().image_index.clone();
-    let version = index.status().version;
-    let outcome = catalog
-        .delete_action_files(serde_json::json!({
-            "type":plain_rs::enums::DataType::Image.kind(),"action":"DELETE",
-            "ids":[rows[0].id],"fromTrash":false,"destDir":""
-        }))
-        .unwrap();
-    assert!(outcome.failed_ids.is_empty());
-    assert_eq!(outcome.successful.len(), 1);
-    assert!(!path.exists());
-    assert_eq!(catalog.count(plain_rs::enums::DataType::Image).unwrap(), 0);
-    assert!(index.status().version > version);
-    assert_eq!(index.status().indexed_images, 0);
-    core.stop_core().await;
-}
-
 #[tokio::test]
 async fn filesystem_watch_events_from_an_os_thread_update_the_shared_catalog() {
     let directory = tempfile::tempdir().unwrap();

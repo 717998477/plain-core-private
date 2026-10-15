@@ -36,6 +36,7 @@ impl From<AudioTrack> for AudioItem {
 #[derive(SimpleObject, Clone, Debug)]
 #[graphql(complex)]
 pub struct Audio {
+    pub album_id: async_graphql::ID,
     pub id: async_graphql::ID,
     pub title: String,
     pub artist: String,
@@ -148,6 +149,7 @@ impl AudioQuery {
                     duration_ms: Long(crate::graphql::types::facts::integer(item, "durationMs")),
                     size: Long(crate::graphql::types::facts::integer(item, "size")),
                     bucket_id: crate::graphql::types::facts::id(item, "bucketId"),
+                    album_id: crate::graphql::types::facts::text(item, "albumId").into(),
                     album_file_id: crate::graphql::types::facts::text(item, "albumFileId"),
                     created_at: crate::graphql::types::facts::instant(item, "createdAt"),
                     updated_at: crate::graphql::types::facts::instant(item, "updatedAt"),
@@ -555,16 +557,16 @@ pub(crate) async fn search_tracks(
 }
 
 async fn read_lyrics(ctx: &Context<'_>, path: String) -> async_graphql::Result<String> {
-    #[cfg(all(feature = "media", not(any(target_os = "android", target_os = "ios"))))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = ctx;
         tokio::task::spawn_blocking(move || {
-            plain_media::metadata::audio::lyrics::extract_lyrics_from_path(&path)
+            plain_rs::media::audio::lyrics::extract_lyrics_from_path(&path)
         })
         .await
         .map_err(|error| async_graphql::Error::new(error.to_string()))
     }
-    #[cfg(not(all(feature = "media", not(any(target_os = "android", target_os = "ios")))))]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         Ok(host_call(ctx, "systemAudioLyrics", json!({"path":path}))
             .await?

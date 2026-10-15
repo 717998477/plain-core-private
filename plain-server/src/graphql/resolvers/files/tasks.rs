@@ -9,7 +9,7 @@ use plain_rs::files::tasks::FileTaskStatus;
 use plain_rs::files::tasks::FileTaskType;
 use std::sync::Arc;
 #[derive(InputObject)]
-struct FileHostTaskOpInput {
+struct FileTaskOpInput {
     src: String,
     dst: String,
     overwrite: bool,
@@ -28,6 +28,7 @@ impl From<CompletedOp> for FileHostCompletedOp {
     }
 }
 #[derive(SimpleObject)]
+#[graphql(name = "FileTask")]
 struct FileHostTask {
     id: ID,
     client_id: String,
@@ -66,12 +67,8 @@ impl From<FileTask> for FileHostTask {
 pub struct FileTaskQuery;
 #[Object]
 impl FileTaskQuery {
-    async fn file_host_task_record(
-        &self,
-        ctx: &Context<'_>,
-        client_id: String,
-        id: ID,
-    ) -> Result<Option<FileHostTask>> {
+    async fn file_task(&self, ctx: &Context<'_>, id: ID) -> Result<Option<FileHostTask>> {
+        let client_id = caller(ctx)?;
         Ok(ctx
             .data::<Arc<FileTasks>>()?
             .list(client_id)
@@ -80,14 +77,14 @@ impl FileTaskQuery {
             .find(|task| task.id == id.as_str())
             .map(Into::into))
     }
-    async fn file_host_tasks(
+    async fn file_tasks(
         &self,
         ctx: &Context<'_>,
-        client_id: String,
         query: String,
         offset: i32,
         limit: i32,
     ) -> Result<Vec<FileHostTask>> {
+        let client_id = caller(ctx)?;
         if offset < 0 || limit < 0 {
             return Err("invalid pagination".into());
         }
@@ -108,40 +105,72 @@ impl FileTaskQuery {
 pub struct FileTaskMutation;
 #[Object]
 impl FileTaskMutation {
-    async fn remove_file_host_task(
+    async fn create_copy_task(
         &self,
         ctx: &Context<'_>,
-        client_id: String,
-        id: ID,
-    ) -> Result<bool> {
+        ops: Vec<FileTaskOpInput>,
+    ) -> Result<FileHostTask> {
+        create(ctx, FileTaskType::Copy, "COPY".into(), ops).await
+    }
+    async fn create_move_task(
+        &self,
+        ctx: &Context<'_>,
+        ops: Vec<FileTaskOpInput>,
+    ) -> Result<FileHostTask> {
+        create(ctx, FileTaskType::Move, "MOVE".into(), ops).await
+    }
+    async fn remove_file_task(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
+        let client_id = caller(ctx)?;
         Ok(ctx
             .data::<Arc<FileTasks>>()?
             .remove(client_id, id.to_string())
             .await?)
     }
-    async fn create_file_host_task(
+    async fn create_file_task(
         &self,
         ctx: &Context<'_>,
-        client_id: String,
         r#type: FileTaskType,
         title: String,
-        ops: Vec<FileHostTaskOpInput>,
+        ops: Vec<FileTaskOpInput>,
     ) -> Result<FileHostTask> {
-        Ok(ctx
-            .data::<Arc<FileTasks>>()?
-            .create(
-                &client_id,
-                r#type,
-                &title,
-                ops.into_iter()
-                    .map(|op| FileTaskOp {
-                        src: op.src,
-                        dst: op.dst,
-                        overwrite: op.overwrite,
-                    })
-                    .collect(),
-            )
-            .await?
-            .into())
+        create(ctx, r#type, title, ops).await
     }
+}
+
+fn caller(ctx: &Context<'_>) -> Result<String> {
+    let client_id = ctx.data::<String>()?;
+    if client_id.is_empty() {
+        return Err("unauthorized".into());
+    }
+    Ok(client_id.clone())
+}
+
+async fn create(
+    ctx: &Context<'_>,
+    r#type: FileTaskType,
+    title: String,
+    ops: Vec<FileTaskOpInput>,
+) -> Result<FileHostTask> {
+    crate::http::auth::public_gate::require(
+        ctx,
+        ctx.data::<Arc<plain_rs::prefs::Prefs>>()?,
+        &["WRITE_EXTERNAL_STORAGE"],
+    )?;
+    let client_id = caller(ctx)?;
+    Ok(ctx
+        .data::<Arc<FileTasks>>()?
+        .create(
+            &client_id,
+            r#type,
+            &title,
+            ops.into_iter()
+                .map(|op| FileTaskOp {
+                    src: op.src,
+                    dst: op.dst,
+                    overwrite: op.overwrite,
+                })
+                .collect(),
+        )
+        .await?
+        .into())
 }

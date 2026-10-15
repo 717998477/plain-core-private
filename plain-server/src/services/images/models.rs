@@ -1,17 +1,11 @@
-use crate::assembly::server::ServerState;
 use crate::graphql::resolvers::images::public_index::ImageSearchStatus;
 use crate::graphql::resolvers::images::public_index::ImageSearchStatusType;
 use crate::host::bridge::Host;
 use crate::services::images::index::ImageIndex;
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
+
 use plain_rs::events::WsEvent;
 use plain_rs::prefs::Prefs;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use std::{
     path::PathBuf,
@@ -120,6 +114,10 @@ impl Runtime {
         }
         snapshot.version = state.version;
         snapshot
+    }
+    pub(crate) fn report_error(&self, message: String) {
+        self.state.lock().unwrap().error = message;
+        self.publish();
     }
     fn publish(&self) {
         let snapshot = self.snapshot();
@@ -493,56 +491,6 @@ impl Runtime {
         });
     }
 }
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Command {
-    Snapshot,
-    Search { text: String, limit: usize },
-    Restore,
-    Enable,
-    Import,
-    Disable,
-    Cancel,
-    Release,
-    Error { message: String },
-}
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(command): Json<Command>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let runtime = &state.image_models;
-    let result = match command {
-        Command::Search { text, limit } => {
-            return match runtime.search(&text, limit).await {
-                Ok(items) => Json(json!({"items": items})).into_response(),
-                Err(error) => {
-                    (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response()
-                }
-            };
-        }
-        Command::Error { message } => {
-            runtime.state.lock().unwrap().error = message;
-            runtime.publish();
-            Ok(())
-        }
-        Command::Snapshot => Ok(()),
-        Command::Restore => runtime.enable(true).await,
-        Command::Enable => runtime.enable(false).await,
-        Command::Import => runtime.import().await,
-        Command::Disable => runtime.cancel(true).await,
-        Command::Cancel => runtime.cancel(false).await,
-        Command::Release => runtime.release().await,
-    };
-    match result {
-        Ok(()) => Json(json!({"result":runtime.snapshot()})).into_response(),
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({"error":error}))).into_response(),
-    }
-}
-
 #[cfg(test)]
 #[path = "../../../tests/unit/services/images/models.rs"]
 mod tests;

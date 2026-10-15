@@ -1,5 +1,5 @@
 #[cfg(feature = "core")]
 pub mod public;
 
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "core")]
 pub mod types;

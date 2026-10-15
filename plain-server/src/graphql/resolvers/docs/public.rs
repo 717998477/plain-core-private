@@ -20,6 +20,7 @@ use crate::graphql::resolvers::media::public::row;
 #[derive(SimpleObject, Clone, Debug)]
 #[graphql(complex)]
 pub struct Doc {
+    pub duration_ms: Long,
     pub id: async_graphql::ID,
     pub title: String,
     pub path: String,
@@ -83,7 +84,8 @@ impl DocsQuery {
         Ok(rows(&items, |item| {
             let row = row(item);
             Doc {
-                id: row.id,
+                duration_ms: Long(crate::graphql::types::facts::integer(item, "durationMs")),
+                id: row.id.into(),
                 title: row.title,
                 // Derived from the path, exactly as plain-app's lazy
                 // `DDoc.extension` does — the store does not carry it.
@@ -100,14 +102,18 @@ impl DocsQuery {
         }))
     }
 
-    async fn doc_ext_groups(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<DocExtGroup>> {
+    async fn doc_ext_groups(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default)] query: String,
+    ) -> async_graphql::Result<Vec<DocExtGroup>> {
         if !public_gate::require_granted(ctx, &[STORAGE]).await? {
             return Ok(Vec::new());
         }
         let rows = crate::graphql::resolvers::media::public::library_rows(
             ctx,
             DataType::Doc,
-            String::new(),
+            query,
             crate::graphql::resolvers::files::types::FileSortBy::NameAsc,
             0,
             i32::MAX as u32,

@@ -184,7 +184,7 @@ async fn completed_operations_keep_resolved_collision_paths_when_native_scan_fai
     assert_eq!(task.completed_ops.len(), 1);
     assert_eq!(
         task.completed_ops[0].dst,
-        temp.path().join("copy_1.txt").to_str().unwrap()
+        temp.path().join("copy (1).txt").to_str().unwrap()
     );
     assert_eq!(std::fs::read(&target).unwrap(), b"existing");
     assert_eq!(

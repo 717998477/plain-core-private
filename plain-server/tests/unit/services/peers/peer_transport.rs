@@ -119,3 +119,32 @@ async fn cancel_releases_route_and_malformed_raw_ble_response_is_terminal() {
     host.disconnect(generation);
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn aware_config_uses_current_pairing_identity_and_rejects_corrupt_keys() {
+    let (_dir, server, state) = state();
+    state.prefs.set_user("https_port", 2443).unwrap();
+    let config = aware_config(&state, "fixture").unwrap();
+    assert!(config.is_client);
+    assert_eq!(config.local_port, 2443);
+    assert_eq!(
+        config.pmk.unwrap(),
+        plain_rs::utils::base64::base64_encode(&[7; 32])
+    );
+    let native = server.native_graphql().unwrap();
+    let response = native.execute(async_graphql::Request::new("{ activePeerTransfers { peerId transport } peerAwareConfig(id: \"fixture\") { isClient localPort pmk } }")).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    assert_eq!(data["activePeerTransfers"], json!([]));
+    assert_eq!(data["peerAwareConfig"]["localPort"], 2443);
+    let mut corrupt = peers::get(&state.db, "fixture").unwrap().unwrap();
+    corrupt.key = "%%%".into();
+    peers::save(
+        &state.db,
+        &[corrupt],
+        plain_rs::db::chat_store::SaveMode::Update,
+    )
+    .unwrap();
+    assert!(aware_config(&state, "fixture").is_err());
+    server.shutdown().await;
+}

@@ -3,15 +3,15 @@
 // limit overflows long before the roots themselves do.
 #![recursion_limit = "512"]
 
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "core")]
 pub mod assembly;
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "core")]
 pub mod files;
 pub mod graphql;
 pub mod http;
-pub mod platform;
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "core")]
 pub mod native;
+pub mod platform;
 pub mod services;
 
 /// Test fixtures whose dir must outlive the helper that created it
@@ -41,8 +41,12 @@ pub(crate) mod test_tempdirs {
     }
 }
 
-#[cfg(feature = "mobile")]
+#[cfg(feature = "core")]
 pub mod mobile;
 
 #[cfg(feature = "core")]
 pub mod host;
+
+#[cfg(all(test, feature = "core"))]
+#[path = "../tests/support/mod.rs"]
+pub(crate) mod test_support;

@@ -5,8 +5,6 @@ use crate::graphql::types::Instant;
 use async_graphql::{ComplexObject, Context, ID, Object, SimpleObject};
 use std::sync::Arc;
 
-#[cfg(feature = "api")]
-use crate::assembly::context::AppCtx;
 use crate::services::feeds;
 use plain_rs::db::Db;
 use plain_rs::db::notes_feeds::FeedEntryRow;
@@ -117,7 +115,7 @@ fn entry_model(ctx: &Context<'_>, row: FeedEntryRow) -> GqlResult<FeedEntry> {
         feed_id: ID(row.feed_id),
         title: row.title,
         url: row.url,
-        image: entry_image(ctx, &row.image)?,
+        image: row.image,
         description: row.description,
         author: row.author,
         content: row.content,
@@ -262,15 +260,6 @@ impl FeedMutation {
 
     async fn sync_feed_entry_content(&self, ctx: &Context<'_>, id: ID) -> GqlResult<FeedEntry> {
         let assets = ctx.data_opt::<Arc<feeds::FeedAssets>>().cloned();
-        #[cfg(feature = "api")]
-        let assets = assets.or_else(|| {
-            ctx.data_opt::<Arc<AppCtx>>().map(|app| {
-                Arc::new(feeds::FeedAssets {
-                    db: app.db.clone(),
-                    directory: app.data_dir.clone(),
-                })
-            })
-        });
         entry_model(
             ctx,
             feeds::sync_entry_content_with_assets(
@@ -307,40 +296,9 @@ impl FeedMutation {
 mod tests;
 
 fn sync_service(ctx: &Context<'_>) -> GqlResult<Arc<feeds::SyncService>> {
-    if let Some(service) = ctx.data_opt::<Arc<feeds::SyncService>>() {
-        return Ok(service.clone());
-    }
-    #[cfg(feature = "api")]
-    if let Some(app) = ctx.data_opt::<Arc<AppCtx>>() {
-        return Ok(app.feed_sync.clone());
-    }
-    Err(async_graphql::Error::new("feed sync service unavailable"))
-}
-
-fn entry_image(ctx: &Context<'_>, uri: &str) -> GqlResult<String> {
-    #[cfg(feature = "api")]
-    if let Some(app) = ctx.data_opt::<Arc<AppCtx>>() {
-        if uri.is_empty() || uri.starts_with("http://") || uri.starts_with("https://") {
-            return Ok(uri.into());
-        }
-        return plain_rs::crypto::xchacha_encrypt(&app.token, uri.as_bytes())
-            .map(|bytes| plain_rs::utils::base64::base64_encode(&bytes))
-            .ok_or_else(|| "invalid file token".into());
-    }
-    let _ = ctx;
-    Ok(uri.into())
+    Ok(ctx.data::<Arc<feeds::SyncService>>()?.clone())
 }
 
 fn feed_assets(ctx: &Context<'_>) -> Option<Arc<feeds::FeedAssets>> {
-    let assets = ctx.data_opt::<Arc<feeds::FeedAssets>>().cloned();
-    #[cfg(feature = "api")]
-    let assets = assets.or_else(|| {
-        ctx.data_opt::<Arc<AppCtx>>().map(|app| {
-            Arc::new(feeds::FeedAssets {
-                db: app.db.clone(),
-                directory: app.data_dir.clone(),
-            })
-        })
-    });
-    assets
+    ctx.data_opt::<Arc<feeds::FeedAssets>>().cloned()
 }

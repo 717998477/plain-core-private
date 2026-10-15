@@ -8,46 +8,17 @@ use crate::services::casting::sender::util::xml_escape;
 use serde_json::json;
 use std::time::Duration;
 
-async fn address(state: &ServerState) -> Result<(String, String), String> {
-    let facts = state.host.call("systemCastAddressFacts", json!({})).await?;
-    let ip = facts["ip"]
-        .as_str()
-        .filter(|ip| !ip.is_empty())
-        .ok_or("Missing cast HTTP address")?;
-    let settings =
-        plain_rs::prefs::user::snapshot(&state.prefs).map_err(|error| error.to_string())?;
-    let base = if settings.http_port == 80 {
-        format!("http://{ip}")
-    } else {
-        format!("http://{ip}:{}", settings.http_port)
-    };
-    let name = if settings.device_name.is_empty() {
-        facts["defaultDeviceName"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned()
-    } else {
-        settings.device_name
-    };
-    Ok((base, name))
-}
-
 pub(crate) async fn soap(
     state: &ServerState,
     device: &DiscoveredDevice,
     action: &str,
     params: &str,
 ) -> Result<String, String> {
-    let (_, name) = address(state).await?;
+    let (_, name) = super::address::http_address(state).await?;
     protocol::soap_response(device, action, params, &name).await
 }
 async fn mime_type(state: &ServerState, path: &str) -> String {
-    state
-        .host
-        .call(
-            "systemFileResource",
-            json!({"operation":"mime","path":path,"params":{}}),
-        )
+    crate::services::files::resources::read(&state.host, &state.directory, "mime", path, json!({}))
         .await
         .ok()
         .and_then(|value| {
@@ -58,8 +29,9 @@ async fn mime_type(state: &ServerState, path: &str) -> String {
         })
         .unwrap_or_else(|| plain_rs::utils::mime::mime_from_ext(path).to_owned())
 }
+
 async fn media_url(state: &ServerState, path: &str, art: bool) -> Result<String, String> {
-    let (base, _) = address(state).await?;
+    let (base, _) = super::address::http_address(state).await?;
     let mime = if art {
         "image/jpeg".to_owned()
     } else {
@@ -73,6 +45,14 @@ async fn media_url(state: &ServerState, path: &str, art: bool) -> Result<String,
     ))
 }
 pub(crate) async fn cast(state: &ServerState, item: Item, advance: bool) -> Result<(), String> {
+    cast_with_mime(state, item, advance, None).await
+}
+pub(crate) async fn cast_with_mime(
+    state: &ServerState,
+    item: Item,
+    advance: bool,
+    requested_mime: Option<String>,
+) -> Result<(), String> {
     let runtime = state.cast.clone();
     let device = runtime.device()?;
     let url = media_url(state, &item.path, false).await?;
@@ -81,7 +61,10 @@ pub(crate) async fn cast(state: &ServerState, item: Item, advance: bool) -> Resu
     } else {
         media_url(state, &item.album_art, true).await?
     };
-    let mime = mime_type(state, &item.path).await;
+    let mime = match requested_mime.filter(|mime| !mime.trim().is_empty()) {
+        Some(mime) => mime,
+        None => mime_type(state, &item.path).await,
+    };
     let media_type = if mime.starts_with("audio/") {
         MediaType::Audio
     } else if mime.starts_with("image/") {
@@ -132,7 +115,7 @@ pub(crate) async fn cast(state: &ServerState, item: Item, advance: bool) -> Resu
         s.active = true;
     }
     if !advance {
-        let (base, _) = address(state).await?;
+        let (base, _) = super::address::http_address(state).await?;
         let callback = format!("{base}/callback/cast");
         if let Ok(subscription) = protocol::subscription(&device, Some(&callback), "", false).await
         {

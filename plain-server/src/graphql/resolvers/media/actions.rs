@@ -4,7 +4,7 @@ use plain_rs::enums::DataType;
 use plain_rs::media::actions::Action;
 use std::sync::Arc;
 #[derive(SimpleObject)]
-struct MediaHostActionResult {
+struct MediaActionOutcome {
     affected_count: i32,
     failed_ids: Vec<ID>,
 }
@@ -12,7 +12,7 @@ struct MediaHostActionResult {
 pub struct MediaActionMutation;
 #[Object]
 impl MediaActionMutation {
-    async fn media_host_action(
+    async fn media_action(
         &self,
         ctx: &Context<'_>,
         r#type: DataType,
@@ -20,7 +20,12 @@ impl MediaActionMutation {
         ids: Vec<ID>,
         from_trash: bool,
         dest_dir: String,
-    ) -> Result<MediaHostActionResult> {
+    ) -> Result<MediaActionOutcome> {
+        crate::http::auth::public_gate::require(
+            ctx,
+            ctx.data::<Arc<plain_rs::prefs::Prefs>>()?,
+            &["WRITE_EXTERNAL_STORAGE"],
+        )?;
         let result = ctx
             .data::<Arc<MediaActions>>()?
             .run(
@@ -31,7 +36,7 @@ impl MediaActionMutation {
                 dest_dir,
             )
             .await?;
-        Ok(MediaHostActionResult {
+        Ok(MediaActionOutcome {
             affected_count: result.affected_count,
             failed_ids: result.failed_ids.into_iter().map(ID).collect(),
         })

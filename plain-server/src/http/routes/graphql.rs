@@ -83,6 +83,9 @@ async fn execute(
     let authorization = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok());
+    if state.authenticated(headers) {
+        return run_local(state, body).await;
+    }
     if !state.prefs.get_user_or("desktop_access", true) {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -99,10 +102,10 @@ async fn execute(
         return run_development(&state, body).await;
     }
 
-    // The shell talks to its own core as itself: its `c-id` is the core's
-    // own client id, and no login ever created a session for it. Remote
-    // callers still need one.
     if client_id == state.native_client_id().unwrap_or_default() {
+        if !state.authenticated(headers) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
         return run_local(&state, body).await;
     }
 
@@ -116,7 +119,7 @@ async fn execute(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::UNAUTHORIZED)?;
     let (token_mode, key) = if authorization.is_none() {
-        let key = crate::http::sessions::host::key(&state.db, client_id)
+        let key = crate::services::sessions::key(&state.db, client_id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;
         (true, key)
@@ -146,7 +149,7 @@ async fn execute(
         String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?
     };
 
-    crate::http::sessions::host::touch(state, client_id)
+    crate::services::sessions::touch(state, client_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let result = run_with_context(
         &state.public,
@@ -271,12 +274,12 @@ pub(crate) async fn init(
         return StatusCode::BAD_REQUEST.into_response();
     }
     if !state.prefs.get_user_or("desktop_access", true) {
-        return StatusCode::NOT_FOUND.into_response();
+        return StatusCode::FORBIDDEN.into_response();
     }
     // The shell decrypts `/init` with the local URL token, like every other
     // local request.
-    let key = crate::http::sessions::host::local_key(&state, client_id).or(
-        crate::http::sessions::host::key(&state.db, client_id)
+    let key = crate::services::sessions::local_key(&state, client_id).or(
+        crate::services::sessions::key(&state.db, client_id)
             .ok()
             .flatten(),
     );

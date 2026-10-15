@@ -86,6 +86,28 @@ pub struct FileOpsMutation;
 
 #[Object]
 impl FileOpsMutation {
+    async fn create_file(&self, ctx: &Context<'_>, path: String) -> async_graphql::Result<File> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let record = crate::services::files::writes::execute(
+            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
+            plain_rs::files::filesystem::writes::Operation::CreateFile { path },
+        )
+        .await
+        .map_err(async_graphql::Error::new)?;
+        Ok(written_file(record))
+    }
+    async fn rename_file_path(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+        name: String,
+    ) -> async_graphql::Result<Option<String>> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        Ok(ctx
+            .data::<Arc<crate::services::files::file_tasks::FileTasks>>()?
+            .rename(path, name)
+            .await?)
+    }
     /// Counts what was actually removed. A path that was already gone
     /// counts as zero, so the number is the delta rather than the request
     /// size.
@@ -110,10 +132,61 @@ impl FileOpsMutation {
         })
     }
 
+    async fn create_zip_archive(
+        &self,
+        ctx: &Context<'_>,
+        paths: Vec<String>,
+        target: String,
+    ) -> async_graphql::Result<String> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let state = ctx.data::<crate::assembly::server::ServerState>()?;
+        crate::services::files::archive_operations::pack(
+            &state.file_platform,
+            paths,
+            target,
+            state.stop.clone(),
+        )
+        .await
+        .map_err(async_graphql::Error::new)
+    }
+
+    async fn extract_zip_archive(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+        target: String,
+    ) -> async_graphql::Result<String> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let state = ctx.data::<crate::assembly::server::ServerState>()?;
+        crate::services::files::archive_operations::unpack(
+            &state.file_platform,
+            path,
+            target,
+            state.stop.clone(),
+        )
+        .await
+        .map_err(async_graphql::Error::new)
+    }
+
+    async fn cache_zip_entry(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+    ) -> async_graphql::Result<String> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let services = ctx.data::<crate::assembly::services::Services>()?;
+        let path = services
+            .archives
+            .preview(&services.file_platform, path)
+            .await
+            .map_err(async_graphql::Error::new)?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+
     async fn create_dir(&self, ctx: &Context<'_>, path: String) -> async_graphql::Result<File> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         let record = crate::services::files::writes::execute(
-            ctx.data::<Arc<Host>>()?,
+            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
             plain_rs::files::filesystem::writes::Operation::CreateDirectory { path },
         )
         .await
@@ -147,7 +220,7 @@ impl FileOpsMutation {
     ) -> async_graphql::Result<File> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         let record = crate::services::files::writes::execute(
-            ctx.data::<Arc<Host>>()?,
+            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
             plain_rs::files::filesystem::writes::Operation::WriteText {
                 path,
                 content,
@@ -237,10 +310,10 @@ impl FileOpsMutation {
 }
 
 #[derive(Default)]
-pub struct MediaActionMutation;
+pub struct MediaItemsMutation;
 
 #[Object]
-impl MediaActionMutation {
+impl MediaItemsMutation {
     /// A blank query would match the whole library, and a bulk delete is
     /// not something a client should be able to aim at everything by
     /// accident — it is refused before the platform is asked.
@@ -392,6 +465,7 @@ async fn media_action(
 
 fn written_file(record: plain_rs::files::filesystem::record::FileRecord) -> File {
     File {
+        permission: record.permission,
         media_id: (!record.media_id.is_empty()).then(|| record.media_id.into()),
         name: record.name,
         path: record.path,

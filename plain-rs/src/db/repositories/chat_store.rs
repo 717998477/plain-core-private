@@ -19,3 +19,7 @@ fn validate(id: &str, created: &str, updated: &str) -> Result<()> {
     chrono::DateTime::parse_from_rfc3339(updated)?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/db/repositories/chat_store.rs"]
+mod tests;

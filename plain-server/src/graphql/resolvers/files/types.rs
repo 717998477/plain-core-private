@@ -53,6 +53,7 @@ pub struct Mount {
 /// One entry of a directory listing or a search page.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct File {
+    pub permission: String,
     /// Empty for non-media files — exposed as `null` rather than an empty id.
     #[graphql(name = "mediaId")]
     pub media_id: Option<ID>,

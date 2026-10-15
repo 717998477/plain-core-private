@@ -1,11 +1,5 @@
-#[cfg(feature = "api")]
-pub mod context;
 
-#[cfg(feature = "api")]
-pub mod desktop;
 
-#[cfg(feature = "api")]
-pub mod pairing;
 
 #[cfg(feature = "core")]
 pub mod public;
@@ -16,5 +10,9 @@ pub mod query;
 #[cfg(feature = "core")]
 pub mod actions;
 
-#[cfg(feature = "api")]
-pub mod types;
+
+#[cfg(feature = "core")]
+pub mod transport;
+
+#[cfg(feature = "core")]
+pub mod records;

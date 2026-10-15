@@ -4,7 +4,7 @@ use clap::Parser;
 pub fn run() -> Result<()> {
     plain_server::assembly::headless::initialize_tls();
 
-    plain_server::platform::system::version::set(
+    plain_server::platform::version::set(
         crate::version::VERSION,
         crate::version::COMMIT,
         crate::version::BUILD_TIME,

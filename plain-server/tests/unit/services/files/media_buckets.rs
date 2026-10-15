@@ -39,3 +39,42 @@ fn aggregation_sorts_by_host_pinyin_key_and_rejects_invalid_facts() {
     assert!(aggregate("CONTACT", vec![]).is_err());
     assert!(aggregate("IMAGE", vec![fact("1", "Photos", "/p", "photos", -1)]).is_err());
 }
+
+#[test]
+fn aggregation_orders_equal_names_deterministically_and_rejects_overflow() {
+    let result = aggregate(
+        "IMAGE",
+        vec![
+            fact("b", "Same", "/b", "same", 0),
+            fact("a", "Same", "/a", "same", 0),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        result
+            .iter()
+            .map(|bucket| bucket.id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert!(
+        aggregate(
+            "AUDIO",
+            vec![
+                fact("a", "Audio", "/1", "audio", i64::MAX),
+                fact("a", "Audio", "/2", "audio", 1)
+            ]
+        )
+        .is_err()
+    );
+    assert!(
+        aggregate(
+            "VIDEO",
+            vec![
+                fact("a", "First", "/1", "first", 1),
+                fact("a", "Other", "/2", "other", 1)
+            ]
+        )
+        .is_err()
+    );
+}

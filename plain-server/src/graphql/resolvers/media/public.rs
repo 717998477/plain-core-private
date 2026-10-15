@@ -3,7 +3,6 @@ use crate::graphql::types::Long;
 use crate::graphql::types::facts::id;
 use crate::graphql::types::facts::integer;
 use crate::graphql::types::facts::optional_instant;
-use crate::graphql::types::facts::rows;
 use crate::graphql::types::facts::text;
 use crate::host::bridge::Host;
 use crate::http::auth::public_gate;
@@ -11,7 +10,7 @@ use async_graphql::{Context, Object};
 use chrono::{DateTime, Utc};
 use plain_rs::enums::DataType;
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 pub(crate) const STORAGE: &str = "WRITE_EXTERNAL_STORAGE";
 
@@ -48,6 +47,25 @@ pub struct MediaQuery;
 
 #[Object]
 impl MediaQuery {
+    async fn media_ids(
+        &self,
+        ctx: &Context<'_>,
+        r#type: MediaDataType,
+        query: String,
+        #[graphql(default)] from_trash: bool,
+    ) -> async_graphql::Result<Vec<async_graphql::ID>> {
+        if !public_gate::require_granted(ctx, &[STORAGE]).await? {
+            return Ok(Vec::new());
+        }
+        Ok(catalog(ctx)
+            .ids(r#type.data_type(), &query, from_trash)
+            .await
+            .map_err(async_graphql::Error::new)?
+            .into_iter()
+            .map(async_graphql::ID::from)
+            .collect())
+    }
+
     async fn media_buckets(
         &self,
         ctx: &Context<'_>,
@@ -61,72 +79,24 @@ impl MediaQuery {
             .buckets(data_type)
             .await
             .map_err(async_graphql::Error::new)?;
-        Ok(aggregate_buckets(&facts)
+        let items = serde_json::from_value(facts)
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+        let buckets = crate::services::files::media_buckets::aggregate(r#type.as_str(), items)
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+        buckets
             .into_iter()
-            .map(Bucket::into_media)
-            .collect())
+            .map(|bucket| {
+                Ok(MediaBucket {
+                    id: async_graphql::ID::from(bucket.id),
+                    name: bucket.name,
+                    item_count: i32::try_from(bucket.item_count)
+                        .map_err(|error| async_graphql::Error::new(error.to_string()))?,
+                    size: Long(bucket.size),
+                    top_item_paths: bucket.top_items,
+                })
+            })
+            .collect()
     }
-}
-
-/// Groups rows into folders and orders them by the lowercased folder name,
-/// the same rule plain-app's bucket bar uses. The platform reports one row
-/// per item; the contract wants one row per folder.
-struct Bucket {
-    id: String,
-    name: String,
-    sort_name: String,
-    item_count: i32,
-    top_item_paths: Vec<String>,
-}
-
-impl Bucket {
-    fn into_media(self) -> MediaBucket {
-        MediaBucket {
-            id: async_graphql::ID::from(self.id),
-            name: self.name,
-            item_count: self.item_count,
-            top_item_paths: self.top_item_paths,
-        }
-    }
-}
-
-/// At most this many sample paths per folder — enough for a thumbnail
-/// grid, and a bound so one huge folder cannot drag every path over the
-/// wire.
-const BUCKET_SAMPLES: usize = 4;
-
-fn aggregate_buckets(value: &Value) -> Vec<Bucket> {
-    let mut buckets: HashMap<String, Bucket> = HashMap::new();
-    for item in rows(value, |item| item.clone()) {
-        let key = text(&item, "id");
-        if key.is_empty() {
-            continue;
-        }
-        let path = text(&item, "path");
-        match buckets.get_mut(&key) {
-            Some(existing) => {
-                existing.item_count += 1;
-                if existing.top_item_paths.len() < BUCKET_SAMPLES {
-                    existing.top_item_paths.push(path);
-                }
-            }
-            None => {
-                buckets.insert(
-                    key.clone(),
-                    Bucket {
-                        id: key,
-                        name: text(&item, "name"),
-                        sort_name: text(&item, "sortName").to_lowercase(),
-                        item_count: 1,
-                        top_item_paths: vec![path],
-                    },
-                );
-            }
-        }
-    }
-    let mut aggregated: Vec<Bucket> = buckets.into_values().collect();
-    aggregated.sort_by(|a, b| a.sort_name.cmp(&b.sort_name).then_with(|| a.id.cmp(&b.id)));
-    aggregated
 }
 
 /// The DSL's bare-token name filter, pulled out on its own: plain-app splits

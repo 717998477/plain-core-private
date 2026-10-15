@@ -63,7 +63,9 @@ impl BookmarkQuery {
         let counts = bookmark_db::get_bookmarks(db).into_iter().fold(
             std::collections::HashMap::new(),
             |mut acc, b| {
-                if let Some(group_id) = b.group_id { *acc.entry(group_id).or_insert(0i32) += 1; }
+                if let Some(group_id) = b.group_id {
+                    *acc.entry(group_id).or_insert(0i32) += 1;
+                }
                 acc
             },
         );
@@ -205,3 +207,7 @@ impl BookmarkMutation {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/graphql/resolvers/bookmarks/bookmark.rs"]
+mod tests;

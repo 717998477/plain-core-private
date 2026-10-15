@@ -67,6 +67,7 @@ impl PlatformQuery {
     }
 
     async fn disks(&self, ctx: &Context<'_>) -> Result<Vec<Disk>> {
+        require_capability(ctx, "DISK_MANAGER").await?;
         let value = ctx
             .data::<Arc<Host>>()?
             .call(SYSTEM_DISKS_FACTS, serde_json::json!({}))
@@ -89,6 +90,7 @@ impl PlatformQuery {
     }
 
     async fn app_update(&self, ctx: &Context<'_>) -> Result<AppUpdate> {
+        require_capability(ctx, "APP_UPDATES").await?;
         let value = ctx
             .data::<Arc<Host>>()?
             .call(SYSTEM_APP_UPDATE_FACTS, serde_json::json!({}))
@@ -105,7 +107,14 @@ impl PlatformQuery {
     }
 }
 
+async fn require_capability(ctx: &Context<'_>, name: &str) -> Result<()> {
+    crate::services::capabilities::require(ctx.data::<Arc<Host>>()?, name)
+        .await
+        .map_err(|error| async_graphql::Error::new(error.to_string()))
+}
+
 async fn samba_service(ctx: &Context<'_>) -> Result<SambaServiceFacts> {
+    require_capability(ctx, "LAN_SHARE").await?;
     let value = ctx
         .data::<Arc<Host>>()?
         .call(SYSTEM_SAMBA_SERVICE_FACTS, serde_json::json!({}))
@@ -174,6 +183,7 @@ pub struct PlatformMutation;
 #[Object]
 impl PlatformMutation {
     async fn format_disk(&self, ctx: &Context<'_>, path: String) -> Result<bool> {
+        require_capability(ctx, "DISK_MANAGER").await?;
         let state = ctx.data::<ServerState>()?;
         let request = crate::host::platform::DiskFormatRequest {
             path,
@@ -260,6 +270,7 @@ impl PlatformMutation {
     }
 
     async fn set_samba_user_password(&self, ctx: &Context<'_>, password: String) -> Result<bool> {
+        require_capability(ctx, "LAN_SHARE").await?;
         if password.trim().is_empty() {
             return Err("password required".into());
         }

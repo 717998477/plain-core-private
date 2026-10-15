@@ -11,10 +11,14 @@ fn stub(host: Arc<Host>, handler: impl Fn(&str, Value) -> Value + Send + 'static
             let Some(id) = request["id"].as_u64() else {
                 continue;
             };
-            let result = handler(
-                &request["method"].as_str().unwrap_or_default(),
-                request["params"].clone(),
-            );
+            let result = if request["method"] == "systemCapabilities" {
+                json!(["NOTIFICATIONS"])
+            } else {
+                handler(
+                    &request["method"].as_str().unwrap_or_default(),
+                    request["params"].clone(),
+                )
+            };
             let _ = host.reply(generation, json!({ "id": id, "result": result }));
         }
     });
@@ -147,4 +151,36 @@ async fn reply_notification_rejects_a_negative_index_without_calling_the_host() 
         .execute(r#"mutation { replyNotification(id:"a", actionIndex:-1, text:"hi") }"#)
         .await;
     assert_eq!(response.errors[0].message, "action_not_found");
+}
+
+#[test]
+fn reported_notifications_keep_permission_filtering_and_project_public_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let prefs = Prefs::load(&dir.path().join("prefs.json")).unwrap();
+    let (events, mut receiver) = tokio::sync::broadcast::channel(8);
+    let facts = |kind: &str| {
+        serde_json::from_value(json!({
+        "type":kind,
+        "notification":{"id":"notice", "appId":"app", "title":"hello", "time":"2026-10-01T00:00:00.000Z"}
+    })).unwrap()
+    };
+    publish(&prefs, &events, facts("NOTIFICATION_CREATED")).unwrap();
+    assert!(receiver.try_recv().is_err());
+    prefs
+        .set("api_permissions", json!(["NOTIFICATION_LISTENER"]))
+        .unwrap();
+    publish(&prefs, &events, facts("NOTIFICATION_UPDATED")).unwrap();
+    let event = receiver.try_recv().unwrap();
+    assert_eq!(event.event_type, "NOTIFICATION_UPDATED");
+    let payload: Value = serde_json::from_str(&event.payload).unwrap();
+    assert_eq!(payload["id"], "notice");
+    assert_eq!(payload["postedAt"], "2026-10-01T00:00:00.000Z");
+    prefs.set("api_permissions", json!([])).unwrap();
+    publish(&prefs, &events, facts("NOTIFICATION_DELETED")).unwrap();
+    assert_eq!(
+        receiver.try_recv().unwrap().event_type,
+        "NOTIFICATION_DELETED"
+    );
+    assert!(publish(&prefs, &events, facts("MESSAGE_CREATED")).is_err());
+    assert!(receiver.try_recv().is_err());
 }

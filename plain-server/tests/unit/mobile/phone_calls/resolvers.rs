@@ -211,3 +211,30 @@ async fn delete_calls_refuses_a_query_of_fields_it_does_not_act_on() {
         );
     }
 }
+
+#[tokio::test]
+async fn calls_without_geo_preserve_provider_values_without_phone_metadata_calls() {
+    let (_dir, schema) = fixture(json!(["READ_CALL_LOG"]));
+    let calls = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let observed = calls.clone();
+    stub(schema_host(&schema), move |method, _| {
+        observed.lock().unwrap().push(method.to_owned());
+        match method {
+            "systemCallFacts" => {
+                let mut fact = call_fact("1", 37);
+                fact["photoUri"] = json!("content://contacts/photo/1");
+                json!([fact])
+            }
+            other => panic!("unexpected host call {other}"),
+        }
+    });
+    let response = schema
+        .execute(r#"{ calls(query:"", offset:0, limit:10) { id type typeCode photoUri } }"#)
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    assert_eq!(data["calls"][0]["type"], "UNKNOWN");
+    assert_eq!(data["calls"][0]["typeCode"], 37);
+    assert_eq!(data["calls"][0]["photoUri"], "content://contacts/photo/1");
+    assert_eq!(*calls.lock().unwrap(), ["systemCallFacts"]);
+}

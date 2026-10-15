@@ -1,9 +1,3 @@
-//! Public `/graphql` notification roots.
-//!
-//! Reads share the platform listener cache with the app's own provider view
-//! ([`crate::http::routes::system`]), so a notification dismissed on the device
-//! disappears from both surfaces at once.
-
 use crate::graphql::resolvers::notifications::types::Notification;
 use crate::graphql::types::ActionResult;
 use crate::graphql::types::facts::flag;
@@ -13,7 +7,6 @@ use crate::graphql::types::facts::strings;
 use crate::graphql::types::facts::text;
 use crate::host::bridge::Host;
 use crate::http::auth::public_gate;
-use crate::http::routes::system as system_providers;
 use async_graphql::{Context, Object};
 use plain_rs::prefs::Prefs;
 use serde_json::Value;
@@ -34,10 +27,15 @@ impl NotificationsQuery {
         limit: i32,
     ) -> async_graphql::Result<Vec<Notification>> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[PERMISSION])?;
+        crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "NOTIFICATIONS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let items = notification_items(ctx, &query).await?;
-        Ok(system_providers::page(items, offset.into(), limit.into())
-            .iter()
-            .map(notification)
+        Ok(items
+            .into_iter()
+            .skip(offset.max(0) as usize)
+            .take(limit.max(0) as usize)
+            .map(|item| notification(&item))
             .collect())
     }
 
@@ -47,6 +45,9 @@ impl NotificationsQuery {
         query: String,
     ) -> async_graphql::Result<i32> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[PERMISSION])?;
+        crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "NOTIFICATIONS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         Ok(notification_items(ctx, &query).await?.len() as i32)
     }
 }
@@ -62,6 +63,9 @@ impl NotificationsMutation {
         ids: Vec<async_graphql::ID>,
     ) -> async_graphql::Result<ActionResult> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[PERMISSION])?;
+        crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "NOTIFICATIONS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let ids: Vec<String> = ids.iter().map(|id| id.0.clone()).collect();
         let receipt = ctx
             .data_unchecked::<Arc<Host>>()
@@ -98,6 +102,9 @@ impl NotificationsMutation {
         if action_index < 0 {
             return Err(async_graphql::Error::new("action_not_found"));
         }
+        crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "NOTIFICATIONS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let receipt = ctx
             .data_unchecked::<Arc<Host>>()
             .call(
@@ -160,36 +167,31 @@ pub(crate) struct EventFacts {
     event_type: String,
     notification: Value,
 }
-pub(crate) async fn publish(
-    axum::extract::State(state): axum::extract::State<crate::assembly::server::ServerState>,
-    headers: axum::http::HeaderMap,
-    axum::Json(facts): axum::Json<EventFacts>,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    if !state.authenticated(&headers) {
-        return axum::http::StatusCode::UNAUTHORIZED.into_response();
-    }
+pub(crate) fn publish(
+    prefs: &plain_rs::prefs::Prefs,
+    events: &tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
+    facts: EventFacts,
+) -> Result<(), String> {
     let kind = match facts.event_type.as_str() {
         "NOTIFICATION_CREATED" => "NOTIFICATION_CREATED",
         "NOTIFICATION_UPDATED" => "NOTIFICATION_UPDATED",
         "NOTIFICATION_DELETED" => "NOTIFICATION_DELETED",
-        _ => return axum::http::StatusCode::BAD_REQUEST.into_response(),
+        _ => return Err("invalid notification event type".into()),
     };
-    if facts.event_type != "NOTIFICATION_DELETED"
-        && (!public_gate::is_enabled(&state.prefs, &[PERMISSION])
+    if kind != "NOTIFICATION_DELETED"
+        && (!public_gate::is_enabled(prefs, &[PERMISSION])
             || crate::services::notifications::query::notifications(
-                &state.prefs,
+                prefs,
                 vec![facts.notification.clone()],
                 "",
             )
-            .map_or(true, |items| items.is_empty()))
+            .map_err(|error| error.to_string())?
+            .is_empty())
     {
-        return axum::Json(true).into_response();
+        return Ok(());
     }
-    let item = notification(&facts.notification);
-    let payload = serde_json::to_string(&item).unwrap();
-    let _ = state
-        .events
-        .send(plain_rs::events::WsEvent::broadcast(kind, payload));
-    axum::Json(true).into_response()
+    let payload = serde_json::to_string(&notification(&facts.notification))
+        .map_err(|error| error.to_string())?;
+    let _ = events.send(plain_rs::events::WsEvent::broadcast(kind, payload));
+    Ok(())
 }

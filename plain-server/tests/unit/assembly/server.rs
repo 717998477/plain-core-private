@@ -1,6 +1,6 @@
 use super::*;
-use crate::graphql::executor::content_changes;
 
+#[cfg(feature = "http_transport")]
 #[tokio::test]
 async fn app_and_remote_access_share_listeners_without_background_service() {
     let directory = tempfile::tempdir().unwrap();
@@ -77,11 +77,8 @@ async fn app_and_remote_access_share_listeners_without_background_service() {
             404
         );
     }
-    let router = unified_router(
-        server.state.clone(),
-        server.local_router.as_ref().unwrap().clone(),
-        Router::new(),
-    );
+    let router =
+        crate::http::routes::public::build_router(server.state.clone(), server.stop.subscribe());
     use tower::ServiceExt;
     for peer in [None, Some("192.0.2.42:1234"), Some("127.0.0.1:1234")] {
         let mut request = axum::http::Request::builder()
@@ -121,6 +118,7 @@ async fn app_and_remote_access_share_listeners_without_background_service() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "http_transport")]
 #[tokio::test]
 async fn configured_public_uses_core_settings_and_keeps_listeners_on_tls_preflight_error() {
     let directory = tempfile::tempdir().unwrap();
@@ -173,4 +171,72 @@ async fn shell_preferences_share_the_core_owner() {
     );
     core.stop_core().await;
     assert!(core.shared_preferences().is_err());
+}
+
+#[tokio::test]
+async fn every_transport_build_serves_the_main_guest_and_peer_contracts_without_private_routes() {
+    let directory = tempfile::tempdir().unwrap();
+    let prefs =
+        Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    prefs.set_user("desktop_access", true).unwrap();
+    let token = plain_rs::utils::base64::base64_encode(&[3; 32]);
+    let server = ContentServer::start(&directory.path().join("plain.db"), &token, prefs).unwrap();
+    let client = reqwest::Client::new();
+    let document = serde_json::json!({"query":"query Main { __typename audioQueuedMediaIds }","operationName":"Main"});
+    let native = server
+        .graphql_executor()
+        .execute(serde_json::from_value(document.clone()).unwrap())
+        .await;
+    assert!(native.errors.is_empty(), "{:?}", native.errors);
+    let http = client
+        .post(format!("http://127.0.0.1:{}/graphql", server.port))
+        .bearer_auth(&token)
+        .header("content-type", "application/json")
+        .body(document.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(http.status(), 200);
+    let body: serde_json::Value = serde_json::from_slice(&http.bytes().await.unwrap()).unwrap();
+    assert_eq!(body, serde_json::to_value(native).unwrap());
+    for path in ["/guest_graphql", "/peer_graphql"] {
+        let response = client
+            .post(format!("http://127.0.0.1:{}{path}", server.port))
+            .body(document.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            401,
+            "{path} must reach its own authentication gate"
+        );
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/octet-stream"
+        );
+    }
+    for path in [
+        "/host",
+        "/host/graphql",
+        "/host_graphql",
+        "/private_graphql",
+        "/content_graphql",
+        "/system/tls",
+        "/system/provider-plan",
+        "/chat/store",
+        "/chat/download",
+        "/chat/transport",
+        "/shares/batch",
+    ] {
+        let response = client
+            .post(format!("http://127.0.0.1:{}{path}", server.port))
+            .bearer_auth(&token)
+            .body(document.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 404, "obsolete endpoint {path}");
+    }
+    server.stop_core().await;
 }

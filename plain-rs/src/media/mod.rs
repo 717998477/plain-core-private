@@ -16,3 +16,5 @@ pub mod images;
 pub mod videos;
 
 pub mod audio;
+
+pub mod documents;

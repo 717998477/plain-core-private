@@ -130,7 +130,10 @@ impl Db {
                     row.browser_name,
                     row.browser_version,
                     row.token,
-                    row.last_seen_at.as_deref().map(crate::utils::dbtime::normalize).transpose()?,
+                    row.last_seen_at
+                        .as_deref()
+                        .map(crate::utils::dbtime::normalize)
+                        .transpose()?,
                     crate::utils::dbtime::normalize(&row.created_at)?,
                     crate::utils::dbtime::normalize(&row.updated_at)?
                 ],
@@ -148,11 +151,26 @@ impl Db {
                 let mut stmt =
                     tx.prepare("UPDATE sessions SET last_seen_at=?2 WHERE client_id=?1")?;
                 for (client_id, at) in items {
-                    updated += stmt.execute(params![client_id, crate::utils::dbtime::normalize(at)?])?;
+                    updated +=
+                        stmt.execute(params![client_id, crate::utils::dbtime::normalize(at)?])?;
                 }
             }
             tx.commit()?;
             Ok(updated)
+        })
+    }
+
+    pub fn session_rename(
+        &self,
+        client_id: &str,
+        name: &str,
+        updated_at: &str,
+    ) -> rusqlite::Result<usize> {
+        self.with_conn(|connection| {
+            connection.execute(
+                "UPDATE sessions SET name=?2,updated_at=?3 WHERE client_id=?1",
+                rusqlite::params![client_id, name, updated_at],
+            )
         })
     }
 
@@ -191,7 +209,10 @@ impl Db {
                     row.name,
                     row.password,
                     row.url_token,
-                    row.expires_at.as_deref().map(crate::utils::dbtime::normalize).transpose()?,
+                    row.expires_at
+                        .as_deref()
+                        .map(crate::utils::dbtime::normalize)
+                        .transpose()?,
                     row.read_only as i64,
                     row.data,
                     crate::utils::dbtime::normalize(&row.created_at)?,
@@ -355,7 +376,8 @@ impl Db {
     pub fn embedding_save(&self, row: &ImageEmbeddingRow) -> rusqlite::Result<()> {
         let blob = crate::utils::base64::base64_decode_checked(&row.embedding_base64)
             .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
-        crate::utils::vector::decode_f32_be(&blob).map_err(rusqlite::Error::InvalidParameterName)?;
+        crate::utils::vector::decode_f32_be(&blob)
+            .map_err(rusqlite::Error::InvalidParameterName)?;
         self.with_conn(|c| {
             c.execute(
                 "INSERT OR REPLACE INTO image_embeddings (id, path, embedding, created_at, updated_at)
@@ -402,7 +424,10 @@ impl Db {
             c.execute(
                 "INSERT OR REPLACE INTO archived_sms_conversations (conversation_id, archived_at)
                  VALUES (?1, ?2)",
-                params![row.conversation_id, crate::utils::dbtime::normalize(&row.archived_at)?],
+                params![
+                    row.conversation_id,
+                    crate::utils::dbtime::normalize(&row.archived_at)?
+                ],
             )?;
             Ok(())
         })
@@ -434,8 +459,11 @@ impl Db {
                      VALUES (?1, ?2, ?3)",
                 )?;
                 for row in rows {
-                    inserted +=
-                        stmt.execute(params![row.message_id, row.is_mms as i64, crate::utils::dbtime::normalize(&row.trashed_at)?])?;
+                    inserted += stmt.execute(params![
+                        row.message_id,
+                        row.is_mms as i64,
+                        crate::utils::dbtime::normalize(&row.trashed_at)?
+                    ])?;
                 }
             }
             tx.commit()?;
@@ -448,8 +476,14 @@ impl Db {
             let tx = c.unchecked_transaction()?;
             let mut count = 0;
             for id in ids {
-                let (message_id, is_mms) = match id.strip_prefix("mms_") { Some(id)=>(id,true), None=>(id.as_str(),false) };
-                count += tx.execute("DELETE FROM trashed_sms WHERE message_id=?1 AND is_mms=?2",params![message_id,is_mms])?;
+                let (message_id, is_mms) = match id.strip_prefix("mms_") {
+                    Some(id) => (id, true),
+                    None => (id.as_str(), false),
+                };
+                count += tx.execute(
+                    "DELETE FROM trashed_sms WHERE message_id=?1 AND is_mms=?2",
+                    params![message_id, is_mms],
+                )?;
             }
             tx.commit()?;
             Ok(count)

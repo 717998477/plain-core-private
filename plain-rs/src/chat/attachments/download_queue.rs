@@ -49,6 +49,7 @@ struct State {
     revision: u64,
 }
 pub struct Queue {
+    runtime_id: String,
     db: Db,
     directory: PathBuf,
     imports: Arc<Imports>,
@@ -58,6 +59,7 @@ pub struct Queue {
 impl Queue {
     pub fn new(db: Db, directory: PathBuf, imports: Arc<Imports>) -> Self {
         Self {
+            runtime_id: uuid::Uuid::new_v4().to_string(),
             db,
             directory,
             imports,
@@ -122,9 +124,97 @@ impl Queue {
         self.touch(&mut s);
         Ok(true)
     }
+    pub fn enqueue_message(&self, message_id: &str, peer_id: &str) -> Result<bool> {
+        let mut s = self.state.lock().unwrap();
+        self.capacity(&s)?;
+        if s.tasks
+            .values()
+            .any(|task| task.snapshot.message_id == message_id)
+        {
+            return Ok(false);
+        }
+        let peer =
+            peers::get(&self.db, peer_id)?.ok_or_else(|| anyhow::anyhow!("Peer unavailable"))?;
+        let row = messages::get(&self.db, message_id)?
+            .ok_or_else(|| anyhow::anyhow!("Message unavailable"))?;
+        if peer_id != row.from_id && peer_id != row.to_id {
+            bail!("Attachment peer does not belong to message");
+        }
+        let content: Value = serde_json::from_str(&row.content)?;
+        if !matches!(content["type"].as_str(), Some("FILES" | "IMAGES")) {
+            bail!("Message has no attachments");
+        }
+        let items = content["value"]["items"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Invalid message attachments"))?;
+        let mut selected = Vec::new();
+        let mut ids = std::collections::HashSet::new();
+        for file in items.iter().filter(|file| {
+            file["uri"]
+                .as_str()
+                .is_some_and(|uri| uri.starts_with("fsid:"))
+        }) {
+            let id = file["id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("Invalid attachment identity"))?;
+            if !ids.insert(id.to_owned()) {
+                bail!("Duplicate attachment identity");
+            }
+            if s.tasks.contains_key(id) {
+                bail!("Attachment already queued for another message");
+            }
+            let total = file["size"]
+                .as_u64()
+                .filter(|total| *total <= i64::MAX as u64)
+                .ok_or_else(|| anyhow::anyhow!("Invalid attachment size"))?;
+            selected.push(Snapshot {
+                id: id.into(),
+                message_id: message_id.into(),
+                file: file.clone(),
+                peer: peer.clone(),
+                status: Status::Pending,
+                error: String::new(),
+                downloaded: 0,
+                total,
+                speed: 0,
+                generation: String::new(),
+            });
+        }
+        if selected.is_empty() {
+            return Ok(false);
+        }
+        if s.tasks.len() + selected.len() > 128 {
+            bail!("Download task capacity exceeded");
+        }
+        for snapshot in selected {
+            let id = snapshot.id.clone();
+            s.tasks.insert(
+                id.clone(),
+                Task {
+                    snapshot,
+                    ticket: None,
+                    last: Instant::now(),
+                    last_bytes: 0,
+                },
+            );
+            s.pending.push_back(id);
+        }
+        self.schedule(&mut s);
+        self.touch(&mut s);
+        Ok(true)
+    }
     pub fn control(&self, id: &str, action: &str) -> Result<bool> {
         let mut s = self.state.lock().unwrap();
         self.capacity(&s)?;
+        let changed = self.control_locked(&mut s, id, action)?;
+        if changed {
+            self.schedule(&mut s);
+            self.touch(&mut s);
+        }
+        Ok(changed)
+    }
+    fn control_locked(&self, s: &mut State, id: &str, action: &str) -> Result<bool> {
         let Some(task) = s.tasks.get_mut(id) else {
             return Ok(false);
         };
@@ -166,9 +256,36 @@ impl Queue {
             }
             _ => {}
         }
-        self.schedule(&mut s);
-        self.touch(&mut s);
         Ok(true)
+    }
+    pub fn control_message(
+        &self,
+        message_id: &str,
+        peer_id: Option<&str>,
+        action: &str,
+    ) -> Result<bool> {
+        let mut s = self.state.lock().unwrap();
+        self.capacity(&s)?;
+        let ids = s
+            .tasks
+            .values()
+            .filter(|task| task.snapshot.message_id == message_id)
+            .map(|task| {
+                if peer_id.is_some_and(|peer| peer != task.snapshot.peer.id) {
+                    bail!("Attachment peer changed");
+                }
+                Ok(task.snapshot.id.clone())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut changed = false;
+        for id in ids {
+            changed |= self.control_locked(&mut s, &id, action)?;
+        }
+        if changed {
+            self.schedule(&mut s);
+            self.touch(&mut s);
+        }
+        Ok(changed)
     }
     pub fn progress(&self, id: &str, generation: &str, downloaded: u64) -> Result<bool> {
         let mut s = self.state.lock().unwrap();
@@ -228,7 +345,7 @@ impl Queue {
     }
     pub fn snapshot(&self) -> Value {
         let s = self.state.lock().unwrap();
-        json!({"revision":s.revision,"tasks":s.tasks.values().map(|t|&t.snapshot).collect::<Vec<_>>()})
+        json!({"runtimeId":self.runtime_id,"revision":s.revision,"tasks":s.tasks.values().map(|t|&t.snapshot).collect::<Vec<_>>()})
     }
     pub fn public_progress(&self) -> String {
         let s = self.state.lock().unwrap();

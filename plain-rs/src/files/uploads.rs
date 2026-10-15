@@ -13,7 +13,10 @@ pub enum Kind {
     AppFile { name: String },
 }
 type Completion = Arc<
-    dyn Fn(PathBuf) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+    dyn Fn(
+            PathBuf,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>
         + Send
         + Sync,
 >;
@@ -90,8 +93,11 @@ pub async fn save_chunk(
 
 impl Runtime {
     pub fn with_completion(
-        completed: impl Fn(PathBuf) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-        + Send
+        completed: impl Fn(
+            PathBuf,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
+        > + Send
         + Sync
         + 'static,
     ) -> Self {
@@ -165,9 +171,15 @@ impl Runtime {
             if registered.await.is_err() {
                 return;
             }
-            let outcome = merge(Some(store), &dir, count, size, kind).await;
+            let mut outcome = merge(Some(store), &dir, count, size, kind).await;
             if let (Ok((value, _)), Some(parent), Some(completed)) = (&outcome, parent, completed) {
-                completed(parent.join(value)).await;
+                let path = parent.join(value);
+                if let Err(error) = completed(path.clone()).await {
+                    outcome = Err(anyhow::anyhow!(
+                        "Uploaded file saved at {} but completion failed: {error}",
+                        path.display()
+                    ));
+                }
             }
             let (status, event) = match outcome {
                 Ok((value, size)) => (
@@ -255,15 +267,18 @@ pub async fn merge(
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            let path = if replace {
-                path
+            let selected = if replace {
+                path.clone()
             } else {
                 crate::utils::unique_path::unique_sibling(&path)?
             };
             let staging =
                 Temp(path.with_file_name(format!(".merge_destination_{}", uuid::Uuid::new_v4())));
             tokio::fs::copy(&temp.0, &staging.0).await?;
-            tokio::fs::rename(&staging.0, &path).await?;
+            let staged = staging.0.clone();
+            let path =
+                tokio::task::spawn_blocking(move || commit_file(&staged, &path, selected, replace))
+                    .await??;
             path.file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or_default()
@@ -272,6 +287,27 @@ pub async fn merge(
     };
     tokio::fs::remove_dir_all(dir).await?;
     Ok((value, written))
+}
+
+fn commit_file(
+    staged: &Path,
+    original: &Path,
+    mut destination: PathBuf,
+    replace: bool,
+) -> std::io::Result<PathBuf> {
+    if replace {
+        std::fs::rename(staged, &destination)?;
+        return Ok(destination);
+    }
+    loop {
+        match crate::files::filesystem::rename::no_replace(staged, &destination) {
+            Ok(()) => return Ok(destination),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                destination = crate::utils::unique_path::unique_sibling(original)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[cfg(test)]

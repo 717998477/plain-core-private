@@ -1,19 +1,39 @@
 use super::*;
 use async_graphql::Request;
 
+#[cfg(feature = "media")]
 #[tokio::test]
-async fn native_private_media_controls_share_core_and_public_requires_storage_grants() {
+async fn native_media_controls_share_the_main_contract_and_remote_permissions() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let host = state.host.clone();
+    let (generation, mut requests) = host.connect();
+    let provider = tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            let result = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => serde_json::json!(["MEDIA_SCAN"]),
+                "systemPermissionFacts" => {
+                    serde_json::json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}})
+                }
+                method => panic!("unexpected {method}"),
+            };
+            host.reply(
+                generation,
+                serde_json::json!({"id":request["id"],"result":result}),
+            )
+            .unwrap();
+        }
+    });
     let native = core.native_graphql().unwrap();
     let set = native
-        .execute_private(Request::new(
+        .execute(Request::new(
             r#"mutation { setMediaSourceDirs(dirs:["/media/a"]) }"#,
         ))
         .await;
     assert!(set.errors.is_empty(), "{:?}", set.errors);
     let query = native
-        .execute_private(Request::new(
+        .execute(Request::new(
             "{ mediaSourceDirs scanProgress { indexed pending total state error } }",
         ))
         .await;
@@ -28,15 +48,9 @@ async fn native_private_media_controls_share_core_and_public_requires_storage_gr
             .unwrap(),
         vec!["/media/a"]
     );
-    let failed = native
-        .execute_private(Request::new(
-            r#"mutation { startMediaScan(root:"/media/a") }"#,
-        ))
-        .await;
-    assert!(!failed.errors.is_empty());
     let state = core.runtime_state();
     let remote = crate::graphql::executor::execute_graphql(
-        &state.schema,
+        &state.public,
         Request::new("{ mediaSourceDirs }"),
         crate::graphql::executor::RequestContext::remote(Some(state.clone())),
     )
@@ -45,10 +59,12 @@ async fn native_private_media_controls_share_core_and_public_requires_storage_gr
     let main = native
         .execute(Request::new("{ scanProgress { state } }"))
         .await;
-    assert!(!main.errors.is_empty());
+    assert!(main.errors.is_empty(), "{:?}", main.errors);
+    provider.abort();
     core.stop_core().await;
 }
 
+#[cfg(feature = "media")]
 #[tokio::test]
 async fn public_scans_require_opt_in_and_grants_then_read_the_same_core() {
     let directory = tempfile::tempdir().unwrap();
@@ -85,6 +101,14 @@ async fn public_scans_require_opt_in_and_grants_then_read_the_same_core() {
                 request = requests.recv() => request.unwrap(),
             };
             let granted = provider_grants.load(std::sync::atomic::Ordering::SeqCst);
+            if request["method"] == "systemCapabilities" {
+                host.reply(
+                    generation,
+                    serde_json::json!({"id":request["id"],"result":["MEDIA_SCAN"]}),
+                )
+                .unwrap();
+                continue;
+            }
             assert_eq!(request["method"], "systemPermissionFacts");
             assert_eq!(
                 request["params"]["permissions"],

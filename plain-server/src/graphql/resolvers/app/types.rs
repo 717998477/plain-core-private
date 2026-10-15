@@ -6,6 +6,12 @@ use async_graphql::Enum;
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Capability {
     MediaTrash,
+    MediaDelete,
+    MediaMove,
+    MediaFavorite,
+    AppUpdates,
+    Donation,
+
     MirrorAudio,
     DocPreview,
     ImageSearch,
@@ -32,6 +38,12 @@ impl Capability {
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
             "MEDIA_TRASH" => Self::MediaTrash,
+            "MEDIA_DELETE" => Self::MediaDelete,
+            "MEDIA_MOVE" => Self::MediaMove,
+            "MEDIA_FAVORITE" => Self::MediaFavorite,
+            "APP_UPDATES" => Self::AppUpdates,
+            "DONATION" => Self::Donation,
+
             "MIRROR_AUDIO" => Self::MirrorAudio,
             "DOC_PREVIEW" => Self::DocPreview,
             "IMAGE_SEARCH" => Self::ImageSearch,

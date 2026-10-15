@@ -176,69 +176,7 @@ pub fn guess_mime(path: &std::path::Path) -> String {
     }
 }
 
-/// Image extensions that qualify for the animated-image/SVG sniff below.
-/// Mirrors plain-app `Constants.PHOTO_EXTENSIONS` (`isImageFast` gate).
-const PHOTO_EXTENSIONS: [&str; 13] = [
-    "jpg", "jpeg", "png", "bmp", "webp", "heic", "heif", "apng", "avif", "gif", "tiff", "tif",
-    "svg",
-];
-
-/// Whether the file is an animated image (GIF, animated WebP, animated HEIF)
-/// or an SVG. Decided from the extension plus a sniff of the first 256 content
-/// bytes, mirroring plain-app `isAnimatedImageOrSvg` so the shared web client
-/// sees identical `/fs` behaviour on both platforms: such files must be
-/// served as-is (browsers render them natively, thumbnails included) instead
-/// of being routed into the WebP thumbnail pipeline, which cannot decode them.
-pub fn is_animated_image_or_svg(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if !PHOTO_EXTENSIONS.contains(&ext.as_str()) {
-        return false;
-    }
-    if ext == "svg" {
-        return true;
-    }
-    if ext == "png" || ext == "jpg" || ext == "jpeg" {
-        return false;
-    }
-
-    let mut header = [0u8; 256];
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let n = std::io::Read::read(&mut file, &mut header).unwrap_or(0);
-    let header = &header[..n];
-
-    // GIF87a / GIF89a magic at offset 0 — both served as-is (plain-app never
-    // routes GIFs through the thumbnail pipeline on `/fs`).
-    if n >= 6 && matches!(&header[..6], b"GIF87a" | b"GIF89a") {
-        return true;
-    }
-
-    // JPEG / PNG magic bytes are never animated; stop the sniff cheaply.
-    let b0 = header.first().copied();
-    let b1 = header.get(1).copied();
-    if b0 == Some(0xFF) && b1 == Some(0xD8) || b0 == Some(0x89) && b1 == Some(b'P') {
-        return false;
-    }
-
-    // WebP: "RIFF" + "WEBP"; a "VP8X" box's animation bit is bit 1 of byte 16.
-    if n >= 17 && &header[0..4] == b"RIFF" && &header[8..12] == b"WEBP" {
-        return &header[12..16] == b"VP8X" && n > 17 && (header[16] & 0b10) != 0;
-    }
-
-    // HEIF: an "ftyp" box followed by an animated brand (msf1/hevc/hevx).
-    if n >= 12 && &header[4..8] == b"ftyp" {
-        return matches!(&header[8..12], b"msf1" | b"hevc" | b"hevx");
-    }
-
-    // SVG without a recognised extension: scan the readable window for the
-    // `<svg` tag.
-    header.windows(4).any(|w| w == b"<svg")
-}
+pub use plain_rs::files::filesystem::image_format::is_animated_image_or_svg;
 
 // ---------------------------------------------------------------------------
 // File operations

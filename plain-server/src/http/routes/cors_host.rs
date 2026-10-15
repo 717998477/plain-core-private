@@ -16,7 +16,7 @@ pub(crate) async fn apply(
     if let Some(origin) = &origin {
         let scheme = request
             .extensions()
-            .get::<crate::http::listeners::ConnectionScheme>()
+            .get::<crate::http::ConnectionScheme>()
             .map_or("http", |scheme| scheme.0);
         let host = request
             .headers()
@@ -95,3 +95,7 @@ pub(crate) async fn apply(
     }
     response
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/http/routes/cors_host.rs"]
+mod tests;

@@ -12,10 +12,18 @@ pub(crate) fn extract(cache: &Path, reference: &str) -> Result<PathBuf, String> 
     if !Path::new(archive).is_absolute() || name.is_empty() {
         return Err("Absolute archive path and entry name required".into());
     }
+    let name = name.trim_matches('/');
+    if name.is_empty() {
+        return Err("Archive entry name required".into());
+    }
     let file = File::open(archive).map_err(|error| error.to_string())?;
     let metadata = file.metadata().map_err(|error| error.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
-    let mut entry = zip.by_name(name).map_err(|error| error.to_string())?;
+    let index = zip
+        .index_for_name(name)
+        .or_else(|| zip.index_for_name(&format!("/{name}")))
+        .ok_or("Archive entry not found")?;
+    let mut entry = zip.by_index(index).map_err(|error| error.to_string())?;
     if entry.is_dir() {
         return Err("Regular archive entry required".into());
     }
@@ -50,7 +58,10 @@ pub(crate) fn extract(cache: &Path, reference: &str) -> Result<PathBuf, String> 
     let temporary = cache.join(format!("{key}-{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> Result<(), String> {
         let mut target = File::create(&temporary).map_err(|error| error.to_string())?;
-        std::io::copy(&mut entry, &mut target).map_err(|error| error.to_string())?;
+        let written = std::io::copy(&mut entry, &mut target).map_err(|error| error.to_string())?;
+        if written != entry.size() {
+            return Err("Archive entry size changed".into());
+        }
         target.sync_all().map_err(|error| error.to_string())?;
         std::fs::rename(&temporary, &output).map_err(|error| error.to_string())
     })();

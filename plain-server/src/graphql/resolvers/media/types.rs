@@ -57,6 +57,7 @@ pub struct ScanProgress {
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct MediaBucket {
+    pub size: crate::graphql::types::Long,
     pub id: ID,
     pub name: String,
     #[graphql(name = "itemCount")]

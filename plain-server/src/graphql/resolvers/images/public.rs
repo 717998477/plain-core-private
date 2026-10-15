@@ -23,6 +23,10 @@ pub struct Image {
     pub title: String,
     pub path: String,
     pub size: Long,
+    pub duration_ms: Long,
+    pub width: i32,
+    pub height: i32,
+    pub rotation: i32,
     #[graphql(name = "bucketId")]
     pub bucket_id: async_graphql::ID,
     #[graphql(name = "createdAt")]
@@ -88,19 +92,66 @@ impl ImagesQuery {
             .await
             .map_err(async_graphql::Error::new)?,
         );
-        Ok(rows(&items, |item| {
-            let row = row(item);
-            Image {
-                id: row.id,
-                title: row.title,
-                path: row.path,
-                size: row.size,
-                bucket_id: row.bucket_id,
-                created_at: row.created_at,
-                updated_at: row.updated_at,
-                taken_at: optional_instant(item, "takenAt"),
-                is_favorite: flag(item, "isFavorite"),
-            }
-        }))
+        Ok(rows(&items, image))
+    }
+
+    async fn search_images(
+        &self,
+        ctx: &Context<'_>,
+        text: String,
+        query: String,
+        offset: i32,
+        limit: i32,
+        sort_by: crate::graphql::resolvers::files::types::FileSortBy,
+    ) -> async_graphql::Result<Vec<Image>> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let facts = crate::services::images::search::rows(
+            &crate::graphql::resolvers::media::public::catalog(ctx),
+            ctx.data::<Arc<crate::services::images::models::Runtime>>()?,
+            &text,
+            &query,
+            offset,
+            limit,
+            sort_by.as_str(),
+        )
+        .await
+        .map_err(async_graphql::Error::new)?;
+        Ok(facts.iter().map(image).collect())
+    }
+
+    async fn search_image_count(
+        &self,
+        ctx: &Context<'_>,
+        text: String,
+        query: String,
+    ) -> async_graphql::Result<i32> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        crate::services::images::search::count(
+            &crate::graphql::resolvers::media::public::catalog(ctx),
+            ctx.data::<Arc<crate::services::images::models::Runtime>>()?,
+            &text,
+            &query,
+        )
+        .await
+        .map_err(async_graphql::Error::new)
+    }
+}
+
+fn image(item: &Value) -> Image {
+    let row = row(item);
+    Image {
+        id: row.id.into(),
+        title: row.title,
+        path: row.path,
+        size: row.size,
+        duration_ms: Long(crate::graphql::types::facts::integer(item, "durationMs")),
+        width: crate::graphql::types::facts::integer(item, "width") as i32,
+        height: crate::graphql::types::facts::integer(item, "height") as i32,
+        rotation: crate::graphql::types::facts::integer(item, "rotation") as i32,
+        bucket_id: row.bucket_id,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        taken_at: optional_instant(item, "takenAt"),
+        is_favorite: flag(item, "isFavorite"),
     }
 }

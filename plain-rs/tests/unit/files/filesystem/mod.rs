@@ -39,14 +39,14 @@ async fn real_copy_and_move_preserve_existing_destination_and_return_actual_path
     std::fs::create_dir(&destination).unwrap();
     std::fs::write(destination.join("synthetic.bin"), b"existing").unwrap();
     let copy = copy_path(&source, &destination, false).await.unwrap();
-    assert_eq!(copy, destination.join("synthetic_1.bin"));
+    assert_eq!(copy, destination.join("synthetic (1).bin"));
     assert_eq!(std::fs::read(&copy).unwrap(), b"source");
     assert_eq!(
         std::fs::read(destination.join("synthetic.bin")).unwrap(),
         b"existing"
     );
     let moved = move_path(&source, &destination, false).await.unwrap();
-    assert_eq!(moved, destination.join("synthetic_2.bin"));
+    assert_eq!(moved, destination.join("synthetic (2).bin"));
     assert_eq!(std::fs::read(&moved).unwrap(), b"source");
     assert!(!source.exists());
     let free = temp.path().join("free.bin");
@@ -148,7 +148,7 @@ fn unique_names_preserve_dangling_links_and_surface_non_directory_ancestors() {
     std::os::unix::fs::symlink(temp.path().join("absent"), &target).unwrap();
     assert_eq!(
         crate::utils::unique_path::unique_sibling(&target).unwrap(),
-        temp.path().join("dangling_1")
+        temp.path().join("dangling (1)")
     );
     let blocking = temp.path().join("blocking");
     std::fs::write(&blocking, b"synthetic").unwrap();

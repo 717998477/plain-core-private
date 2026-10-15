@@ -15,7 +15,7 @@ fn server(dir: &std::path::Path) -> ContentServer {
 async fn execute(server: &ContentServer, document: String) -> Value {
     let result = server
         .graphql_executor()
-        .execute(Request::new(document), true)
+        .execute(Request::new(document))
         .await;
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     result.data.into_json().unwrap()
@@ -163,10 +163,9 @@ async fn long_text_files_and_invalid_targets_use_the_same_message_lifecycle() {
     assert_eq!(content["value"]["items"][0]["size"], text.len());
     let rejected = server
         .graphql_executor()
-        .execute(
-            Request::new(r#"mutation { sendChatText(target:"channel:", text:"bad") {id} }"#),
-            true,
-        )
+        .execute(Request::new(
+            r#"mutation { sendChatText(target:"channel:", text:"bad") {id} }"#,
+        ))
         .await;
     assert!(!rejected.errors.is_empty());
     assert_eq!(server.runtime_state().db.get_all_chats().len(), 1);

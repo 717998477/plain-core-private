@@ -394,18 +394,18 @@ async fn media_entries(
         .collect())
 }
 
-#[cfg(feature = "mobile")]
 async fn package_entries(
     state: &ServerState,
     query: &str,
 ) -> anyhow::Result<Vec<(PathBuf, String)>> {
+    crate::services::capabilities::require(&state.host, "PACKAGES").await?;
     let facts = state
         .host
         .call("systemPackageFacts", json!({}))
         .await
         .map_err(anyhow::Error::msg)?;
     let facts: Vec<Value> = serde_json::from_value(facts)?;
-    let items = crate::mobile::packages::query::packages(&state.db, facts, query, "NAME_ASC")?;
+    let items = crate::services::packages::query::packages(&state.db, facts, query, "NAME_ASC")?;
     Ok(items
         .iter()
         .filter_map(|item| {
@@ -417,14 +417,6 @@ async fn package_entries(
             ))
         })
         .collect())
-}
-
-#[cfg(not(feature = "mobile"))]
-async fn package_entries(
-    _state: &ServerState,
-    _query: &str,
-) -> anyhow::Result<Vec<(PathBuf, String)>> {
-    anyhow::bail!("unsupported provider")
 }
 
 #[derive(Deserialize)]

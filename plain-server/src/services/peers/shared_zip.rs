@@ -1,14 +1,5 @@
-use crate::assembly::server::ServerState;
 use anyhow::{Result, ensure};
-use axum::{
-    Json,
-    body::Body,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
 use serde::Deserialize;
-use serde_json::json;
 use std::{
     collections::HashSet,
     io::{Read, Seek, SeekFrom, Write},
@@ -18,32 +9,26 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use tokio::io::AsyncReadExt;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Item {
-    source_path: PathBuf,
-    entry_name: String,
+    pub(crate) source_path: PathBuf,
+    pub(crate) entry_name: String,
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Request {
-    items: Vec<Item>,
-}
-struct Temporary(PathBuf);
+pub(crate) struct Temporary(pub(crate) PathBuf);
 impl Drop for Temporary {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
 }
-struct Cancel(Arc<AtomicBool>);
+pub(crate) struct Cancel(pub(crate) Arc<AtomicBool>);
 impl Drop for Cancel {
     fn drop(&mut self) {
         self.0.store(true, Ordering::SeqCst);
     }
 }
-fn pack(
+pub(crate) fn pack(
     directory: PathBuf,
     items: Vec<Item>,
     canceled: Arc<AtomicBool>,
@@ -66,7 +51,7 @@ fn pack(
         ensure!(names.insert(&item.entry_name), "Duplicate shared ZIP entry");
     }
     std::fs::create_dir_all(&directory)?;
-    let path = directory.join(format!("share-zip-{}.tmp", uuid::Uuid::new_v4()));
+    let path = directory.join(format!(".share-zip-{}.tmp", uuid::Uuid::new_v4()));
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -97,64 +82,6 @@ fn pack(
     let mut file = writer.finish()?;
     file.seek(SeekFrom::Start(0))?;
     Ok((file, temporary))
-}
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let mut stop = state.stop.clone();
-    if *stop.borrow() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    let canceled = Arc::new(AtomicBool::new(false));
-    let cancel = Cancel(canceled.clone());
-    let work = async {
-        let permit = state.lan.capacity.clone().acquire_owned().await?;
-        let directory = state.directory.join("shared-zip");
-        let (file, temporary) =
-            tokio::task::spawn_blocking(move || pack(directory, request.items, canceled)).await??;
-        let size = file.metadata()?.len();
-        let stream = futures_util::stream::try_unfold(
-            (
-                tokio::fs::File::from_std(file),
-                temporary,
-                permit,
-                cancel,
-                state.stop.clone(),
-            ),
-            |(mut file, temporary, permit, cancel, mut stop)| async move {
-                if *stop.borrow() {
-                    return Ok::<_, std::io::Error>(None);
-                }
-                let mut buffer = vec![0; 64 * 1024];
-                let read = tokio::select! { result=file.read(&mut buffer)=>result?, _=stop.changed()=>return Ok(None) };
-                if read == 0 {
-                    return Ok(None);
-                }
-                buffer.truncate(read);
-                Ok(Some((buffer, (file, temporary, permit, cancel, stop))))
-            },
-        );
-        Ok::<_, anyhow::Error>(
-            Response::builder()
-                .header("content-type", "application/zip")
-                .header("content-length", size)
-                .body(Body::from_stream(stream))?,
-        )
-    };
-    match tokio::select! { result=work=>result, _=stop.changed()=>Err(anyhow::anyhow!("Core stopped")) }
-    {
-        Ok(response) => response,
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":error.to_string()})),
-        )
-            .into_response(),
-    }
 }
 #[cfg(test)]
 #[path = "../../../tests/unit/services/peers/shared_zip.rs"]

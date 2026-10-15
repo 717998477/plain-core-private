@@ -59,7 +59,7 @@ pub fn collect(app_version: &str, app_full_version: &str) -> Result<DeviceInfo> 
 
     Ok(DeviceInfo {
         hostname,
-        os: read_os_release(),
+        os: os_release(),
         kernel_version: read_kernel_version(),
         app_version: app_version.to_owned(),
         app_full_version: app_full_version.to_owned(),
@@ -352,7 +352,7 @@ fn read_kernel_version() -> String {
         .unwrap_or_default()
 }
 
-fn read_os_release() -> String {
+pub fn os_release() -> String {
     if let Some(s) = read_file("/etc/os-release") {
         for line in s.lines() {
             if let Some(rest) = line.strip_prefix("PRETTY_NAME=") {

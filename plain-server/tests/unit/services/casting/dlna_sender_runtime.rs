@@ -1,59 +1,43 @@
 use super::*;
 #[tokio::test]
-async fn queue_mutations_preserve_legacy_duplicates_and_order() {
+async fn queue_mutations_preserve_duplicates_and_order_through_the_main_schema() {
     let dir = tempfile::tempdir().unwrap();
-    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
-    let token = plain_rs::utils::base64::base64_encode(&[3; 32]);
-    let server =
-        crate::assembly::server::ContentServer::start(&dir.path().join("plain.db"), &token, prefs)
-            .unwrap();
-    let client = reqwest::Client::new();
-    let command = |body: serde_json::Value| {
-        client
-            .post(format!(
-                "http://127.0.0.1:{}/system/dlna-sender",
-                server.port
-            ))
-            .bearer_auth(&token)
-            .header("content-type", "application/json")
-            .body(body.to_string())
-    };
+    let server = crate::assembly::server::ContentServer::open(dir.path()).unwrap();
+    let native = server.native_graphql().unwrap();
     for path in ["a.mp3", "b.mp3", "a.mp3"] {
-        let response = command(json!({"action":"add","item":{"path":path,"title":path}}))
-            .send()
-            .await
-            .unwrap();
-        assert!(response.status().is_success());
+        let response = native.execute(async_graphql::Request::new("mutation($path:String!){addDlnaItem(item:{path:$path,title:$path}){items{path}}}").variables(async_graphql::Variables::from_json(json!({"path":path})))).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
     }
-    let row = command(json!({"action":"reorder","from":0,"to":1}))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    let row: serde_json::Value = serde_json::from_str(&row).unwrap();
-    assert_eq!(row["result"]["items"].as_array().unwrap().len(), 3);
-    assert_eq!(row["result"]["items"][0]["path"], "b.mp3");
-    let row = command(json!({"action":"removeAt","index":0}))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    let row: serde_json::Value = serde_json::from_str(&row).unwrap();
-    assert_eq!(row["result"]["items"].as_array().unwrap().len(), 2);
-    assert_eq!(row["result"]["items"][0]["path"], "a.mp3");
-    let row = command(json!({"action":"clear"}))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    let row: serde_json::Value = serde_json::from_str(&row).unwrap();
-    assert!(row["result"]["items"].as_array().unwrap().is_empty());
+    let response = native
+        .execute("mutation {reorderDlnaItems(from:0,to:1){items{path}}}".into())
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let row = response.data.into_json().unwrap();
+    assert_eq!(
+        row["reorderDlnaItems"]["items"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(row["reorderDlnaItems"]["items"][0]["path"], "b.mp3");
+    let response = native
+        .execute("mutation {removeDlnaItemAt(index:0){items{path}}}".into())
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let row = response.data.into_json().unwrap();
+    assert_eq!(
+        row["removeDlnaItemAt"]["items"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(row["removeDlnaItemAt"]["items"][0]["path"], "a.mp3");
+    let response = native
+        .execute("mutation {clearDlnaItems{items{path}}}".into())
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert!(
+        response.data.into_json().unwrap()["clearDlnaItems"]["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     server.shutdown().await;
 }
 #[test]
@@ -121,20 +105,7 @@ async fn sender_controls_use_soap_and_release_the_original_subscription() {
     .unwrap();
     let state = server.runtime_state();
     let host = state.host.clone();
-    let (generation, mut requests) = host.connect();
-    let host_task = tokio::spawn(async move {
-        while let Some(request) = requests.recv().await {
-            let id = request["id"].as_u64().unwrap();
-            let result = match request["method"].as_str().unwrap() {
-                "systemCastAddressFacts" => {
-                    json!({"ip":"127.0.0.1", "defaultDeviceName":"Test Phone"})
-                }
-                "systemFileResource" => json!("video/mp4"),
-                method => panic!("Unexpected native operation: {method}"),
-            };
-            let _ = host.reply(generation, json!({"id":id,"result":result}));
-        }
-    });
+    let (_generation, mut requests) = host.connect();
     let device = DiscoveredDevice {
         udn: "uuid:renderer".into(),
         location: format!("{base}/description.xml"),
@@ -265,7 +236,7 @@ async fn sender_controls_use_soap_and_release_the_original_subscription() {
             .iter()
             .any(|row| row.1.contains("#Stop"))
     );
+    assert!(requests.try_recv().is_err());
     server.shutdown().await;
-    host_task.abort();
     renderer.abort();
 }

@@ -186,7 +186,10 @@ async fn background_session_is_reserved_before_running_and_shutdown_joins_it() {
 #[test]
 fn core_scan_events_report_real_lifecycle_and_unknown_totals() {
     let (events, mut received) = tokio::sync::broadcast::channel(32);
-    let scans = Arc::new(MediaScans::new(events));
+    let scans = Arc::new(MediaScans::new(
+        events,
+        std::env::temp_dir().join("plain-media-scan-cache"),
+    ));
     let session = scans.begin_discovery().unwrap();
     let event = received.try_recv().unwrap();
     assert_eq!(event.event_type, plain_rs::events::MEDIA_SCAN_PROGRESS);

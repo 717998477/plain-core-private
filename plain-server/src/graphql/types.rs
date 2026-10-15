@@ -30,13 +30,19 @@ impl serde::Serialize for Instant {
     }
 }
 
+impl<'de> serde::Deserialize<'de> for Instant {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <chrono::DateTime<chrono::Utc> as serde::Deserialize>::deserialize(deserializer).map(Self)
+    }
+}
+
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ActionResult {
     #[graphql(name = "affectedCount")]
     pub affected_count: i32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct Long(pub i64);
 

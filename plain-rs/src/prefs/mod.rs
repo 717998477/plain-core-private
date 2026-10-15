@@ -371,3 +371,5 @@ impl PrefsStore {
 #[cfg(test)]
 #[path = "../../tests/unit/prefs/mod.rs"]
 mod tests;
+
+pub mod recent;

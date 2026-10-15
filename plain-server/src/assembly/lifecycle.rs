@@ -67,7 +67,6 @@ pub(crate) async fn stop_locked(state: &ServerState, guard: &mut Option<PublicSe
         .store(false, std::sync::atomic::Ordering::SeqCst);
     state.peer_status.outgoing.stop().await;
     state.main_ws.close_client(state, None);
-    #[cfg(feature = "mobile")]
     state.mobile.mms.cancel_all().await;
     let _cast_guard = state.cast.operations.lock().await;
     crate::services::casting::dlna_sender_playback::end(state, true).await;

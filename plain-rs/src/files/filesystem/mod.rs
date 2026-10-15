@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 pub mod browse;
+pub mod walk;
 pub mod deletion;
 pub mod record;
-mod rename;
+pub mod rename;
 pub mod writes;
 pub type TransferProgress = dyn Fn(i64, i64) -> std::io::Result<()> + Send + Sync;
 
@@ -844,3 +845,5 @@ pub fn measure(path: &Path) -> std::io::Result<(i64, i64)> {
         }
     }
 }
+
+pub mod image_format;

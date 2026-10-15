@@ -7,3 +7,5 @@ pub mod commands;
 pub mod play_mode;
 
 pub(crate) mod state;
+
+pub mod lyrics;

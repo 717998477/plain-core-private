@@ -2,6 +2,11 @@ type ActionResult {
 	affectedCount: Int!
 }
 
+type ActivePeerTransfer {
+	peerId: ID!
+	transport: TransportType!
+}
+
 type AndroidExtras {
 	sdkVersion: Int!
 	versionCodeName: String!
@@ -24,14 +29,14 @@ type App {
 	urlToken: String!
 	httpPort: Int!
 	httpsPort: Int!
-	appDir: String!
 	deviceName: String!
+	developerMode: Boolean!
+	appDir: String!
 	deviceType: DeviceType!
 	capabilities: [Capability!]!
 	buildChannel: AppChannelType!
 	permissions: [Permission!]!
 	downloadsDir: String!
-	developerMode: Boolean!
 	debug: Boolean!
 }
 
@@ -59,6 +64,7 @@ type AppUpdate {
 }
 
 type Audio implements MediaItem {
+	albumId: ID!
 	id: ID!
 	title: String!
 	artist: String!
@@ -71,6 +77,23 @@ type Audio implements MediaItem {
 	updatedAt: Instant!
 	isFavorite: Boolean!
 	tags: [Tag!]!
+}
+
+type AudioArtistPlayCount {
+	artist: String!
+	count: Long!
+}
+
+enum AudioCommandAction {
+	PLAY
+	PAUSE
+	SEEK
+	NEXT
+	PREVIOUS
+	COMPLETED
+	CLEAR
+	RESTART
+	SET_SPEED
 }
 
 type AudioFileInfo {
@@ -102,6 +125,12 @@ type AudioPlayback {
 	mode: MediaPlayMode!
 	isPlaying: Boolean!
 	positionMs: Long!
+}
+
+type AudioPlaybackState {
+	path: String!
+	positionMs: Long!
+	revision: Long!
 }
 
 type AudioPlaylist {
@@ -167,6 +196,8 @@ input BookmarkInput {
 }
 
 type Call {
+	typeCode: Int!
+	photoUri: String!
 	id: ID!
 	number: String!
 	name: String!
@@ -197,6 +228,11 @@ booleans on the app root.
 """
 enum Capability {
 	MEDIA_TRASH
+	MEDIA_DELETE
+	MEDIA_MOVE
+	MEDIA_FAVORITE
+	APP_UPDATES
+	DONATION
 	MIRROR_AUDIO
 	DOC_PREVIEW
 	IMAGE_SEARCH
@@ -250,10 +286,57 @@ type ChatChannelMember {
 	status: ChannelMemberStatus!
 }
 
+type ChatChannelRecord {
+	id: ID!
+	name: String!
+	key: String!
+	ownerId: ID!
+	members: [ChatChannelMember!]!
+	version: Long!
+	status: String!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
 enum ChatChannelStatus {
 	JOINED
 	LEFT
 	KICKED
+}
+
+type ChatConversation {
+	id: ID!
+	chat: ChatItem!
+}
+
+type ChatDownloadFile {
+	fileId: String!
+	uri: String!
+	size: Long!
+	durationMs: Long!
+	width: Int!
+	height: Int!
+	summary: String!
+	fileName: String!
+}
+
+type ChatDownloadQueue {
+	runtimeId: String!
+	revision: Long!
+	tasks: [ChatDownloadTask!]!
+}
+
+type ChatDownloadTask {
+	id: ID!
+	messageId: ID!
+	file: ChatDownloadFile!
+	peer: PeerRecord!
+	status: DownloadStatus!
+	error: String!
+	downloaded: Long!
+	total: Long!
+	speed: Long!
+	generation: String!
 }
 
 type ChatItem {
@@ -291,9 +374,14 @@ type ChatItem {
 
 enum ChatStatus {
 	SENT
-	PARTIAL
 	FAILED
+	PARTIAL
 	PENDING
+}
+
+type ChatTextEdit {
+	changed: Boolean!
+	chat: ChatItem!
 }
 
 type ClipboardItem {
@@ -306,6 +394,18 @@ type ClipboardItem {
 	label: String!
 	sensitive: Boolean!
 	createdAt: Instant!
+}
+
+input ClipboardRecordInput {
+	text: String!
+	source: String!
+	label: String!
+	sensitive: Boolean!
+}
+
+type ClipboardRecordResult {
+	inserted: Boolean!
+	item: ClipboardItem!
 }
 
 """
@@ -340,6 +440,7 @@ type Contact {
 }
 
 type ContactAddress {
+	typeCode: Int!
 	value: String!
 	type: PostalType!
 	label: String!
@@ -352,6 +453,7 @@ input ContactAddressInput {
 }
 
 type ContactEmail {
+	typeCode: Int!
 	value: String!
 	type: EmailType!
 	label: String!
@@ -364,6 +466,7 @@ input ContactEmailInput {
 }
 
 type ContactEvent {
+	typeCode: Int!
 	value: String!
 	type: EventType!
 	label: String!
@@ -382,6 +485,7 @@ type ContactGroup {
 }
 
 type ContactIm {
+	typeCode: Int!
 	value: String!
 	protocol: ImProtocol!
 	customProtocol: String!
@@ -420,6 +524,7 @@ input ContactPhoneInput {
 }
 
 type ContactPhoneNumber {
+	typeCode: Int!
 	value: String!
 	type: PhoneType!
 	label: String!
@@ -432,6 +537,7 @@ type ContactSource {
 }
 
 type ContactWebsite {
+	typeCode: Int!
 	value: String!
 	type: WebsiteType!
 	label: String!
@@ -553,7 +659,53 @@ type DisplayInfo {
 	density: Float!
 }
 
+input DlnaMediaInput {
+	path: String!
+	title: String!
+	albumArt: String! = ""
+	artist: String! = ""
+	durationMs: Long! = 0
+	audio: Boolean! = false
+}
+
+type DlnaRenderer {
+	udn: String!
+	name: String!
+	manufacturer: String
+	modelName: String
+	location: String!
+}
+
+type DlnaSenderDevice {
+	id: ID!
+	hostAddress: String!
+	name: String!
+	location: String!
+}
+
+type DlnaSenderMedia {
+	path: String!
+	title: String!
+	albumArt: String!
+	artist: String!
+	durationMs: Long!
+	audio: Boolean!
+}
+
+type DlnaSenderState {
+	version: Long!
+	devices: [DlnaSenderDevice!]!
+	currentDevice: DlnaSenderDevice
+	items: [DlnaSenderMedia!]!
+	currentUri: String!
+	playing: Boolean!
+	progressMs: Long!
+	durationMs: Long!
+	supportsCallback: Boolean!
+}
+
 type Doc implements MediaItem {
+	durationMs: Long!
 	id: ID!
 	title: String!
 	path: String!
@@ -568,6 +720,15 @@ type Doc implements MediaItem {
 type DocExtGroup {
 	ext: String!
 	count: Int!
+}
+
+enum DownloadStatus {
+	PENDING
+	DOWNLOADING
+	PAUSED
+	COMPLETED
+	FAILED
+	CANCELED
 }
 
 enum DriveType {
@@ -648,6 +809,7 @@ type FeedSyncState {
 One entry of a directory listing or a search page.
 """
 type File {
+	permission: String!
 	"""
 	Empty for non-media files — exposed as `null` rather than an empty id.
 	"""
@@ -659,6 +821,11 @@ type File {
 	size: Long!
 	isDir: Boolean!
 	childCount: Int!
+}
+
+type FileHostCompletedOp {
+	src: String!
+	dst: String!
 }
 
 """
@@ -673,6 +840,11 @@ type FileInfo {
 	data: MediaFileInfo
 }
 
+type FilePage {
+	count: Long!
+	items: [File!]!
+}
+
 enum FileSortBy {
 	DATE_ASC
 	DATE_DESC
@@ -681,6 +853,40 @@ enum FileSortBy {
 	NAME_ASC
 	NAME_DESC
 	TAKEN_AT_DESC
+}
+
+type FileTask {
+	id: ID!
+	clientId: String!
+	type: FileTaskType!
+	title: String!
+	status: FileTaskStatus!
+	error: String!
+	totalBytes: Long!
+	doneBytes: Long!
+	totalItems: Long!
+	doneItems: Long!
+	createdAt: Instant!
+	updatedAt: Instant!
+	completedOps: [FileHostCompletedOp!]!
+}
+
+input FileTaskOpInput {
+	src: String!
+	dst: String!
+	overwrite: Boolean!
+}
+
+enum FileTaskStatus {
+	QUEUED
+	RUNNING
+	DONE
+	ERROR
+}
+
+enum FileTaskType {
+	COPY
+	MOVE
 }
 
 enum ImProtocol {
@@ -701,6 +907,10 @@ type Image implements MediaItem {
 	title: String!
 	path: String!
 	size: Long!
+	durationMs: Long!
+	width: Int!
+	height: Int!
+	rotation: Int!
 	bucketId: ID!
 	createdAt: Instant!
 	updatedAt: Instant!
@@ -741,6 +951,38 @@ type ImageFileInfo {
 	width: Int!
 	height: Int!
 	location: Location
+}
+
+input ImageHostEmbeddingInput {
+	id: ID!
+	path: String!
+	embeddingBase64: String!
+}
+
+type ImageHostIndexStatus {
+	version: Long!
+	isRunning: Boolean!
+	totalImages: Long!
+	indexedImages: Long!
+	skippedImages: Long!
+	errorMessage: String!
+}
+
+type ImageHostSearchResult {
+	imageId: ID!
+	score: Float!
+}
+
+type ImageModelsState {
+	version: Long!
+	status: ImageSearchStatusType!
+	downloadProgress: Int!
+	errorMessage: String!
+	modelSize: Long!
+	modelDir: String!
+	isIndexing: Boolean!
+	totalImages: Int!
+	indexedImages: Int!
 }
 
 type ImageSearchStatus {
@@ -785,7 +1027,59 @@ type Location {
 
 scalar Long
 
+type MdnsPacket {
+	time: Long!
+	direction: String!
+	srcIp: String!
+	srcPort: Int!
+	dstIp: String!
+	dstPort: Int!
+	size: Long!
+	summary: String!
+	detail: String!
+}
+
+type MdnsService {
+	serviceType: String!
+	instanceName: String!
+	instanceFqdn: String!
+	hostname: String!
+	port: Int!
+	txtRecords: [String!]!
+	ips: [String!]!
+	ipv6: [String!]!
+	complete: Boolean!
+}
+
+type MdnsState {
+	runtimeId: String!
+	packetsIn: [MdnsPacket!]!
+	packetsOut: [MdnsPacket!]!
+	revision: Long!
+	receiver: Boolean!
+	running: Boolean!
+	scanning: Boolean!
+	published: Boolean!
+	manualScanning: Boolean!
+	debugSessionCount: Int!
+	capturing: Boolean!
+	services: [MdnsService!]!
+}
+
+enum MediaAction {
+	TRASH
+	RESTORE
+	DELETE
+	MOVE
+}
+
+type MediaActionOutcome {
+	affectedCount: Int!
+	failedIds: [ID!]!
+}
+
 type MediaBucket {
+	size: Long!
 	id: ID!
 	name: String!
 	itemCount: Int!
@@ -804,6 +1098,16 @@ enum MediaDataType {
 }
 
 union MediaFileInfo = ImageFileInfo | AudioFileInfo | VideoFileInfo
+
+type MediaHostDuration {
+	type: DataType!
+	mediaId: ID!
+	durationMs: Long!
+	path: String!
+	sizeBytes: Long!
+	modifiedAt: Instant!
+	updatedAt: Instant!
+}
 
 interface MediaItem {
 	id: ID!
@@ -857,12 +1161,116 @@ type Mount {
 }
 
 type Mutation {
+	regenerateTlsCertificate: [Int!]!
+	importTlsCertificatePem(certificatePem: String!, privateKeyPem: String!): [Int!]!
+	importTlsCertificatePkcs12(data: String!, password: String!): [Int!]!
+	removePeerRecord(id: ID!): Boolean!
+	unpairPeerRecord(id: ID!): Boolean!
+	enqueueSharedDownload(input: SharedDownloadInput!): ID!
+	pauseSharedDownload(id: ID!): Boolean!
+	resumeSharedDownload(id: ID!): Boolean!
+	retrySharedDownload(id: ID!): Boolean!
+	cancelSharedDownload(id: ID!): Boolean!
+	removeSharedDownload(id: ID!): Boolean!
+	enqueueChatDownload(messageId: ID!, fileId: String!, peerId: ID!): Boolean!
+	pauseChatDownload(id: ID!): Boolean!
+	resumeChatDownload(id: ID!): Boolean!
+	retryChatDownload(id: ID!): Boolean!
+	removeChatDownload(id: ID!): Boolean!
+	startMdnsReceiver: MdnsState!
+	startMdnsDiscovery: MdnsState!
+	stopMdnsDiscovery: MdnsState!
+	browseMdns: MdnsState!
+	restartMdnsDiscovery: MdnsState!
+	publishMdns: MdnsState!
+	updateMdnsPublication: MdnsState!
+	unpublishMdns: MdnsState!
+	setMdnsCapture(enabled: Boolean!): MdnsState!
+	acquireMdnsDebugSession(token: String!): MdnsState!
+	releaseMdnsDebugSession(token: String!): MdnsState!
+	prewarmPeerTransport(id: ID!): PeerPrewarmAdvertisement
+	browseSharedLink(messageId: ID!, expected: SharedMessageCardInput!, virtualPath: String): SharedBrowseResult
+	planSharedDownload(kind: SharedDownloadKind!, link: SharedLinkInput!, entries: [SharedEntryInput!]!, targetDir: String!, downloadsBase: String!): SharedDownloadPlan!
+	trashFiles(paths: [String!]!): ActionResult!
+	restoreFiles(paths: [String!]!): ActionResult!
+	deleteTrashedFile(path: String!): Boolean!
+	dlnaCast(rendererUdn: String!, url: String!, title: String!, mime: String!, type: MediaDataType!): Boolean!
+	startDlnaScan: DlnaSenderState!
+	stopDlnaScan: DlnaSenderState!
+	playDlna: DlnaSenderState!
+	pauseDlna: DlnaSenderState!
+	stopDlna: DlnaSenderState!
+	exitDlna: DlnaSenderState!
+	clearDlnaItems: DlnaSenderState!
+	selectDlnaDevice(id: ID!): DlnaSenderState!
+	castDlnaMedia(item: DlnaMediaInput!): DlnaSenderState!
+	addDlnaItem(item: DlnaMediaInput!): DlnaSenderState!
+	removeDlnaItem(path: String!): DlnaSenderState!
+	seekDlna(positionMs: Long!): DlnaSenderState!
+	removeDlnaItemAt(index: Int!): DlnaSenderState!
+	reorderDlnaItems(from: Int!, to: Int!): DlnaSenderState!
+	restoreImageSearch: Boolean!
+	releaseImageModelMemory: Boolean!
+	audioCommand(action: AudioCommandAction!, positionMs: Long!, speed: Float!): AudioPlaybackState!
+	audioPlayTrack(mediaId: ID!): AudioPlaybackState!
+	audioPlayPath(path: String!): AudioPlaybackState!
+	invalidateAudioEngine: AudioPlaybackState!
+	enqueueAudios(mediaIds: [ID!]!): Boolean!
+	selectNextAudio(isNext: Boolean!, shuffle: Boolean!): AudioItem
+	selectAudio(mediaId: ID): Boolean!
+	addAudioPlaylistMedia(id: ID!, mediaIds: [ID!]!): Int!
+	sendChatText(target: String!, text: String!): ChatItem!
+	forwardChatItem(id: ID!, target: String!): ChatItem!
+	deliverChatItem(id: ID!, recipients: [ID!]): ChatItem!
+	createChatItem(target: String!, content: String!): ChatItem!
+	replaceChatFiles(id: ID!, content: String!): ChatItem
+	clearChatItems(target: String!): ActionResult!
+	editChatText(id: ID!, text: String!): ChatTextEdit!
+	createCopyTask(ops: [FileTaskOpInput!]!): FileTask!
+	createMoveTask(ops: [FileTaskOpInput!]!): FileTask!
+	removeFileTask(id: ID!): Boolean!
+	createFileTask(type: FileTaskType!, title: String!, ops: [FileTaskOpInput!]!): FileTask!
+	saveVideoPlayProgress(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
+	recordVideoPlay(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
+	deleteVideoPlayProgress(mediaId: ID!): Boolean!
+	createShare(name: String!, realPaths: [String!]!, readOnly: Boolean!, expiresAt: Instant): ShareRecord!
+	updateShare(id: ID!, name: String!, expiresAt: Instant, realPaths: [String!]): ShareRecord!
+	deleteShare(id: ID!): Boolean!
+	importAppFile(source: String!, fileName: String!, mimeType: String!, deleteSource: Boolean!): AppFile!
+	releaseAppFile(fileId: String!): Boolean!
+	addTagRelationRecords(items: [TagHostRelationInput!]!): Boolean!
+	editTagRelationRecords(type: DataType!, item: TagHostItemInput!, addTagIds: [ID!]!, removeTagIds: [ID!]!): Boolean!
+	removeTagRelationRecords(keys: [String!]!, tagIds: [ID!]!): Boolean!
+	removeTagRelationKeys(type: DataType!, keys: [String!]!): Boolean!
+	clearTagRelationType(type: DataType!): Boolean!
+	clearTagRelationTag(id: ID!): Boolean!
+	removeMediaDurations(type: DataType!, mediaIds: [ID!]!): Long!
+	saveImageEmbeddings(items: [ImageHostEmbeddingInput!]!): Boolean!
+	removeImageEmbeddings(ids: [ID!]!): Long!
+	clearImageEmbeddings: Long!
+	mediaAction(type: DataType!, action: MediaAction!, ids: [ID!]!, fromTrash: Boolean!, destDir: String!): MediaActionOutcome!
+	startImageIndexTask(force: Boolean!): ImageHostIndexStatus!
+	indexSelectedImages(ids: [ID!]!): ImageHostIndexStatus!
+	cancelImageIndexTask: ImageHostIndexStatus!
+	recordClipboard(input: ClipboardRecordInput!): ClipboardRecordResult!
+	deleteClipboardItemsByIds(ids: [ID!]!): ActionResult!
+	fetchBookmarkMetadata(id: ID!): Bookmark
+	configurePomodoroDay(date: String!, dayStart: Instant!): PomodoroToday!
+	tickPomodoro: PomodoroTickResult!
+	skipPomodoro: PomodoroTickResult!
+	adjustPomodoro(durationSec: Int!): PomodoroToday!
+	createSession(name: String!): Session!
+	renameSession(clientId: String!, name: String!): Boolean!
+	closeAllWebSocketSessions: Boolean!
+	logout: Boolean!
+	revokeSession(clientId: String!): Boolean!
 	formatDisk(path: String!): Boolean!
 	setHostname(name: String!): Boolean!
 	setMountAlias(id: ID!, alias: String!): Boolean!
 	setSambaSettings(input: SambaSettingsInput!): Boolean!
 	setSambaUserPassword(password: String!): Boolean!
 	startMediaScan(root: String!): Boolean!
+	rebuildMediaIndex(root: String!): Boolean!
 	pauseMediaScan: Boolean!
 	resumeMediaScan: Boolean!
 	stopMediaScan: Boolean!
@@ -891,7 +1299,7 @@ type Mutation {
 	createContactGroup(name: String!, accountName: String!, accountType: String!): ContactGroup!
 	updateContactGroup(id: ID!, name: String!): ContactGroup!
 	deleteContactGroup(id: ID!): Boolean!
-	archiveSmsConversation(id: ID!): Boolean!
+	archiveSmsConversation(id: ID!, date: Instant): Boolean!
 	unarchiveSmsConversation(id: ID!): Boolean!
 	trashSms(query: String!): ActionResult!
 	restoreSms(query: String!): ActionResult!
@@ -1063,12 +1471,17 @@ type Mutation {
 	"""
 	createDbTableRow(table: String!, row: String!): Boolean!
 	deleteDbTableRows(table: String!, ids: [String!]!): Boolean!
+	createFile(path: String!): File!
+	renameFilePath(path: String!, name: String!): String
 	"""
 	Counts what was actually removed. A path that was already gone
 	counts as zero, so the number is the delta rather than the request
 	size.
 	"""
 	deleteFiles(paths: [String!]!): ActionResult!
+	createZipArchive(paths: [String!]!, target: String!): String!
+	extractZipArchive(path: String!, target: String!): String!
+	cacheZipEntry(path: String!): String!
 	createDir(path: String!): File!
 	"""
 	`false` rather than an error when the rename is refused: a name that
@@ -1114,10 +1527,24 @@ type Mutation {
 	updateDeviceName(name: String!): Boolean!
 	startDiscovery: Boolean!
 	stopDiscovery: Boolean!
-	pauseDownload(messageId: String!): Boolean!
-	downloadPeerFile(messageId: String!, peerId: String!): Boolean!
-	resumeDownload(messageId: String!, peerId: String!): Boolean!
-	retryDownload(messageId: String!, peerId: String!): Boolean!
+	pauseDownload(messageId: ID!): Boolean!
+	downloadPeerFile(messageId: ID!, peerId: ID!): Boolean!
+	resumeDownload(messageId: ID!, peerId: ID!): Boolean!
+	retryDownload(messageId: ID!, peerId: ID!): Boolean!
+}
+
+type NearbyDevice {
+	id: ID!
+	name: String!
+	ips: [String!]!
+	port: Int!
+	deviceType: String!
+	version: String!
+	platform: String!
+	lastSeen: String!
+	discoveryMethods: [String!]!
+	bestIp: String!
+	status: String!
 }
 
 type Note {
@@ -1225,6 +1652,21 @@ input PairingRequestInput {
 	awareSupported: Boolean!
 }
 
+type PairingState {
+	deviceId: ID!
+	generation: String!
+	phase: String!
+}
+
+type PairingTicket {
+	deviceId: ID!
+	deviceName: String!
+	deviceIp: String!
+	devicePort: Int!
+	generation: String!
+	delayMs: Long!
+}
+
 enum PathKind {
 	FILE
 	DIR
@@ -1240,6 +1682,55 @@ type Peer {
 	createdAt: Instant!
 	updatedAt: Instant!
 	online: Boolean!
+}
+
+type PeerAwareConfig {
+	pmk: String
+	isClient: Boolean!
+	localPort: Int!
+}
+
+type PeerPrewarmAdvertisement {
+	shortId: String!
+	awareSupported: Boolean!
+	awareRunning: Boolean!
+}
+
+type PeerRecord {
+	id: ID!
+	name: String!
+	ip: String!
+	key: String!
+	publicKey: String!
+	status: String!
+	port: Int
+	deviceType: String!
+	token: String!
+	createdAt: Instant!
+	updatedAt: Instant!
+	address: PeerRecordAddress
+}
+
+type PeerRecordAddress {
+	bestIp: String!
+	name: String!
+	baseUrl: String!
+	apiUrl: String!
+	statusWsUrl: String!
+}
+
+input PeerRecordInput {
+	id: ID!
+	name: String!
+	ip: String!
+	key: String!
+	publicKey: String!
+	status: String!
+	port: Int
+	deviceType: String!
+	token: String!
+	createdAt: Instant!
+	updatedAt: Instant!
 }
 
 enum PeerStatus {
@@ -1305,6 +1796,19 @@ enum PhoneType {
 	ASSISTANT
 }
 
+type PomodoroRecord {
+	id: ID!
+	"""
+	Calendar date (YYYY-MM-DD) in the host device's local timezone.
+	"""
+	date: String!
+	completedCount: Int!
+	totalWorkSec: Long!
+	totalBreakSec: Long!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
 type PomodoroSettings {
 	workDurationMin: Int!
 	shortBreakDurationMin: Int!
@@ -1320,6 +1824,11 @@ enum PomodoroState {
 	WORK
 	SHORT_BREAK
 	LONG_BREAK
+}
+
+type PomodoroTickResult {
+	today: PomodoroToday!
+	completedState: PomodoroState
 }
 
 type PomodoroToday {
@@ -1341,6 +1850,60 @@ enum PostalType {
 }
 
 type Query {
+	tlsCertificateSignature: [Int!]!
+	peerRecords(ids: [ID!]): [PeerRecord!]!
+	peerRecord(id: ID!): PeerRecord
+	peerFileUrl(id: ID!, expected: PeerRecordInput!, fileId: String!): String!
+	chatChannelRecord(id: ID!): ChatChannelRecord
+	sharedDownloadQueue: SharedDownloadQueue!
+	chatDownloadQueue: ChatDownloadQueue!
+	activePeerTransfers: [ActivePeerTransfer!]!
+	peerAwareConfig(id: ID!): PeerAwareConfig!
+	mdnsState: MdnsState!
+	shareLink(id: ID!, host: String): SharedLink!
+	initialSharedLink(messageId: ID!, expected: SharedMessageCardInput!): SharedLink!
+	sharedLinkInfo(link: SharedLinkInput!, virtualPath: String): SharedLinkInfo!
+	sharedFileUrl(link: SharedLinkInput!, urlToken: String!, virtualPath: String!, zip: Boolean! = false): String!
+	trashedFiles(query: String!, offset: Int!, limit: Int!, sortBy: TrashedFileSortBy!): [TrashedFile!]!
+	trashedFileCount: Int!
+	dlnaSenderState: DlnaSenderState!
+	dlnaRenderers: [DlnaRenderer!]!
+	imageModelsState: ImageModelsState!
+	semanticImageSearch(text: String!, maxResults: Int!): [SemanticImageMatch!]!
+	nearbyDevices: [NearbyDevice!]!
+	chatConversations: [ChatConversation!]!
+	chatRecords(query: String!, offset: Int!, limit: Int!): [ChatItem!]!
+	chatCount(query: String!): Int!
+	chatIds(query: String!): [ID!]!
+	fileTask(id: ID!): FileTask
+	fileTasks(query: String!, offset: Int!, limit: Int!): [FileTask!]!
+	audioQueuedMediaIds: [ID!]!
+	audioArtistPlayCounts: [AudioArtistPlayCount!]!
+	videoPlayProgress(mediaId: ID!): VideoPlayProgress
+	recentVideoPlayProgress(since: Instant!): [VideoPlayProgress!]!
+	browseShare(id: ID!, virtualPath: String!): ShareListing!
+	shareZipEntries(id: ID!, fileId: String!): [Root!]!
+	shareRecord(id: ID!): ShareRecord
+	shareRecords: [ShareRecord!]!
+	shareToken(id: ID!): String!
+	shareAuth(id: ID!): ShareAuthRecord
+	resolveSharePath(id: ID!, virtualPath: String!): String
+	resolveShareFile(id: ID!, fileId: String!): String
+	tagRecords(type: DataType!): [TagHostRecord!]!
+	tagRecord(id: ID!): TagHostRecord
+	tagRelationRecords(type: DataType!, keys: [String!]!): [TagHostRelation!]!
+	tagIntersection(tagIds: [ID!]!): [String!]!
+	mediaDurations: [MediaHostDuration!]!
+	imageEmbeddingIds: [ID!]!
+	imageEmbeddingCount: Long!
+	searchImageEmbeddings(embeddingBase64: String!, maxResults: Int!): [ImageHostSearchResult!]!
+	imageIndexStatus: ImageHostIndexStatus!
+	pomodoroRecord(date: String!): PomodoroRecord
+	pomodoroRecords(startDate: String!): [PomodoroRecord!]!
+	pomodoroTotalCompleted: Long!
+	imageEditorProjectItems(query: String!, offset: Int!, limit: Int!): [ImageEditorProjectSummary!]!
+	sessions: [Session!]!
+	onlineClientIds: [ID!]!
 	scanProgress: ScanProgress!
 	mediaSourceDirs: [String!]!
 	auditEvents(query: String!, offset: Int!, limit: Int!): [AuditEvent!]!
@@ -1358,10 +1921,16 @@ type Query {
 	plain-app degrades this to 0 rather than erroring when the web client
 	was not granted the contact permission.
 	"""
+	contactIds(query: String!): [ID!]!
 	contactCount(query: String!): Int!
 	contactSources: [ContactSource!]!
 	contactGroups: [ContactGroup!]!
-	sms(query: String!, offset: Int!, limit: Int!): [Sms!]!
+	sms(query: String!, offset: Int!, limit: Int!, includeTrashed: Boolean! = false): [Sms!]!
+	smsIds(query: String!, includeTrashed: Boolean! = false): [ID!]!
+	mmsTextIds(filters: [String!]!): [ID!]!
+	smsConversationDate(id: ID!): Instant
+	smsArchiveRecords: [SmsArchiveRecord!]!
+	trashedSmsIds: [ID!]!
 	smsCount(query: String!): Int!
 	smsBoxCounts: SmsCounts!
 	smsConversations(query: String!, offset: Int!, limit: Int!): [SmsConversation!]!
@@ -1371,6 +1940,7 @@ type Query {
 	"""
 	plain-app degrades this to 0 rather than erroring.
 	"""
+	callIds(query: String!): [ID!]!
 	callCount(query: String!): Int!
 	appFiles(query: String!, offset: Int!, limit: Int!): [AppFile!]!
 	appFileCount(query: String!): Int!
@@ -1415,6 +1985,9 @@ type Query {
 	latestChatItems: [ChatItem!]!
 	chatItem(id: ID!): ChatItem
 	chatChannels: [ChatChannel!]!
+	pairingTickets: [PairingTicket!]!
+	pairingStates: [PairingState!]!
+	isPairingRequestCurrent(id: ID!, signature: String!): Boolean!
 	peers: [Peer!]!
 	"""
 	The SIM slots the platform reports. Empty on a device with no
@@ -1436,6 +2009,9 @@ type Query {
 	screenMirrorVideoCodec: ScreenMirrorVideoCodec
 	screenMirrorQuality: ScreenMirrorQuality!
 	imageSearchStatus: ImageSearchStatus!
+	indexedFiles(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [File!]!
+	indexedFileCount(query: String!): Long!
+	browseFiles(root: String!, query: String!, text: String, showHidden: Boolean, sortBy: FileSortBy!, offset: Int!, limit: Int!, countOnly: Boolean! = false): FilePage!
 	"""
 	Volumes the platform reports. The host builds these because drive
 	enumeration is platform state; there is nothing to gate.
@@ -1481,14 +2057,17 @@ type Query {
 	List all favorite folders.
 	"""
 	favoriteFolders: [FavoriteFolder!]!
+	mediaIds(type: MediaDataType!, query: String!, fromTrash: Boolean! = false): [ID!]!
 	mediaBuckets(type: MediaDataType!): [MediaBucket!]!
 	imageCount(query: String!): Int!
 	images(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!
+	searchImages(text: String!, query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!
+	searchImageCount(text: String!, query: String!): Int!
 	videoCount(query: String!): Int!
 	videos(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Video!]!
 	docCount(query: String!): Int!
 	docs(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Doc!]!
-	docExtGroups: [DocExtGroup!]!
+	docExtGroups(query: String! = ""): [DocExtGroup!]!
 	tags(type: DataType!): [Tag!]!
 	tagRelations(type: DataType!, keys: [String!]!): [TagRelation!]!
 	"""
@@ -1521,10 +2100,6 @@ type Query {
 	client sees before it calls `mergeChunks`.
 	"""
 	mergeStatus(fileId: String!): MergeTask!
-	"""
-	Battery level is null when the platform cannot report it; CPU and
-	storage are not, because a zero there is a real reading.
-	"""
 	deviceStatus: DeviceStatus!
 	deviceInfo: DeviceInfo!
 	"""
@@ -1545,6 +2120,12 @@ type Query {
 	than a snapshot the caller would have to re-read.
 	"""
 	isDiscovering: Boolean!
+}
+
+type Root {
+	virtualPath: String!
+	realPath: String!
+	isDir: Boolean!
 }
 
 type SambaSettings {
@@ -1622,10 +2203,210 @@ type ScreenMirrorVideoCodec {
 	keyFrame: String
 }
 
+type SemanticImageMatch {
+	imageId: ID!
+	score: Float!
+}
+
+type Session {
+	clientId: String!
+	clientName: String!
+	type: String!
+	token: String!
+	clientIp: String!
+	osName: String!
+	osVersion: String!
+	browserName: String!
+	browserVersion: String!
+	lastSeenAt: Instant
+	lastActive: Instant!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
 type SettingsUpdate {
 	result: ActionResult!
 	systemSettings: SystemSettings!
 	userSettings: UserSettings!
+}
+
+type ShareAuthRecord {
+	share: ShareRecord!
+	token: String!
+}
+
+type ShareListing {
+	share: ShareRecord!
+	entries: [Root!]!
+}
+
+type ShareRecord {
+	id: ID!
+	name: String!
+	password: String!
+	urlToken: String!
+	readOnly: Boolean!
+	expiresAt: Instant
+	createdAt: Instant!
+	updatedAt: Instant!
+	roots: [Root!]!
+}
+
+enum SharedBatchStatus {
+	PENDING
+	DOWNLOADING
+	PAUSED
+	COMPLETED
+	PARTIAL
+	FAILED
+	CANCELED
+}
+
+type SharedBrowseResult {
+	info: SharedLinkInfo!
+	link: SharedLink!
+	card: SharedMessageCard!
+}
+
+type SharedDownloadFailure {
+	path: String!
+	error: String!
+}
+
+input SharedDownloadInput {
+	messageId: ID!
+	kind: SharedDownloadKind!
+	link: SharedLinkInput!
+	urlToken: String!
+	entries: [SharedEntryInput!]!
+	targetDir: String!
+	downloadsBase: String!
+	zipName: String!
+}
+
+enum SharedDownloadKind {
+	FILE
+	SYNC
+	MULTI
+	ZIP
+}
+
+type SharedDownloadPlan {
+	targets: [SharedDownloadTarget!]!
+	totalFiles: Int!
+	totalSize: Long!
+}
+
+type SharedDownloadQueue {
+	runtimeId: String!
+	revision: Long!
+	tasks: [SharedDownloadTask!]!
+}
+
+type SharedDownloadTarget {
+	entry: SharedEntry!
+	writeDir: String!
+	storeToDownloads: Boolean!
+	entryName: String!
+}
+
+type SharedDownloadTask {
+	id: ID!
+	messageId: ID!
+	type: SharedDownloadKind!
+	title: String!
+	targetDir: String!
+	link: SharedLink!
+	urlToken: String!
+	entries: [SharedEntry!]!
+	zipName: String!
+	generation: String!
+	status: SharedBatchStatus!
+	error: String!
+	downloadedSize: Long!
+	totalSize: Long!
+	downloadSpeed: Long!
+	totalFiles: Int!
+	doneFiles: Int!
+	failedFiles: Int!
+	currentFile: String!
+	packing: Boolean!
+	failures: [SharedDownloadFailure!]!
+}
+
+type SharedEntry {
+	name: String!
+	virtualPath: String!
+	isDir: Boolean!
+	size: Long!
+	mimeType: String!
+	hasThumb: Boolean!
+}
+
+input SharedEntryInput {
+	name: String!
+	virtualPath: String!
+	isDir: Boolean!
+	size: Long!
+	mimeType: String!
+	hasThumb: Boolean!
+}
+
+type SharedLink {
+	host: String!
+	port: Int!
+	sharedId: ID!
+	token: String!
+	pageUrl: String!
+}
+
+type SharedLinkInfo {
+	name: String!
+	readOnly: Boolean!
+	requiresPassword: Boolean!
+	expiresAt: Instant
+	urlToken: String!
+	entries: [SharedEntry!]!
+}
+
+input SharedLinkInput {
+	host: String!
+	port: Int!
+	sharedId: ID!
+	token: String!
+	pageUrl: String
+}
+
+type SharedMessageCard {
+	shareId: ID!
+	urlToken: String!
+	peerInfo: SharedPeerAddress!
+	name: String!
+	itemCount: Long!
+	totalSize: Long!
+	expiresAt: Instant
+}
+
+input SharedMessageCardInput {
+	shareId: ID!
+	urlToken: String!
+	peerInfo: SharedPeerAddressInput!
+	name: String!
+	itemCount: Long!
+	totalSize: Long!
+	expiresAt: Instant
+}
+
+type SharedPeerAddress {
+	id: ID!
+	ip: String!
+	port: Int!
+}
+
+input SharedPeerAddressInput {
+	id: ID!
+	ip: String!
+	port: Int!
 }
 
 type Sim {
@@ -1644,10 +2425,16 @@ type Sms {
 	read: Boolean!
 	threadId: ID!
 	type: SmsType!
+	typeCode: Int!
 	subscriptionId: Int!
 	isMms: Boolean!
 	attachments: [SmsAttachment!]!
 	tags: [Tag!]!
+}
+
+type SmsArchiveRecord {
+	conversationId: ID!
+	archivedAt: Instant!
 }
 
 type SmsAttachment {
@@ -1740,6 +2527,38 @@ type Tag {
 	count: Int!
 }
 
+input TagHostItemInput {
+	key: String!
+	sizeBytes: Long!
+	title: String!
+}
+
+type TagHostRecord {
+	id: ID!
+	name: String!
+	type: Int!
+	count: Int!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+type TagHostRelation {
+	tagId: ID!
+	key: String!
+	type: Int!
+	createdAt: Instant!
+	sizeBytes: Long!
+	title: String!
+}
+
+input TagHostRelationInput {
+	tagId: ID!
+	key: String!
+	type: DataType!
+	sizeBytes: Long!
+	title: String!
+}
+
 """
 One (tag, item-key) relation (plain-app contract). `key` is the media id
 / entity key the tag is attached to.
@@ -1758,6 +2577,42 @@ input TagRelationStub {
 type Temperature {
 	label: String!
 	celsius: Float!
+}
+
+enum TransportType {
+	LAN
+	AWARE
+	BLE
+}
+
+type TrashedFile {
+	id: ID!
+	type: TrashedFileType!
+	originalPath: String!
+	disk: String!
+	trashRelPath: String!
+	deletedAt: Instant!
+	uid: Int!
+	gid: Int!
+	mode: Int!
+	sizeBytes: Long
+	entryCount: Int
+	displayName: String!
+	trashedPath: String!
+}
+
+enum TrashedFileSortBy {
+	DATE_ASC
+	DATE_DESC
+	SIZE_ASC
+	SIZE_DESC
+	NAME_ASC
+	NAME_DESC
+}
+
+enum TrashedFileType {
+	FILE
+	DIR
 }
 
 type UserSettings {
@@ -1869,6 +2724,9 @@ input UserSettingsInput {
 }
 
 type Video implements MediaItem {
+	width: Int!
+	height: Int!
+	rotation: Int!
 	id: ID!
 	title: String!
 	path: String!
@@ -1887,6 +2745,12 @@ type VideoFileInfo {
 	height: Int!
 	durationMs: Long!
 	location: Location
+}
+
+type VideoPlayProgress {
+	mediaId: ID!
+	positionMs: Long!
+	updatedAt: Instant!
 }
 
 enum WebSettingsFeature {

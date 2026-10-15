@@ -7,7 +7,9 @@ use crate::media::audio::queue as audio_queue;
 use crate::media::audio::queue::AudioTrack;
 use crate::prefs::Prefs;
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[cfg_attr(feature = "graphql", graphql(name = "AudioCommandAction"))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Action {
     Play,

@@ -1,5 +1,5 @@
 use crate::assembly::server::{ContentServer, ServerState};
-use crate::http::{routes::graphql, sessions::host};
+use crate::http::routes::graphql;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -18,11 +18,8 @@ fn device() -> (tempfile::TempDir, ContentServer, HeaderMap) {
         prefs,
     )
     .unwrap();
-    let session = host::execute(
-        &server.runtime_state(),
-        host::Request::Create {
-            name: "Controller".into(),
-        },
+    let session = serde_json::to_value(
+        crate::services::sessions::create(&server.runtime_state(), "Controller".into()).unwrap(),
     )
     .unwrap();
     let mut headers = HeaderMap::new();

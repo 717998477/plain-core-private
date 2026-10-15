@@ -2,17 +2,10 @@ use crate::assembly::server::ServerState;
 use crate::services::peers::peer_transport;
 use crate::services::peers::peer_wire;
 use anyhow::{Result, bail};
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
 use plain_rs::chat::attachments::prewarm;
 use plain_rs::chat::attachments::prewarm::Advertisement;
 use plain_rs::chat::attachments::prewarm::Capabilities;
 use plain_rs::chat::attachments::prewarm::Driver;
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 struct Native<'a>(&'a ServerState);
@@ -82,39 +75,17 @@ fn started(response: &Value) -> Result<bool> {
         .as_bool()
         .ok_or_else(|| anyhow::anyhow!("Invalid peer startAware receipt"))
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Request {
-    id: String,
-}
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
+pub(crate) async fn execute(state: &ServerState, id: &str) -> Result<Option<Advertisement>> {
+    let mut stop = state.stop.clone();
+    if *stop.borrow() {
+        bail!("Server stopped");
     }
-    let result = prewarm::run(&state.db, &state.prewarmer, &request.id, &Native(&state)).await;
-    match result {
-        Ok(value) => Json(json!({"result":value})).into_response(),
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":error.to_string()})),
-        )
-            .into_response(),
+    let native = Native(state);
+    tokio::select! {
+        _ = stop.changed() => Err(anyhow::anyhow!("Server stopped")),
+        result = prewarm::run(&state.db, &state.prewarmer, id, &native) => result,
     }
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn start_receipt_requires_actual_boolean_and_no_errors() {
-        assert!(!started(&json!({"data":{"startAware":false}})).unwrap());
-        assert!(started(&json!({"data":{"startAware":true},"errors":[]})).unwrap());
-        assert!(
-            started(&json!({"data":{"startAware":true},"errors":[{"message":"failed"}]})).is_err()
-        );
-        assert!(started(&json!({"data":{}})).is_err());
-    }
-}
+#[path = "../../../tests/unit/services/chat/prewarm.rs"]
+mod tests;

@@ -10,7 +10,12 @@ fn changed(state: &ServerState, id: &str) {
     crate::services::peers::peer_status::emit(state, id, false);
 }
 
-pub(crate) fn remove(state: &ServerState, id: &str) -> anyhow::Result<bool> {
+pub(crate) async fn remove(state: &ServerState, id: &str) -> anyhow::Result<bool> {
+    let state = state.clone();
+    let id = id.to_owned();
+    tokio::task::spawn_blocking(move || remove_record(&state, &id)).await?
+}
+fn remove_record(state: &ServerState, id: &str) -> anyhow::Result<bool> {
     let removed = plain_rs::chat::attachments::app_file_store::chat_deletion::delete(
         &state.db,
         &state.directory,
@@ -27,7 +32,12 @@ pub(crate) fn remove(state: &ServerState, id: &str) -> anyhow::Result<bool> {
     Ok(removed)
 }
 
-pub(crate) fn unpair(state: &ServerState, id: &str) -> anyhow::Result<bool> {
+pub(crate) async fn unpair(state: &ServerState, id: &str) -> anyhow::Result<bool> {
+    let state = state.clone();
+    let id = id.to_owned();
+    tokio::task::spawn_blocking(move || unpair_record(&state, &id)).await?
+}
+fn unpair_record(state: &ServerState, id: &str) -> anyhow::Result<bool> {
     let changed_peer = plain_rs::db::chat_store::peers::unpair(&state.db, id)?;
     if changed_peer {
         changed(state, id);

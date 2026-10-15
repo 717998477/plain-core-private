@@ -143,9 +143,17 @@ fn read_lines_newest_first_matches_plain_app_semantics() {
     let path = tmp_log("read");
 
     // Missing / empty file → empty result.
-    assert!(read_lines_newest_first(&path, None, 0, 10).is_empty());
+    assert!(
+        read_lines_newest_first(&path, None, 0, 10)
+            .unwrap()
+            .is_empty()
+    );
     std::fs::write(&path, b"").unwrap();
-    assert!(read_lines_newest_first(&path, None, 0, 10).is_empty());
+    assert!(
+        read_lines_newest_first(&path, None, 0, 10)
+            .unwrap()
+            .is_empty()
+    );
 
     // 3000 short lines ≈ several 64 KB blocks. Newest = highest number.
     let mut f = std::fs::File::create(&path).unwrap();
@@ -154,23 +162,25 @@ fn read_lines_newest_first_matches_plain_app_semantics() {
     }
     drop(f);
 
-    let first_page = read_lines_newest_first(&path, None, 0, 200);
+    let first_page = read_lines_newest_first(&path, None, 0, 200).unwrap();
     assert_eq!(first_page.len(), 200);
     assert_eq!(first_page[0], "line-2999", "newest line first");
     assert_eq!(first_page[199], "line-2800");
 
-    let second_page = read_lines_newest_first(&path, None, 200, 200);
+    let second_page = read_lines_newest_first(&path, None, 200, 200).unwrap();
     assert_eq!(
         second_page[0], "line-2799",
         "offset windows into older lines"
     );
 
-    let tail = read_lines_newest_first(&path, None, 2990, 100);
+    let tail = read_lines_newest_first(&path, None, 2990, 100).unwrap();
     assert_eq!(tail.len(), 10, "short read near the oldest line");
     assert_eq!(tail[9], "line-0");
 
     assert!(
-        read_lines_newest_first(&path, None, 0, 0).is_empty(),
+        read_lines_newest_first(&path, None, 0, 0)
+            .unwrap()
+            .is_empty(),
         "limit 0"
     );
 
@@ -178,7 +188,7 @@ fn read_lines_newest_first_matches_plain_app_semantics() {
     let path2 = tmp_log("read2");
     std::fs::write(&path2, b"old\r\n\nnewest no newline").unwrap();
     assert_eq!(
-        read_lines_newest_first(&path2, None, 0, 10),
+        read_lines_newest_first(&path2, None, 0, 10).unwrap(),
         vec!["newest no newline", "old"]
     );
     std::fs::remove_file(&path).ok();

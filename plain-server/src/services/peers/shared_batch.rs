@@ -1,19 +1,11 @@
+use super::shared_transfer::{cleanup, operation};
 use crate::assembly::server::ServerState;
 use anyhow::{Result, ensure};
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
 use plain_rs::files::shares::batch_plan::Kind;
 use plain_rs::files::shares::batch_plan::Plan;
 use plain_rs::files::shares::batch_plan::Walker;
-use plain_rs::files::shares::batch_queue::Intent;
 use plain_rs::files::shares::batch_queue::Queue;
-use plain_rs::files::shares::batch_queue::Receipt;
 use plain_rs::files::shares::batch_queue::Run;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -21,7 +13,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 use tokio::{sync::Mutex, task::JoinHandle};
 
@@ -31,7 +22,7 @@ pub(crate) struct Runtime {
     workers: Mutex<HashMap<String, (String, Option<JoinHandle<()>>, Arc<AtomicBool>)>>,
 }
 impl Runtime {
-    pub(crate) async fn shutdown(&self, host: &crate::host::bridge::Host) {
+    pub(crate) async fn shutdown(&self, directory: &std::path::Path) {
         self.queue.stop();
         let mut workers = self.workers.lock().await;
         for (_, (generation, job, clean)) in workers.drain() {
@@ -40,122 +31,40 @@ impl Runtime {
                 let _ = job.await;
             }
             if !clean.load(Ordering::SeqCst) {
-                let _ = host
-                    .call("sharedTransferCancel", json!({"generation":generation}))
-                    .await;
+                if let Err(error) = cleanup(directory, &generation).await {
+                    log::error!("Shared transfer cleanup failed: {error}");
+                }
             }
         }
     }
 }
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Request {
-    Enqueue {
-        intent: Intent,
-    },
-    Control {
-        id: String,
-        command: String,
-    },
-    Snapshot,
-    Progress {
-        id: String,
-        generation: String,
-        ticket: String,
-        bytes: i64,
-    },
-    Receipt {
-        id: String,
-        generation: String,
-        ticket: String,
-        receipt: Receipt,
-    },
-}
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
+pub(crate) async fn control(state: &ServerState, id: &str, command: &str) -> Result<bool> {
+    ensure!(!*state.stop.borrow(), "Core stopped");
+    let mut workers = state.shared_batches.workers.lock().await;
+    if let Some((generation, worker, clean)) = workers.get_mut(id) {
+        if !matches!(command, "pause" | "cancel" | "remove") {
+            ensure!(
+                !state.shared_batches.queue.is_active(id),
+                "Shared batch still active"
+            );
+        }
+        let paused = state.shared_batches.queue.control(id, "pause")?.is_some();
+        if let Some(job) = worker.take() {
+            job.abort();
+            let _ = job.await;
+        }
+        if !clean.load(Ordering::SeqCst) {
+            cleanup(&state.directory, generation).await?;
+        }
+        workers.remove(id);
+        if command == "pause" {
+            return Ok(paused);
+        }
+        if command == "retry" && paused {
+            return Ok(state.shared_batches.queue.control(id, "resume")?.is_some());
+        }
     }
-    if *state.stop.borrow() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    let work: Result<Value> = async {
-        Ok(match request {
-            Request::Enqueue { intent } => json!(state.shared_batches.queue.enqueue(intent)?),
-            Request::Snapshot => state.shared_batches.queue.snapshot(),
-            Request::Progress {
-                id,
-                generation,
-                ticket,
-                bytes,
-            } => json!(
-                state
-                    .shared_batches
-                    .queue
-                    .progress(&id, &generation, &ticket, bytes)?
-            ),
-            Request::Receipt {
-                id,
-                generation,
-                ticket,
-                receipt,
-            } => json!(
-                state
-                    .shared_batches
-                    .queue
-                    .receipt(&id, &generation, &ticket, receipt)?
-            ),
-            Request::Control { id, command } => {
-                let mut workers = state.shared_batches.workers.lock().await;
-                if let Some((generation, worker, clean)) = workers.get_mut(&id) {
-                    if !matches!(command.as_str(), "pause" | "cancel" | "remove") {
-                        ensure!(
-                            !state.shared_batches.queue.is_active(&id),
-                            "Shared batch still active"
-                        );
-                    }
-                    let paused = state.shared_batches.queue.control(&id, "pause")?.is_some();
-                    if let Some(job) = worker.take() {
-                        job.abort();
-                        let _ = job.await;
-                    }
-                    if !clean.load(Ordering::SeqCst) {
-                        let result = state
-                            .host
-                            .call("sharedTransferCancel", json!({"generation":generation}))
-                            .await
-                            .map_err(anyhow::Error::msg)?;
-                        ensure!(
-                            result == json!(true),
-                            "OS adapter did not cancel shared transfer"
-                        );
-                    }
-                    workers.remove(&id);
-                    if command == "pause" {
-                        return Ok(json!(paused));
-                    }
-                    if command == "retry" && paused {
-                        return Ok(json!(
-                            state.shared_batches.queue.control(&id, "resume")?.is_some()
-                        ));
-                    }
-                }
-                json!(state.shared_batches.queue.control(&id, &command)?.is_some())
-            }
-        })
-    }
-    .await;
-    match work {
-        Ok(value) => Json(json!({"result":value})).into_response(),
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":error.to_string()})),
-        )
-            .into_response(),
-    }
+    Ok(state.shared_batches.queue.control(id, command)?.is_some())
 }
 pub(crate) fn start(state: ServerState) {
     let progress_state = state.clone();
@@ -197,25 +106,13 @@ pub(crate) fn start(state: ServerState) {
                     let worker_cleaned = cleaned.clone();
                     let job = tokio::spawn(async move {
                         let result = execute(&worker_state, &run).await;
-                        let cleanup = worker_state
-                            .host
-                            .call(
-                                "sharedTransferCancel",
-                                json!({"generation":run.snapshot.generation}),
-                            )
-                            .await;
-                        worker_cleaned.store(
-                            matches!(&cleanup,Ok(value) if value==&json!(true)),
-                            Ordering::SeqCst,
-                        );
+                        let released =
+                            cleanup(&worker_state.directory, &run.snapshot.generation).await;
+                        worker_cleaned.store(released.is_ok(), Ordering::SeqCst);
                         let error = result
                             .err()
-                            .map(|e| e.to_string())
-                            .or_else(|| match cleanup {
-                                Ok(v) if v == json!(true) => None,
-                                Ok(_) => Some("OS adapter did not release shared transfer".into()),
-                                Err(e) => Some(e),
-                            });
+                            .map(|error| error.to_string())
+                            .or_else(|| released.err().map(|error| error.to_string()));
                         worker_state.shared_batches.queue.finish(
                             &run.snapshot.id,
                             &run.snapshot.generation,
@@ -227,7 +124,7 @@ pub(crate) fn start(state: ServerState) {
             }
             tokio::select! {_=stop.changed()=>break, result=changed.changed()=>if result.is_err(){break}}
         }
-        state.shared_batches.shutdown(&state.host).await;
+        state.shared_batches.shutdown(&state.directory).await;
     });
 }
 async fn plan(state: &ServerState, run: &Run) -> Result<Plan> {
@@ -247,29 +144,6 @@ async fn plan(state: &ServerState, run: &Run) -> Result<Plan> {
         walker.supply(info.entries)?;
     }
     walker.finish()
-}
-async fn operation(
-    state: &ServerState,
-    run: &Run,
-    name: &str,
-    size: Option<i64>,
-    params: Value,
-) -> Result<Receipt> {
-    let (ticket, receiver) =
-        state
-            .shared_batches
-            .queue
-            .begin(&run.snapshot.id, &run.snapshot.generation, name, size)?;
-    let accepted = state.host.call("sharedTransferStart", json!({"id":run.snapshot.id,"generation":run.snapshot.generation,"ticket":ticket,"operation":params})).await.map_err(anyhow::Error::msg)?;
-    ensure!(
-        accepted == json!(true),
-        "OS adapter refused shared transfer"
-    );
-    let receipt = tokio::time::timeout(Duration::from_secs(15 * 60), receiver).await??;
-    if let Some(error) = &receipt.error {
-        return Err(anyhow::anyhow!(error.clone()));
-    }
-    Ok(receipt)
 }
 async fn execute(state: &ServerState, run: &Run) -> Result<()> {
     let plan = match &run.plan {
@@ -312,6 +186,9 @@ async fn execute(state: &ServerState, run: &Run) -> Result<()> {
                     &target.entry.virtual_path,
                     None,
                 )?;
+                if run.intent.kind != Kind::Zip {
+                    state.file_platform.scan(&[receipt.path]).await?;
+                }
             }
             Err(error) => {
                 state.shared_batches.queue.file_finished(
@@ -320,18 +197,6 @@ async fn execute(state: &ServerState, run: &Run) -> Result<()> {
                     &target.entry.virtual_path,
                     Some(error.to_string()),
                 )?;
-                let canceled = state
-                    .host
-                    .call(
-                        "sharedTransferCancel",
-                        json!({"generation":run.snapshot.generation}),
-                    )
-                    .await
-                    .map_err(anyhow::Error::msg)?;
-                ensure!(
-                    canceled == json!(true),
-                    "OS adapter did not cancel failed transfer"
-                );
                 if run.intent.kind == Kind::Zip {
                     return Err(error);
                 }
@@ -340,7 +205,8 @@ async fn execute(state: &ServerState, run: &Run) -> Result<()> {
     }
     if run.intent.kind == Kind::Zip {
         ensure!(!items.is_empty(), "No shared files to archive");
-        operation(state,run,"",None,json!({"kind":"zip","items":items,"path":format!("{}/{}",run.intent.downloads_base.trim_end_matches('/'),run.intent.zip_name)})).await?;
+        let receipt = operation(state,run,"",None,json!({"kind":"zip","items":items,"path":format!("{}/{}",run.intent.downloads_base.trim_end_matches('/'),run.intent.zip_name)})).await?;
+        state.file_platform.scan(&[receipt.path]).await?;
     }
     Ok(())
 }

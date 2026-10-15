@@ -14,8 +14,6 @@ mod events;
 mod keyvalue;
 mod password;
 #[allow(dead_code)]
-pub mod recent;
-mod session;
 mod signature_key;
 pub mod storage_alias;
 mod url_token;
@@ -23,7 +21,6 @@ mod url_token;
 pub use events::EventLog;
 pub use keyvalue::{device_display_name, server_client_id};
 pub use password::PasswordStore;
-pub use session::{SessionInfo, SessionStore, token_key};
 pub use signature_key::SignatureKey;
 pub use storage_alias as storage;
 pub use url_token::UrlToken;

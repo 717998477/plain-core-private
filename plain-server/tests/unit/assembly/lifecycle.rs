@@ -40,13 +40,13 @@ async fn start(server: &ContentServer) -> (u16, u16) {
 }
 
 #[tokio::test]
-async fn local_health_requires_auth_and_public_listeners_are_healthy() {
+async fn loopback_and_public_listeners_serve_the_same_health_endpoint() {
     let directory = tempfile::tempdir().unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[9; 32]);
     let server = server(directory.path(), &token);
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{}/health", server.port);
-    assert_eq!(client.get(&url).send().await.unwrap().status(), 401);
+    assert_eq!(client.get(&url).send().await.unwrap().status(), 200);
     assert_eq!(
         client
             .get(&url)

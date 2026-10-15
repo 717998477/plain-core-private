@@ -1,15 +1,11 @@
 use super::*;
-use serde_json::{Value, json};
-#[cfg(feature = "http_transport")]
+use serde_json::json;
+
 #[tokio::test]
-async fn root_peer_views_addresses_and_file_urls_use_current_record_without_host() {
+async fn main_peer_records_and_file_urls_use_current_addresses_and_reject_stale_identity_without_host()
+ {
     let dir = tempfile::tempdir().unwrap();
-    let prefs =
-        std::sync::Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
-    let token = plain_rs::utils::base64::base64_encode(&[9; 32]);
-    let server =
-        crate::assembly::server::ContentServer::start(&dir.path().join("plain.db"), &token, prefs)
-            .unwrap();
+    let server = crate::assembly::server::ContentServer::open(dir.path()).unwrap();
     let state = server.runtime_state();
     let mut peer = DPeer::new(
         "fixture",
@@ -18,51 +14,41 @@ async fn root_peer_views_addresses_and_file_urls_use_current_record_without_host
         Some(443),
         plain_rs::chat::enums::DeviceType::Tablet,
     );
-    peer.port = Some(443);
     plain_rs::db::chat_store::peers::save(
         &state.db,
         &[peer.clone()],
         plain_rs::db::chat_store::SaveMode::Insert,
     )
     .unwrap();
-    let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{}/chat/store", server.port);
-    let call = |body: Value| {
-        client
-            .post(&url)
-            .bearer_auth(&token)
-            .header("content-type", "application/json")
-            .body(body.to_string())
-    };
-    async fn result(request: reqwest::RequestBuilder) -> Value {
-        let response = request.send().await.unwrap();
-        assert!(response.status().is_success());
-        serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap()["result"].clone()
-    }
-    let row = result(call(json!({"action":"peer","id":"fixture"}))).await;
+    let (_generation, mut requests) = state.host.connect();
+    let native = server.native_graphql().unwrap();
+    let response = native.execute(r#"{peerRecord(id:"fixture"){ip address{bestIp name baseUrl apiUrl statusWsUrl}} peerRecords(ids:["fixture"]){ip address{bestIp name baseUrl apiUrl statusWsUrl}}}"#.into()).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let rows = response.data.into_json().unwrap();
+    let row = &rows["peerRecord"];
     assert_eq!(row["ip"], "bad, 127.0.0.1");
     assert_eq!(
         row["address"],
         json!({"bestIp":"127.0.0.1","name":"127.0.0.1","baseUrl":"https://127.0.0.1","apiUrl":"https://127.0.0.1/peer_graphql","statusWsUrl":"wss://127.0.0.1/status"})
     );
-    let list = result(call(json!({"action":"peers","statuses":[]}))).await;
-    assert_eq!(list[0], row);
-    let selected = result(call(
-        json!({"action":"peerAddress","id":"fixture","expected":peer}),
-    ))
-    .await;
-    assert_eq!(selected, row["address"]);
-    let id = "id +/?#&中文%";
-    let file = result(call(
-        json!({"action":"peerFileUrl","id":"fixture","expected":peer,"file_id":id}),
-    ))
-    .await;
-    let parsed = reqwest::Url::parse(file.as_str().unwrap()).unwrap();
+    assert_eq!(rows["peerRecords"][0], *row);
+    let file_id = "id +/?#&中文%";
+    async fn file(
+        server: &crate::assembly::server::ContentServer,
+        expected: &DPeer,
+        id: &str,
+    ) -> async_graphql::Response {
+        server.native_graphql().unwrap().execute(async_graphql::Request::new(r#"query($expected:PeerRecordInput!,$file:String!){peerFileUrl(id:"fixture",expected:$expected,fileId:$file)}"#).variables(async_graphql::Variables::from_json(json!({"expected":{"id":expected.id,"name":expected.name,"ip":expected.ip,"key":expected.key,"publicKey":expected.public_key,"status":expected.status,"port":expected.port,"deviceType":expected.device_type,"token":expected.token,"createdAt":expected.created_at,"updatedAt":expected.updated_at},"file":id})))).await
+    }
+    let response = file(&server, &peer, file_id).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let parsed = reqwest::Url::parse(data["peerFileUrl"].as_str().unwrap()).unwrap();
     assert_eq!(parsed.host_str(), Some("127.0.0.1"));
     assert_eq!(parsed.path(), "/fs");
     assert_eq!(
         parsed.query_pairs().collect::<Vec<_>>(),
-        vec![("id".into(), id.into())]
+        vec![("id".into(), file_id.into())]
     );
     let old = peer.clone();
     peer.ip = "::1".into();
@@ -74,35 +60,17 @@ async fn root_peer_views_addresses_and_file_urls_use_current_record_without_host
     )
     .unwrap();
     assert_eq!(
-        call(json!({"action":"peerAddress","id":"fixture","expected":old}))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        400
+        file(&server, &old, file_id).await.errors[0].message,
+        "Peer changed"
     );
+    let current = address(&peer);
+    assert_eq!(current.api_url, "https://[::1]:2443/peer_graphql");
+    assert_eq!(current.status_ws_url, "wss://[::1]:2443/status");
+    plain_rs::db::chat_store::peers::delete(&state.db, &[peer.id.clone()]).unwrap();
     assert_eq!(
-        call(json!({"action":"peerFileUrl","id":"fixture","expected":old,"file_id":id}))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        400
+        file(&server, &peer, file_id).await.errors[0].message,
+        "Peer removed"
     );
-    let current = result(call(json!({"action":"peer","id":"fixture"}))).await;
-    assert_eq!(
-        current["address"]["apiUrl"],
-        "https://[::1]:2443/peer_graphql"
-    );
-    assert_eq!(current["address"]["statusWsUrl"], "wss://[::1]:2443/status");
-    plain_rs::db::chat_store::peers::delete(&state.db, &["fixture".into()]).unwrap();
-    assert_eq!(
-        call(json!({"action":"peerAddress","id":"fixture","expected":peer}))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        400
-    );
+    assert!(requests.try_recv().is_err());
     server.shutdown().await;
 }

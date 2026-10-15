@@ -9,7 +9,6 @@ pub mod types;
 pub mod xml_templates;
 
 /// Whether a persisted sender list (`ip|name` entries, see
-/// [`crate::assembly::ShellHooks::dlna_senders`]) contains `ip`.
 pub fn senders_contain_ip(list: &[String], ip: &str) -> bool {
     plain_rs::prefs::dlna::senders_contain_ip(list, ip)
 }

@@ -1,16 +1,9 @@
-use crate::assembly::server::ServerState;
 use crate::graphql::resolvers::files::types::FileSortBy;
 use crate::graphql::resolvers::images::public_index::ImageSearchStatusType;
 use crate::services::files::catalog::MediaCatalog;
 use crate::services::images::models::Runtime;
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
+
 use plain_rs::enums::DataType;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
@@ -102,60 +95,4 @@ pub(crate) async fn count(
     let mut ids = ids.into_iter().collect::<HashSet<_>>();
     ids.extend(semantic.into_iter().map(|row| row.image_id));
     i32::try_from(ids.len()).map_err(|e| e.to_string())
-}
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase")]
-pub(crate) enum Command {
-    Rows {
-        text: String,
-        query: String,
-        offset: i32,
-        limit: i32,
-        #[serde(rename = "sortBy")]
-        sort_by: String,
-    },
-    Count {
-        text: String,
-        query: String,
-    },
-}
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(command): Json<Command>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let result = match command {
-        Command::Rows {
-            text,
-            query,
-            offset,
-            limit,
-            sort_by,
-        } => rows(
-            &MediaCatalog::new(state.db.clone(), state.host.clone()),
-            &state.image_models,
-            &text,
-            &query,
-            offset,
-            limit,
-            &sort_by,
-        )
-        .await
-        .map(|items| json!({"items":items})),
-        Command::Count { text, query } => count(
-            &MediaCatalog::new(state.db.clone(), state.host.clone()),
-            &state.image_models,
-            &text,
-            &query,
-        )
-        .await
-        .map(|count| json!({"count":count})),
-    };
-    match result {
-        Ok(value) => Json(value).into_response(),
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({"error":error}))).into_response(),
-    }
 }

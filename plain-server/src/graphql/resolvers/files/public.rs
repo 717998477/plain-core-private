@@ -1,12 +1,3 @@
-//! Public `/graphql` file-browsing roots: mounts, a directory listing, a
-//! single-path stat and its media probe.
-//!
-//! The directory walk itself is [`plain_rs::files::filesystem`] — the same code the
-//! app's `files/read` route runs, reached through
-//! [`crate::http::routes::file_reads`] so the two cannot drift. Only the things Rust
-//! genuinely cannot know reach for the host: which volumes are mounted,
-//! what "recent" means on this platform, and image/video/audio metadata.
-
 use crate::graphql::resolvers::files::types::AudioFileInfo;
 use crate::graphql::resolvers::files::types::DriveType;
 use crate::graphql::resolvers::files::types::File;
@@ -27,7 +18,7 @@ use crate::graphql::types::facts::rows;
 use crate::graphql::types::facts::text;
 use crate::host::bridge::Host;
 use crate::http::auth::public_gate;
-use crate::http::routes::file_reads;
+use crate::services::files::browse as file_reads;
 use async_graphql::{Context, Enum, Object};
 use chrono::{DateTime, Utc};
 use plain_rs::files::filesystem::SortBy;
@@ -37,14 +28,78 @@ use std::{path::Path, sync::Arc};
 
 const STORAGE: &str = "WRITE_EXTERNAL_STORAGE";
 
-#[cfg(all(feature = "media", not(any(target_os = "android", target_os = "ios"))))]
-const RECENT_FILE_LIMIT: usize = 500;
-
 #[derive(Default)]
 pub struct FilesQuery;
 
 #[Object]
 impl FilesQuery {
+    async fn indexed_files(
+        &self,
+        ctx: &Context<'_>,
+        query: String,
+        offset: i32,
+        limit: i32,
+        sort_by: FileSortBy,
+    ) -> async_graphql::Result<Vec<File>> {
+        if !public_gate::require_granted(ctx, &[STORAGE]).await? {
+            return Ok(Vec::new());
+        }
+        let items = ctx
+            .data::<Arc<crate::services::files::platform::FilePlatform>>()?
+            .indexed_files(query, offset, limit, sort_by, false)
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+        Ok(rows(&items, file))
+    }
+    async fn indexed_file_count(
+        &self,
+        ctx: &Context<'_>,
+        query: String,
+    ) -> async_graphql::Result<Long> {
+        if !public_gate::require_granted(ctx, &[STORAGE]).await? {
+            return Ok(Long(0));
+        }
+        let count = ctx
+            .data::<Arc<crate::services::files::platform::FilePlatform>>()?
+            .indexed_files(query, 0, 0, FileSortBy::NameAsc, true)
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+        Ok(Long(count.as_i64().ok_or("invalid indexed file count")?))
+    }
+
+    async fn browse_files(
+        &self,
+        ctx: &Context<'_>,
+        root: String,
+        query: String,
+        text: Option<String>,
+        show_hidden: Option<bool>,
+        sort_by: FileSortBy,
+        offset: i32,
+        limit: i32,
+        #[graphql(default)] count_only: bool,
+    ) -> async_graphql::Result<FilePage> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let page = file_reads::execute(
+            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
+            Request {
+                root,
+                query,
+                text,
+                show_hidden,
+                sort_by: sort_by.into(),
+                offset: usize::try_from(offset)?,
+                limit: Some(usize::try_from(limit)?),
+                count_only,
+            },
+        )
+        .await
+        .map_err(async_graphql::Error::new)?;
+        Ok(FilePage {
+            count: Long(page["count"].as_i64().ok_or("invalid file count")?),
+            items: list(&page, "items", file),
+        })
+    }
     /// Volumes the platform reports. The host builds these because drive
     /// enumeration is platform state; there is nothing to gate.
     async fn mounts(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Mount>> {
@@ -56,41 +111,11 @@ impl FilesQuery {
     /// gates — plain-app's `recentFiles` calls `checkEnabledAsync`.
     async fn recent_files(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<File>> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        #[cfg(not(all(feature = "media", not(any(target_os = "android", target_os = "ios")))))]
-        {
-            return Ok(rows(
-                &host_call(ctx, "systemRecentFileFacts", json!({})).await?,
-                file,
-            ));
-        }
-        #[cfg(all(feature = "media", not(any(target_os = "android", target_os = "ios"))))]
-        {
-            let recent =
-                plain_media::storage::kv::recent::get_recent_files(prefs(ctx), RECENT_FILE_LIMIT);
-            let mut listed = Vec::new();
-            for path in recent {
-                let Ok(entry) =
-                    plain_rs::files::filesystem::stat(std::path::Path::new(&path)).await
-                else {
-                    continue;
-                };
-                listed.push(File {
-                    media_id: None,
-                    name: std::path::Path::new(&entry.path)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or_default()
-                        .to_owned(),
-                    path: entry.path,
-                    created_at: Some(instant(entry.created_at.timestamp_millis())),
-                    updated_at: instant(entry.updated_at.timestamp_millis()),
-                    size: Long(entry.size),
-                    is_dir: entry.is_dir,
-                    child_count: entry.child_count as i32,
-                });
-            }
-            Ok(listed)
-        }
+        let items = ctx
+            .data::<Arc<crate::services::files::platform::FilePlatform>>()?
+            .recent_files(prefs(ctx))
+            .await?;
+        Ok(items.iter().map(file).collect())
     }
 
     /// One page of a directory listing, filtered and sorted by the search
@@ -107,7 +132,7 @@ impl FilesQuery {
     ) -> async_graphql::Result<Vec<File>> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         let page = file_reads::execute(
-            host(ctx),
+            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
             Request {
                 root,
                 query,
@@ -133,7 +158,7 @@ impl FilesQuery {
     ) -> async_graphql::Result<i32> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         let page = file_reads::execute(
-            host(ctx),
+            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
             Request {
                 root,
                 query,
@@ -164,7 +189,11 @@ impl FilesQuery {
         file_name: Option<String>,
     ) -> async_graphql::Result<FileInfo> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        let record = file_reads::stat_record(host(ctx), &path).await;
+        let record = file_reads::stat_record(
+            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
+            &path,
+        )
+        .await;
         let name = file_name.unwrap_or_else(|| {
             Path::new(&path)
                 .file_name()
@@ -190,7 +219,12 @@ impl FilesQuery {
     /// file and a denied path all read as `false` so callers can use it in
     /// a filter without guarding every call.
     async fn path_exists(&self, ctx: &Context<'_>, path: String) -> async_graphql::Result<bool> {
-        Ok(file_reads::stat_record(host(ctx), &path).await.is_some())
+        Ok(file_reads::stat_record(
+            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
+            &path,
+        )
+        .await
+        .is_some())
     }
 
     /// Same total-predicate semantics as `pathExists`; `null` when the path
@@ -200,15 +234,18 @@ impl FilesQuery {
         ctx: &Context<'_>,
         path: String,
     ) -> async_graphql::Result<Option<PathKind>> {
-        Ok(file_reads::stat_record(host(ctx), &path)
-            .await
-            .map(|record| {
-                if record.is_dir {
-                    PathKind::Dir
-                } else {
-                    PathKind::File
-                }
-            }))
+        Ok(file_reads::stat_record(
+            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
+            &path,
+        )
+        .await
+        .map(|record| {
+            if record.is_dir {
+                PathKind::Dir
+            } else {
+                PathKind::File
+            }
+        }))
     }
 }
 
@@ -321,6 +358,7 @@ fn is_audio(extension: &str) -> bool {
 
 fn file(item: &Value) -> File {
     File {
+        permission: text(item, "permission"),
         media_id: item["mediaId"]
             .as_str()
             .filter(|value| !value.is_empty())
@@ -386,3 +424,9 @@ async fn host_call(ctx: &Context<'_>, method: &str, params: Value) -> async_grap
 #[cfg(test)]
 #[path = "../../../../tests/unit/graphql/resolvers/files/public.rs"]
 mod tests;
+
+#[derive(async_graphql::SimpleObject)]
+struct FilePage {
+    count: Long,
+    items: Vec<File>,
+}

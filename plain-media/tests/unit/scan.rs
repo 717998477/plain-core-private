@@ -1299,3 +1299,23 @@ fn ext_of_is_lowercased_last_extension() {
     assert_eq!(ext_of("noext"), "");
     assert_eq!(ext_of(".hidden.md"), "md");
 }
+
+#[test]
+fn the_default_scan_root_expands_to_all_configured_sources() {
+    let sources = vec!["/fixtures/Pictures".into(), "/fixtures/Music".into()];
+    assert_eq!(
+        selected_roots("/".into(), &sources),
+        vec![
+            std::path::PathBuf::from("/fixtures/Pictures"),
+            std::path::PathBuf::from("/fixtures/Music")
+        ]
+    );
+    assert_eq!(
+        selected_roots("/fixtures/selected".into(), &sources),
+        vec![std::path::PathBuf::from("/fixtures/selected")]
+    );
+    assert_eq!(
+        selected_roots("/".into(), &[]),
+        vec![std::path::PathBuf::from("/")]
+    );
+}

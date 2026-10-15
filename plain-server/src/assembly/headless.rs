@@ -44,9 +44,9 @@ impl HeadlessService {
         initialize_tls();
         plain_media::storage::paths::set(paths.data_dir.clone(), paths.cache_dir.clone());
         let core = Arc::new(ContentServer::open(&paths.data_dir).map_err(anyhow::Error::msg)?);
-        crate::platform::system::log::set_file(&crate::platform::system::log::default_log_file(
-            &paths.data_dir,
-        ));
+        let log_file = crate::platform::system::log::default_log_file(&paths.data_dir);
+        crate::platform::system::log::set_file(&log_file);
+        core.set_log_file(&log_file).map_err(anyhow::Error::msg)?;
         let runtime = Arc::new(Runtime::new(core.clone(), capabilities()));
         let host = tokio::spawn(runtime.run());
         let mut service = Self {
@@ -101,7 +101,7 @@ impl HeadlessService {
             .tls_identity
             .write()
             .map_err(|_| anyhow!("TLS identity configuration unavailable"))? =
-            crate::http::tls_identity::IdentitySource::Pem {
+            crate::services::tls_identity::IdentitySource::Pem {
                 certificate: paths.tls_cert.clone(),
                 key: paths.tls_key.clone(),
             };
@@ -162,7 +162,18 @@ impl HeadlessService {
 }
 
 fn capabilities() -> Vec<String> {
-    let mut capabilities = vec!["MEDIA_SCAN".into()];
+    let mut capabilities = vec![
+        "MEDIA_SCAN".into(),
+        "NOTES".into(),
+        "FEEDS".into(),
+        "POMODORO".into(),
+        "APP_UPDATES".into(),
+    ];
+    capabilities.extend(
+        crate::services::files::media_action_io::capabilities()
+            .iter()
+            .map(|value| (*value).to_owned()),
+    );
     #[cfg(target_os = "linux")]
     {
         if !plain_rs::platform::linux::samba::detect_systemd_service_name().is_empty() {

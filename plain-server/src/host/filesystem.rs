@@ -18,12 +18,7 @@ async fn primitive(
     path: &str,
     extra: Value,
 ) -> anyhow::Result<Value> {
-    state
-        .host
-        .call_wait(
-            "systemFileResource",
-            json!({"operation":operation,"path":path,"params":extra}),
-        )
+    crate::services::files::resources::read(&state.host, &state.directory, operation, path, extra)
         .await
         .map_err(anyhow::Error::msg)
 }
@@ -50,11 +45,7 @@ pub(crate) async fn resolve_reference(
         .get(..6)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("app://"))
     {
-        let dir = host
-            .call(
-                "systemFileResource",
-                json!({"operation":"appDir","path":"","params":{}}),
-            )
+        let dir = crate::services::files::resources::app_directory(host, &directory)
             .await
             .map_err(anyhow::Error::msg)?;
         let suffix = Path::new(&path[6..]);
@@ -65,13 +56,7 @@ pub(crate) async fn resolve_reference(
                     .any(|c| matches!(c, std::path::Component::ParentDir)),
             "Invalid app file path"
         );
-        return Ok(Path::new(
-            dir.as_str()
-                .ok_or_else(|| anyhow::anyhow!("Missing app directory"))?,
-        )
-        .join(suffix)
-        .to_string_lossy()
-        .into_owned());
+        return Ok(dir.join(suffix).to_string_lossy().into_owned());
     }
     Ok(path.to_owned())
 }
@@ -216,10 +201,11 @@ pub(crate) async fn serve(
 ) -> anyhow::Result<Response> {
     let download = query(request, "dl").as_deref() == Some("1");
     if path.contains("!zip!/") {
-        let cached = primitive(state, "zipExtract", path, json!({})).await?;
-        let Some(cached) = cached.as_str() else {
-            return Ok(StatusCode::NOT_FOUND.into_response());
-        };
+        let cached = state
+            .archives
+            .preview(&state.file_platform, path.to_owned())
+            .await
+            .map_err(anyhow::Error::msg)?;
         let filename = if name.is_empty() {
             path.trim_end_matches('/')
                 .rsplit('/')
@@ -228,10 +214,9 @@ pub(crate) async fn serve(
         } else {
             name
         };
-        let mime = plain_rs::utils::mime::mime_from_ext(cached);
+        let mime = plain_rs::utils::mime::mime_from_ext(&cached.to_string_lossy());
         let response =
-            crate::http::routes::files::stream_file(Path::new(cached), mime, &request.headers)
-                .await;
+            crate::http::routes::files::stream_file(&cached, mime, &request.headers).await;
         return Ok(secure(response, Some(filename), download));
     }
     if let (Some(offset), Some(length)) = (
@@ -317,7 +302,7 @@ pub(crate) async fn serve(
     if meta.is_dir() {
         return Ok(StatusCode::BAD_REQUEST.into_response());
     }
-    #[cfg(feature = "media")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let range = request
             .headers
@@ -332,7 +317,9 @@ pub(crate) async fn serve(
             );
         let thumbnail = query(request, "w").and_then(|value| value.parse::<u32>().ok());
         if starts_view && thumbnail.is_none_or(|width| width > 200) {
-            plain_media::storage::kv::recent::add_recent_file(&state.prefs, path);
+            if let Err(error) = plain_rs::prefs::recent::add_recent_file(&state.prefs, path) {
+                log::warn!("Recent file update failed: {error}");
+            }
         }
     }
     #[cfg(feature = "media")]
@@ -469,3 +456,7 @@ pub(crate) async fn serve(
         download,
     ))
 }
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+#[path = "../../tests/unit/host/filesystem.rs"]
+mod tests;

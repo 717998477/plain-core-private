@@ -56,9 +56,6 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
                 .unwrap();
         }
     });
-    // The desktop reaches mDNS through the native controller, not an HTTP
-    // route: the public router never had one and `/chat/mdns` only exists on
-    // the legacy listener this test no longer drives.
     let discovery = crate::native::discovery::NativeDiscovery::new(state.clone());
     allowed.store(true, Ordering::SeqCst);
     state
@@ -245,9 +242,7 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
 }
 
 async fn execute(state: &ServerState, request: Request) -> Value {
-    state
-        .mdns
-        .execute(state, request)
+    control(state, request)
         .await
         .unwrap_or_else(|error| panic!("mDNS request failed: {error}"))
 }

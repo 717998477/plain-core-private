@@ -212,3 +212,16 @@ fn partial_failures_keep_only_confirmed_bytes_and_retries_resume_remaining_paths
     assert_eq!(s["tasks"][0]["downloadedSize"], 7);
     assert_eq!(s["tasks"][0]["failedFiles"], 0);
 }
+
+#[test]
+fn recreated_shared_queue_resets_revision_with_a_new_runtime_identity() {
+    let first = Queue::default();
+    first.enqueue(intent(Kind::File)).unwrap();
+    let restarted = Queue::default();
+    assert_ne!(
+        first.snapshot()["runtimeId"],
+        restarted.snapshot()["runtimeId"]
+    );
+    assert_eq!(restarted.snapshot()["revision"], 0);
+    assert_eq!(restarted.snapshot()["tasks"], json!([]));
+}

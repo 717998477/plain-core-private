@@ -3,17 +3,13 @@ pub mod deletes;
 
 pub mod contacts;
 
-pub mod sms;
-
 pub mod phone_calls;
-
-pub mod packages;
 
 pub mod query;
 
 use std::sync::Arc;
 pub(crate) struct Runtime {
-    pub(crate) mms: Arc<sms::mms::Runtime>,
+    pub(crate) mms: Arc<crate::services::sms::mms::Runtime>,
 }
 impl Runtime {
     pub(crate) fn new(
@@ -24,9 +20,8 @@ impl Runtime {
         events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            mms: sms::mms::Runtime::new(host, prefs, db, directory, events),
+            mms: crate::services::sms::mms::Runtime::new(host, prefs, db, directory, events),
         })
     }
 }
 pub mod graphql;
-pub mod http;

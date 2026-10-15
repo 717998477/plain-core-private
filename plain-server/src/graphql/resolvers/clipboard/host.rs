@@ -80,3 +80,7 @@ impl ClipboardHostMutation {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/graphql/resolvers/clipboard/host.rs"]
+mod tests;

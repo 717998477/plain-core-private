@@ -1,4 +1,4 @@
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "core")]
 pub mod local;
 
 #[cfg(feature = "core")]

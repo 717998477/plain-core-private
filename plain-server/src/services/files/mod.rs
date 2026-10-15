@@ -47,3 +47,33 @@ pub mod mounts;
 
 #[cfg(feature = "core")]
 pub(crate) mod zip_entries;
+
+#[cfg(feature = "core")]
+pub(crate) mod platform;
+
+#[cfg(all(feature = "core", feature = "media"))]
+pub(crate) mod native_scan;
+
+#[cfg(feature = "core")]
+pub(crate) mod archive_listing;
+
+#[cfg(feature = "core")]
+pub(crate) mod browse;
+
+#[cfg(feature = "core")]
+pub(crate) mod scanning;
+
+#[cfg(feature = "core")]
+pub(crate) mod indexed;
+
+#[cfg(feature = "core")]
+pub(crate) mod archive_operations;
+
+#[cfg(feature = "core")]
+pub(crate) mod media_provider;
+
+#[cfg(feature = "core")]
+pub mod media_action_io;
+
+#[cfg(feature = "core")]
+pub(crate) mod resources;

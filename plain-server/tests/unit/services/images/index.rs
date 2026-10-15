@@ -61,7 +61,11 @@ fn setup(
                 .unwrap();
         }
     });
-    let service = Arc::new(ImageIndex::new(db, host));
+    let service = Arc::new(ImageIndex::new(
+        db,
+        host,
+        tokio::sync::broadcast::channel(16).0,
+    ));
     struct Encoder;
     impl plain_inference::embedding::ImageEncoder for Encoder {
         fn image(&self, _: &std::path::Path) -> Result<Option<Vec<f32>>, String> {
@@ -103,8 +107,7 @@ async fn cancelled_generation_cannot_resurrect_deleted_embeddings() {
     let control = IndexControl {
         generation: 0,
         state: service.state.clone(),
-        host: service.host.clone(),
-        runtime: tokio::runtime::Handle::current(),
+        events: service.events.clone(),
     };
     let input = EmbeddingInput {
         id: "one".into(),

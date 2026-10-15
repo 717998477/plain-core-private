@@ -1,8 +1,3 @@
-//! The public `/graphql` schema is the network contract. Its root field
-//! set and signatures are frozen against `testdata/public-schema.graphqls`:
-//! a missing root field silently breaks the web console, and an extra one
-//! publishes an internal API to the LAN.
-
 use super::build;
 use plain_rs::db::Db;
 use plain_rs::prefs::Prefs;
@@ -29,26 +24,17 @@ fn sdl() -> String {
 }
 
 fn expected_sdl() -> &'static str {
-    if cfg!(feature = "mobile") {
-        include_str!("../../../../../plain-rs/testdata/public-schema.graphqls")
-    } else {
-        include_str!("../../../../../plain-rs/testdata/public-server-schema.graphqls")
-    }
+    include_str!("../../../../../plain-rs/testdata/public-schema.graphqls")
 }
 
 #[test]
 fn public_schema_matches_committed_sdl() {
     let sdl = sdl();
     if std::env::var_os("UPDATE_PUBLIC_SCHEMA").is_some() {
-        let name = if cfg!(feature = "mobile") {
-            "public-schema.graphqls"
-        } else {
-            "public-server-schema.graphqls"
-        };
         std::fs::write(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../plain-rs/testdata")
-                .join(name),
+                .join("public-schema.graphqls"),
             &sdl,
         )
         .unwrap();
@@ -73,9 +59,9 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
     assert!(playback.contains("path: String\n"));
     assert!(!playback.contains("currentPath"));
     assert!(sdl.contains("lastSeen: Instant!"));
-    if cfg!(feature = "mobile") {
-        assert!(sdl.contains("TTY_TDD"));
-    }
+    assert!(sdl.contains("enum AudioCommandAction {"));
+    assert!(sdl.contains("enum MediaAction {"));
+    assert!(sdl.contains("TTY_TDD"));
     assert!(!sdl.contains("TTY_DDD"));
     for field in [
         "packages(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Package!]!",
@@ -101,7 +87,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "createContactGroup(name: String!, accountName: String!, accountType: String!): ContactGroup!",
         "updateContactGroup(id: ID!, name: String!): ContactGroup!",
         "deleteContactGroup(id: ID!): Boolean!",
-        "sms(query: String!, offset: Int!, limit: Int!): [Sms!]!",
+        "sms(query: String!, offset: Int!, limit: Int!, includeTrashed: Boolean! = false): [Sms!]!",
         "smsCount(query: String!): Int!",
         "smsBoxCounts: SmsCounts!",
         "smsConversations(query: String!, offset: Int!, limit: Int!): [SmsConversation!]!",
@@ -227,9 +213,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "deletePeer(id: ID!): Boolean!",
         "unpairPeer(id: ID!): Boolean!",
     ] {
-        if cfg!(feature = "mobile") || expected_sdl().contains(field) {
-            assert!(sdl.contains(field), "missing {field}");
-        }
+        assert!(sdl.contains(field), "missing {field}");
     }
     assert!(
         sdl.contains("replyActions: [String!]!"),
@@ -273,9 +257,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "validFrom: Instant!",
         "validTo: Instant!",
     ] {
-        if cfg!(feature = "mobile") {
-            assert!(sdl.contains(field), "certificate field renamed: {field}");
-        }
+        assert!(sdl.contains(field), "certificate field renamed: {field}");
     }
 }
 
@@ -500,7 +482,10 @@ async fn no_root_field_fails_for_unregistered_schema_data() {
     });
     for (name, ty) in &roots {
         let base = base_type(ty);
-        let selection = leaves(ty);
+        let mut selection = leaves(ty);
+        if selection.is_empty() && !is_leaf(&base) {
+            selection.push("__typename".into());
+        }
         // An object type queried without a selection set fails validation before
         // any resolver runs — the probe would look "covered" while testing
         // nothing. Skipping those silently is exactly how feedSyncStates went
@@ -515,7 +500,11 @@ async fn no_root_field_fails_for_unregistered_schema_data() {
             format!("{{ {name} {{ {} }} }}", selection.join(" "))
         };
         let response = schema
-            .execute(async_graphql::Request::new(query.as_str()).data(server.runtime_state()))
+            .execute(
+                async_graphql::Request::new(query.as_str())
+                    .data(server.runtime_state())
+                    .data(server.runtime_state().native_client_id().unwrap()),
+            )
             .await;
         for error in response.errors {
             if error.message.contains("does not exist") {
@@ -569,5 +558,31 @@ fn download_controls_are_mutations_and_never_queries() {
             "{field} must not run as a query"
         );
         assert!(mutation.contains(&format!("{field}(")), "missing {field}");
+    }
+}
+
+#[test]
+fn media_types_preserve_the_shared_interface() {
+    let sdl = sdl();
+    for name in ["Audio", "Image", "Video", "Doc"] {
+        assert!(sdl.contains(&format!("type {name} implements MediaItem {{")));
+    }
+    let interface = sdl
+        .split("interface MediaItem {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    for field in [
+        "id: ID!",
+        "title: String!",
+        "path: String!",
+        "size: Long!",
+        "bucketId: ID!",
+        "createdAt: Instant!",
+        "updatedAt: Instant!",
+    ] {
+        assert!(interface.contains(field), "missing {field}");
     }
 }

@@ -13,6 +13,9 @@ use plain_rs::prefs::Prefs;
 use serde_json::json;
 use std::sync::Arc;
 pub struct MediaActions {
+    #[cfg(feature = "media")]
+    scans: Arc<super::media_scans::MediaScans>,
+    platform: Arc<super::platform::FilePlatform>,
     duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     db: Arc<Db>,
     host: Arc<Host>,
@@ -27,6 +30,8 @@ pub struct Completed {
 }
 impl MediaActions {
     pub fn new(
+        #[cfg(feature = "media")] scans: Arc<super::media_scans::MediaScans>,
+        platform: Arc<super::platform::FilePlatform>,
         db: Arc<Db>,
         host: Arc<Host>,
         audio: Arc<Audio>,
@@ -36,6 +41,9 @@ impl MediaActions {
         duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     ) -> Self {
         Self {
+            #[cfg(feature = "media")]
+            scans,
+            platform,
             duration_cache,
             db,
             host,
@@ -52,17 +60,17 @@ impl MediaActions {
         query: &str,
         dest_dir: &str,
     ) -> Result<i32> {
+        let capabilities = super::media_action_io::capability_list(&self.host)
+            .await
+            .map_err(async_graphql::Error::new)?;
+        crate::services::capabilities::require_list(
+            &capabilities,
+            super::media_action_io::action_capability(action),
+        )
+        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let from_trash = action == Action::Restore
-            || (action == Action::Delete && {
-                let facts = self
-                    .host
-                    .call("systemAppFacts", json!({}))
-                    .await
-                    .map_err(async_graphql::Error::new)?;
-                crate::graphql::types::facts::strings(&facts, "capabilities")
-                    .iter()
-                    .any(|kind| kind == "MEDIA_TRASH")
-            });
+            || (action == Action::Delete
+                && capabilities.iter().any(|value| value == "MEDIA_TRASH"));
         if !matches!(
             kind,
             DataType::Audio | DataType::Video | DataType::Image | DataType::Doc
@@ -82,7 +90,7 @@ impl MediaActions {
         let mut failed = 0;
         for batch in ids.chunks(500) {
             let result = self
-                .run(
+                .apply(
                     kind,
                     action,
                     batch.to_vec(),
@@ -90,10 +98,6 @@ impl MediaActions {
                     dest_dir.to_owned(),
                 )
                 .await?;
-            let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
-                "CONTENT_CHANGED",
-                "{}".into(),
-            ));
             affected += result.affected_count;
             failed += result.failed_ids.len();
         }
@@ -107,6 +111,26 @@ impl MediaActions {
         Ok(affected)
     }
     pub async fn run(
+        &self,
+        r#type: DataType,
+        action: Action,
+        requested: Vec<String>,
+        from_trash: bool,
+        dest_dir: String,
+    ) -> Result<Completed> {
+        let capabilities = super::media_action_io::capability_list(&self.host)
+            .await
+            .map_err(async_graphql::Error::new)?;
+        crate::services::capabilities::require_list(
+            &capabilities,
+            super::media_action_io::action_capability(action),
+        )
+        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+        self.apply(r#type, action, requested, from_trash, dest_dir)
+            .await
+    }
+
+    async fn apply(
         &self,
         r#type: DataType,
         action: Action,
@@ -128,57 +152,86 @@ impl MediaActions {
         if action == Action::Move && dest_dir.is_empty() {
             return Err("media destination required".into());
         }
-        let host = &self.host;
-        let outcome:Outcome=serde_json::from_value(host.call("mediaAction",json!({"type":r#type.kind(),"action":action,"ids":requested,"fromTrash":from_trash,"destDir":dest_dir})).await.map_err(async_graphql::Error::new)?)?;
-        media_actions::validate(r#type, action, &requested, &outcome)?;
-        let successful = outcome.successful;
-        let completed_ids = successful
-            .iter()
-            .map(|item| item.id.clone())
-            .collect::<Vec<_>>();
-        let affected = if r#type == DataType::Audio {
+        let operation = super::media_action_io::Operation::prepare(
+            &self.host,
+            &self.platform,
+            r#type,
+            action,
+            requested,
+            from_trash,
+            dest_dir,
+            #[cfg(feature = "media")]
+            self.scans.clone(),
+        )
+        .await
+        .map_err(async_graphql::Error::new)?;
+        let result = if r#type == DataType::Audio {
             let prefs = self.prefs.clone();
             self.audio
                 .run(move |db, engine| {
                     let before = audio_playback::snapshot(db)?;
-                    let count = media_actions::cleanup(db, r#type, action, &successful)?;
-                    if action != Action::Restore
-                        && !before.path.is_empty()
-                        && successful.iter().any(|item| item.path == before.path)
-                    {
-                        if action == Action::Move {
-                            audio_commands::clear_engine(db, &prefs, engine)?;
-                        } else {
-                            audio_commands::command(
-                                db,
-                                &prefs,
-                                engine,
-                                audio_commands::Action::Clear,
-                                0,
-                                1.0,
-                            )?;
+                    operation.complete(db, |outcome| {
+                        let count =
+                            media_actions::cleanup(db, r#type, action, &outcome.successful)?;
+                        if action != Action::Restore
+                            && !before.path.is_empty()
+                            && outcome
+                                .successful
+                                .iter()
+                                .any(|item| item.path == before.path)
+                        {
+                            if action == Action::Move {
+                                audio_commands::clear_engine(db, &prefs, engine)?;
+                            } else {
+                                audio_commands::command(
+                                    db,
+                                    &prefs,
+                                    engine,
+                                    audio_commands::Action::Clear,
+                                    0,
+                                    1.0,
+                                )?;
+                            }
                         }
-                    }
-                    Ok(count)
+                        Ok((count, outcome))
+                    })
                 })
                 .await?
         } else {
             let db = self.db.clone();
             let index = self.index.clone();
             tokio::task::spawn_blocking(move || {
-                if r#type == DataType::Image && action != Action::Restore {
-                    index.update_cache(|db| media_actions::cleanup(db, r#type, action, &successful))
-                } else {
-                    media_actions::cleanup(&db, r#type, action, &successful)
-                }
+                operation.complete(&db, |outcome| {
+                    if outcome.successful.is_empty() {
+                        return Ok((0, outcome));
+                    }
+                    let count = if r#type == DataType::Image && action != Action::Restore {
+                        index.update_cache(|db| {
+                            media_actions::cleanup(db, r#type, action, &outcome.successful)
+                        })?
+                    } else {
+                        media_actions::cleanup(&db, r#type, action, &outcome.successful)?
+                    };
+                    Ok((count, outcome))
+                })
             })
             .await??
         };
+        let (affected, outcome) = result;
+        let completed_ids: Vec<_> = outcome
+            .successful
+            .iter()
+            .map(|item| item.id.clone())
+            .collect();
         if matches!(r#type, DataType::Audio | DataType::Video) {
             self.duration_cache
                 .remove(r#type.media_type_str().unwrap(), &completed_ids)?;
         }
         if !completed_ids.is_empty() {
+            let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
+                "CONTENT_CHANGED",
+                "{}".into(),
+            ));
             let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
                 plain_rs::events::MEDIA_ACTION_FINISHED,
                 json!({"type":r#type.kind(),"action":action,"ids":completed_ids}).to_string(),

@@ -161,7 +161,41 @@ impl HostEvents {
         self.state.thumbnails.submit(token, bytes)
     }
 
-    pub fn publish_text(&self, kind: &str, payload: String) -> Result<(), String> {
+    pub async fn publish_text(&self, kind: &str, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+        if crate::services::discovery::pairing_runtime::accept_report(&self.state, kind, &payload)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(());
+        }
+        if kind == "NOTIFICATION_REPORTED" {
+            return crate::graphql::resolvers::notifications::public::publish(
+                &self.state.prefs,
+                &self.state.events,
+                serde_json::from_str(&payload).map_err(|error| error.to_string())?,
+            );
+        }
+        if kind == "IMAGE_INDEX_ERROR_REPORTED" {
+            self.state
+                .image_models
+                .report_error(serde_json::from_str(&payload).map_err(|error| error.to_string())?);
+            return Ok(());
+        }
+        if crate::services::audio::reports::accept(
+            &self.state.audio,
+            &self.state.duration_cache,
+            self.state.host.clone(),
+            self.generation,
+            kind,
+            &payload,
+        )
+        .await?
+        {
+            return Ok(());
+        }
         self.publish(WsEvent::host_text(kind, payload))
     }
     pub fn publish_binary(&self, kind: &str, payload: Vec<u8>) -> Result<(), String> {

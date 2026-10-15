@@ -391,8 +391,8 @@ async fn recent_files_are_gated_and_projected_from_the_store() {
         .data::<Arc<plain_rs::prefs::Prefs>>()
         .unwrap()
         .clone();
-    plain_media::storage::kv::recent::add_recent_file(&prefs, &first.to_string_lossy());
-    plain_media::storage::kv::recent::add_recent_file(&prefs, &second.to_string_lossy());
+    plain_rs::prefs::recent::add_recent_file(&prefs, &first.to_string_lossy()).unwrap();
+    plain_rs::prefs::recent::add_recent_file(&prefs, &second.to_string_lossy()).unwrap();
 
     let response = schema
         .execute(r#"query { recentFiles { name path mediaId size isDir } }"#)

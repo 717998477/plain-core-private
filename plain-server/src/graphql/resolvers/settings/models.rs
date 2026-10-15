@@ -4,12 +4,15 @@ use serde_json::Value;
 
 #[derive(SimpleObject)]
 pub struct SystemSettings {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
     pub password: String,
     pub password_type: i32,
     pub auth_two_factor: bool,
     pub rotate_url_token_on_restart: bool,
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
     pub adb_token: String,
     pub update_info: Json<Value>,
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
     pub url_token: String,
     pub api_permissions: Vec<String>,
     pub onboarding_completed: bool,

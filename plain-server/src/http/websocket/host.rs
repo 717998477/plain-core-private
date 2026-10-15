@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
+use plain_rs::events::WsEvent;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::HashMap, net::SocketAddr, sync::Mutex, time::Duration};
@@ -122,7 +123,7 @@ pub(crate) async fn upgrade(
         .into_response()
 }
 async fn completed(state: &ServerState, result: &Value) {
-    let _ = state.host.call("systemWebLoginCompleted", json!({"request":result["request"],"chatPaired":result["response"]["chatPaired"],"clientIp":result["clientIp"]})).await;
+    let _ = state.events.send(WsEvent::broadcast("WEB_LOGIN_COMPLETED", json!({"request":result["request"],"chatPaired":result["response"]["chatPaired"],"clientIp":result["clientIp"]}).to_string()));
 }
 async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: String) {
     if !enabled(&state) || params.cid.is_empty() {
@@ -187,17 +188,16 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                         }
                     }
                 }
-                let key = crate::http::sessions::host::local_key(&state, &params.cid)
-                    .or_else(|| crate::http::sessions::host::key(&state.db, &params.cid).ok().flatten());
+                let key = crate::services::sessions::local_key(&state, &params.cid)
+                    .or_else(|| crate::services::sessions::key(&state.db, &params.cid).ok().flatten());
                 let plain = key.and_then(|key| plain_rs::crypto::xchacha_decrypt_raw(&key,&frame));
                 let Some(plain) = plain else { let _ = socket.send(close(1013,"invalid_request")).await; break; };
                 if !registered {
                     registered = true;
                     if let Some(c) = state.main_ws.connections.lock().unwrap().get_mut(&id) { c.registered = true; }
                     state.main_ws.changed(&state);
-                    #[cfg(feature = "mobile")]
-                    let _ = state.mobile.mms.replay();
-                    let _ = state.host.call("systemWebSocketRegistered", json!({})).await;
+                                        let _ = state.mobile.mms.replay();
+                    let _ = state.events.send(WsEvent::broadcast("WEB_SOCKET_REGISTERED", "{}".into()));
                 } else {
                     let controls = controls(&plain);
                     if !controls.is_empty() { let _ = state.host.call("systemScreenMirrorControls", json!({"inputs":controls})).await; }
@@ -209,8 +209,8 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                 if event.is_internal() || event.target_cid.as_ref().is_some_and(|cid| cid != &params.cid) { continue; }
                 if !enabled(&state) { break; }
                 // Same key the inbound frames used: the shell holds no session.
-                let Some(key) = crate::http::sessions::host::local_key(&state, &params.cid)
-                    .or_else(|| crate::http::sessions::host::key(&state.db, &params.cid).ok().flatten())
+                let Some(key) = crate::services::sessions::local_key(&state, &params.cid)
+                    .or_else(|| crate::services::sessions::key(&state.db, &params.cid).ok().flatten())
                 else { break; };
                 let bytes = if let Some(payload) = event.binary_payload {
                     let Some(bytes) = plain_rs::protocols::websocket::encode_raw(event.event_type, &payload) else { continue; };
@@ -310,29 +310,6 @@ fn controls(bytes: &[u8]) -> Vec<Value> {
         vec![input]
     }
 }
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Request {
-    Snapshot,
-    CloseAll,
-}
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    match request {
-        Request::Snapshot => Json(json!({"result":state.main_ws.snapshot()})).into_response(),
-        Request::CloseAll => {
-            state.main_ws.close_client(&state, None);
-            Json(json!({"result":true})).into_response()
-        }
-    }
-}
-
 #[cfg(test)]
 #[path = "../../../tests/unit/http/websocket/host.rs"]
 mod tests;

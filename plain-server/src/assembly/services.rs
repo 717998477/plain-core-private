@@ -1,6 +1,12 @@
 use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct Services {
+    pub logs: Arc<crate::services::logs::Logs>,
+    pub device: Arc<crate::services::device::Status>,
+    pub file_platform: Arc<crate::services::files::platform::FilePlatform>,
+    #[cfg(feature = "media")]
+    pub media_scans: Arc<crate::services::files::media_scans::MediaScans>,
+    pub sms: Arc<crate::services::sms::mutations::Mutations>,
     pub store: Arc<plain_rs::kv::LazyDb>,
     pub archives: Arc<crate::services::files::archives::Archives>,
     pub app_files: Arc<plain_rs::files::app_files::FileStore>,
@@ -26,51 +32,6 @@ impl Services {
         prefs: Arc<plain_rs::prefs::Prefs>,
         directory: std::path::PathBuf,
     ) -> Self {
-        let shared = Self::shared(
-            db.clone(),
-            host.clone(),
-            events.clone(),
-            prefs.clone(),
-            directory.clone(),
-        );
-        Self::with_shared(db, host, events, prefs, directory, shared)
-    }
-
-    pub(crate) fn shared(
-        db: Arc<plain_rs::db::Db>,
-        host: Arc<crate::host::bridge::Host>,
-        events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
-        prefs: Arc<plain_rs::prefs::Prefs>,
-        directory: std::path::PathBuf,
-    ) -> crate::assembly::shared_services::SharedServices {
-        let uploads = Arc::new(plain_rs::files::uploads::Runtime::with_completion({
-            let host = host.clone();
-            move |path| {
-                let host = host.clone();
-                Box::pin(async move {
-                    if let Err(error) = host
-                        .call(
-                            "scanFilesFacts",
-                            serde_json::json!({"paths": [path.to_string_lossy()]}),
-                        )
-                        .await
-                    {
-                        log::warn!("Merged upload media scan failed: {error}");
-                    }
-                })
-            }
-        }));
-        crate::assembly::shared_services::SharedServices::new(db, prefs, events, directory, uploads)
-    }
-
-    pub(crate) fn with_shared(
-        db: Arc<plain_rs::db::Db>,
-        host: Arc<crate::host::bridge::Host>,
-        events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
-        prefs: Arc<plain_rs::prefs::Prefs>,
-        directory: std::path::PathBuf,
-        shared: crate::assembly::shared_services::SharedServices,
-    ) -> Self {
         let store = Arc::new(plain_rs::kv::LazyDb::new(plain_rs::kv::default_db_path(
             &directory,
         )));
@@ -84,9 +45,23 @@ impl Services {
         let index = Arc::new(crate::services::images::index::ImageIndex::new(
             db.clone(),
             host.clone(),
+            events.clone(),
+        ));
+        #[cfg(feature = "media")]
+        let media_scans = Arc::new(crate::services::files::media_scans::MediaScans::new(
+            events.clone(),
+            directory.join("cache"),
+        ));
+        let file_platform = Arc::new(crate::services::files::platform::FilePlatform::new(
+            host.clone(),
+            db.clone(),
+            directory.clone(),
+            #[cfg(feature = "media")]
+            media_scans.clone(),
         ));
         let files = Arc::new(crate::services::files::file_tasks::FileTasks::new(
-            host.clone(),
+            store.clone(),
+            file_platform.clone(),
             events.clone(),
             audio.clone(),
             index.clone(),
@@ -95,7 +70,35 @@ impl Services {
         ));
         let app_files = plain_rs::files::app_files::FileStore::new(db.clone(), directory.clone());
         let shares = plain_rs::files::shares::Service::new(db.clone(), prefs.clone());
+        let sms = crate::services::sms::mutations::Mutations::new(
+            db.clone(),
+            host.clone(),
+            prefs.clone(),
+        );
+        let logs = Arc::new(crate::services::logs::Logs::new(host.clone()));
+        let feed_assets = Arc::new(crate::services::feeds::FeedAssets {
+            db: db.clone(),
+            directory: directory.clone(),
+        });
+        let feeds = crate::services::feeds::SyncService::new(
+            db.clone(),
+            events.clone(),
+            Some(feed_assets.clone()),
+        );
+        let pomodoro =
+            crate::services::pomodoro::Service::new(db.clone(), prefs.clone(), events.clone());
+        let image_updates = plain_rs::media::images::editor::Updates::new(events.clone());
+        let uploads = Arc::new(plain_rs::files::uploads::Runtime::with_completion({
+            let platform = file_platform.clone();
+            move |path| {
+                let platform = platform.clone();
+                Box::pin(async move { platform.scan(&[path.to_string_lossy().into_owned()]).await })
+            }
+        }));
         let media_actions = Arc::new(crate::services::files::media_actions::MediaActions::new(
+            #[cfg(feature = "media")]
+            media_scans.clone(),
+            file_platform.clone(),
             db,
             host,
             audio.clone(),
@@ -105,6 +108,12 @@ impl Services {
             duration_cache.clone(),
         ));
         Self {
+            logs,
+            device: Arc::new(crate::services::device::Status::new(directory.clone())),
+            file_platform,
+            #[cfg(feature = "media")]
+            media_scans,
+            sms,
             store,
             duration_cache,
             archives: Arc::new(crate::services::files::archives::Archives::new(
@@ -119,11 +128,11 @@ impl Services {
             files,
             audio,
             index,
-            pomodoro: shared.pomodoro,
-            feeds: shared.feeds,
-            feed_assets: shared.feed_assets,
-            image_updates: shared.image_updates,
-            uploads: shared.uploads,
+            pomodoro,
+            feeds,
+            feed_assets,
+            image_updates,
+            uploads,
             temp_values: Default::default(),
         }
     }
@@ -140,11 +149,14 @@ impl Services {
         events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
     ) -> async_graphql::SchemaBuilder<Q, M, S> {
         builder
+            .data(self.clone())
             .data(crate::graphql::resolvers::tags::loader::new(db.clone()))
             .data(db)
             .data(host)
             .data(prefs)
             .data(events)
+            .data(self.file_platform)
+            .data(self.sms)
             .data(self.store)
             .data(self.duration_cache)
             .data(self.app_files)

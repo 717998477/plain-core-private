@@ -29,7 +29,7 @@
 //!   * structured JSON output (we never needed it).
 //!   * per-target filters (one global level is enough).
 
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -216,92 +216,7 @@ pub fn clear_file(path: &Path) {
     }
 }
 
-/// Read log lines from `path` in **newest-first** order without loading
-/// the whole file: reads backwards in 64 KB blocks so only
-/// `offset + limit` lines are ever in memory (plain-app `AppLogHelper`
-/// semantics, byte-for-byte behavior parity: empty lines are skipped,
-/// trailing `\r` trimmed, a file without a trailing newline still yields
-/// its last line).
-/// Newest-first log lines, keeping only lines that contain `needle`
-/// (case-insensitive) when one is given; the backward block scan keeps
-/// going until enough matching lines are collected or the file start is
-/// reached, so filtering precedes offset/limit (plain-app
-/// `appLogs(filter: TextFilter)`).
-pub fn read_lines_newest_first(
-    path: &Path,
-    needle: Option<&str>,
-    offset: usize,
-    limit: usize,
-) -> Vec<String> {
-    let needle = needle.map(str::to_lowercase);
-    let matches = |line: &str| match &needle {
-        None => true,
-        Some(n) => line.to_lowercase().contains(n.as_str()),
-    };
-    if limit == 0 {
-        return Vec::new();
-    }
-    let Ok(meta) = std::fs::metadata(path) else {
-        return Vec::new();
-    };
-    let len = meta.len() as usize;
-    if len == 0 {
-        return Vec::new();
-    }
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return Vec::new();
-    };
-
-    const BLOCK: usize = 64 * 1024;
-    let needed = offset.saturating_add(limit);
-    let mut collected: Vec<String> = Vec::with_capacity(needed);
-    // Bytes of the not-yet-terminated earliest line carried over from the
-    // previous (higher-offset) block.
-    let mut tail: Vec<u8> = Vec::new();
-    let mut read_pos = len;
-
-    while read_pos > 0 && collected.len() < needed {
-        let block_len = BLOCK.min(read_pos);
-        read_pos -= block_len;
-        let mut combined = vec![0u8; block_len + tail.len()];
-        if file.seek(SeekFrom::Start(read_pos as u64)).is_err() {
-            return collected;
-        }
-        if file.read_exact(&mut combined[..block_len]).is_err() {
-            return collected;
-        }
-        combined[block_len..].copy_from_slice(&tail);
-
-        let mut end = combined.len();
-        for i in (0..combined.len()).rev() {
-            if combined[i] == b'\n' {
-                if i + 1 < end {
-                    let line = String::from_utf8_lossy(&combined[i + 1..end])
-                        .trim_end_matches('\r')
-                        .to_string();
-                    if !line.is_empty() && matches(&line) {
-                        collected.push(line);
-                        if collected.len() >= needed {
-                            return collected.into_iter().skip(offset).take(limit).collect();
-                        }
-                    }
-                }
-                end = i;
-            }
-        }
-        tail = combined[..end].to_vec();
-    }
-
-    if collected.len() < needed && !tail.is_empty() {
-        let line = String::from_utf8_lossy(&tail)
-            .trim_end_matches(['\r', '\n'])
-            .to_string();
-        if !line.is_empty() && matches(&line) {
-            collected.push(line);
-        }
-    }
-    collected.into_iter().skip(offset).take(limit).collect()
-}
+pub use crate::services::logs::read_lines_newest_first;
 
 // ---------------------------------------------------------------------------
 // The `log` facade bridge — every call site (NAS modules and plain-rs

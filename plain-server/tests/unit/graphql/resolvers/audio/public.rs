@@ -200,16 +200,18 @@ async fn playback_joins_the_queue_state_and_the_player_state() {
         "systemAudioPlaybackState" => json!({ "isPlaying": true, "positionMs": 4200 }),
         _other => panic!("unexpected host call {_other}"),
     });
+    seed_queue(&schema, &[("/music/one.mp3", "Track", "Artist")]);
     schema
         .data::<Arc<Prefs>>()
         .unwrap()
         .set_user("audio_play_mode", 2)
         .unwrap();
-    query(
+    let played = query(
         &schema,
         r#"mutation { playAudioByPath(path: "/music/one.mp3") { title path } }"#,
     )
     .await;
+    assert!(played.get("errors").is_none(), "{played}");
 
     let state = query(
         &schema,

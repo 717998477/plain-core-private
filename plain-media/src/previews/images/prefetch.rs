@@ -193,8 +193,13 @@ fn collect_jobs(db: &crate::storage::kv::Db, prefs: &plain_rs::prefs::Prefs) -> 
             }
         }
     }
-    for p in crate::storage::kv::recent::get_recent_files(prefs, RECENT_LIMIT) {
-        push_job(&mut jobs, &mut seen, &p, RECENT_THUMB_W, RECENT_THUMB_H);
+    match plain_rs::prefs::recent::get_recent_files(prefs, RECENT_LIMIT) {
+        Ok(paths) => {
+            for path in paths {
+                push_job(&mut jobs, &mut seen, &path, RECENT_THUMB_W, RECENT_THUMB_H);
+            }
+        }
+        Err(error) => log::warn!("Recent thumbnail selection failed: {error}"),
     }
     jobs.truncate(MAX_JOBS);
     jobs

@@ -50,8 +50,8 @@ async fn failed_replacement_preserves_active_package_index_and_search() {
     });
     let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
     let db = Arc::new(Db::open(&directory.path().join("data.db")).unwrap());
-    let index = Arc::new(ImageIndex::new(db.clone(), host.clone()));
     let (events, _) = tokio::sync::broadcast::channel(16);
+    let index = Arc::new(ImageIndex::new(db.clone(), host.clone(), events.clone()));
     let runtime = Runtime::new(directory.path().into(), host, prefs, index, events);
     runtime.import().await.unwrap();
     settled(&runtime).await;

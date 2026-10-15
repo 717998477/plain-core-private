@@ -1,43 +1,28 @@
-use crate::assembly::server::ServerState;
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::collections::HashMap;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Request {
-    data_type: String,
-    items: Vec<ItemFact>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ItemFact {
-    id: String,
-    name: String,
-    size: i64,
+pub(crate) struct ItemFact {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) size: i64,
     path: String,
     sort_name: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Bucket {
-    id: String,
-    name: String,
-    item_count: u64,
-    size: i64,
-    top_items: Vec<String>,
+pub(crate) struct Bucket {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) item_count: u64,
+    pub(crate) size: i64,
+    pub(crate) top_items: Vec<String>,
     sort_name: String,
 }
 
-fn aggregate(data_type: &str, items: Vec<ItemFact>) -> anyhow::Result<Vec<Bucket>> {
+pub(crate) fn aggregate(data_type: &str, items: Vec<ItemFact>) -> anyhow::Result<Vec<Bucket>> {
     anyhow::ensure!(
         matches!(data_type, "IMAGE" | "VIDEO" | "AUDIO" | "DOC"),
         "unsupported media bucket type"
@@ -72,30 +57,8 @@ fn aggregate(data_type: &str, items: Vec<ItemFact>) -> anyhow::Result<Vec<Bucket
             });
         }
     }
-    buckets.sort_by(|a, b| a.sort_name.cmp(&b.sort_name));
+    buckets.sort_by(|a, b| a.sort_name.cmp(&b.sort_name).then_with(|| a.id.cmp(&b.id)));
     Ok(buckets)
-}
-
-async fn execute(request: Request) -> anyhow::Result<Value> {
-    Ok(json!({"items": aggregate(&request.data_type, request.items)?}))
-}
-
-pub(crate) async fn call(
-    State(_state): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> Response {
-    if !_state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    match execute(request).await {
-        Ok(value) => Json(value).into_response(),
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": error.to_string()})),
-        )
-            .into_response(),
-    }
 }
 
 #[cfg(test)]

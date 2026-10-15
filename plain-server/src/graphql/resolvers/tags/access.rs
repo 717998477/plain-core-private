@@ -75,22 +75,18 @@ fn ids(items: Vec<ID>) -> Vec<String> {
 pub struct TagHostQuery;
 #[Object]
 impl TagHostQuery {
-    async fn tag_host_all(
-        &self,
-        ctx: &Context<'_>,
-        r#type: DataType,
-    ) -> Result<Vec<TagHostRecord>> {
+    async fn tag_records(&self, ctx: &Context<'_>, r#type: DataType) -> Result<Vec<TagHostRecord>> {
         domain::all(ctx.data::<Arc<Db>>()?, r#type.kind())?
             .into_iter()
             .map(tag)
             .collect()
     }
-    async fn tag_host_get(&self, ctx: &Context<'_>, id: ID) -> Result<Option<TagHostRecord>> {
+    async fn tag_record(&self, ctx: &Context<'_>, id: ID) -> Result<Option<TagHostRecord>> {
         domain::get(ctx.data::<Arc<Db>>()?, id.as_str())?
             .map(tag)
             .transpose()
     }
-    async fn tag_host_relations(
+    async fn tag_relation_records(
         &self,
         ctx: &Context<'_>,
         r#type: DataType,
@@ -101,11 +97,7 @@ impl TagHostQuery {
             .map(relation)
             .collect()
     }
-    async fn tag_host_intersection(
-        &self,
-        ctx: &Context<'_>,
-        tag_ids: Vec<ID>,
-    ) -> Result<Vec<String>> {
+    async fn tag_intersection(&self, ctx: &Context<'_>, tag_ids: Vec<ID>) -> Result<Vec<String>> {
         Ok(domain::intersection(ctx.data::<Arc<Db>>()?, &ids(tag_ids))?)
     }
 }
@@ -113,7 +105,7 @@ impl TagHostQuery {
 pub struct TagHostMutation;
 #[Object]
 impl TagHostMutation {
-    async fn tag_host_add(
+    async fn add_tag_relation_records(
         &self,
         ctx: &Context<'_>,
         items: Vec<TagHostRelationInput>,
@@ -124,7 +116,7 @@ impl TagHostMutation {
         )?;
         Ok(true)
     }
-    async fn tag_host_edit(
+    async fn edit_tag_relation_records(
         &self,
         ctx: &Context<'_>,
         r#type: DataType,
@@ -143,7 +135,7 @@ impl TagHostMutation {
         )?;
         Ok(true)
     }
-    async fn tag_host_remove(
+    async fn remove_tag_relation_records(
         &self,
         ctx: &Context<'_>,
         keys: Vec<String>,
@@ -152,7 +144,7 @@ impl TagHostMutation {
         domain::remove(ctx.data::<Arc<Db>>()?, &keys, &ids(tag_ids))?;
         Ok(true)
     }
-    async fn tag_host_remove_keys(
+    async fn remove_tag_relation_keys(
         &self,
         ctx: &Context<'_>,
         r#type: DataType,
@@ -161,11 +153,11 @@ impl TagHostMutation {
         domain::remove_keys(ctx.data::<Arc<Db>>()?, r#type.kind(), &keys)?;
         Ok(true)
     }
-    async fn tag_host_clear_type(&self, ctx: &Context<'_>, r#type: DataType) -> Result<bool> {
+    async fn clear_tag_relation_type(&self, ctx: &Context<'_>, r#type: DataType) -> Result<bool> {
         domain::clear_type(ctx.data::<Arc<Db>>()?, r#type.kind())?;
         Ok(true)
     }
-    async fn tag_host_clear_tag(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
+    async fn clear_tag_relation_tag(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
         domain::clear_tag(ctx.data::<Arc<Db>>()?, id.as_str())?;
         Ok(true)
     }

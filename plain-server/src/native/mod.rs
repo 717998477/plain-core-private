@@ -1,7 +1,7 @@
 #[cfg(feature = "core")]
 pub mod graphql;
 
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "core")]
 pub mod resources;
 
 #[cfg(feature = "core")]

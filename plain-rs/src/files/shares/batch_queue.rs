@@ -85,12 +85,14 @@ struct State {
     stopped: bool,
 }
 pub struct Queue {
+    runtime_id: String,
     state: Mutex<State>,
     pub changed: watch::Sender<u64>,
 }
 impl Default for Queue {
     fn default() -> Self {
         Self {
+            runtime_id: uuid::Uuid::new_v4().to_string(),
             state: Mutex::new(State::default()),
             changed: watch::channel(0).0,
         }
@@ -492,7 +494,7 @@ impl Queue {
     }
     pub fn snapshot(&self) -> Value {
         let s = self.state.lock().unwrap();
-        json!({"revision":s.revision,"tasks":s.tasks.values().map(|v|&v.run.snapshot).collect::<Vec<_>>()})
+        json!({"runtimeId":self.runtime_id,"revision":s.revision,"tasks":s.tasks.values().map(|v|&v.run.snapshot).collect::<Vec<_>>()})
     }
     pub fn stop(&self) {
         let mut s = self.state.lock().unwrap();

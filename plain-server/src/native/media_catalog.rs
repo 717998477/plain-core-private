@@ -2,37 +2,6 @@ use crate::assembly::server::ServerState;
 use plain_rs::db::{MediaFileMetadata, MediaFileRow};
 use plain_rs::enums::DataType;
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CountRequest {
-    data_type: DataType,
-    query: String,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct IdsRequest {
-    data_type: DataType,
-    query: String,
-    from_trash: bool,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RowsRequest {
-    data_type: DataType,
-    query: String,
-    sort_by: crate::graphql::resolvers::files::types::FileSortBy,
-    limit: u32,
-    offset: u32,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BucketRequest {
-    data_type: DataType,
-}
-
 #[cfg(feature = "media")]
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,26 +9,20 @@ struct CompletedFilesRequest {
     paths: Vec<String>,
 }
 
-#[cfg(feature = "media")]
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DeleteActionRequest {
-    #[serde(rename = "type")]
-    data_type: i32,
-    action: plain_rs::media::actions::Action,
-    ids: Vec<String>,
-    from_trash: bool,
-    dest_dir: String,
-}
-
 #[derive(Clone)]
 pub struct NativeMediaCatalog {
     state: ServerState,
+    #[cfg(test)]
+    read_gate: Option<std::sync::Arc<(tokio::sync::Notify, tokio::sync::Semaphore)>>,
 }
 
 impl NativeMediaCatalog {
     pub(crate) fn new(state: ServerState) -> Self {
-        Self { state }
+        Self {
+            state,
+            #[cfg(test)]
+            read_gate: None,
+        }
     }
 
     pub fn source_directories(&self) -> Result<Vec<String>, String> {
@@ -93,6 +56,15 @@ impl NativeMediaCatalog {
         data_type: DataType,
         reference: &str,
     ) -> Result<plain_rs::db::MediaFileMetadataRead, String> {
+        #[cfg(test)]
+        if let Some(gate) = &self.read_gate {
+            gate.0.notify_one();
+            gate.1
+                .acquire()
+                .await
+                .map_err(|error| error.to_string())?
+                .forget();
+        }
         let path =
             crate::services::files::file_access::resolve_native(&self.state, reference).await?;
         let metadata = tokio::task::spawn_blocking(move || {
@@ -143,59 +115,12 @@ impl NativeMediaCatalog {
         self.state.native_client_id()?;
         let request: CompletedFilesRequest =
             serde_json::from_value(params).map_err(|error| error.to_string())?;
-        let mut files = Vec::new();
-        if !request.paths.is_empty() {
-            crate::host::file_resource::authorize_read(
-                serde_json::json!({"operation":"read","paths":request.paths}),
-            )?;
-            let policy = self.state.media_scans.policy()?;
-            let directory = self
-                .state
-                .directory
-                .canonicalize()
-                .map_err(|error| error.to_string())?;
-            for path in request.paths {
-                let path = std::path::Path::new(&path)
-                    .canonicalize()
-                    .map_err(|error| error.to_string())?;
-                if !path.is_file() {
-                    return Err("Regular completed file required".into());
-                }
-                let name = path
-                    .to_str()
-                    .ok_or("Invalid completed file path encoding")?;
-                if plain_media::scan::is_media_excluded_at(
-                    name,
-                    &directory,
-                    &policy.cache_directory,
-                    &policy.excluded_roots,
-                ) {
-                    continue;
-                }
-                let kind = plain_media::scan::infer_type(name);
-                let Some(data_type) = [
-                    DataType::Audio,
-                    DataType::Video,
-                    DataType::Image,
-                    DataType::Doc,
-                ]
-                .into_iter()
-                .find(|data_type| data_type.media_type_str() == Some(kind)) else {
-                    continue;
-                };
-                let read = plain_media::metadata::file_facts::read_file_metadata_with_availability(
-                    &path, data_type,
-                )
-                .map_err(|error| error.to_string())?;
-                if data_type == DataType::Doc && read.metadata.size_bytes == 0 {
-                    continue;
-                }
-                files.push(read);
-            }
-        }
-        self.state
-            .media_scans
-            .record_completion(|| self.record_file_reads(&files))?;
+        crate::services::files::native_scan::completed(
+            &self.state.db,
+            &self.state.media_scans,
+            &self.state.directory,
+            request.paths,
+        )?;
         Ok(true)
     }
 
@@ -587,170 +512,6 @@ impl NativeMediaCatalog {
             offset,
         )
         .map_err(|error| error.to_string())
-    }
-
-    pub fn rows_facts(&self, params: serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
-        let request: RowsRequest =
-            serde_json::from_value(params).map_err(|error| error.to_string())?;
-        self.search(
-            request.data_type,
-            &request.query,
-            request.sort_by,
-            request.limit,
-            request.offset,
-        )?
-        .iter()
-        .map(crate::services::files::media_catalog_facts::row_facts)
-        .collect()
-    }
-
-    pub fn bucket_item_facts(
-        &self,
-        params: serde_json::Value,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        self.state.native_client_id()?;
-        let request: BucketRequest =
-            serde_json::from_value(params).map_err(|error| error.to_string())?;
-        crate::services::files::media_catalog::bucket_item_facts(&self.state.db, request.data_type)
-            .map_err(|error| error.to_string())
-    }
-
-    #[cfg(feature = "media")]
-    pub fn delete_action_files(
-        &self,
-        params: serde_json::Value,
-    ) -> Result<plain_rs::media::actions::Outcome, String> {
-        use plain_rs::media::actions::{Action, Item, Outcome};
-        use rusqlite::OptionalExtension;
-        self.state.native_client_id()?;
-        let request: DeleteActionRequest =
-            serde_json::from_value(params).map_err(|error| error.to_string())?;
-        if request.action != Action::Delete || !request.dest_dir.is_empty() {
-            return Err("Only media delete is implemented by this provider".into());
-        }
-        if ![
-            DataType::Audio,
-            DataType::Video,
-            DataType::Image,
-            DataType::Doc,
-        ]
-        .iter()
-        .any(|kind| kind.kind() == request.data_type)
-            || request.ids.len() > 500
-            || request.ids.iter().any(String::is_empty)
-            || request
-                .ids
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                != request.ids.len()
-        {
-            return Err("Invalid media delete selection".into());
-        }
-        let rows = self
-            .state
-            .db
-            .with_conn(|conn| {
-                let mut statement = conn.prepare(
-                    "SELECT path,trashed FROM media_items WHERE id=?1 AND data_type=?2",
-                )?;
-                request
-                    .ids
-                    .iter()
-                    .map(|id| {
-                        statement
-                            .query_row(rusqlite::params![id, request.data_type], |row| {
-                                Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
-                            })
-                            .optional()
-                    })
-                    .collect::<rusqlite::Result<Vec<_>>>()
-            })
-            .map_err(|error| error.to_string())?;
-        let mut outcome = Outcome {
-            successful: Vec::new(),
-            failed_ids: Vec::new(),
-        };
-        for (id, row) in request.ids.into_iter().zip(rows) {
-            let removed = (|| -> Result<String, String> {
-                self.state.native_client_id()?;
-                let (path, trashed) = row.ok_or("Media file not found")?;
-                if trashed != request.from_trash || !std::path::Path::new(&path).is_absolute() {
-                    return Err("Media delete path or trash state mismatch".into());
-                }
-                self.state.media_scans.record_completion(|| {
-                    let metadata =
-                        std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
-                    if !metadata.file_type().is_file() {
-                        return Err("Regular media file required".into());
-                    }
-                    std::fs::remove_file(&path).map_err(|error| error.to_string())?;
-                    let kind = [
-                        DataType::Audio,
-                        DataType::Video,
-                        DataType::Image,
-                        DataType::Doc,
-                    ]
-                    .into_iter()
-                    .find(|kind| kind.kind() == request.data_type)
-                    .ok_or("Invalid media delete type")?;
-                    let receipt = Item {
-                        id: id.clone(),
-                        path: path.clone(),
-                        destination_path: String::new(),
-                    };
-                    let cleanup = |db: &plain_rs::db::Db| {
-                        plain_rs::media::actions::cleanup(db, kind, Action::Delete, &[receipt])
-                    };
-                    let result = if kind == DataType::Image {
-                        self.state.image_index.update_cache(cleanup)
-                    } else {
-                        cleanup(&self.state.db)
-                    };
-                    result.map(|_| ()).map_err(|error| {
-                        format!("Media file removed but catalog cleanup failed: {error}")
-                    })
-                })?;
-                Ok(path)
-            })();
-            match removed {
-                Ok(path) => outcome.successful.push(Item {
-                    id,
-                    path,
-                    destination_path: String::new(),
-                }),
-                Err(error) => {
-                    log::warn!("Media delete failed for {id}: {error}");
-                    outcome.failed_ids.push(id);
-                }
-            }
-        }
-        if !outcome.successful.is_empty() {
-            let _ = self.state.events.send(plain_rs::events::WsEvent::broadcast(
-                "CONTENT_CHANGED",
-                "{}".into(),
-            ));
-        }
-        Ok(outcome)
-    }
-
-    pub fn ids_facts(&self, params: serde_json::Value) -> Result<Vec<String>, String> {
-        self.state.native_client_id()?;
-        let request: IdsRequest =
-            serde_json::from_value(params).map_err(|error| error.to_string())?;
-        crate::services::files::media_catalog::ids(
-            &self.state.db,
-            request.data_type,
-            &request.query,
-            request.from_trash,
-        )
-        .map_err(|error| error.to_string())
-    }
-
-    pub fn count_facts(&self, params: serde_json::Value) -> Result<i64, String> {
-        let request: CountRequest =
-            serde_json::from_value(params).map_err(|error| error.to_string())?;
-        self.count_matching(request.data_type, &request.query)
     }
 
     pub fn count_matching(&self, data_type: DataType, query: &str) -> Result<i64, String> {

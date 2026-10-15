@@ -1,11 +1,7 @@
-use crate::graphql::schemas::host as schema;
-use crate::graphql::schemas::host::ContentSchema;
-use async_graphql::Request;
 use axum::{
-    Json, Router,
-    extract::{DefaultBodyLimit, State, WebSocketUpgrade},
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    Router,
+    extract::DefaultBodyLimit,
+    http::HeaderMap,
     routing::{get, post},
 };
 use plain_rs::db::Db;
@@ -22,30 +18,26 @@ use tokio::{
 };
 #[derive(Clone)]
 pub(crate) struct ServerState {
+    pub(crate) logs: Arc<crate::services::logs::Logs>,
+    pub(crate) file_platform: Arc<crate::services::files::platform::FilePlatform>,
+    pub(crate) duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     pub(crate) store: Arc<plain_rs::kv::LazyDb>,
     #[cfg(feature = "http_transport")]
     pub(crate) public_server: Arc<tokio::sync::Mutex<Option<PublicServer>>>,
     #[cfg(feature = "http_transport")]
     pub(crate) http_failure:
         Arc<std::sync::Mutex<Option<crate::assembly::lifecycle::HttpServerFailure>>>,
-    #[cfg(feature = "http_transport")]
     pub(crate) build_debug: Arc<std::sync::atomic::AtomicBool>,
-    #[cfg(feature = "http_transport")]
     pub(crate) web_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
-    #[cfg(feature = "http_transport")]
     pub(crate) web_bundle:
         Arc<std::sync::RwLock<Option<crate::http::routes::web_bundle::SharedWebBundle>>>,
-    #[cfg(feature = "http_transport")]
-    pub(crate) tls_identity: Arc<std::sync::RwLock<crate::http::tls_identity::IdentitySource>>,
-    pub(crate) schema: ContentSchema,
-    /// The contract schema the public `/graphql` executes. Built once next
-    /// to the app's own schema so both share one host and one database.
+    pub(crate) tls_identity: Arc<std::sync::RwLock<crate::services::tls_identity::IdentitySource>>,
     pub(crate) public: crate::graphql::schemas::public::PublicSchema,
     pub(crate) peer_status: Arc<crate::services::peers::peer_status::Runtime>,
     pub(crate) mdns: Arc<crate::services::discovery::mdns_runtime::Runtime>,
     pub(crate) guest_replay: Arc<crate::http::auth::replay::Replay>,
     pub(crate) main_replay: Arc<crate::http::auth::replay::Replay>,
-    pub(crate) peer_schema: crate::graphql::schemas::peer_host::PeerSchema,
+    pub(crate) peer_schema: crate::graphql::schemas::peer::PeerSchema,
     pub(crate) archives: Arc<crate::services::files::archives::Archives>,
     pub(crate) upload_chunks: Arc<crate::services::files::upload_chunks::UploadChunks>,
     pub(crate) files: Arc<crate::services::files::file_tasks::FileTasks>,
@@ -80,7 +72,6 @@ pub(crate) struct ServerState {
     pub(crate) dlna: Arc<crate::services::casting::receiver::receiver_engine::DlnaEngine>,
     pub(crate) image_models: Arc<crate::services::images::models::Runtime>,
     pub(crate) image_index: Arc<crate::services::images::index::ImageIndex>,
-    #[cfg(feature = "mobile")]
     pub(crate) mobile: Arc<crate::mobile::Runtime>,
     pub(crate) cast: Arc<crate::services::casting::dlna_sender_runtime::Runtime>,
     pub(crate) audio: Arc<crate::services::audio::host::Audio>,
@@ -134,8 +125,6 @@ pub struct ContentServer {
     pub port: u16,
     state: ServerState,
     task: Option<JoinHandle<()>>,
-    #[cfg(feature = "http_transport")]
-    local_router: Option<Router>,
     stop: watch::Sender<bool>,
 }
 impl ContentServer {
@@ -191,7 +180,7 @@ impl ContentServer {
     pub fn native_file_tasks(&self) -> Result<crate::native::file_tasks::NativeFileTasks, String> {
         Ok(crate::native::file_tasks::NativeFileTasks::new(
             self.state.files.clone(),
-            self.state.host.clone(),
+            self.state.file_platform.clone(),
             self.state.native_client_id()?,
             self.state.stop.clone(),
         ))
@@ -209,7 +198,7 @@ impl ContentServer {
         self.state.native_client_id()?;
         Ok(crate::native::archives::NativeArchives::new(
             self.state.archives.clone(),
-            self.state.host.clone(),
+            self.state.file_platform.clone(),
             self.state.stop.clone(),
         ))
     }
@@ -273,6 +262,10 @@ impl ContentServer {
         Ok(crate::native::media_catalog::NativeMediaCatalog::new(
             self.state.clone(),
         ))
+    }
+
+    pub fn set_log_file(&self, path: &Path) -> Result<(), String> {
+        self.state.logs.set_path(path.to_owned())
     }
 
     pub fn data_directory(&self) -> &Path {
@@ -350,37 +343,17 @@ impl ContentServer {
             plain_rs::prefs::system::log_level(&prefs).map_err(|error| error.to_string())?,
         );
         plain_rs::prefs::identity::ensure_identity(&prefs);
-        // The mDNS runtime reads the hostname rather than deriving one, so a
-        // core that never seeds it cannot answer a pairing or advertisement
-        // request. The legacy `AppCtx::assemble` already did this; the core
-        // needs the same identity floor.
         plain_rs::prefs::ensure_mdns_hostname(&prefs);
         let (stop, receiver) = watch::channel(false);
         let lan =
             Arc::new(crate::services::peers::peer_lan::Lan::new().map_err(|e| e.to_string())?);
-        let shared = crate::assembly::services::Services::shared(
+        let services = crate::assembly::services::Services::new(
             db.clone(),
             host.clone(),
             events.clone(),
             prefs.clone(),
             directory.clone(),
         );
-        let services = crate::assembly::services::Services::with_shared(
-            db.clone(),
-            host.clone(),
-            events.clone(),
-            prefs.clone(),
-            directory.clone(),
-            shared,
-        );
-        let schema = schema::build_with_services(
-            db.clone(),
-            events.clone(),
-            prefs.clone(),
-            host.clone(),
-            services.clone(),
-        );
-        #[cfg(feature = "mobile")]
         let mobile = crate::mobile::Runtime::new(
             host.clone(),
             prefs.clone(),
@@ -403,7 +376,6 @@ impl ContentServer {
             db.clone(),
             services.clone(),
             image_models.clone(),
-            #[cfg(feature = "mobile")]
             mobile.clone(),
         );
         let bridge = Arc::new(crate::host::resources::NativeResources::new(host.clone()));
@@ -428,11 +400,12 @@ impl ContentServer {
         ));
         let dlna = Arc::new(crate::services::casting::receiver::receiver_engine::DlnaEngine::new());
         let state = ServerState {
+            logs: services.logs.clone(),
+            file_platform: services.file_platform.clone(),
+            duration_cache: services.duration_cache.clone(),
             store,
             #[cfg(feature = "media")]
-            media_scans: Arc::new(crate::services::files::media_scans::MediaScans::new(
-                events.clone(),
-            )),
+            media_scans: services.media_scans.clone(),
             #[cfg(feature = "media")]
             media_watch: std::sync::Arc::new(std::sync::Mutex::new(None)),
             #[cfg(feature = "http_transport")]
@@ -441,11 +414,10 @@ impl ContentServer {
             http_failure: Arc::new(std::sync::Mutex::new(None)),
             public,
             lan,
-            schema,
             thumbnails: Arc::new(crate::services::images::thumbnails::Thumbnails::default()),
             peer_status: Arc::new(crate::services::peers::peer_status::Runtime::default()),
             mdns: Arc::new(crate::services::discovery::mdns_runtime::Runtime::default()),
-            peer_schema: crate::graphql::schemas::peer_host::schema(),
+            peer_schema: crate::graphql::schemas::peer::schema(),
             guest_replay: Arc::new(crate::http::auth::replay::Replay::default()),
             main_replay: Arc::new(crate::http::auth::replay::Replay::default()),
             transport: Arc::new(plain_rs::transport::router::Router::default()),
@@ -475,7 +447,6 @@ impl ContentServer {
             db,
             prefs,
             image_models: image_models.clone(),
-            #[cfg(feature = "mobile")]
             mobile,
             cast: Arc::new(crate::services::casting::dlna_sender_runtime::Runtime::default()),
             main_ws: Arc::new(crate::http::websocket::host::Runtime::default()),
@@ -483,15 +454,11 @@ impl ContentServer {
                 crate::http::auth::ws_login::LoginAttempts::default(),
             )),
             directory: directory.clone(),
-            #[cfg(feature = "http_transport")]
             build_debug: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "http_transport")]
             web_root: Arc::new(std::sync::RwLock::new(None)),
-            #[cfg(feature = "http_transport")]
             web_bundle: Arc::new(std::sync::RwLock::new(None)),
-            #[cfg(feature = "http_transport")]
             tls_identity: Arc::new(std::sync::RwLock::new(
-                crate::http::tls_identity::IdentitySource::Json(
+                crate::services::tls_identity::IdentitySource::Json(
                     directory.join("tls-identity.json"),
                 ),
             )),
@@ -502,8 +469,6 @@ impl ContentServer {
             stop: receiver.clone(),
             bridge: bridge.clone(),
         };
-        #[cfg(feature = "http_transport")]
-        #[cfg(feature = "mobile")]
         state
             .mobile
             .mms
@@ -518,7 +483,6 @@ impl ContentServer {
         crate::services::discovery::nearby_devices::start(state.clone());
         crate::services::discovery::ble_scan::start(state.clone());
         image_models.follow(receiver.clone());
-        #[cfg(feature = "mobile")]
         state.mobile.mms.follow(receiver.clone());
         crate::services::casting::receiver::control::follow_changes(&state);
         let mdns = state.mdns.clone();
@@ -547,103 +511,7 @@ impl ContentServer {
         String,
     > {
         let (state, stop, receiver) = Self::build_state(path, token, prefs)?;
-        let router = Router::new()
-            .route("/graphql", post(graphql))
-            .route("/health", get(health))
-            .route("/fs", get(crate::http::routes::files::file))
-            .route(
-                "/chat/mdns",
-                post(crate::services::discovery::mdns_runtime::call),
-            )
-            .route(
-                "/chat/pairing",
-                post(crate::services::discovery::pairing_runtime::call),
-            )
-            .route(
-                "/shares/client",
-                post(crate::services::peers::shared_client::call),
-            )
-            .route(
-                "/shares/client/file",
-                post(crate::services::peers::shared_download::file),
-            )
-            .route(
-                "/shares/client/zip",
-                post(crate::services::peers::shared_zip::call),
-            )
-            .route(
-                "/shares/batch",
-                post(crate::services::peers::shared_batch::call),
-            )
-            .route(
-                "/chat/transport",
-                post(crate::services::peers::peer_transport::call),
-            )
-            .route("/chat/prewarm", post(crate::services::chat::prewarm::call))
-            .route(
-                "/chat/download",
-                post(crate::services::chat::download_queue::call),
-            )
-            .route(
-                "/files/thumbnail/output/:token",
-                post(crate::services::images::thumbnails::output),
-            )
-            .route(
-                "/chat/ble-incoming",
-                get(crate::services::discovery::ble_http::incoming),
-            )
-            .route(
-                "/chat/store",
-                post(crate::services::chat::chat_store_routes::call),
-            )
-            .route(
-                "/files/write",
-                post(crate::http::routes::file_writes::write),
-            )
-            .route("/files/read", post(crate::http::routes::file_reads::read))
-            .route(
-                "/files/mutate",
-                post(crate::http::routes::file_mutations::mutate),
-            )
-            .route(
-                "/system/ws-runtime",
-                post(crate::http::websocket::host::call),
-            )
-            .route(
-                "/system/dlna-sender",
-                post(crate::services::casting::dlna_sender_runtime::call),
-            )
-            .route("/system/sessions", post(crate::http::sessions::host::call))
-            .route("/system/providers", post(crate::http::routes::system::call))
-            .route(
-                "/system/media-buckets",
-                post(crate::services::files::media_buckets::call),
-            )
-            .route(
-                "/system/provider-plan",
-                post(crate::http::routes::provider_query::call),
-            )
-            .route(
-                "/system/image-models",
-                post(crate::services::images::models::call),
-            )
-            .route(
-                "/system/image-search",
-                post(crate::services::images::search::call),
-            );
-        #[cfg(feature = "http_transport")]
-        let router = router
-            .route("/system/tls", post(crate::http::tls_identity_host::call))
-            .route("/resources/:id", get(resource_upgrade))
-            .route(
-                "/system/notification-event",
-                post(crate::graphql::resolvers::notifications::public::publish),
-            );
-        let router = router
-            .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
-            .with_state(state.clone());
-        #[cfg(feature = "mobile")]
-        let router = router.merge(crate::mobile::http::routes(state.clone()));
+        let router = crate::http::routes::public::build_router(state.clone(), receiver.clone());
         Ok((state, router, stop, receiver))
     }
     pub fn open(directory: &Path) -> Result<Self, String> {
@@ -681,8 +549,6 @@ impl ContentServer {
             state,
             task: None,
             stop,
-            #[cfg(feature = "http_transport")]
-            local_router: None,
         })
     }
 
@@ -697,19 +563,20 @@ impl ContentServer {
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let listener = tokio::net::TcpListener::from_std(listener).map_err(|e| e.to_string())?;
         let task = tokio::spawn(async move {
-            let _ = axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
-                    let _ = receiver.changed().await;
-                })
-                .await;
+            let _ = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                let _ = receiver.changed().await;
+            })
+            .await;
         });
         Ok(Self {
             port,
             state,
             task: Some(task),
             stop,
-            #[cfg(feature = "http_transport")]
-            local_router: None,
         })
     }
     #[cfg(feature = "http_transport")]
@@ -724,13 +591,12 @@ impl ContentServer {
         debug: bool,
         web_root: &str,
     ) -> Result<Self, String> {
-        let (state, router, stop, _) = Self::build(path, token, prefs)?;
+        let (state, stop, _) = Self::build_state(path, token, prefs)?;
         let mut server = Self {
             port: 0,
             state,
             task: None,
             stop,
-            local_router: Some(router),
         };
         server.set_build_debug(debug);
         server.set_web_root(web_root);
@@ -769,11 +635,6 @@ impl ContentServer {
         let (stop, receiver) = watch::channel(false);
         let router =
             crate::http::routes::public::build_router(self.state.clone(), receiver.clone());
-        let router = if let Some(local) = &self.local_router {
-            unified_router(self.state.clone(), local.clone(), router)
-        } else {
-            router
-        };
         let listeners =
             crate::http::listeners::HttpListeners::start(router, http, https, cert, key).await?;
         let ports = (listeners.http_port, listeners.https_port);
@@ -900,7 +761,6 @@ impl ContentServer {
             .as_ref()
             .map(|server| server.generation)
     }
-    #[cfg(feature = "http_transport")]
     pub fn set_build_debug(&self, debug: bool) {
         self.state
             .build_debug
@@ -909,7 +769,6 @@ impl ContentServer {
     /// The bundle root the host unpacked this run. Empty means the SPA is not
     /// served, which is the desktop case where the bundle is loaded by the
     /// webview itself.
-    #[cfg(feature = "http_transport")]
     pub fn set_web_root(&self, root: &str) {
         if let Ok(mut guard) = self.state.web_root.write() {
             *guard = (!root.is_empty()).then(|| PathBuf::from(root));
@@ -917,7 +776,6 @@ impl ContentServer {
     }
     /// The bundle compiled into this executable, used only when no web root
     /// is set.
-    #[cfg(feature = "http_transport")]
     pub fn set_web_bundle(&self, bundle: crate::http::routes::web_bundle::SharedWebBundle) {
         if let Ok(mut guard) = self.state.web_bundle.write() {
             *guard = Some(bundle);
@@ -930,10 +788,11 @@ impl ContentServer {
         }
         #[cfg(feature = "http_transport")]
         self.stop_public_locked().await;
-        #[cfg(feature = "http_transport")]
-        self.state.shared_batches.shutdown(&self.state.host).await;
+        self.state
+            .shared_batches
+            .shutdown(&self.state.directory)
+            .await;
         self.state.download_runtime.shutdown().await;
-        #[cfg(feature = "mobile")]
         self.state.mobile.mms.shutdown().await;
         self.state.image_models.shutdown().await;
         if self.state.host.connected() && self.state.host.needs_socket_cleanup() {
@@ -982,29 +841,6 @@ impl Drop for ContentServer {
         }
     }
 }
-async fn health(State(s): State<ServerState>, headers: HeaderMap) -> impl IntoResponse {
-    if s.authenticated(&headers) {
-        StatusCode::OK
-    } else {
-        StatusCode::UNAUTHORIZED
-    }
-}
-async fn graphql(
-    State(s): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> axum::response::Response {
-    if !s.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let response = crate::graphql::executor::execute_graphql(
-        &s.schema,
-        request,
-        crate::graphql::executor::RequestContext::local(s.clone()),
-    )
-    .await;
-    Json(response).into_response()
-}
 #[cfg(test)]
 #[path = "../../tests/unit/assembly/server.rs"]
 mod tests;
@@ -1015,45 +851,18 @@ pub(crate) struct PublicServer {
     pub(crate) stop: watch::Sender<bool>,
     pub(crate) generation: u64,
 }
-#[cfg(feature = "http_transport")]
-async fn resource_upgrade(
-    State(state): State<ServerState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    headers: HeaderMap,
-    socket: WebSocketUpgrade,
-) -> axum::response::Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    socket
-        .on_upgrade(move |socket| async move { state.bridge.attach(&id, socket).await })
-        .into_response()
+pub(crate) fn adapter_router(state: ServerState) -> Router {
+    let router = Router::new()
+        .route(
+            "/shares/client/file",
+            post(crate::services::peers::shared_download::file),
+        )
+        .route(
+            "/chat/ble-incoming",
+            get(crate::services::discovery::ble_http::incoming),
+        );
+    let router = router
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
+        .with_state(state.clone());
+    router
 }
-
-#[cfg(feature = "http_transport")]
-fn unified_router(state: ServerState, local: Router, remote: Router) -> Router {
-    Router::new().fallback(move |request: axum::extract::Request| {
-        use tower::ServiceExt;
-        let local = local.clone();
-        let remote = remote.clone();
-        let state = state.clone();
-        async move {
-            if state.authenticated(request.headers()) {
-                let loopback = request
-                    .extensions()
-                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                    .is_some_and(|peer| peer.0.ip().is_loopback());
-                if !loopback {
-                    return StatusCode::FORBIDDEN.into_response();
-                }
-                local.oneshot(request).await.unwrap()
-            } else {
-                remote.oneshot(request).await.unwrap()
-            }
-        }
-    })
-}
-
-#[cfg(all(test, feature = "http_transport"))]
-#[path = "../../tests/unit/assembly/server.rs"]
-mod unified_http_tests;

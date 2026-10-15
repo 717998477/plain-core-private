@@ -158,7 +158,7 @@ async fn media_buckets_are_served_by_the_core_catalog() {
 }
 
 #[tokio::test]
-async fn completion_callback_dispatch_never_waits_for_another_host_request() {
+async fn completion_scan_runs_directly_without_another_host_request() {
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")));
@@ -178,12 +178,14 @@ async fn completion_callback_dispatch_never_waits_for_another_host_request() {
         let path = path.clone();
         calls.spawn(async move {
             runtime
-                .dispatch("scanFilesFacts", serde_json::json!({"paths":[path]}))
-                .await
+                .core
+                .native_media_catalog()
+                .unwrap()
+                .scan_completed_files(serde_json::json!({"paths":[path]}))
         });
     }
     while let Some(result) = calls.join_next().await {
-        assert_eq!(result.unwrap().unwrap(), serde_json::json!(true));
+        assert!(result.unwrap().unwrap());
     }
     assert_eq!(
         core.native_media_catalog()
@@ -194,9 +196,9 @@ async fn completion_callback_dispatch_never_waits_for_another_host_request() {
     );
     let missing = directory.0.as_path().join("missing.txt");
     assert!(
-        runtime
-            .dispatch("scanFilesFacts", serde_json::json!({"paths":[missing]}))
-            .await
+        core.native_media_catalog()
+            .unwrap()
+            .scan_completed_files(serde_json::json!({"paths":[missing]}))
             .is_err()
     );
     core.stop_core().await;
@@ -209,6 +211,7 @@ async fn device_and_log_queries_use_the_headless_server_provider_without_a_legac
     std::fs::create_dir_all(&logs).unwrap();
     std::fs::write(logs.join("latest.log"), "first\nsecond\n").unwrap();
     let core = Arc::new(ContentServer::open(&directory.0).unwrap());
+    core.set_log_file(&logs.join("latest.log")).unwrap();
     let runtime = Arc::new(Runtime::new(core.clone(), Vec::new()));
     let runner = tokio::spawn(runtime.run());
     let response = core.native_graphql().unwrap().execute("{ deviceInfo { platform cpuArch appVersion } deviceStatus { uptimeSec cpuUsage } appLogs(query:\"\",offset:0,limit:2) }".into()).await;
@@ -262,14 +265,7 @@ async fn thumbnails_and_regular_file_probes_use_the_shared_media_engine() {
         .unwrap();
     assert_eq!(image::load_from_memory(&bytes).unwrap().width(), 4);
     assert_eq!(image::load_from_memory(&bytes).unwrap().height(), 4);
-    let value = runtime
-        .dispatch(
-            "systemFileResource",
-            serde_json::json!({"operation":"animated","path":image_path,"params":{}}),
-        )
-        .await
-        .unwrap();
-    assert_eq!(value, Value::Bool(false));
+    assert!(!plain_rs::files::filesystem::image_format::is_animated_image_or_svg(&image_path));
     core.stop_core().await;
     runner.await.unwrap().unwrap();
 }

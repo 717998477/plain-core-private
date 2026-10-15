@@ -61,106 +61,66 @@ fn zip_roundtrip_validates_names_sources_and_cancellation_and_cleans_temporary()
         0
     );
 }
-#[tokio::test]
-async fn authenticated_zip_http_streams_root_archive_without_native_host() {
+#[test]
+fn archive_preserves_large_files_and_nested_names_without_native_or_http_adapter() {
     let directory = tempfile::tempdir().unwrap();
-    let prefs =
-        Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("system.json")).unwrap());
-    let token = plain_rs::utils::base64::base64_encode(&[4; 32]);
-    let server = crate::assembly::server::ContentServer::start(
-        &directory.path().join("plain.db"),
-        &token,
-        prefs,
+    let source = directory.path().join("source");
+    let expected = vec![7; 256 * 1024];
+    std::fs::write(&source, &expected).unwrap();
+    let (file, temporary) = pack(
+        directory.path().join("zip"),
+        vec![Item {
+            source_path: source,
+            entry_name: "root/子目录/a.txt".into(),
+        }],
+        Arc::new(AtomicBool::new(false)),
     )
     .unwrap();
-    let source = directory.path().join("source");
-    std::fs::write(&source, vec![7; 256 * 1024]).unwrap();
-    let request = json!({"items":[{"sourcePath":source,"entryName":"root/子目录/a.txt"}]});
-    let url = format!("http://127.0.0.1:{}/shares/client/zip", server.port);
-    let client = reqwest::Client::new();
-    assert_eq!(
-        client
-            .post(&url)
-            .header("content-type", "application/json")
-            .body(request.to_string())
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    let response = client
-        .post(&url)
-        .bearer_auth(&token)
-        .header("content-type", "application/json")
-        .body(request.to_string())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["content-type"], "application/zip");
-    let bytes = response.bytes().await.unwrap();
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let path = temporary.0.clone();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
     let mut content = Vec::new();
     archive
         .by_name("root/子目录/a.txt")
         .unwrap()
         .read_to_end(&mut content)
         .unwrap();
-    assert_eq!(content, vec![7; 256 * 1024]);
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    assert_eq!(
-        std::fs::read_dir(directory.path().join("shared-zip"))
-            .unwrap()
-            .count(),
-        0
-    );
-    server.shutdown().await;
+    assert_eq!(content, expected);
+    drop(archive);
+    drop(temporary);
+    assert!(!path.exists());
 }
-
-#[tokio::test]
-async fn dropping_archive_body_releases_capacity_and_deletes_root_spool() {
+#[test]
+fn dropping_zip_owners_cancels_work_and_releases_its_spool() {
     let directory = tempfile::tempdir().unwrap();
-    let prefs =
-        Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("system.json")).unwrap());
-    let token = plain_rs::utils::base64::base64_encode(&[4; 32]);
-    let server = crate::assembly::server::ContentServer::start(
-        &directory.path().join("plain.db"),
-        &token,
-        prefs,
-    )
-    .unwrap();
-    let state = server.runtime_state();
     let source = directory.path().join("source");
     std::fs::write(&source, vec![8; 128 * 1024]).unwrap();
-    let mut headers = HeaderMap::new();
-    headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
-    let response = call(
-        State(state.clone()),
-        headers,
-        Json(Request {
-            items: vec![Item {
-                source_path: source,
-                entry_name: "a.txt".into(),
-            }],
-        }),
+    let canceled = Arc::new(AtomicBool::new(false));
+    let cancel = Cancel(canceled.clone());
+    let (file, temporary) = pack(
+        directory.path().join("zip"),
+        vec![Item {
+            source_path: source.clone(),
+            entry_name: "a.txt".into(),
+        }],
+        canceled.clone(),
     )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(state.lan.capacity.available_permits(), 3);
-    assert_eq!(
-        std::fs::read_dir(directory.path().join("shared-zip"))
-            .unwrap()
-            .count(),
-        1
+    .unwrap();
+    let path = temporary.0.clone();
+    assert!(path.exists());
+    drop(file);
+    drop(temporary);
+    drop(cancel);
+    assert!(canceled.load(Ordering::SeqCst));
+    assert!(!path.exists());
+    assert!(
+        pack(
+            directory.path().join("zip"),
+            vec![Item {
+                source_path: source,
+                entry_name: "a.txt".into()
+            }],
+            canceled
+        )
+        .is_err()
     );
-    drop(response);
-    assert_eq!(state.lan.capacity.available_permits(), 4);
-    assert_eq!(
-        std::fs::read_dir(directory.path().join("shared-zip"))
-            .unwrap()
-            .count(),
-        0
-    );
-    server.shutdown().await;
 }

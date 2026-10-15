@@ -1,5 +1,5 @@
-use crate::host::bridge::Host;
 use crate::services::files::file_tasks::FileTasks;
+use crate::services::files::platform::FilePlatform;
 use plain_rs::files::filesystem::record::FileRecord;
 use plain_rs::files::filesystem::writes::Operation;
 use plain_rs::files::tasks::{FileTask, FileTaskOp, FileTaskType};
@@ -9,7 +9,7 @@ use tokio::sync::watch;
 #[derive(Clone)]
 pub struct NativeFileTasks {
     tasks: Arc<FileTasks>,
-    host: Arc<Host>,
+    platform: Arc<FilePlatform>,
     client_id: String,
     stop: watch::Receiver<bool>,
 }
@@ -17,13 +17,13 @@ pub struct NativeFileTasks {
 impl NativeFileTasks {
     pub(crate) fn new(
         tasks: Arc<FileTasks>,
-        host: Arc<Host>,
+        platform: Arc<FilePlatform>,
         client_id: String,
         stop: watch::Receiver<bool>,
     ) -> Self {
         Self {
             tasks,
-            host,
+            platform,
             client_id,
             stop,
         }
@@ -38,13 +38,14 @@ impl NativeFileTasks {
 
     pub async fn create_directory(&self, path: String) -> Result<FileRecord, String> {
         self.ensure_running()?;
-        crate::services::files::writes::execute(&self.host, Operation::CreateDirectory { path })
+        crate::services::files::writes::execute(&self.platform, Operation::CreateDirectory { path })
             .await
     }
 
     pub async fn create_file(&self, path: String) -> Result<FileRecord, String> {
         self.ensure_running()?;
-        crate::services::files::writes::execute(&self.host, Operation::CreateFile { path }).await
+        crate::services::files::writes::execute(&self.platform, Operation::CreateFile { path })
+            .await
     }
 
     pub async fn write_text(
@@ -55,7 +56,7 @@ impl NativeFileTasks {
     ) -> Result<FileRecord, String> {
         self.ensure_running()?;
         crate::services::files::writes::execute(
-            &self.host,
+            &self.platform,
             Operation::WriteText {
                 path,
                 content,

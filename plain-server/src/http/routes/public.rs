@@ -6,7 +6,6 @@ use axum::{
 };
 use tokio::sync::watch;
 
-#[cfg(feature = "http_transport")]
 pub(crate) fn build_router(state: ServerState, receiver: watch::Receiver<bool>) -> Router {
     let peer_router = peer_router(state.clone());
     let status_router = Router::new()
@@ -51,6 +50,7 @@ pub(crate) fn build_router(state: ServerState, receiver: watch::Receiver<bool>) 
         .fallback(crate::http::routes::static_host::fallback)
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024 * 1024))
         .with_state(state.clone())
+        .merge(crate::assembly::server::adapter_router(state.clone()))
         .merge(peer_router)
         .merge(status_router)
         .merge(nearby_router)
@@ -60,16 +60,17 @@ pub(crate) fn build_router(state: ServerState, receiver: watch::Receiver<bool>) 
         ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            crate::http::auth::local_client::authorize,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             crate::http::routes::cors_host::apply,
         ))
 }
 
 pub(crate) fn peer_router(state: ServerState) -> Router {
     Router::new()
-        .route(
-            "/peer_graphql",
-            post(crate::graphql::schemas::peer_host::public),
-        )
+        .route("/peer_graphql", post(crate::graphql::schemas::peer::public))
         .route(
             "/guest_graphql",
             post(crate::http::auth::guest_graphql::public),

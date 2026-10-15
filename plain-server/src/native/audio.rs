@@ -1,7 +1,4 @@
 use crate::assembly::server::ServerState;
-use plain_rs::db::{MediaFileRow, audio_catalog::AudioMedia};
-use plain_rs::enums::DataType;
-use plain_rs::media::audio::queue::AudioTrack;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -10,21 +7,6 @@ use serde_json::{Value, json};
 struct ResolveRequest {
     ids: Vec<String>,
     paths: Vec<String>,
-}
-
-fn row(row: MediaFileRow) -> AudioMedia {
-    AudioMedia {
-        media_id: Some(row.id),
-        aliases: Vec::new(),
-        track: AudioTrack {
-            media_id: None,
-            path: row.path,
-            title: row.title,
-            artist: row.artist,
-            duration_ms: row.duration_ms,
-            album_id: String::new(),
-        },
-    }
 }
 
 #[derive(Clone)]
@@ -75,8 +57,12 @@ impl NativeAudio {
                     .collect::<rusqlite::Result<Vec<_>>>()
             })
             .map_err(|error| error.to_string())?;
-        serde_json::to_value(rows.into_iter().map(row).collect::<Vec<_>>())
-            .map_err(|error| error.to_string())
+        serde_json::to_value(
+            rows.into_iter()
+                .map(crate::services::audio::metadata::from_row)
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| error.to_string())
     }
 
     fn metadata(&self, params: Value) -> Result<Value, String> {
@@ -84,31 +70,8 @@ impl NativeAudio {
             .as_str()
             .filter(|path| !path.is_empty())
             .ok_or("Audio path required")?;
-        let db = self.state.db.clone();
-        let item = if let Some(item) = db
-            .media_file_by_path(DataType::Audio, path)
-            .map_err(|error| error.to_string())?
-        {
-            row(item)
-        } else {
-            let facts = plain_media::metadata::file_facts::read_file_metadata_with_availability(
-                std::path::Path::new(path),
-                DataType::Audio,
-            )
+        let item = crate::services::audio::metadata::read(&self.state.db, path)
             .map_err(|error| error.to_string())?;
-            AudioMedia {
-                media_id: None,
-                aliases: Vec::new(),
-                track: AudioTrack {
-                    media_id: None,
-                    path: facts.metadata.path,
-                    title: facts.metadata.title,
-                    artist: facts.metadata.artist,
-                    duration_ms: facts.metadata.duration_ms,
-                    album_id: String::new(),
-                },
-            }
-        };
         serde_json::to_value(item).map_err(|error| error.to_string())
     }
 }
@@ -128,7 +91,10 @@ fn command(params: Value) -> Result<Value, String> {
 pub fn handles(method: &str) -> bool {
     matches!(
         method,
-        "audioLibraryResolve" | "audioMetadata" | "systemAudioLyrics" | "systemAudioPlaybackState"
+        "audioLibraryResolve"
+            | "audioMetadata"
+            | "systemAudioLyrics"
+            | "systemAudioPlaybackState"
             | "audioEngineCommand"
     )
 }

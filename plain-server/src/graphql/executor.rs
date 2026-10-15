@@ -30,8 +30,6 @@ impl RequestClient {
 pub struct RequestContext {
     #[cfg(feature = "core")]
     state: Option<ServerState>,
-    #[cfg(feature = "api")]
-    desktop: Option<std::sync::Arc<crate::assembly::context::AppCtx>>,
     remote_client_id: Option<String>,
     notify_changes: bool,
     origin: RequestOrigin,
@@ -40,8 +38,6 @@ impl RequestContext {
     #[cfg(feature = "core")]
     pub(crate) fn local(state: ServerState) -> Self {
         Self {
-            #[cfg(feature = "api")]
-            desktop: None,
             state: Some(state),
             remote_client_id: None,
             notify_changes: true,
@@ -51,8 +47,6 @@ impl RequestContext {
     #[cfg(feature = "core")]
     pub(crate) fn remote(state: Option<ServerState>) -> Self {
         Self {
-            #[cfg(feature = "api")]
-            desktop: None,
             state,
             remote_client_id: None,
             notify_changes: false,
@@ -73,20 +67,6 @@ impl RequestContext {
         let mut context = Self::remote(Some(state));
         context.remote_client_id = Some(client_id);
         context
-    }
-    #[cfg(feature = "api")]
-    pub(crate) fn desktop(
-        context: std::sync::Arc<crate::assembly::context::AppCtx>,
-        origin: RequestOrigin,
-    ) -> Self {
-        Self {
-            #[cfg(feature = "core")]
-            state: None,
-            desktop: Some(context),
-            remote_client_id: None,
-            notify_changes: false,
-            origin,
-        }
     }
     pub(crate) fn origin(&self) -> RequestOrigin {
         self.origin
@@ -131,25 +111,6 @@ pub async fn execute_graphql<
         }
         None => request,
     };
-    #[cfg(feature = "api")]
-    let request = match context.desktop.as_ref() {
-        Some(context) => request
-            .data(context.clone())
-            .data(context.media.db.clone())
-            .data(context.prefs.clone())
-            .data(context.pomodoro.clone())
-            .data(context.image_updates.clone())
-            .data(context.event_tx.clone())
-            .data(context.db.clone()),
-        None => request,
-    };
-    #[cfg(feature = "api")]
-    let request = match context.desktop.as_ref() {
-        Some(context) if origin == RequestOrigin::Local => {
-            request.data(context.identity.client_id.clone())
-        }
-        _ => request,
-    };
     let response = schema.execute(request).await;
     if changed && response.errors.is_empty() {
         #[cfg(feature = "core")]
@@ -180,17 +141,28 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                 .is_none_or(|selected| name.is_some_and(|n| n.as_str() == selected))
         })
         .any(|(_, operation)| {
-            operation.node.ty == OperationType::Mutation
-                && operation
-                    .node
-                    .selection_set
-                    .node
-                    .items
-                    .iter()
-                    .any(|selection| match &selection.node {
-                        Selection::Field(field) => !matches!(
+            if operation.node.ty != OperationType::Mutation {
+                return false;
+            }
+            let mut pending = operation
+                .node
+                .selection_set
+                .node
+                .items
+                .iter()
+                .collect::<Vec<_>>();
+            let mut visited = std::collections::HashSet::new();
+            while let Some(selection) = pending.pop() {
+                match &selection.node {
+                    Selection::Field(field) => {
+                        if !matches!(
                             field.node.name.node.as_str(),
-                            "broadcastImageEditorUpdate"
+                            "mediaAction"
+                                | "deleteMediaItems"
+                                | "trashMediaItems"
+                                | "restoreMediaItems"
+                                | "moveMediaItems"
+                                | "broadcastImageEditorUpdate"
                                 | "configurePomodoroDay"
                                 | "tickPomodoro"
                                 | "skipPomodoro"
@@ -198,9 +170,24 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                                 | "startPomodoro"
                                 | "pausePomodoro"
                                 | "stopPomodoro"
-                        ),
-                        _ => true,
-                    })
+                        ) {
+                            return true;
+                        }
+                    }
+                    Selection::InlineFragment(fragment) => {
+                        pending.extend(&fragment.node.selection_set.node.items)
+                    }
+                    Selection::FragmentSpread(spread) => {
+                        let name = &spread.node.fragment_name.node;
+                        if visited.insert(name.clone()) {
+                            if let Some(fragment) = document.fragments.get(name) {
+                                pending.extend(&fragment.node.selection_set.node.items);
+                            }
+                        }
+                    }
+                }
+            }
+            false
         })
 }
 
@@ -214,13 +201,13 @@ impl GraphqlExecutor {
     pub(crate) fn new(state: ServerState) -> Self {
         Self { state }
     }
-    pub async fn execute(&self, request: Request, host_api: bool) -> Response {
-        let context = RequestContext::local(self.state.clone());
-        if host_api {
-            execute_graphql(&self.state.schema, request, context).await
-        } else {
-            execute_graphql(&self.state.public, request, context).await
-        }
+    pub async fn execute(&self, request: Request) -> Response {
+        execute_graphql(
+            &self.state.public,
+            request,
+            RequestContext::local(self.state.clone()),
+        )
+        .await
     }
 }
 

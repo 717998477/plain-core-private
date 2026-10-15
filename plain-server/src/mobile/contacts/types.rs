@@ -120,6 +120,7 @@ data_kind!(ImProtocol {
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ContactPhoneNumber {
+    pub type_code: i32,
     pub value: String,
     pub r#type: PhoneType,
     pub label: String,
@@ -129,6 +130,7 @@ pub struct ContactPhoneNumber {
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ContactEmail {
+    pub type_code: i32,
     pub value: String,
     pub r#type: EmailType,
     pub label: String,
@@ -136,6 +138,7 @@ pub struct ContactEmail {
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ContactAddress {
+    pub type_code: i32,
     pub value: String,
     pub r#type: PostalType,
     pub label: String,
@@ -143,6 +146,7 @@ pub struct ContactAddress {
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ContactEvent {
+    pub type_code: i32,
     pub value: String,
     pub r#type: EventType,
     pub label: String,
@@ -150,6 +154,7 @@ pub struct ContactEvent {
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ContactWebsite {
+    pub type_code: i32,
     pub value: String,
     pub r#type: WebsiteType,
     pub label: String,
@@ -157,6 +162,7 @@ pub struct ContactWebsite {
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ContactIm {
+    pub type_code: i32,
     pub value: String,
     pub protocol: ImProtocol,
     #[graphql(name = "customProtocol")]

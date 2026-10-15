@@ -1,5 +1,5 @@
 #[tokio::test]
-async fn nearby_snapshot_is_native_private_and_does_not_start_discovery() {
+async fn nearby_snapshot_uses_the_main_contract_without_starting_discovery() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let native = core.native_graphql().unwrap();
@@ -9,25 +9,17 @@ async fn nearby_snapshot_is_native_private_and_does_not_start_discovery() {
             .sdl()
             .contains("startDiscovery: Boolean!")
     );
-    assert!(
-        core.runtime_state()
-            .schema
-            .sdl()
-            .contains("startDiscovery: [NearbyDevice!]!")
-    );
     let stopped = native
-        .execute_private(async_graphql::Request::new("mutation { stopDiscovery }"))
+        .execute(async_graphql::Request::new("mutation { stopDiscovery }"))
         .await;
     assert!(stopped.errors.is_empty(), "{:?}", stopped.errors);
     assert_eq!(
         stopped.data.into_json().unwrap()["stopDiscovery"],
-        serde_json::json!(false)
+        serde_json::json!(true)
     );
 
     let selection = "{ nearbyDevices { id name ips port deviceType version platform lastSeen discoveryMethods bestIp status } }";
-    let response = native
-        .execute_private(async_graphql::Request::new(selection))
-        .await;
+    let response = native.execute(async_graphql::Request::new(selection)).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
         response.data.into_json().unwrap()["nearbyDevices"],
@@ -38,12 +30,20 @@ async fn nearby_snapshot_is_native_private_and_does_not_start_discovery() {
             .as_bool()
             .unwrap()
     );
-    let response = native.execute(async_graphql::Request::new(selection)).await;
-    assert!(!response.errors.is_empty());
+    let state = core.runtime_state();
+    let response = crate::graphql::executor::execute_graphql(
+        &state.public,
+        async_graphql::Request::new(selection),
+        crate::graphql::executor::RequestContext::remote(Some(state.clone())),
+    )
+    .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["nearbyDevices"],
+        serde_json::json!([])
+    );
     core.stop_core().await;
-    let response = native
-        .execute_private(async_graphql::Request::new(selection))
-        .await;
+    let response = native.execute(async_graphql::Request::new(selection)).await;
     assert!(!response.errors.is_empty());
 }
 
@@ -53,9 +53,7 @@ async fn is_discovering_reports_the_manual_scan_loop() {
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let native = core.native_graphql().unwrap();
     let selection = "{ isDiscovering }";
-    let response = native
-        .execute_private(async_graphql::Request::new(selection))
-        .await;
+    let response = native.execute(async_graphql::Request::new(selection)).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
         response.data.into_json().unwrap()["isDiscovering"],

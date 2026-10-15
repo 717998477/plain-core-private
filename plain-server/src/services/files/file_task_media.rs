@@ -1,4 +1,4 @@
-use crate::host::bridge::Host;
+use super::platform::FilePlatform;
 use crate::services::files::file_task_walk::FileWalker;
 use anyhow::{Result, anyhow, bail};
 use plain_rs::files::moves::Binding;
@@ -8,22 +8,18 @@ use std::{collections::HashSet, path::Path};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Identity {
-    media_type: i32,
-    media_id: String,
-    path: String,
+pub(crate) struct Identity {
+    pub(crate) media_type: i32,
+    pub(crate) media_id: String,
+    pub(crate) path: String,
 }
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
     root: String,
     items: Vec<Identity>,
 }
-async fn lookup(host: &Host, paths: &[String]) -> Result<Vec<Identity>> {
-    let result = host
-        .call("fileTaskMediaSnapshot", json!({"paths": paths}))
-        .await
-        .map_err(anyhow::Error::msg)?;
-    let rows: Vec<Identity> = serde_json::from_value(result)?;
+async fn lookup(platform: &FilePlatform, paths: &[String]) -> Result<Vec<Identity>> {
+    let rows = platform.identities(paths).await?;
     let mut seen = HashSet::new();
     for row in &rows {
         if !matches!(row.media_type, 1 | 2 | 3 | 24)
@@ -51,7 +47,7 @@ pub(crate) async fn normalized(path: &Path) -> Result<String> {
         .ok_or_else(|| anyhow!("invalid path encoding"))?
         .to_owned())
 }
-pub(crate) async fn prepare(host: &Host, source: &str) -> Result<Value> {
+pub(crate) async fn prepare(platform: &FilePlatform, source: &str) -> Result<Value> {
     let root = normalized(Path::new(source)).await?;
     let mut walker = FileWalker::new(Path::new(&root));
     let mut batch = Vec::new();
@@ -63,12 +59,12 @@ pub(crate) async fn prepare(host: &Host, source: &str) -> Result<Value> {
                 .to_owned(),
         );
         if batch.len() == 128 {
-            items.extend(lookup(host, &batch).await?);
+            items.extend(lookup(platform, &batch).await?);
             batch.clear();
         }
     }
     if !batch.is_empty() {
-        items.extend(lookup(host, &batch).await?);
+        items.extend(lookup(platform, &batch).await?);
     }
     Ok(serde_json::to_value(Snapshot { root, items })?)
 }
@@ -82,7 +78,7 @@ pub(crate) fn source_root(snapshot: &Value) -> Result<String> {
 }
 
 pub(crate) async fn resolve(
-    host: &Host,
+    platform: &FilePlatform,
     destination: &str,
     snapshot: &Value,
 ) -> Result<MediaMoveBindings> {
@@ -105,7 +101,7 @@ pub(crate) async fn resolve(
                     .to_owned())
             })
             .collect::<Result<Vec<_>>>()?;
-        let rows = lookup(host, &paths).await?;
+        let rows = lookup(platform, &paths).await?;
         for (source, path) in batch.iter().zip(paths) {
             let target = rows
                 .iter()
@@ -128,13 +124,13 @@ pub(crate) async fn resolve(
 }
 
 pub(crate) async fn deletion_snapshot(
-    host: &Host,
+    platform: &FilePlatform,
     root: String,
     paths: &[String],
 ) -> Result<Value> {
     let mut items = Vec::new();
     for batch in paths.chunks(128) {
-        items.extend(lookup(host, batch).await?);
+        items.extend(lookup(platform, batch).await?);
     }
     Ok(serde_json::to_value(Snapshot { root, items })?)
 }

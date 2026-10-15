@@ -51,3 +51,9 @@ pub mod videos;
 pub mod docs;
 
 pub mod casting;
+
+#[cfg(feature = "core")]
+pub mod sms;
+
+#[cfg(feature = "core")]
+pub mod packages;

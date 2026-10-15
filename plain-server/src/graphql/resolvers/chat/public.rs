@@ -6,24 +6,7 @@ use plain_rs::db::Db;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-pub enum ChatStatus {
-    Sent,
-    Partial,
-    Failed,
-    Pending,
-}
-
-impl ChatStatus {
-    fn parse(value: &str) -> Self {
-        match value {
-            "PARTIAL" => ChatStatus::Partial,
-            "FAILED" => ChatStatus::Failed,
-            "PENDING" => ChatStatus::Pending,
-            _ => ChatStatus::Sent,
-        }
-    }
-}
+pub use plain_rs::chat::enums::ChatStatus;
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ChatChannelStatus {
@@ -32,13 +15,15 @@ pub enum ChatChannelStatus {
     Kicked,
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ChannelMemberStatus {
     Joined,
     Pending,
 }
 
-#[derive(SimpleObject, Clone, Debug)]
+#[derive(SimpleObject, Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatChannelMember {
     #[graphql(name = "peerId")]
     pub peer_id: async_graphql::ID,
@@ -367,7 +352,9 @@ fn from_json(value: &Value) -> ChatItem {
         updated_at: crate::graphql::types::facts::stored_instant(
             &crate::graphql::types::facts::text(value, "updatedAt"),
         ),
-        status: ChatStatus::parse(&crate::graphql::types::facts::text(value, "status")),
+        status: crate::graphql::types::facts::text(value, "status")
+            .parse()
+            .unwrap_or(ChatStatus::Sent),
         status_data: crate::graphql::types::facts::text(value, "statusData"),
     }
 }

@@ -108,3 +108,6 @@ pub mod transport;
 pub mod feeds;
 
 pub use utils::hostname::platform_hostname;
+
+#[cfg(feature = "library")]
+pub mod sessions;

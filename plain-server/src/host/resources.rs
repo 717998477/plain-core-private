@@ -1,11 +1,6 @@
 use crate::host::bridge::Host;
 use crate::native::resource_stream::{NativeResourceStream, ResourceFrame};
-use axum::{
-    body::Body,
-    extract::ws::{Message, WebSocket},
-    http::StatusCode,
-};
-use futures_util::StreamExt;
+use axum::{body::Body, http::StatusCode};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -55,38 +50,6 @@ impl NativeResources {
             pending: Mutex::new(HashMap::new()),
             capacity: Arc::new(Semaphore::new(32)),
         }
-    }
-    pub async fn attach(&self, id: &str, mut socket: WebSocket) {
-        let pending = self.pending.lock().unwrap().remove(id);
-        let Some(mut pending) = pending.filter(|pending| self.host.is_current(pending.generation))
-        else {
-            let _ = tokio::time::timeout(Duration::from_secs(1), socket.close()).await;
-            return;
-        };
-        let _ = pending.attached.send(());
-        loop {
-            tokio::select! {
-                _ = pending.stop.changed() => break,
-                message = pending.outgoing.recv() => {
-                    let Some(message) = message else { break; };
-                    if tokio::select! { _=pending.stop.changed()=>true, result=socket.send(message.into_socket_message())=>result.is_err() } { break; }
-                }
-                message = socket.next() => {
-                    match message {
-                        Some(Ok(Message::Ping(_)|Message::Pong(_))) => {},
-                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                        Some(Ok(Message::Binary(ref bytes))) if bytes.len()>64*1024=>break,
-                        Some(Ok(message)) => {
-                            if tokio::select! {
-                                _ = pending.stop.changed() => true,
-                                result = pending.incoming.send(ResourceFrame::from_socket_message(message)) => result.is_err(),
-                            } { break; }
-                        }
-                    }
-                }
-            }
-        }
-        let _ = tokio::time::timeout(Duration::from_secs(1), socket.close()).await;
     }
     pub(crate) fn attach_native(
         &self,
@@ -208,31 +171,6 @@ impl NativeResources {
     }
 }
 
-impl ResourceFrame {
-    fn into_socket_message(self) -> Message {
-        match self {
-            Self::Request(value) => Message::Text(value),
-            Self::Bytes(value) => Message::Binary(value),
-            Self::End => Message::Text(json!({"kind":"end"}).to_string()),
-            Self::Error => Message::Text(json!({"kind":"error"}).to_string()),
-        }
-    }
-
-    fn from_socket_message(message: Message) -> Self {
-        match message {
-            Message::Binary(bytes) => Self::Bytes(bytes),
-            Message::Text(value)
-                if serde_json::from_str::<Value>(&value)
-                    .ok()
-                    .is_some_and(|value| value["kind"] == "end") =>
-            {
-                Self::End
-            }
-            _ => Self::Error,
-        }
-    }
-}
-
 impl NativeResourceReader {
     pub async fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
         if self.finished {
@@ -260,3 +198,7 @@ impl NativeResourceReader {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/host/resources.rs"]
+mod tests;

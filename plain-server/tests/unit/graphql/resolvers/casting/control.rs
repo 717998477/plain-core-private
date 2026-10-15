@@ -443,36 +443,22 @@ async fn an_oversized_control_request_never_reaches_the_protocol() {
     drop(dir);
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
-async fn receiver_name_uses_platform_default_and_core_setting() {
+async fn receiver_name_uses_the_native_default_and_current_core_setting_without_host_calls() {
     let (_dir, server) = fixture();
     let state = server.runtime_state();
     state.prefs.set_user("device_name", "").unwrap();
-    assert_eq!(device_name(&state).await.unwrap(), "Test Phone");
+    let (_generation, mut requests) = state.host.connect();
+    assert_eq!(
+        device_name(&state).await.unwrap(),
+        plain_rs::prefs::identity::default_device_name()
+    );
     state
         .prefs
         .set_user("device_name", "Shared Renderer")
         .unwrap();
     assert_eq!(device_name(&state).await.unwrap(), "Shared Renderer");
-    let (_generation, _requests) = state.host.connect();
-    assert_eq!(device_name(&state).await.unwrap(), "Shared Renderer");
-}
-
-#[tokio::test]
-async fn receiver_name_rejects_missing_platform_name() {
-    let (_dir, server) = fixture();
-    let state = server.runtime_state();
-    state.prefs.set_user("device_name", "").unwrap();
-    let host = state.host.clone();
-    let (generation, mut requests) = host.connect();
-    let reply = tokio::spawn(async move {
-        let request = requests.recv().await.unwrap();
-        host.reply(
-            generation,
-            json!({"id":request["id"],"result":{"ip":"127.0.0.1"}}),
-        )
-        .unwrap();
-    });
-    assert!(device_name(&state).await.is_err());
-    reply.await.unwrap();
+    assert!(requests.try_recv().is_err());
+    server.shutdown().await;
 }

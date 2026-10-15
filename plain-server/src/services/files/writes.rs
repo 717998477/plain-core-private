@@ -1,20 +1,26 @@
-use crate::services::files::file_access::receipt;
+use super::platform::FilePlatform;
 use plain_rs::files::filesystem::writes::Operation;
 
 pub(crate) async fn execute(
-    host: &crate::host::bridge::Host,
+    platform: &FilePlatform,
     operation: Operation,
 ) -> Result<plain_rs::files::filesystem::record::FileRecord, String> {
     let path = operation.path().to_owned();
     if !std::path::Path::new(&path).is_absolute() {
         return Err("absolute file path required".into());
     }
-    receipt(host, "fileTaskAuthorize", &path).await?;
+    platform
+        .authorize(&path, true)
+        .await
+        .map_err(|error| error.to_string())?;
     tokio::task::spawn_blocking(move || operation.apply())
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
-    receipt(host, "fileTaskScan", &path).await?;
+    platform
+        .scan(std::slice::from_ref(&path))
+        .await
+        .map_err(|error| error.to_string())?;
     let entry = plain_rs::files::filesystem::stat(std::path::Path::new(&path))
         .await
         .map_err(|e| e.to_string())?;
@@ -22,3 +28,7 @@ pub(crate) async fn execute(
     record.permission = "rw".into();
     Ok(record)
 }
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+#[path = "../../../tests/unit/services/files/writes.rs"]
+mod tests;

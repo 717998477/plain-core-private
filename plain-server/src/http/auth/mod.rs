@@ -9,3 +9,6 @@ pub mod ws_login;
 
 #[cfg(feature = "core")]
 pub mod guest_graphql;
+
+#[cfg(feature = "core")]
+pub(crate) mod local_client;

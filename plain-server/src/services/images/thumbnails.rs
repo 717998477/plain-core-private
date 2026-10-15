@@ -1,8 +1,7 @@
 use crate::assembly::server::ServerState;
 use axum::{
     Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use plain_rs::utils::keyed_locks::KeyedLocks;
@@ -32,6 +31,8 @@ pub(crate) struct Thumbnails {
     locks: KeyedLocks,
     capacity: Semaphore,
     outputs: Mutex<HashMap<String, oneshot::Sender<Vec<u8>>>>,
+    #[cfg(test)]
+    native_decodes: std::sync::atomic::AtomicUsize,
 }
 impl Default for Thumbnails {
     fn default() -> Self {
@@ -39,6 +40,8 @@ impl Default for Thumbnails {
             locks: KeyedLocks::new(),
             capacity: Semaphore::new(4),
             outputs: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            native_decodes: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -66,7 +69,35 @@ async fn fingerprint(request: &Request) -> Result<Option<String>, String> {
         input.as_bytes(),
     ))))
 }
+fn validate_output(bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() || bytes.len() > 32 * 1024 * 1024 {
+        return Err("invalid thumbnail output size".into());
+    }
+    Ok(())
+}
+
 async fn decode(
+    state: &ServerState,
+    request: &Request,
+    system: bool,
+    cache: &Path,
+) -> Result<Option<Vec<u8>>, String> {
+    if !cfg!(any(target_os = "android", target_os = "ios")) {
+        #[cfg(test)]
+        state
+            .thumbnails
+            .native_decodes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let bytes = super::thumbnail_decoder::native(request, cache).await?;
+        if let Some(bytes) = bytes.as_ref() {
+            validate_output(bytes)?;
+        }
+        return Ok(bytes);
+    }
+    decode_sdk(state, request, system).await
+}
+
+async fn decode_sdk(
     state: &ServerState,
     request: &Request,
     system: bool,
@@ -107,36 +138,9 @@ impl Drop for Output<'_> {
         self.service.outputs.lock().unwrap().remove(&self.token);
     }
 }
-pub(crate) async fn output(
-    State(state): State<ServerState>,
-    axum::extract::Path(token): axum::extract::Path<String>,
-    headers: HeaderMap,
-    body: axum::body::Body,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let sender = state.thumbnails.outputs.lock().unwrap().remove(&token);
-    let Some(sender) = sender else {
-        return StatusCode::GONE.into_response();
-    };
-    match axum::body::to_bytes(body, usize::MAX).await {
-        Ok(bytes) if !bytes.is_empty() => {
-            if sender.send(bytes.to_vec()).is_ok() {
-                StatusCode::NO_CONTENT.into_response()
-            } else {
-                StatusCode::GONE.into_response()
-            }
-        }
-        _ => StatusCode::BAD_REQUEST.into_response(),
-    }
-}
-
 impl Thumbnails {
     pub(crate) fn submit(&self, token: &str, bytes: Vec<u8>) -> Result<(), String> {
-        if bytes.is_empty() || bytes.len() > 32 * 1024 * 1024 {
-            return Err("invalid thumbnail output size".into());
-        }
+        validate_output(&bytes)?;
         self.outputs
             .lock()
             .unwrap()
@@ -161,13 +165,10 @@ impl Thumbnails {
         };
         request.path = canonical.to_string_lossy().into_owned();
         let cache = state
-            .host
-            .call("thumbnailAuthorize", json!({"paths":[request.path]}))
-            .await?;
-        let cache = PathBuf::from(cache.as_str().ok_or("invalid thumbnail cache root")?);
-        if !cache.is_absolute() {
-            return Err("absolute thumbnail cache root required".into());
-        }
+            .file_platform
+            .thumbnail_cache(&request.path)
+            .await
+            .map_err(|error| error.to_string())?;
         let Some(key) = fingerprint(&request).await? else {
             return Ok(None);
         };
@@ -175,7 +176,7 @@ impl Thumbnails {
             .join("thumbs")
             .join("rust")
             .join(format!("{key}.thumb"));
-        let system = !request.media_id.is_empty() && request.width <= 512;
+        let system = super::thumbnail_decoder::uses_system_thumbnail(&request);
         self.locks
             .with_lock(key.clone(), async {
                 if !system {
@@ -189,7 +190,7 @@ impl Thumbnails {
                 }
                 let _permit = self.capacity.acquire().await.map_err(|e| e.to_string())?;
                 if system {
-                    if let Some(bytes) = decode(state, &request, true).await? {
+                    if let Some(bytes) = decode(state, &request, true, &cache).await? {
                         return Ok(if fingerprint(&request).await?.as_deref() == Some(&key) {
                             Some(bytes)
                         } else {
@@ -202,7 +203,7 @@ impl Thumbnails {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
                     _ => {}
                 }
-                let Some(bytes) = decode(state, &request, false).await? else {
+                let Some(bytes) = decode(state, &request, false, &cache).await? else {
                     return Ok(None);
                 };
                 if fingerprint(&request).await?.as_deref() != Some(&key) {

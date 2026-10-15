@@ -8,15 +8,15 @@ enum ChannelSystemMessageType {
 }
 
 type ChatItem {
-	id: ID!
 	fromId: ID!
 	toId: ID!
 	channelId: ID
+	id: ID!
 	content: String!
-	status: ChatStatus!
-	statusData: String!
 	createdAt: Instant!
 	updatedAt: Instant!
+	status: ChatStatus!
+	statusData: String!
 }
 
 enum ChatStatus {
@@ -28,37 +28,21 @@ enum ChatStatus {
 
 scalar Instant
 
-type PeerMutation {
-	"""
-	Receive a chat item from an authenticated peer.
-	Wire format: `mutation CreateChatItem($content: String!) { createChatItem(content: $content) { ... } }`
-	"""
+scalar Long
+
+type Mutation {
 	createChatItem(content: String!): [ChatItem!]!
-	"""
-	Receive a channel system message from an authenticated peer.
-	Wire format: `mutation ChannelSystemMessage($type: ChannelSystemMessageType!, $payload: String!) { channelSystemMessage(type: $type, payload: $payload) }`
-	"""
-	channelSystemMessage(
-		"""
-		System message type discriminator
-		"""
-		type: ChannelSystemMessageType!,		payload: String!
-	): Boolean!
-	"""
-	Ask the peer to start its Wi-Fi Aware service (mirrors plain-app's
-	`startAware` mutation). The Tauri desktop build does not support
-	Wi-Fi Aware, so this always logs a warning and returns `false`.
-	Keeping the field in the schema avoids GraphQL validation errors
-	when a paired Android peer prewarms the transport.
-	"""
+	channelSystemMessage(type: ChannelSystemMessageType!, payload: String!): Boolean!
 	startAware: Boolean!
 }
 
-type PeerQuery {
-	"""
-	Schema-mandated placeholder; the peer protocol is mutation-only.
-	"""
-	peerSchemaVersion: Int!
+enum PeerStatus {
+	PAIRED
+	UNPAIRED
+	CHANNEL
+}
+
+type Query {
 }
 
 """
@@ -70,6 +54,6 @@ Directs the executor to skip this field or fragment when the `if` argument is tr
 """
 directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 schema {
-	query: PeerQuery
-	mutation: PeerMutation
+	query: Query
+	mutation: Mutation
 }

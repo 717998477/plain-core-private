@@ -21,3 +21,7 @@ impl TempValues {
         self.entries.lock().ok()?.remove(key)
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/services/temp_values.rs"]
+mod tests;

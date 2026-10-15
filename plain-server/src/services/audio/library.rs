@@ -21,7 +21,7 @@ impl HostLibrary {
         }
     }
     pub fn refresh(&mut self) -> DomainResult<()> {
-        if cfg!(feature = "mobile") {
+        if cfg!(any(target_os = "android", target_os = "ios")) {
             self.db.use_platform_audio_catalog()?;
             let ids = self.db.audio_reference_ids()?;
             let rows: Vec<AudioMedia> = if ids.is_empty() {
@@ -36,7 +36,7 @@ impl HostLibrary {
     }
 
     pub fn restore_current(&mut self) -> DomainResult<()> {
-        if cfg!(feature = "mobile") {
+        if cfg!(any(target_os = "android", target_os = "ios")) {
             self.db.use_platform_audio_catalog()?;
             if self.db.audio_restore_needed() {
                 let id = self.db.audio_current_media_id();
@@ -52,7 +52,7 @@ impl HostLibrary {
     }
 
     pub fn cache_paths(&mut self, paths: &[String]) -> DomainResult<()> {
-        if cfg!(feature = "mobile") && !paths.is_empty() {
+        if cfg!(any(target_os = "android", target_os = "ios")) && !paths.is_empty() {
             self.db.forget_platform_audio_paths(paths)?;
             let rows: Vec<AudioMedia> =
                 self.call("audioLibraryResolve", json!({"ids":[],"paths":paths}))?;
@@ -62,7 +62,7 @@ impl HostLibrary {
     }
 
     pub fn cache_ids(&mut self, ids: &[String]) -> DomainResult<()> {
-        if cfg!(feature = "mobile") && !ids.is_empty() {
+        if cfg!(any(target_os = "android", target_os = "ios")) && !ids.is_empty() {
             let rows: Vec<AudioMedia> =
                 self.call("audioLibraryResolve", json!({"ids":ids,"paths":[]}))?;
             self.db.cache_platform_audio(&rows, false)?;
@@ -81,8 +81,12 @@ impl HostLibrary {
 }
 impl plain_rs::media::audio::commands::Engine for HostLibrary {
     fn metadata(&mut self, path: &str) -> DomainResult<AudioTrack> {
-        let row: AudioMedia = self.call("audioMetadata", json!({"path":path}))?;
-        if cfg!(feature = "mobile") {
+        let row: AudioMedia = if cfg!(any(target_os = "android", target_os = "ios")) {
+            self.call("audioMetadata", json!({"path":path}))?
+        } else {
+            super::metadata::read(&self.db, path)?
+        };
+        if cfg!(any(target_os = "android", target_os = "ios")) {
             self.db
                 .cache_platform_audio(std::slice::from_ref(&row), false)?;
         }

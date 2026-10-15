@@ -1,255 +1,237 @@
+#![cfg(feature = "http_transport")]
 use super::*;
-#[test]
-fn request_contract_requires_os_receipt_and_full_intent() {
-    assert!(serde_json::from_value::<Request>(json!({"action":"receipt","id":"id","generation":"g","ticket":"t","receipt":{"path":"/saved","bytes":3,"error":null}})).is_ok());
-    assert!(serde_json::from_value::<Request>(json!({"action":"receipt","id":"id","generation":"g","ticket":"t","receipt":{"path":"/saved","error":null}})).is_err());
-    assert!(
-        serde_json::from_value::<Request>(
-            json!({"action":"control","id":"id","command":"pause","unexpected":true})
-        )
-        .is_err()
+use async_graphql::{Request, Variables};
+use std::sync::Arc;
+use tokio::sync::Notify;
+
+async fn tls() -> (u16, tokio::task::JoinHandle<()>, Arc<Notify>, Arc<Notify>) {
+    use axum::{
+        Router,
+        body::{Body, Bytes},
+        extract::Query,
+        routing::get,
+    };
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    let config = axum_server::tls_rustls::RustlsConfig::from_pem(
+        cert.cert.pem().into_bytes(),
+        cert.key_pair.serialize_pem().into_bytes(),
+    )
+    .await
+    .unwrap();
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let started = Arc::new(Notify::new());
+    let released = Arc::new(Notify::new());
+    let observed = started.clone();
+    let release = released.clone();
+    let router = Router::new().route(
+        "/fs",
+        get(move |Query(params): Query<HashMap<String, String>>| {
+            let started = observed.clone();
+            let released = release.clone();
+            async move {
+                assert_eq!(params["sid"], "fixture");
+                let plain = plain_rs::crypto::xchacha_decrypt_raw(
+                    &[8; 32],
+                    &plain_rs::utils::base64::base64_decode(&params["id"]),
+                )
+                .unwrap();
+                let value: Value = serde_json::from_slice(&plain).unwrap();
+                let path = value["virtualPath"].as_str().unwrap().to_owned();
+                Body::from_stream(futures_util::stream::unfold(0, move |step| {
+                    let path = path.clone();
+                    let started = started.clone();
+                    let released = released.clone();
+                    async move {
+                        let chunk = match (path.as_str(), step) {
+                            ("slow", 0) => {
+                                started.notify_one();
+                                Bytes::from_static(b"a")
+                            }
+                            ("slow", 1) => {
+                                released.notified().await;
+                                Bytes::from_static(b"bc")
+                            }
+                            ("short", 0) => Bytes::from_static(b"ab"),
+                            ("long", 0) => Bytes::from_static(b"abcd"),
+                            ("exact", 0) => Bytes::from_static(b"abc"),
+                            _ => return None,
+                        };
+                        Some((Ok::<_, std::io::Error>(chunk), step + 1))
+                    }
+                }))
+            }
+        }),
     );
-}
-async fn request(client: &reqwest::Client, url: &str, token: &str, body: Value) -> Value {
-    let response = client
-        .post(url)
-        .bearer_auth(token)
-        .header("content-type", "application/json")
-        .body(body.to_string())
-        .send()
-        .await
-        .unwrap();
-    assert!(response.status().is_success(), "{}", response.status());
-    serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap()["result"].clone()
-}
-async fn command(
-    host: &crate::host::bridge::Host,
-    host_generation: u64,
-    receiver: &mut tokio::sync::mpsc::Receiver<Value>,
-    method: &str,
-) -> Value {
-    loop {
-        let value = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+    let task = tokio::spawn(async move {
+        axum_server::from_tcp_rustls(socket, config)
+            .serve(router.into_make_service())
             .await
-            .unwrap()
             .unwrap();
-        if value["method"] == method {
-            return value;
-        }
-        host.reply(host_generation, json!({"id":value["id"],"result":true}))
-            .unwrap();
-    }
+    });
+    (port, task, started, released)
 }
-#[tokio::test]
-async fn actual_http_requires_bearer_and_os_receipts_reject_short_reads_and_cancelled_generations()
-{
+fn fixture() -> (
+    tempfile::TempDir,
+    crate::assembly::server::ContentServer,
+    ServerState,
+) {
     let directory = tempfile::tempdir().unwrap();
     let prefs =
-        Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("system.json")).unwrap());
-    let token = plain_rs::utils::base64::base64_encode(&[9; 32]);
+        Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    prefs.set("client_id", "fixture").unwrap();
     let server = crate::assembly::server::ContentServer::start(
         &directory.path().join("plain.db"),
-        &token,
+        &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
     .unwrap();
     let state = server.runtime_state();
-    let (host_generation, mut receiver) = state.host.connect();
-    let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{}/shares/batch", server.port);
-    assert_eq!(
-        client
-            .post(&url)
-            .header("content-type", "application/json")
-            .body(json!({"action":"snapshot"}).to_string())
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    let intent = json!({"message_id":"message","kind":"FILE","link":{"host":"127.0.0.1","port":8443,"sharedId":"fixture","token":plain_rs::utils::base64::base64_encode(&[7;32]),"pageUrl":""},"url_token":plain_rs::utils::base64::base64_encode(&[8;32]),"entries":[{"name":"file.txt","virtualPath":"file.txt","isDir":false,"size":3,"mimeType":"text/plain","hasThumb":false}],"target_dir":"/downloads","downloads_base":"/downloads","zip_name":""});
-    let id = request(
-        &client,
-        &url,
-        &token,
-        json!({"action":"enqueue","intent":intent}),
-    )
-    .await;
-    let first = command(
-        &state.host,
-        host_generation,
-        &mut receiver,
-        "sharedTransferStart",
-    )
-    .await;
-    assert_eq!(
-        first["params"]["operation"]["target"]["writeDir"],
-        "/downloads"
-    );
-    state
-        .host
-        .reply(host_generation, json!({"id":first["id"],"result":true}))
-        .unwrap();
-    let p = &first["params"];
-    assert_eq!(request(&client,&url,&token,json!({"action":"receipt","id":id,"generation":p["generation"],"ticket":p["ticket"],"receipt":{"path":"/downloads/file.txt","bytes":2,"error":null}})).await,false);
-    let cleanup = command(
-        &state.host,
-        host_generation,
-        &mut receiver,
-        "sharedTransferCancel",
-    )
-    .await;
-    state
-        .host
-        .reply(host_generation, json!({"id":cleanup["id"],"result":true}))
-        .unwrap();
-    let cleanup = command(
-        &state.host,
-        host_generation,
-        &mut receiver,
-        "sharedTransferCancel",
-    )
-    .await;
-    state
-        .host
-        .reply(host_generation, json!({"id":cleanup["id"],"result":true}))
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
+    (directory, server, state)
+}
+async fn enqueue(
+    server: &crate::assembly::server::ContentServer,
+    port: u16,
+    path: &str,
+    target: &std::path::Path,
+) -> String {
+    let response = server.native_graphql().unwrap().execute(Request::new("mutation($input: SharedDownloadInput!) { enqueueSharedDownload(input: $input) }").variables(Variables::from_json(json!({"input":{
+        "messageId":format!("message-{path}"),"kind":"FILE","link":{"host":"127.0.0.1","port":port,"sharedId":"fixture","token":plain_rs::base64_encode(&[7;32]),"pageUrl":""},
+        "urlToken":plain_rs::base64_encode(&[8;32]),"entries":[{"name":format!("{path}.bin"),"virtualPath":path,"isDir":false,"size":3,"mimeType":"application/octet-stream","hasThumb":false}],
+        "targetDir":target.to_str().unwrap(),"downloadsBase":target.to_str().unwrap(),"zipName":""
+    }})))).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    response.data.into_json().unwrap()["enqueueSharedDownload"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+async fn terminal(state: &ServerState, id: &str) -> Value {
+    let mut changed = state.shared_batches.queue.changed.subscribe();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let s = request(&client, &url, &token, json!({"action":"snapshot"})).await;
-            if s["tasks"][0]["status"] == "FAILED" {
-                assert_eq!(s["tasks"][0]["doneFiles"], 0);
-                break;
+            let value = state.shared_batches.queue.snapshot()["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|task| task["id"] == id)
+                .unwrap()
+                .clone();
+            if matches!(
+                value["status"].as_str(),
+                Some("COMPLETED" | "PARTIAL" | "FAILED" | "CANCELED")
+            ) {
+                return value;
             }
-            tokio::task::yield_now().await;
+            changed.changed().await.unwrap();
         }
     })
     .await
-    .unwrap();
+    .unwrap()
+}
+#[tokio::test]
+async fn main_queue_downloads_exact_bytes_without_host_callbacks_and_rejects_invalid_lengths() {
+    let (directory, server, state) = fixture();
+    let (port, tls, _, _) = tls().await;
+    let target = directory.path().join("downloads");
+    let id = enqueue(&server, port, "exact", &target).await;
+    let completed = terminal(&state, &id).await;
+    assert_eq!(completed["status"], "COMPLETED");
+    assert_eq!(completed["downloadedSize"], 3);
     assert_eq!(
-        request(
-            &client,
-            &url,
-            &token,
-            json!({"action":"control","id":id,"command":"retry"})
+        tokio::fs::read(target.join("exact.bin")).await.unwrap(),
+        b"abc"
+    );
+    for path in ["short", "long"] {
+        let id = enqueue(&server, port, path, &target).await;
+        assert_eq!(terminal(&state, &id).await["status"], "FAILED");
+        assert!(!target.join(format!("{path}.bin")).exists());
+    }
+    let response=server.native_graphql().unwrap().execute(Request::new("{ sharedDownloadQueue { runtimeId revision tasks { id type status downloadedSize entries { name size } failures { path error } } } }")).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["sharedDownloadQueue"]["tasks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert!(std::fs::read_dir(&target).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".part")
+    }));
+    let response = server
+        .native_graphql()
+        .unwrap()
+        .execute(
+            Request::new("mutation($id: ID!) { removeSharedDownload(id:$id) }")
+                .variables(Variables::from_json(json!({"id":id}))),
         )
-        .await,
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["removeSharedDownload"],
         true
     );
-    let mut second = command(
-        &state.host,
-        host_generation,
-        &mut receiver,
-        "sharedTransferStart",
-    )
-    .await;
-    assert_ne!(p["generation"], second["params"]["generation"]);
-    state
-        .host
-        .reply(host_generation, json!({"id":second["id"],"result":true}))
-        .unwrap();
-    assert_eq!(request(&client,&url,&token,json!({"action":"receipt","id":id,"generation":p["generation"],"ticket":p["ticket"],"receipt":{"path":"/downloads/file.txt","bytes":3,"error":null}})).await,false);
-    let pause_client = client.clone();
-    let pause_url = url.clone();
-    let pause_token = token.clone();
-    let pause_id = id.clone();
-    let pause = tokio::spawn(async move {
-        pause_client
-            .post(&pause_url)
-            .bearer_auth(&pause_token)
-            .header("content-type", "application/json")
-            .body(json!({"action":"control","id":pause_id,"command":"pause"}).to_string())
-            .send()
-            .await
+    assert!(
+        state.shared_batches.queue.snapshot()["tasks"]
+            .as_array()
             .unwrap()
-            .status()
-    });
-    let cleanup = command(
-        &state.host,
-        host_generation,
-        &mut receiver,
-        "sharedTransferCancel",
-    )
-    .await;
-    state
-        .host
-        .reply(host_generation, json!({"id":cleanup["id"],"result":false}))
+            .iter()
+            .all(|task| task["id"] != id)
+    );
+    server.shutdown().await;
+    tls.abort();
+}
+#[tokio::test]
+async fn pause_invalidates_the_generation_and_late_tls_bytes_cannot_commit_a_file() {
+    let (directory, server, state) = fixture();
+    let (port, tls, started, released) = tls().await;
+    let target = directory.path().join("downloads");
+    let id = enqueue(&server, port, "slow", &target).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+        .await
         .unwrap();
-    assert_eq!(pause.await.unwrap(), StatusCode::BAD_REQUEST);
+    let generation = state.shared_batches.queue.snapshot()["tasks"][0]["generation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let response = server
+        .native_graphql()
+        .unwrap()
+        .execute(
+            Request::new("mutation($id: ID!) { pauseSharedDownload(id:$id) }")
+                .variables(Variables::from_json(json!({"id":id}))),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
-        request(&client, &url, &token, json!({"action":"snapshot"})).await["tasks"][0]["status"],
+        response.data.into_json().unwrap()["pauseSharedDownload"],
+        true
+    );
+    released.notify_waiters();
+    assert_eq!(
+        state.shared_batches.queue.snapshot()["tasks"][0]["status"],
         "PAUSED"
     );
-    let resume_client = client.clone();
-    let resume_url = url.clone();
-    let resume_token = token.clone();
-    let resume_id = id.clone();
-    let resume = tokio::spawn(async move {
-        request(
-            &resume_client,
-            &resume_url,
-            &resume_token,
-            json!({"action":"control","id":resume_id,"command":"resume"}),
-        )
-        .await
-    });
-    let cleanup = command(
-        &state.host,
-        host_generation,
-        &mut receiver,
-        "sharedTransferCancel",
-    )
-    .await;
-    state
-        .host
-        .reply(host_generation, json!({"id":cleanup["id"],"result":true}))
-        .unwrap();
-    assert_eq!(resume.await.unwrap(), true);
-    let third = command(
-        &state.host,
-        host_generation,
-        &mut receiver,
-        "sharedTransferStart",
-    )
-    .await;
-    assert_ne!(
-        third["params"]["generation"],
-        second["params"]["generation"]
+    assert!(
+        !state
+            .shared_batches
+            .queue
+            .progress(&id, &generation, "stale", 3)
+            .unwrap()
     );
-    state
-        .host
-        .reply(host_generation, json!({"id":third["id"],"result":true}))
-        .unwrap();
-    second = third;
-    let control_client = client.clone();
-    let control_url = url.clone();
-    let control_token = token.clone();
-    let control_id = id.clone();
-    let cancel = tokio::spawn(async move {
-        request(
-            &control_client,
-            &control_url,
-            &control_token,
-            json!({"action":"control","id":control_id,"command":"cancel"}),
-        )
-        .await
-    });
-    let cleanup = command(
-        &state.host,
-        host_generation,
-        &mut receiver,
-        "sharedTransferCancel",
-    )
-    .await;
-    state
-        .host
-        .reply(host_generation, json!({"id":cleanup["id"],"result":true}))
-        .unwrap();
-    assert_eq!(cancel.await.unwrap(), true);
-    let s = request(&client, &url, &token, json!({"action":"snapshot"})).await;
-    assert_eq!(s["tasks"][0]["status"], "CANCELED");
-    let p = &second["params"];
-    assert_eq!(request(&client,&url,&token,json!({"action":"receipt","id":id,"generation":p["generation"],"ticket":p["ticket"],"receipt":{"path":"/downloads/file.txt","bytes":3,"error":null}})).await,false);
+    assert!(!target.join("slow.bin").exists());
+    assert!(std::fs::read_dir(&target).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".part")
+    }));
     server.shutdown().await;
+    tls.abort();
 }

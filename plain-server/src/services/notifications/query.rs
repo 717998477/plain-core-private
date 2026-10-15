@@ -39,3 +39,7 @@ pub(crate) fn notifications(
     facts.sort_by(|a, b| instant(b, "time").cmp(&instant(a, "time")));
     Ok(facts)
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/notifications/query.rs"]
+mod tests;

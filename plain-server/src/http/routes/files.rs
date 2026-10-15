@@ -1,55 +1,8 @@
-use crate::assembly::server::ServerState;
 use axum::{
-    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use std::path::Path;
-
-#[derive(serde::Deserialize)]
-pub(crate) struct FileQuery {
-    id: String,
-}
-pub(crate) async fn file(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Query(query): Query<FileQuery>,
-) -> axum::response::Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let Some(decoded) = plain_rs::crypto::xchacha_decrypt(
-        &plain_rs::prefs::ensure_url_token(&state.prefs),
-        &plain_rs::utils::base64::base64_decode(&query.id),
-    ) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let Ok(uri) = String::from_utf8(decoded) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let path = Path::new(&uri);
-    let Some(id) = path.file_stem().and_then(|v| v.to_str()) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let Some(record) = state.db.get_app_file(id) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let store =
-        plain_rs::files::app_files::FileStore::new(state.db.clone(), state.directory.clone());
-    let Some(suffix) = Path::new(&record.real_path)
-        .file_name()
-        .and_then(|s| s.to_str())
-    else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let Ok(owned) = store.resolve(suffix) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    if path != owned {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    stream_file(&owned, &record.mime_type, &headers).await
-}
 
 pub(crate) async fn stream_file(
     path: &Path,

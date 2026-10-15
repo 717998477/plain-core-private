@@ -54,3 +54,7 @@ impl Updates {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/media/images/editor.rs"]
+mod tests;

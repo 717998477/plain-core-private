@@ -1,17 +1,10 @@
 use crate::assembly::server::ServerState;
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
 use plain_rs::db::DPeer;
 use plain_rs::db::chat_store::peers;
 use plain_rs::transport::router::Outcome;
 use plain_rs::transport::router::Router;
 use plain_rs::transport::router::Ticket;
 use plain_rs::transport::router::TransportType;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 pub(crate) fn notify(state: &ServerState) {
@@ -156,96 +149,36 @@ pub(crate) async fn send_checked(
         }
     }
 }
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Request {
-    Send {
-        id: String,
-        channel_id: String,
-        key: String,
-        body: String,
-    },
-    BeginDownload {
-        id: String,
-        available: Vec<TransportType>,
-    },
-    FinishDownload {
-        ticket: Ticket,
-        outcome: Outcome,
-    },
-    Abort {
-        ticket: Ticket,
-    },
-    SnapshotTransfers,
-    AwareConfig {
-        id: String,
-    },
+pub(crate) struct AwareConnectionConfig {
+    pub(crate) pmk: Option<String>,
+    pub(crate) is_client: bool,
+    pub(crate) local_port: u16,
 }
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let notify_result = !matches!(request, Request::SnapshotTransfers);
-    let result = async {
-        Ok::<Value, anyhow::Error>(match request {
-            Request::Send {
-                id,
-                channel_id,
-                key,
-                body,
-            } => {
-                let peer =
-                    peers::get(&state.db, &id)?.ok_or_else(|| anyhow::anyhow!("Unknown peer"))?;
-                send(
-                    &state,
-                    &peer,
-                    &channel_id,
-                    &plain_rs::utils::base64::base64_decode(&key),
-                    &body,
-                )
-                .await
-                .map_err(anyhow::Error::msg)?
-            }
-            Request::BeginDownload { id, mut available } => {
-                if !available.contains(&TransportType::Lan) { available.push(TransportType::Lan); }
-                let peer =
-                    peers::get(&state.db, &id)?.ok_or_else(|| anyhow::anyhow!("Unknown peer"))?;
-                let step = state.transport.begin(&peer, &available)?;
-                json!({"peer":crate::services::peers::peer_address::view(&peer),"ticket":step.ticket,"error":step.error})
-            }
-            Request::FinishDownload { ticket, outcome } => {
-                serde_json::to_value(state.transport.finish(&ticket, outcome)?)?
-            }
-            Request::AwareConfig { id } => {
-                let peer=peers::get(&state.db,&id)?.ok_or_else(||anyhow::anyhow!("Unknown peer"))?;
-                let key=plain_rs::utils::base64::base64_decode(&peer.key);
-                anyhow::ensure!(key.is_empty() || key.len()==32,"Invalid Aware pairing key");
-                let actor=state.prefs.get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?.filter(|s|!s.is_empty()).ok_or_else(||anyhow::anyhow!("Missing local identity"))?;
-                json!({"pmk":if key.is_empty(){Value::Null}else{json!(plain_rs::utils::base64::base64_encode(&key))},"isClient":actor<id,"localPort":state.prefs.get_user::<u16>("https_port")?.unwrap_or(8443)})
-            }
-            Request::SnapshotTransfers => serde_json::to_value(state.transport.active())?,
-            Request::Abort { ticket } => {
-                state.transport.abort(&ticket);
-                json!(true)
-            }
-        })
-    }
-    .await;
-    if notify_result && result.is_ok() {
-        notify(&state);
-    }
-    match result {
-        Ok(value) => Json(json!({"result":value})).into_response(),
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":error.to_string()})),
-        )
-            .into_response(),
-    }
+pub(crate) fn aware_config(state: &ServerState, id: &str) -> anyhow::Result<AwareConnectionConfig> {
+    let peer = peers::get(&state.db, id)?.ok_or_else(|| anyhow::anyhow!("Unknown peer"))?;
+    let key = if peer.key.is_empty() {
+        Vec::new()
+    } else {
+        plain_rs::utils::base64::base64_decode_checked(&peer.key)?
+    };
+    anyhow::ensure!(
+        key.is_empty() || key.len() == 32,
+        "Invalid Aware pairing key"
+    );
+    let actor = state
+        .prefs
+        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Missing local identity"))?;
+    Ok(AwareConnectionConfig {
+        pmk: if key.is_empty() {
+            None
+        } else {
+            Some(plain_rs::utils::base64::base64_encode(&key))
+        },
+        is_client: actor.as_str() < id,
+        local_port: state.prefs.get_user::<u16>("https_port")?.unwrap_or(8443),
+    })
 }
 #[cfg(test)]
 #[path = "../../../tests/unit/services/peers/peer_transport.rs"]

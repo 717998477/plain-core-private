@@ -1,8 +1,9 @@
 #[cfg(feature = "core")]
 pub mod public;
 
-#[cfg(any(feature = "api", feature = "core"))]
+#[cfg(feature = "core")]
 pub mod permissions;
 
-#[cfg(feature = "api")]
-pub mod desktop_types;
+
+#[cfg(feature = "core")]
+pub mod sessions;

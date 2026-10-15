@@ -37,6 +37,7 @@ async fn tls() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
         Router,
         body::Bytes,
         extract::Query,
+        http::HeaderMap,
         routing::{get, post},
     };
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
@@ -67,45 +68,37 @@ async fn tls() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     (port, task, count)
 }
 #[tokio::test]
-async fn authenticated_http_browse_updates_card_and_streams_real_tls_files_without_host() {
+async fn authenticated_main_browse_updates_card_and_streams_real_tls_files_without_host() {
+    use crate::test_support::graphql_http_variables;
     let (_dir, server, token) = root();
     let state = server.runtime_state();
     let (port, tls, _) = tls().await;
     let expected = card(port);
     let row = save_card(&state, &expected);
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{}/shares/client", server.port);
-    let request =
-        json!({"action":"browse","message_id":row.id,"expected":expected,"virtual_path":null});
+    let query = "mutation($id:ID!,$expected:SharedMessageCardInput!){browseSharedLink(messageId:$id,expected:$expected){info{urlToken} link{host port sharedId token pageUrl} card{name expiresAt totalSize}}}";
+    let variables = json!({"id":row.id,"expected":expected});
     assert_eq!(
         client
-            .post(&url)
+            .post(format!("http://127.0.0.1:{}/graphql", server.port))
             .header("content-type", "application/json")
-            .body(request.to_string())
+            .body(json!({"query":query,"variables":variables}).to_string())
             .send()
             .await
             .unwrap()
             .status(),
         401
     );
-    let response = client
-        .post(&url)
-        .bearer_auth(&token)
-        .header("content-type", "application/json")
-        .body(request.to_string())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let result: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
-    let result = &result["result"];
+    let response = graphql_http_variables(server.port, &token, query, variables.clone()).await;
+    assert!(response.get("errors").is_none(), "{response}");
+    let result = &response["data"]["browseSharedLink"];
     assert_eq!(result["card"]["name"], "current");
     assert!(result["card"]["expiresAt"].is_null());
     assert_eq!(result["card"]["totalSize"], 8);
     let link: Link = serde_json::from_value(result["link"].clone()).unwrap();
     let remote = link
         .file_url(
-            &result["info"]["urlToken"].as_str().unwrap(),
+            result["info"]["urlToken"].as_str().unwrap(),
             "folder/ +?#中文%",
             false,
         )
@@ -122,27 +115,24 @@ async fn authenticated_http_browse_updates_card_and_streams_real_tls_files_witho
     assert_eq!(response.status(), 200);
     assert_eq!(response.text().await.unwrap(), "download");
     assert_eq!(state.lan.capacity.available_permits(), 4);
-    assert_eq!(
-        client
-            .post(&url)
-            .bearer_auth(&token)
-            .header("content-type", "application/json")
-            .body(request.to_string())
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        400
-    );
-    let plan = client.post(&url).bearer_auth(&token).header("content-type", "application/json")
-        .body(json!({"action":"plan","kind":"SYNC","link":Link::new("127.0.0.1",port,"fixture",&plain_rs::utils::base64::base64_encode_url_safe(&[7;32])).unwrap(),
-            "entries":[{"name":"Root","virtualPath":"root","isDir":true,"size":0,"mimeType":"","hasThumb":false}],
-            "target_dir":"/out","downloads_base":"/downloads"}).to_string()).send().await.unwrap();
-    assert_eq!(plan.status(), 200);
-    let plan: Value = serde_json::from_str(&plan.text().await.unwrap()).unwrap();
-    assert_eq!(plan["result"]["totalSize"], 8);
-    assert_eq!(plan["result"]["targets"][0]["writeDir"], "/out/Root");
-    assert_eq!(plan["result"]["targets"][0]["entryName"], "Root/a 中文.txt");
+    let stale = graphql_http_variables(server.port, &token, query, variables).await;
+    assert!(stale.get("errors").is_some(), "{stale}");
+    let link = Link::new(
+        "127.0.0.1",
+        port,
+        "fixture",
+        &plain_rs::utils::base64::base64_encode_url_safe(&[7; 32]),
+    )
+    .unwrap();
+    let plan = graphql_http_variables(server.port,&token,
+        r#"mutation($link:SharedLinkInput!,$entries:[SharedEntryInput!]!){planSharedDownload(kind:SYNC,link:$link,entries:$entries,targetDir:"/out",downloadsBase:"/downloads"){totalSize targets{writeDir entryName}}}"#,
+        json!({"link":link,"entries":[{"name":"Root","virtualPath":"root","isDir":true,"size":0,"mimeType":"","hasThumb":false}]})).await;
+    assert!(plan.get("errors").is_none(), "{plan}");
+    let plan = &plan["data"]["planSharedDownload"];
+    assert_eq!(plan["totalSize"], 8);
+    assert_eq!(plan["targets"][0]["writeDir"], "/out/Root");
+    assert_eq!(plan["targets"][0]["entryName"], "Root/a 中文.txt");
+    assert!(!state.host.connected());
     server.shutdown().await;
     tls.abort();
 }
@@ -224,7 +214,7 @@ fn discovery_selects_complete_matching_records_and_safe_ipv6_urls() {
 }
 
 #[tokio::test]
-async fn own_share_links_use_root_secret_ports_and_revocation_without_host() {
+async fn main_share_links_use_root_secret_ports_and_revocation_without_host() {
     let (dir, server, token) = root();
     let state = server.runtime_state();
     state
@@ -241,50 +231,34 @@ async fn own_share_links_use_root_secret_ports_and_revocation_without_host() {
     let share = service
         .create(
             "fixture".into(),
-            vec![path.to_str().unwrap().into()],
+            vec![path.to_string_lossy().into_owned()],
             true,
             None,
         )
         .unwrap();
-    let url = format!("http://127.0.0.1:{}/shares/client", server.port);
-    let client = reqwest::Client::new();
-    let request = json!({"action":"ownLink","id":share.id,"host":"::1"});
-    let response = client
-        .post(&url)
-        .bearer_auth(&token)
-        .header("content-type", "application/json")
-        .body(request.to_string())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let response: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
+    let query = r#"query($id:ID!){shareLink(id:$id,host:"::1"){token pageUrl}}"#;
+    let variables = json!({"id":share.id});
+    let response =
+        crate::test_support::graphql_http_variables(server.port, &token, query, variables.clone())
+            .await;
+    assert!(response.get("errors").is_none(), "{response}");
     assert_eq!(
-        response["result"]["token"],
+        response["data"]["shareLink"]["token"],
         service.token(&share.id).unwrap()
     );
     assert!(
-        response["result"]["pageUrl"]
+        response["data"]["shareLink"]["pageUrl"]
             .as_str()
             .unwrap()
             .starts_with("https://[::1]:2443/s/")
     );
     state.db.share_delete(&share.id).unwrap();
-    assert_eq!(
-        client
-            .post(&url)
-            .bearer_auth(&token)
-            .header("content-type", "application/json")
-            .body(request.to_string())
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        400
-    );
+    let response =
+        crate::test_support::graphql_http_variables(server.port, &token, query, variables).await;
+    assert!(response.get("errors").is_some(), "{response}");
+    assert!(!state.host.connected());
     server.shutdown().await;
 }
-
 #[tokio::test]
 async fn root_candidates_preserve_foreign_self_unbound_and_deduplicated_endpoint_cases() {
     let (_dir, server, _) = root();

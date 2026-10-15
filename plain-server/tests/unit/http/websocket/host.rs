@@ -70,6 +70,7 @@ fn rejecting_confirmation_retains_the_legacy_retry_close_code() {
     assert_eq!(*receiver.borrow(), Some((1013, "rejected")));
 }
 
+#[cfg(feature = "http_transport")]
 #[tokio::test]
 async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_the_browser() {
     use futures_util::SinkExt;
@@ -208,4 +209,147 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
     }
     server.shutdown().await;
     consumer.await.unwrap();
+}
+
+fn public_fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
+    let directory = tempfile::tempdir().unwrap();
+    let prefs = std::sync::Arc::new(
+        plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap(),
+    );
+    prefs.set_user("desktop_access", true).unwrap();
+    let core = crate::assembly::server::ContentServer::start(
+        &directory.path().join("plain.db"),
+        &plain_rs::utils::base64::base64_encode(&[4; 32]),
+        prefs,
+    )
+    .unwrap();
+    let bundle = directory.path().join("web");
+    std::fs::create_dir(&bundle).unwrap();
+    std::fs::write(
+        bundle.join("index.html"),
+        "<!doctype html><html><head></head><body>fixture</body></html>",
+    )
+    .unwrap();
+    core.set_web_root(bundle.to_str().unwrap());
+    (directory, core)
+}
+
+#[tokio::test]
+async fn root_serves_the_spa_and_old_ws_path_never_upgrades() {
+    let (_directory, core) = public_fixture();
+    let client = reqwest::Client::new();
+    for path in ["/", "/ws?cid=browser"] {
+        let response = client
+            .get(format!("http://127.0.0.1:{}{path}", core.port))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(
+            response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html")
+        );
+        assert!(response.text().await.unwrap().contains("fixture"));
+    }
+    let denied =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/ws?cid=browser", core.port))
+            .await;
+    match denied {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), 200)
+        }
+        _ => panic!("the retired /ws endpoint must never upgrade"),
+    }
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn root_upgrades_then_closes_missing_clients_as_the_pre_migration_app_did() {
+    use futures_util::SinkExt;
+    let (_directory, core) = public_fixture();
+    let (mut socket, response) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/", core.port))
+            .await
+            .unwrap();
+    assert_eq!(response.status(), 101);
+    let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match frame {
+        tokio_tungstenite::tungstenite::Message::Close(Some(frame)) => {
+            assert_eq!(u16::from(frame.code), 1008);
+            assert_eq!(frame.reason, "`cid` is missing");
+        }
+        _ => panic!("missing clients require a policy close"),
+    }
+    let (mut socket, response) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid=browser", core.port))
+            .await
+            .unwrap();
+    assert_eq!(response.status(), 101);
+    socket.close(None).await.unwrap();
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_event_socket_registers_without_a_session_and_encrypts_events_with_the_owned_url_key()
+ {
+    use futures_util::SinkExt;
+    let (_directory, core) = public_fixture();
+    let state = core.runtime_state();
+    let key = plain_rs::utils::base64::base64_decode(&plain_rs::prefs::identity::ensure_url_token(
+        &state.prefs,
+    ));
+    let id = state.native_client_id().unwrap();
+    let mut events = state.events.subscribe();
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid={id}", core.port))
+            .await
+            .unwrap();
+    let frame = plain_rs::crypto::xchacha_encrypt_raw(&key, b"1700000000000").unwrap();
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            frame.into(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if events.recv().await.unwrap().event_type == "WEB_SOCKET_REGISTERED" {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(state.main_ws.snapshot().contains(&id));
+    assert!(state.db.session_get(&id).unwrap().is_none());
+    state
+        .events
+        .send(plain_rs::events::WsEvent::broadcast(
+            "CONTENT_CHANGED",
+            json!({"probe":true}).to_string(),
+        ))
+        .unwrap();
+    let frame = tokio::time::timeout(Duration::from_secs(3), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let tokio_tungstenite::tungstenite::Message::Binary(bytes) = frame else {
+        panic!("Expected encrypted event bytes")
+    };
+    let (kind, payload) = plain_rs::protocols::websocket::decode(&bytes, &key).unwrap();
+    assert_eq!(kind, "CONTENT_CHANGED");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).unwrap(),
+        json!({"probe":true})
+    );
+    assert!(!state.host.connected());
+    socket.close(None).await.unwrap();
+    core.shutdown().await;
 }

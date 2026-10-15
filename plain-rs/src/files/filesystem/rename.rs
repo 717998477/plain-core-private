@@ -1,7 +1,7 @@
 use std::{io, path::Path};
 
 #[cfg(unix)]
-pub(crate) fn no_replace(src: &Path, dst: &Path) -> io::Result<()> {
+pub fn no_replace(src: &Path, dst: &Path) -> io::Result<()> {
     let src = std::ffi::CString::new(src.as_os_str().as_encoded_bytes())?;
     let dst = std::ffi::CString::new(dst.as_os_str().as_encoded_bytes())?;
     #[cfg(target_vendor = "apple")]
@@ -31,7 +31,7 @@ pub(crate) fn no_replace(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 #[cfg(windows)]
-pub(crate) fn no_replace(src: &Path, dst: &Path) -> io::Result<()> {
+pub fn no_replace(src: &Path, dst: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
     unsafe extern "system" {

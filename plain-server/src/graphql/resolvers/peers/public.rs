@@ -7,12 +7,7 @@ use async_graphql::{Context, Enum, InputObject, Object, SimpleObject};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-pub enum PeerStatus {
-    Paired,
-    Unpaired,
-    Channel,
-}
+pub use plain_rs::chat::enums::PeerStatus;
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum DiscoveryMethod {
@@ -94,11 +89,60 @@ pub struct PairingRequestInput {
     pub aware_supported: bool,
 }
 
+#[derive(SimpleObject, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingTicket {
+    device_id: async_graphql::ID,
+    device_name: String,
+    device_ip: String,
+    device_port: i32,
+    generation: String,
+    delay_ms: crate::graphql::types::Long,
+}
+
+#[derive(SimpleObject, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingState {
+    device_id: async_graphql::ID,
+    generation: String,
+    phase: String,
+}
+
 #[derive(Default)]
 pub struct PeersQuery;
 
 #[Object]
 impl PeersQuery {
+    async fn pairing_tickets(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<Vec<PairingTicket>> {
+        Ok(serde_json::from_value(serde_json::to_value(
+            ctx.data::<crate::assembly::server::ServerState>()?
+                .pairing
+                .tickets(),
+        )?)?)
+    }
+    async fn pairing_states(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<PairingState>> {
+        let value = crate::services::discovery::pairing_runtime::execute(
+            ctx.data::<crate::assembly::server::ServerState>()?,
+            crate::services::discovery::pairing_runtime::Request::States,
+        )
+        .await?;
+        Ok(serde_json::from_value(value)?)
+    }
+    async fn is_pairing_request_current(
+        &self,
+        ctx: &Context<'_>,
+        id: async_graphql::ID,
+        signature: String,
+    ) -> async_graphql::Result<bool> {
+        Ok(ctx
+            .data::<crate::assembly::server::ServerState>()?
+            .pairing
+            .incoming_target(&id, &signature)
+            .is_some())
+    }
     async fn peers(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Peer>> {
         let state = ctx.data::<crate::assembly::server::ServerState>()?;
         let online = state.peer_status.connections.snapshot(&state.db);
@@ -205,7 +249,8 @@ impl PeersMutation {
         crate::graphql::resolvers::peers::actions::remove(
             ctx.data::<crate::assembly::server::ServerState>()?,
             id.as_str(),
-        )?;
+        )
+        .await?;
         Ok(true)
     }
 
@@ -217,7 +262,8 @@ impl PeersMutation {
         crate::graphql::resolvers::peers::actions::unpair(
             ctx.data::<crate::assembly::server::ServerState>()?,
             id.as_str(),
-        )?;
+        )
+        .await?;
         Ok(true)
     }
 }

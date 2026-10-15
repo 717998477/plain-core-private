@@ -40,9 +40,6 @@ impl NativeGraphqlExecutor {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        self.executor.execute(request, false).await
-    }
-    pub async fn execute_private(&self, request: Request) -> Response {
-        self.executor.execute(request, true).await
+        self.executor.execute(request).await
     }
 }

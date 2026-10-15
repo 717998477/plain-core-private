@@ -158,3 +158,14 @@ fn the_safe_key_set_is_the_one_the_platform_allows() {
         );
     }
 }
+
+#[test]
+fn preference_keys_reject_empty_unsafe_and_overlong_names() {
+    for key in ["homeFeatures", "with_underscores", "a-b.c"] {
+        assert!(validate_key(key).is_ok());
+    }
+    let long_key = "x".repeat(129);
+    for key in ["", "a/b", "a b", "admin:password", "é", &long_key] {
+        assert!(validate_key(key).is_err(), "accepted {key:?}");
+    }
+}

@@ -17,8 +17,7 @@ async fn call(port: u16, token: &str, doc: String) -> Value {
     serde_json::from_str(&text).unwrap()
 }
 #[tokio::test]
-async fn mobile_http_tasks_track_resolved_paths_in_memory_and_gate_execution_on_native_authorization()
- {
+async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_authorization() {
     let temp = tempfile::tempdir().unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[12; 32]);
     let db_path = temp.path().join("tasks.db");
@@ -28,6 +27,7 @@ async fn mobile_http_tasks_track_resolved_paths_in_memory_and_gate_execution_on_
         Arc::new(plain_rs::prefs::Prefs::load(&temp.path().join("prefs.json")).unwrap()),
     )
     .unwrap();
+    server.runtime_state().file_platform.use_sdk_for_test();
     let mut socket = crate::host::events::TestHost::new(&server);
     let revoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let denied = revoked.clone();
@@ -63,24 +63,24 @@ async fn mobile_http_tasks_track_resolved_paths_in_memory_and_gate_execution_on_
     std::fs::write(&src, b"synthetic").unwrap();
     std::fs::write(&dst, b"existing").unwrap();
     let document = format!(
-        "mutation {{ createFileHostTask(clientId:\"owner\",type:COPY,title:\"copy\",ops:[{{src:{},dst:{},overwrite:false}}]) {{ id status }} }}",
+        "mutation {{ createFileTask(type:COPY,title:\"copy\",ops:[{{src:{},dst:{},overwrite:false}}]) {{ id status }} }}",
         json!(src.to_str().unwrap()),
         json!(dst.to_str().unwrap())
     );
     let queued = call(server.port, &token, document.clone()).await;
     assert!(queued.get("errors").is_none(), "{queued}");
-    let id = queued["data"]["createFileHostTask"]["id"].as_str().unwrap();
+    let id = queued["data"]["createFileTask"]["id"].as_str().unwrap();
     let done = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let result = call(server.port,&token,format!("query {{ fileHostTaskRecord(clientId:\"owner\",id:{}) {{ id status error doneBytes completedOps {{ src dst }} }} }}",json!(id))).await;
+            let result = call(server.port,&token,format!("query {{ fileTask(id:{}) {{ id status error doneBytes completedOps {{ src dst }} }} }}",json!(id))).await;
             assert!(result.get("errors").is_none(),"{result}");
-            let task = result["data"]["fileHostTaskRecord"].clone();
+            let task = result["data"]["fileTask"].clone();
             if task["status"] == "DONE" || task["status"] == "ERROR" { break task; }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
     }).await.unwrap();
     assert_eq!(done["status"], "DONE");
-    let resolved = temp.path().join("target_1.txt");
+    let resolved = temp.path().join("target (1).txt");
     assert_eq!(done["completedOps"][0]["dst"], resolved.to_str().unwrap());
     assert!(
         scanned
@@ -90,24 +90,24 @@ async fn mobile_http_tasks_track_resolved_paths_in_memory_and_gate_execution_on_
     );
     assert_eq!(std::fs::read(&resolved).unwrap(), b"synthetic");
     assert_eq!(std::fs::read(&dst).unwrap(), b"existing");
-    let foreign = call(
-        server.port,
-        &token,
-        format!(
-            "query {{ fileHostTaskRecord(clientId:\"foreign\",id:{}) {{ id }} }}",
-            json!(id)
-        ),
-    )
-    .await;
-    assert!(foreign["data"]["fileHostTaskRecord"].is_null());
+    let foreign = server
+        .runtime_state()
+        .public
+        .execute(
+            async_graphql::Request::new(format!("{{ fileTask(id:{}) {{ id }} }}", json!(id)))
+                .data("foreign".to_owned()),
+        )
+        .await;
+    assert!(foreign.errors.is_empty(), "{:?}", foreign.errors);
+    assert!(foreign.data.into_json().unwrap()["fileTask"].is_null());
     revoked.store(true, std::sync::atomic::Ordering::SeqCst);
     let denied = call(server.port, &token, document).await;
     assert!(denied.get("errors").is_some());
-    assert!(!temp.path().join("target_2.txt").exists());
+    assert!(!temp.path().join("target (2).txt").exists());
     let rows = server
         .runtime_state()
         .files
-        .list("owner".into())
+        .list(server.runtime_state().native_client_id().unwrap())
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
@@ -115,13 +115,10 @@ async fn mobile_http_tasks_track_resolved_paths_in_memory_and_gate_execution_on_
     let removed = call(
         server.port,
         &token,
-        format!(
-            "mutation {{ removeFileHostTask(clientId:\"owner\",id:{}) }}",
-            json!(id)
-        ),
+        format!("mutation {{ removeFileTask(id:{}) }}", json!(id)),
     )
     .await;
-    assert_eq!(removed["data"]["removeFileHostTask"], true);
+    assert_eq!(removed["data"]["removeFileTask"], true);
     worker.abort();
     let _ = worker.await;
     server.shutdown().await;
@@ -170,10 +167,25 @@ async fn media_move_case(missing_destination: bool) {
         })
         .unwrap();
     db.use_platform_audio_catalog().unwrap();
-    db.cache_platform_audio(&[plain_rs::db::audio_catalog::AudioMedia { media_id:Some("1".into()),aliases:Vec::new(),track:plain_rs::media::audio::queue::AudioTrack::from_path_stem(&audio_path) }],false).unwrap();
-    db.with_conn(|conn|conn.execute("INSERT INTO audio_queue_items(media_id,sort_order) VALUES('1',0)",[])).unwrap();
+    db.cache_platform_audio(
+        &[plain_rs::db::audio_catalog::AudioMedia {
+            media_id: Some("1".into()),
+            aliases: Vec::new(),
+            track: plain_rs::media::audio::queue::AudioTrack::from_path_stem(&audio_path),
+        }],
+        false,
+    )
+    .unwrap();
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO audio_queue_items(media_id,sort_order) VALUES('1',0)",
+            [],
+        )
+    })
+    .unwrap();
     plain_rs::media::audio::queue::save_audio_current(&db, &audio_path).unwrap();
     plain_rs::media::audio::playback::seek(&db, 100).unwrap();
+    server.runtime_state().file_platform.use_sdk_for_test();
     let mut socket = crate::host::events::TestHost::new(&server);
     let source_root = source.clone();
     let clear_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -200,11 +212,21 @@ async fn media_move_case(missing_destination: bool) {
                     json!(rows)
                 }
                 "audioLibraryResolve" => {
-                    let mut rows=Vec::new();
+                    let mut rows = Vec::new();
                     for id in params["ids"].as_array().unwrap() {
-                        let id=id.as_str().unwrap();
-                        let path = match id { "1"=>source_root.join("audio"), "11"=>source_root.parent().unwrap().join("target_1").join("audio"), _=>continue };
-                        if path.is_file() { rows.push(json!({"mediaId":id,"path":path.to_str().unwrap(),"title":"fixture","artist":"","albumId":"","durationMs":5000000001_i64})); }
+                        let id = id.as_str().unwrap();
+                        let path = match id {
+                            "1" => source_root.join("audio"),
+                            "11" => source_root
+                                .parent()
+                                .unwrap()
+                                .join("target (1)")
+                                .join("audio"),
+                            _ => continue,
+                        };
+                        if path.is_file() {
+                            rows.push(json!({"mediaId":id,"path":path.to_str().unwrap(),"title":"fixture","artist":"","albumId":"","durationMs":5000000001_i64}));
+                        }
                     }
                     json!(rows)
                 }
@@ -225,18 +247,30 @@ async fn media_move_case(missing_destination: bool) {
                 .unwrap();
         }
     });
-    let queued = call(server.port,&token,format!("mutation {{ createFileHostTask(clientId:\"owner\",type:MOVE,title:\"move\",ops:[{{src:{},dst:{},overwrite:false}}]) {{ id }} }}",json!(source.to_str().unwrap()),json!(destination.to_str().unwrap()))).await;
+    let queued = call(server.port,&token,format!("mutation {{ createFileTask(type:MOVE,title:\"move\",ops:[{{src:{},dst:{},overwrite:false}}]) {{ id }} }}",json!(source.to_str().unwrap()),json!(destination.to_str().unwrap()))).await;
     assert!(queued.get("errors").is_none(), "{queued}");
-    let id = queued["data"]["createFileHostTask"]["id"].as_str().unwrap();
-    let task = tokio::time::timeout(std::time::Duration::from_secs(5),async {
+    let id = queued["data"]["createFileTask"]["id"].as_str().unwrap();
+    let task = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let row = call(server.port,&token,format!("query {{ fileHostTaskRecord(clientId:\"owner\",id:{}) {{ status error completedOps {{ src dst }} }} }}",json!(id))).await;
-            let task = row["data"]["fileHostTaskRecord"].clone();
-            if task["status"]=="DONE" || task["status"]=="ERROR" { break task }
+            let row = call(
+                server.port,
+                &token,
+                format!(
+                    "query {{ fileTask(id:{}) {{ status error completedOps {{ src dst }} }} }}",
+                    json!(id)
+                ),
+            )
+            .await;
+            let task = row["data"]["fileTask"].clone();
+            if task["status"] == "DONE" || task["status"] == "ERROR" {
+                break task;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-    }).await.unwrap();
-    let moved = base.join("target_1");
+    })
+    .await
+    .unwrap();
+    let moved = base.join("target (1)");
     assert!(!source.exists());
     assert!(duration_cache.all().unwrap().is_empty());
     assert!(moved.join("audio").is_file());
@@ -264,15 +298,12 @@ async fn media_move_case(missing_destination: bool) {
         let row = call(
             server.port,
             &token,
-            format!(
-                "query {{ fileHostTaskRecord(clientId:\"owner\",id:{}) {{ status }} }}",
-                json!(id)
-            ),
+            format!("query {{ fileTask(id:{}) {{ status }} }}", json!(id)),
         )
         .await;
-        assert_eq!(row["data"]["fileHostTaskRecord"]["status"], "ERROR");
+        assert_eq!(row["data"]["fileTask"]["status"], "ERROR");
         assert_eq!(clear_count.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert!(!base.join("target_2").exists());
+        assert!(!base.join("target (2)").exists());
     } else {
         assert_eq!(task["status"], "DONE", "{task}");
         assert_eq!(clear_count.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -317,8 +348,16 @@ async fn media_move_case(missing_destination: bool) {
         })
         .unwrap();
     }
-    assert_eq!(plain_rs::media::audio::playback::snapshot(&db).unwrap().path,
-        if missing_destination { audio_path } else { moved.join("audio").to_str().unwrap().to_owned() });
+    assert_eq!(
+        plain_rs::media::audio::playback::snapshot(&db)
+            .unwrap()
+            .path,
+        if missing_destination {
+            audio_path
+        } else {
+            moved.join("audio").to_str().unwrap().to_owned()
+        }
+    );
     worker.abort();
     let _ = worker.await;
     server.shutdown().await;

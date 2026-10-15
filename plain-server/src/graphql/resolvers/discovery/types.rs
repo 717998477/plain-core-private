@@ -2,7 +2,7 @@ use async_graphql::SimpleObject;
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct NearbyDevice {
-    pub id: String,
+    pub id: async_graphql::ID,
     pub name: String,
     #[graphql(default)]
     pub ips: Vec<String>,
@@ -23,7 +23,7 @@ impl NearbyDevice {
         let interfaces = plain_rs::transport::lan::local_interfaces();
         let best_ip = plain_rs::transport::lan::best(&device.ips, &interfaces);
         Self {
-            id: device.id,
+            id: device.id.into(),
             name: device.name,
             ips: device.ips,
             port: device.port as i32,

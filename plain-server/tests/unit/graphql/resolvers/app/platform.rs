@@ -9,13 +9,17 @@ async fn public_samba_settings_and_mutation_use_core_preferences_and_explicit_ho
     let (generation, mut requests) = host.connect();
     let provider = tokio::spawn(async move {
         for method in [
+            "systemCapabilities",
             SYSTEM_SAMBA_SERVICE_FACTS,
+            "systemCapabilities",
             SYSTEM_SAMBA_SERVICE_FACTS,
             SYSTEM_SAMBA_APPLY,
         ] {
             let request = requests.recv().await.unwrap();
             assert_eq!(request["method"], method);
-            let result = if method == SYSTEM_SAMBA_APPLY {
+            let result = if method == "systemCapabilities" {
+                serde_json::json!(["LAN_SHARE"])
+            } else if method == SYSTEM_SAMBA_APPLY {
                 assert_eq!(request["params"]["settings"]["enabled"], true);
                 assert_eq!(request["params"]["settings"]["shares"][0]["auth"], "Guest");
                 serde_json::Value::Bool(true)
@@ -109,6 +113,13 @@ async fn public_disk_and_hostname_commands_reach_the_registered_provider() {
     let (generation, mut requests) = host.connect();
     let provider = tokio::spawn(async move {
         let request = requests.recv().await.unwrap();
+        assert_eq!(request["method"], "systemCapabilities");
+        host.reply(
+            generation,
+            serde_json::json!({"id":request["id"],"result":["DISK_MANAGER"]}),
+        )
+        .unwrap();
+        let request = requests.recv().await.unwrap();
         assert_eq!(request["method"], crate::host::platform::SYSTEM_DISK_FORMAT);
         assert_eq!(request["params"]["path"], "/dev/example");
         host.reply(
@@ -162,4 +173,65 @@ async fn public_mount_alias_uses_the_same_preferences_as_the_platform_adapter() 
         "Photos"
     );
     core.stop_core().await;
+}
+
+#[tokio::test]
+async fn unsupported_platform_operations_only_read_capabilities_and_leave_state_unchanged() {
+    for (query, capability) in [
+        ("{ disks { id } }", "DISK_MANAGER"),
+        (
+            r#"mutation { formatDisk(path:"/dev/example") }"#,
+            "DISK_MANAGER",
+        ),
+        ("{ appUpdate { currentVersion } }", "APP_UPDATES"),
+        ("{ sambaSettings { enabled } }", "LAN_SHARE"),
+        (
+            "mutation { setSambaSettings(input:{enabled:true,shares:[]}) }",
+            "LAN_SHARE",
+        ),
+        (
+            r#"mutation { setSambaUserPassword(password:"example") }"#,
+            "LAN_SHARE",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+        let state = core.runtime_state();
+        let before =
+            serde_json::to_value(plain_rs::prefs::samba::get_samba_settings(&state.prefs).unwrap())
+                .unwrap();
+        let (generation, mut requests) = state.host.connect();
+        let host = state.host.clone();
+        let provider = tokio::spawn(async move {
+            let request = requests.recv().await.unwrap();
+            assert_eq!(request["method"], "systemCapabilities");
+            host.reply(
+                generation,
+                serde_json::json!({"id":request["id"],"result":[]}),
+            )
+            .unwrap();
+            requests
+        });
+        let response = core.native_graphql().unwrap().execute(query.into()).await;
+        assert_eq!(response.errors.len(), 1, "{query}: {:?}", response.errors);
+        assert_eq!(
+            response.errors[0].message,
+            format!("unsupported capability {capability}")
+        );
+        let mut requests = provider.await.unwrap();
+        assert!(requests.try_recv().is_err());
+        assert_eq!(
+            serde_json::to_value(plain_rs::prefs::samba::get_samba_settings(&state.prefs).unwrap())
+                .unwrap(),
+            before
+        );
+        assert!(state.db.audit_events(0, 10, None).unwrap().is_empty());
+        core.stop_core().await;
+    }
+}
+
+#[test]
+fn hostname_sanitization_is_shared() {
+    assert_eq!(plain_rs::platform_hostname("  Foo_. Bar-- "), "foo-bar");
+    assert_eq!(plain_rs::platform_hostname("!.."), "");
 }

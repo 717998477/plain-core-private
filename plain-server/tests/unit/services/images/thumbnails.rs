@@ -1,16 +1,7 @@
-//! Thumbnail production behind `/fs`. The `/files/thumbnail` endpoint is
-//! gone, so the contract is asserted against the function that owns it:
-//! concurrent requests for the same key coalesce into one decode, a changed
-//! source invalidates the cache, the conditional request answers 304, and a
-//! revoked authorization surfaces as a refusal rather than an empty image.
-
 use crate::assembly::server::{ContentServer, ServerState};
 use crate::services::images::thumbnails::Request;
 use sha2::Digest;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 fn variant(base: &Request, center_crop: Option<bool>, if_none_match: Option<&str>) -> Request {
     Request {
@@ -55,49 +46,12 @@ fn header<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> String {
     headers.get(name).unwrap().to_str().unwrap().to_owned()
 }
 
-/// Answers every decode request by shipping the source bytes back through the
-/// output token, exactly as a platform thumbnail service does.
-fn decode_worker(
-    state: &ServerState,
-    port: u16,
-    cache: std::path::PathBuf,
-    source: std::path::PathBuf,
-) {
-    let state = state.clone();
-    let (generation, mut requests) = state.host.connect();
-    let worker_state = state.clone();
-    tokio::spawn(async move {
-        while let Some(request) = requests.recv().await {
-            if request["method"] == "thumbnailAuthorize" {
-                let _ = worker_state.host.reply(
-                    generation,
-                    serde_json::json!({"id":request["id"],"result":cache.to_str().unwrap()}),
-                );
-                continue;
-            }
-            let params = &request["params"];
-            let token = params["outputToken"].as_str().unwrap().to_owned();
-            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
-            bytes.extend(std::fs::read(&source).unwrap());
-            bytes.extend(params.to_string().as_bytes());
-            let url = format!("http://127.0.0.1:{port}/files/thumbnail/output/{token}");
-            let posted = reqwest::Client::new()
-                .post(url)
-                .bearer_auth(&plain_rs::utils::base64::base64_encode(&[4; 32]))
-                .body(bytes)
-                .send()
-                .await;
-            assert_eq!(
-                posted.map(|response| response.status().as_u16()).ok(),
-                Some(204),
-                "the decode output has to reach the waiting reader"
-            );
-            let _ = state.host.reply(
-                generation,
-                serde_json::json!({"id":request["id"],"result":true}),
-            );
-        }
-    });
+fn write_image(path: &std::path::Path, width: u32, height: u32) {
+    image::RgbImage::from_fn(width, height, |x, y| {
+        image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+    })
+    .save(path)
+    .unwrap();
 }
 
 fn server_with_cache() -> (tempfile::TempDir, ContentServer, std::path::PathBuf) {
@@ -114,62 +68,17 @@ fn server_with_cache() -> (tempfile::TempDir, ContentServer, std::path::PathBuf)
     (dir, core, cache)
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
 async fn concurrent_requests_for_one_key_decode_once() {
     let dir = server_with_cache();
-    let (_keep, core, cache) = dir;
+    let (_keep, core, _cache) = dir;
     let state = core.runtime_state();
-    let source = state.directory.join("source.bin");
-    std::fs::write(&source, b"payload").unwrap();
+    let source = state.directory.join("source.png");
+    write_image(&source, 160, 80);
 
-    let decodes = Arc::new(AtomicUsize::new(0));
-    let counting = decodes.clone();
-    let (generation, mut requests) = state.host.connect();
-    let worker_source = source.clone();
-    let port = core.port;
-    let worker_state = state.clone();
-    let worker = tokio::spawn(async move {
-        while let Some(request) = requests.recv().await {
-            let state = &worker_state;
-            let params = &request["params"];
-            match request["method"].as_str().unwrap() {
-                "thumbnailAuthorize" => {
-                    let _ = state.host.reply(
-                        generation,
-                        serde_json::json!({"id":request["id"],"result":cache.to_str().unwrap()}),
-                    );
-                }
-                "thumbnailDecode" => {
-                    counting.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
-                    bytes.extend(std::fs::read(&worker_source).unwrap());
-                    bytes.extend(params.to_string().as_bytes());
-                    let posted = reqwest::Client::new()
-                        .post(format!(
-                            "http://127.0.0.1:{port}/files/thumbnail/output/{}",
-                            params["outputToken"].as_str().unwrap()
-                        ))
-                        .bearer_auth(&plain_rs::utils::base64::base64_encode(&[4; 32]))
-                        .body(bytes)
-                        .send()
-                        .await;
-                    assert_eq!(
-                        posted.map(|response| response.status().as_u16()).ok(),
-                        Some(204),
-                        "the decode output has to reach the waiting reader"
-                    );
-                    let _ = state.host.reply(
-                        generation,
-                        serde_json::json!({"id":request["id"],"result":true}),
-                    );
-                }
-                other => panic!("unexpected host method {other}"),
-            }
-        }
-    });
+    let (_generation, mut host_requests) = state.host.connect();
 
-    let base = request_for(&source);
     let mut calls = Vec::new();
     for _ in 0..8 {
         let state = state.clone();
@@ -183,46 +92,44 @@ async fn concurrent_requests_for_one_key_decode_once() {
         assert_eq!(first, call.await.unwrap(), "every caller sees one render");
     }
     assert_eq!(
-        decodes.load(Ordering::SeqCst),
+        state.thumbnails.native_decodes.load(Ordering::SeqCst),
         1,
         "concurrent requests for one key coalesce into a single decode;          first status {} body {:?}",
         first.0,
         String::from_utf8_lossy(&first.2)
     );
     assert_eq!(first.0, 200);
-    assert_eq!(header(&first.1, "content-type"), "image/png");
+    assert_eq!(header(&first.1, "content-type"), "image/jpeg");
+    assert!(host_requests.try_recv().is_err());
+    assert_eq!(image::load_from_memory(&first.2).unwrap().width(), 80);
     assert_eq!(header(&first.1, "cache-control"), "private, max-age=86400");
 
-    worker.abort();
     core.stop_core().await;
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
 async fn a_changed_source_and_a_different_shape_both_invalidate() {
-    let (_dir, core, cache) = server_with_cache();
+    let (_dir, core, _cache) = server_with_cache();
     let state = core.runtime_state();
-    let source = state.directory.join("source.bin");
-    std::fs::write(&source, b"first").unwrap();
-    decode_worker(&state, core.port, cache.clone(), source.clone());
+    let source = state.directory.join("source.png");
+    write_image(&source, 160, 80);
 
     let base = request_for(&source);
     let first = render(&state, variant(&base, None, None)).await;
     assert_eq!(first.0, 200);
 
-    // Same bytes, same key: served from the cache without a decode.
     let again = render(&state, variant(&base, None, None)).await;
     assert_eq!(again, first);
+    assert_eq!(state.thumbnails.native_decodes.load(Ordering::SeqCst), 1);
 
-    // A longer source has a different fingerprint, so the cached entry is
-    // stale rather than silently reused.
-    std::fs::write(&source, b"second-longer").unwrap();
+    write_image(&source, 240, 100);
     let changed = render(&state, variant(&base, None, None)).await;
     assert_ne!(
         changed.2, first.2,
         "a changed source must not serve the old bytes"
     );
 
-    // The crop mode is part of the key, so it is a different entry.
     let mut cropped = variant(&base, None, None);
     cropped.center_crop = false;
     let uncropped = render(&state, cropped).await;
@@ -234,13 +141,13 @@ async fn a_changed_source_and_a_different_shape_both_invalidate() {
     core.stop_core().await;
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
 async fn a_matching_conditional_request_answers_not_modified() {
-    let (_dir, core, cache) = server_with_cache();
+    let (_dir, core, _cache) = server_with_cache();
     let state = core.runtime_state();
-    let source = state.directory.join("source.bin");
-    std::fs::write(&source, b"payload").unwrap();
-    decode_worker(&state, core.port, cache.clone(), source.clone());
+    let source = state.directory.join("source.png");
+    write_image(&source, 160, 80);
 
     let base = request_for(&source);
     let first = render(&state, variant(&base, None, None)).await;
@@ -254,12 +161,10 @@ async fn a_matching_conditional_request_answers_not_modified() {
     assert_eq!(not_modified.0, 304);
     assert!(not_modified.2.is_empty(), "304 carries no body");
 
-    // A weak tag for the same bytes still matches.
     let mut weak = variant(&base, None, None);
     weak.if_none_match = Some(format!("W/{etag}"));
     assert_eq!(render(&state, weak).await.0, 304);
 
-    // The etag of a different shape does not satisfy this request's.
     let mut other = variant(&base, None, None);
     other.center_crop = false;
     let other_etag = header(&render(&state, variant(&other, None, None)).await.1, "etag");
@@ -268,48 +173,27 @@ async fn a_matching_conditional_request_answers_not_modified() {
     assert_ne!(other_etag, etag);
 }
 
+#[cfg(unix)]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
-async fn a_revoked_authorization_is_a_refusal_not_an_empty_image() {
+async fn a_non_regular_source_is_refused_before_decoding() {
     let (_dir, core, _cache) = server_with_cache();
     let state = core.runtime_state();
-    let source = state.directory.join("source.bin");
-    std::fs::write(&source, b"payload").unwrap();
-    let (generation, mut requests) = state.host.connect();
-    let owned = state.clone();
-    let worker = tokio::spawn(async move {
-        while let Some(request) = requests.recv().await {
-            let error = if request["method"] == "thumbnailAuthorize" {
-                "permission revoked"
-            } else {
-                "thumbnailDecode must not run without authorization"
-            };
-            let _ = owned.host.reply(
-                generation,
-                serde_json::json!({"id":request["id"],"error":error}),
-            );
-        }
-    });
-
-    let refused = render(&state, request_for(&source)).await;
-    assert_eq!(
-        refused.0, 400,
-        "a refused authorization must not look like an empty thumbnail"
-    );
-    assert!(
-        String::from_utf8_lossy(&refused.2).contains("permission revoked"),
-        "the refusal has to say why, got {}",
-        String::from_utf8_lossy(&refused.2)
-    );
-    worker.abort();
+    let (_generation, mut host_requests) = state.host.connect();
+    let refused = render(&state, request_for(std::path::Path::new("/dev/null"))).await;
+    assert_eq!(refused.0, 400);
+    assert!(String::from_utf8_lossy(&refused.2).contains("regular file or directory required"));
+    assert_eq!(state.thumbnails.native_decodes.load(Ordering::SeqCst), 0);
+    assert!(host_requests.try_recv().is_err());
     core.stop_core().await;
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
 async fn a_source_that_vanishes_produces_no_content() {
-    let (_dir, core, cache) = server_with_cache();
+    let (_dir, core, _cache) = server_with_cache();
     let state = core.runtime_state();
     let source = state.directory.join("missing.bin");
-    decode_worker(&state, core.port, cache.clone(), source.clone());
     let rendered = render(&state, request_for(&source)).await;
     assert_eq!(
         rendered.0, 204,
@@ -320,4 +204,123 @@ async fn a_source_that_vanishes_produces_no_content() {
 
 fn hex(bytes: &[u8]) -> String {
     plain_rs::utils::hex::bytes_to_hex(&sha2::Sha256::digest(bytes))
+}
+
+#[tokio::test]
+async fn native_thumbnail_output_is_one_shot_and_validates_before_consuming() {
+    let thumbnails = super::Thumbnails::default();
+    let (sender, mut receiver) = tokio::sync::oneshot::channel();
+    thumbnails
+        .outputs
+        .lock()
+        .unwrap()
+        .insert("fixture".into(), sender);
+    assert!(thumbnails.submit("fixture", Vec::new()).is_err());
+    assert!(
+        thumbnails
+            .submit("fixture", vec![0; 32 * 1024 * 1024 + 1])
+            .is_err()
+    );
+    thumbnails.submit("fixture", vec![0, 255, 1]).unwrap();
+    assert_eq!(receiver.try_recv().unwrap(), vec![0, 255, 1]);
+    assert!(thumbnails.submit("fixture", vec![1]).is_err());
+    assert!(thumbnails.submit("expired", vec![1]).is_err());
+}
+
+#[test]
+fn cancelled_thumbnail_output_discards_its_token() {
+    let thumbnails = super::Thumbnails::default();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    thumbnails
+        .outputs
+        .lock()
+        .unwrap()
+        .insert("cancelled".into(), sender);
+    let output = super::Output {
+        service: &thumbnails,
+        token: "cancelled".into(),
+    };
+    drop(output);
+    assert!(thumbnails.submit("cancelled", vec![1]).is_err());
+    assert!(receiver.blocking_recv().is_err());
+}
+
+#[tokio::test]
+async fn sdk_decode_validates_receipts_and_cleans_every_output_token() {
+    for (receipt, output, expected) in [
+        (
+            serde_json::json!(true),
+            Some(vec![0, 255, 1]),
+            Ok(Some(vec![0, 255, 1])),
+        ),
+        (serde_json::json!(null), None, Ok(None)),
+        (
+            serde_json::json!(false),
+            None,
+            Err("invalid thumbnail receipt"),
+        ),
+        (
+            serde_json::json!(true),
+            None,
+            Err("missing thumbnail output"),
+        ),
+    ] {
+        let (_dir, core, _cache) = server_with_cache();
+        let state = core.runtime_state();
+        let (generation, mut requests) = state.host.connect();
+        let owned = state.clone();
+        let worker = tokio::spawn(async move {
+            let request = requests.recv().await.unwrap();
+            assert_eq!(request["method"], "thumbnailDecode");
+            assert_eq!(request["params"]["mediaId"], "sdk-id");
+            assert_eq!(request["params"]["width"], 80);
+            let token = request["params"]["outputToken"].as_str().unwrap();
+            if let Some(bytes) = output {
+                owned.thumbnails.submit(token, bytes).unwrap();
+            }
+            owned
+                .host
+                .reply(
+                    generation,
+                    serde_json::json!({"id":request["id"],"result":receipt}),
+                )
+                .unwrap();
+        });
+        let mut request = request_for(std::path::Path::new("/image.jpg"));
+        request.media_id = "sdk-id".into();
+        let actual = super::decode_sdk(&state, &request, true).await;
+        assert_eq!(
+            actual
+                .as_ref()
+                .map(|value| value.clone())
+                .map_err(String::as_str),
+            expected
+        );
+        worker.await.unwrap();
+        assert!(state.thumbnails.outputs.lock().unwrap().is_empty());
+        core.stop_core().await;
+    }
+}
+
+#[tokio::test]
+async fn cancelling_a_pending_sdk_decode_removes_its_token() {
+    let (_dir, core, _cache) = server_with_cache();
+    let state = core.runtime_state();
+    let (_generation, mut requests) = state.host.connect();
+    let owned = state.clone();
+    let call = tokio::spawn(async move {
+        super::decode_sdk(
+            &owned,
+            &request_for(std::path::Path::new("/image.jpg")),
+            false,
+        )
+        .await
+    });
+    let request = requests.recv().await.unwrap();
+    let token = request["params"]["outputToken"].as_str().unwrap();
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    assert!(state.thumbnails.outputs.lock().unwrap().is_empty());
+    assert!(state.thumbnails.submit(token, vec![1]).is_err());
+    core.stop_core().await;
 }

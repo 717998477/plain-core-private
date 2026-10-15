@@ -90,3 +90,160 @@ fn chunk_ids_cannot_escape_the_upload_directory() {
         json!({"status":"NONE"})
     );
 }
+
+#[tokio::test]
+async fn completion_failures_keep_the_committed_file_and_report_failure_once_without_retry() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(crate::db::Db::open(&directory.path().join("plain.db")).unwrap());
+    let store = FileStore::new(db, directory.path().into());
+    let base = directory.path().join("chunks");
+    save_chunk(&base, "upload", 0, b"complete").await.unwrap();
+    let destination = directory.path().join("saved.txt");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let runtime = Arc::new(Runtime::with_completion(move |path| {
+        let count = count.clone();
+        Box::pin(async move {
+            count.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(tokio::fs::read(path).await.unwrap(), b"complete");
+            Err(anyhow::anyhow!("scan refused"))
+        })
+    }));
+    let (events, mut received) = broadcast::channel(8);
+    runtime
+        .start(
+            store.clone(),
+            base.clone(),
+            "upload".into(),
+            1,
+            8,
+            Kind::File {
+                path: destination.clone(),
+                replace: false,
+            },
+            events.clone(),
+        )
+        .await
+        .unwrap();
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), received.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(event.event_type, "UPLOAD_MERGE_RESULT");
+    let payload: Value = serde_json::from_str(&event.payload).unwrap();
+    assert_eq!(payload["ok"], false);
+    let status = runtime.status("upload");
+    assert_eq!(status["status"], "FAILED");
+    assert!(
+        status["error"]
+            .as_str()
+            .unwrap()
+            .contains(destination.to_str().unwrap())
+    );
+    assert!(status["error"].as_str().unwrap().contains("scan refused"));
+    assert!(!base.join("upload").exists());
+    assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"complete");
+    assert!(
+        runtime
+            .start(
+                store,
+                base,
+                "upload".into(),
+                1,
+                8,
+                Kind::File {
+                    path: destination,
+                    replace: false
+                },
+                events
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(received.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn saved_chunks_are_listed_in_numeric_order_with_sizes_and_reject_invalid_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    assert!(list(directory.path(), "missing").await.unwrap().is_empty());
+    for (index, bytes) in [
+        (2, b"!".as_slice()),
+        (0, b"hello".as_slice()),
+        (1, b"world".as_slice()),
+    ] {
+        save_chunk(directory.path(), "upload", index, bytes)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        chunks(directory.path(), "upload").await.unwrap(),
+        vec![(0, 5), (1, 5), (2, 1)]
+    );
+    assert_eq!(
+        list(directory.path(), "upload").await.unwrap(),
+        vec!["0:5", "1:5", "2:1"]
+    );
+    for id in ["", "../escape", "nested/child"] {
+        assert!(save_chunk(directory.path(), id, 0, b"bytes").await.is_err());
+    }
+    assert!(
+        save_chunk(directory.path(), "upload", -1, b"bytes")
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn replacement_and_unique_merge_commits_preserve_the_correct_existing_files() {
+    for replace in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let chunks = directory.path().join("chunks");
+        save_chunk(&chunks, "upload", 0, b"fresh").await.unwrap();
+        let target = directory.path().join("report.txt");
+        let variant = directory.path().join("report (1).txt");
+        std::fs::write(&target, b"existing").unwrap();
+        std::fs::write(&variant, b"variant").unwrap();
+        let (saved, size) = merge(
+            None,
+            &chunks.join("upload"),
+            1,
+            5,
+            Kind::File {
+                path: target.clone(),
+                replace,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(size, 5);
+        let saved = directory.path().join(saved);
+        if replace {
+            assert_eq!(saved, target);
+            assert_eq!(std::fs::read(&target).unwrap(), b"fresh");
+        } else {
+            assert_eq!(saved, directory.path().join("report (2).txt"));
+            assert_eq!(std::fs::read(&target).unwrap(), b"existing");
+            assert_eq!(std::fs::read(saved).unwrap(), b"fresh");
+        }
+        assert_eq!(std::fs::read(&variant).unwrap(), b"variant");
+        assert!(!chunks.join("upload").exists());
+    }
+}
+
+#[test]
+fn a_collision_after_merge_destination_selection_never_overwrites_the_other_writer() {
+    let directory = tempfile::tempdir().unwrap();
+    let original = directory.path().join("report.txt");
+    let selected = crate::utils::unique_path::unique_sibling(&original).unwrap();
+    let staged = directory.path().join("staged");
+    std::fs::write(&staged, b"uploaded").unwrap();
+    std::fs::write(&original, b"other writer").unwrap();
+    let committed = commit_file(&staged, &original, selected, false).unwrap();
+    assert_eq!(committed, directory.path().join("report (1).txt"));
+    assert_eq!(std::fs::read(&original).unwrap(), b"other writer");
+    assert_eq!(std::fs::read(&committed).unwrap(), b"uploaded");
+    assert!(!staged.exists());
+}

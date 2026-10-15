@@ -43,50 +43,6 @@ struct ChunkInfo {
     size: i64,
 }
 
-/// plain-app's `File.newName()`: an existing ` (N)` suffix is stripped before
-/// the next index is appended, so repeated uploads walk `a.txt`, `a (1).txt`,
-/// `a (2).txt` rather than nesting counters.
-fn split_name(name: &str) -> (&str, &str) {
-    match name.rfind('.') {
-        Some(position) if position > 0 => (&name[..position], &name[position + 1..]),
-        _ => (name, ""),
-    }
-}
-
-fn candidate(stem: &str, extension: &str, index: u32) -> String {
-    if extension.is_empty() {
-        format!("{stem} ({index})")
-    } else {
-        format!("{stem} ({index}).{extension}")
-    }
-}
-
-fn next_unique_name(parent: &Path, name: &str) -> String {
-    let (stem, extension) = split_name(name);
-    // Drop a trailing ` (N)` exactly like plain-app before appending the next.
-    let stem = {
-        let mut base = stem;
-        if let Some(position) = base.rfind(" (") {
-            let suffix = &base[position + 2..];
-            if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) {
-                base = &base[..position];
-            }
-        }
-        base
-    };
-    let mut index = 1u32;
-    loop {
-        let name = candidate(stem, extension, index);
-        if !parent.join(&name).exists() {
-            return name;
-        }
-        index += 1;
-        if index == u32::MAX {
-            return name;
-        }
-    }
-}
-
 fn plain(status: StatusCode, body: impl Into<String>) -> Response {
     (
         status,
@@ -107,6 +63,11 @@ async fn session_key(state: &ServerState, headers: &HeaderMap) -> anyhow::Result
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
     anyhow::ensure!(!client_id.is_empty(), "c-id header is missing");
+    if state.authenticated(headers) {
+        if let Some(key) = crate::services::sessions::local_key(state, client_id) {
+            return Ok(key);
+        }
+    }
     let row = state
         .db
         .session_get(client_id)
@@ -161,8 +122,15 @@ async fn stream_to_file(
     Ok(written)
 }
 
-fn temp_name(prefix: &str, millis: u128) -> String {
-    format!(".{prefix}_{millis}_{}", std::process::id())
+struct Temporary(PathBuf);
+impl Drop for Temporary {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn temp_name(prefix: &str) -> String {
+    format!(".{prefix}_{}", uuid::Uuid::new_v4())
 }
 
 /// A declared-length chunk goes through the shared writer, whose `Drop`
@@ -198,13 +166,6 @@ async fn store_chunk(
         )),
         Err(error) => Err(error),
     }
-}
-
-fn now_millis() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_millis())
-        .unwrap_or_default()
 }
 
 pub(crate) async fn upload_tmp_dir(state: &ServerState) -> anyhow::Result<String> {
@@ -256,7 +217,10 @@ pub(crate) async fn upload(State(state): State<ServerState>, request: Request) -
                     .next()
                     .unwrap_or_default()
                     .to_owned();
-                if file_name.is_empty() || current.dir.is_empty() {
+                if file_name.is_empty()
+                    || matches!(file_name.as_str(), "." | "..")
+                    || current.dir.is_empty()
+                {
                     return plain(StatusCode::BAD_REQUEST, "dir or fileName is empty");
                 }
                 let content_type = field.content_type().unwrap_or_default().to_owned();
@@ -276,17 +240,36 @@ pub(crate) async fn upload(State(state): State<ServerState>, request: Request) -
                     }
                     continue;
                 }
-                let mut final_name = file_name.clone();
-                let mut destination = destination_dir.join(&file_name);
-                if destination.is_file() {
-                    if current.replace {
-                        let _ = tokio::fs::remove_file(&destination).await;
-                    } else {
-                        final_name = next_unique_name(&destination_dir, &file_name);
-                        destination = destination_dir.join(&final_name);
-                    }
+                if !destination_dir.is_absolute() {
+                    return plain(
+                        StatusCode::BAD_REQUEST,
+                        "absolute upload directory required",
+                    );
                 }
-                let temp = destination_dir.join(temp_name("upload_tmp", now_millis()));
+                if let Err(error) = state
+                    .file_platform
+                    .authorize(
+                        destination_dir
+                            .join(&file_name)
+                            .to_str()
+                            .unwrap_or_default(),
+                        true,
+                    )
+                    .await
+                {
+                    return plain(StatusCode::BAD_REQUEST, error.to_string());
+                }
+                let original = destination_dir.join(&file_name);
+                let mut destination = if current.replace {
+                    original.clone()
+                } else {
+                    match plain_rs::utils::unique_path::unique_sibling(&original) {
+                        Ok(path) => path,
+                        Err(error) => return plain(StatusCode::BAD_REQUEST, error.to_string()),
+                    }
+                };
+                let temp = destination_dir.join(temp_name("upload_tmp"));
+                let _temporary = Temporary(temp.clone());
                 let written = match stream_to_file(&mut field, &temp).await {
                     Ok(written) => written,
                     Err(error) => {
@@ -301,21 +284,61 @@ pub(crate) async fn upload(State(state): State<ServerState>, request: Request) -
                         format!("Size mismatch: expected {}, got {written}", current.size),
                     );
                 }
-                if let Err(error) = tokio::fs::rename(&temp, &destination).await {
+                let commit = if current.replace {
+                    tokio::fs::rename(&temp, &destination).await
+                } else {
+                    loop {
+                        let source = temp.clone();
+                        let target = destination.clone();
+                        let result = tokio::task::spawn_blocking(move || {
+                            plain_rs::files::filesystem::rename::no_replace(&source, &target)
+                        })
+                        .await;
+                        let result = match result {
+                            Ok(result) => result,
+                            Err(error) => break Err(std::io::Error::other(error)),
+                        };
+                        if result
+                            .as_ref()
+                            .is_err_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
+                        {
+                            destination =
+                                match plain_rs::utils::unique_path::unique_sibling(&original) {
+                                    Ok(path) => path,
+                                    Err(error) => break Err(error),
+                                };
+                        } else {
+                            break result;
+                        }
+                    }
+                };
+                if let Err(error) = commit {
                     let _ = tokio::fs::remove_file(&temp).await;
                     return plain(
                         StatusCode::BAD_REQUEST,
                         format!("Failed to move uploaded file into place: {error}"),
                     );
                 }
-                let _ = state
-                    .host
-                    .call(
-                        "scanFilesFacts",
-                        json!({"paths":[destination.to_string_lossy()]}),
-                    )
-                    .await;
-                saved = Some(final_name);
+                if let Err(error) = state
+                    .file_platform
+                    .scan(&[destination.to_string_lossy().into_owned()])
+                    .await
+                {
+                    return plain(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "Uploaded file saved at {} but scan failed: {error}",
+                            destination.display()
+                        ),
+                    );
+                }
+                saved = Some(
+                    destination
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
             }
             _ => {
                 let _ = field.bytes().await;
@@ -336,7 +359,8 @@ async fn store_app_file(
     expected: i64,
 ) -> anyhow::Result<String> {
     let directory = state.directory.clone();
-    let temp = directory.join(temp_name("chat_upload", now_millis()));
+    let temp = directory.join(temp_name("chat_upload"));
+    let _temporary = Temporary(temp.clone());
     let written = match stream_to_file(field, &temp).await {
         Ok(written) => written,
         Err(error) => {
@@ -451,10 +475,11 @@ pub(crate) async fn upload_chunk(State(state): State<ServerState>, request: Requ
                     }
                 };
                 let chunk = base;
-                let temp = chunk.parent().unwrap().join(temp_name(
-                    &format!("tmp_chunk_{}_{}", current.index, now_millis()),
-                    std::process::id() as u128,
-                ));
+                let temp = chunk
+                    .parent()
+                    .unwrap()
+                    .join(temp_name(&format!("tmp_chunk_{}", current.index)));
+                let _temporary = Temporary(temp.clone());
                 match stream_to_file(&mut field, &temp).await {
                     Ok(_) => {
                         let _ = tokio::fs::remove_file(&chunk).await;

@@ -23,25 +23,25 @@ fn status(s: Status) -> Result<ImageHostIndexStatus> {
     })
 }
 #[derive(Default)]
-pub struct ImageIndexQuery;
+pub struct ImageIndexTaskQuery;
 #[Object]
-impl ImageIndexQuery {
-    async fn image_host_index_status(&self, ctx: &Context<'_>) -> Result<ImageHostIndexStatus> {
+impl ImageIndexTaskQuery {
+    async fn image_index_status(&self, ctx: &Context<'_>) -> Result<ImageHostIndexStatus> {
         status(ctx.data::<Arc<ImageIndex>>()?.status())
     }
 }
 #[derive(Default)]
-pub struct ImageIndexMutation;
+pub struct ImageIndexTaskMutation;
 #[Object]
-impl ImageIndexMutation {
-    async fn image_host_start_index(
+impl ImageIndexTaskMutation {
+    async fn start_image_index_task(
         &self,
         ctx: &Context<'_>,
         force: bool,
     ) -> Result<ImageHostIndexStatus> {
         status(ctx.data::<Arc<ImageIndex>>()?.start(force)?)
     }
-    async fn image_host_index_selected(
+    async fn index_selected_images(
         &self,
         ctx: &Context<'_>,
         ids: Vec<ID>,
@@ -51,7 +51,7 @@ impl ImageIndexMutation {
                 .selected(ids.into_iter().map(|id| id.to_string()).collect())?,
         )
     }
-    async fn image_host_cancel_index(&self, ctx: &Context<'_>) -> Result<ImageHostIndexStatus> {
+    async fn cancel_image_index_task(&self, ctx: &Context<'_>) -> Result<ImageHostIndexStatus> {
         status(ctx.data::<Arc<ImageIndex>>()?.cancel()?)
     }
 }

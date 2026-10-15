@@ -1,12 +1,6 @@
 use crate::assembly::server::ServerState;
 use crate::services::discovery::nearby_devices::Context;
 use anyhow::{Result, ensure};
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
 use plain_rs::protocols::mdns::host_responder;
 use plain_rs::protocols::mdns::service_browser::MdnsServiceBrowser;
 use serde::Deserialize;
@@ -539,26 +533,12 @@ impl Runtime {
         }
     }
 }
-pub(crate) async fn call(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    Json(request): Json<Request>,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
+pub(crate) async fn control(state: &ServerState, request: Request) -> Result<Value> {
     let mut stop = state.stop.clone();
-    if *stop.borrow() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    let result = tokio::select! {_=stop.changed()=>Err(anyhow::anyhow!("Server stopped")),result=state.mdns.execute(&state,request)=>result};
-    match result {
-        Ok(value) => Json(json!({"result":value})).into_response(),
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":error.to_string()})),
-        )
-            .into_response(),
+    ensure!(!*stop.borrow(), "Server stopped");
+    tokio::select! {
+        _ = stop.changed() => Err(anyhow::anyhow!("Server stopped")),
+        result = state.mdns.execute(state, request) => result,
     }
 }
 

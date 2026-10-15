@@ -154,7 +154,7 @@ pub(crate) async fn dispatch(
         req.extensions_mut()
             .insert(crate::host::resources::RemoteHost(remote_host));
         req.extensions_mut()
-            .insert(crate::http::listeners::ConnectionScheme("https"));
+            .insert(crate::http::ConnectionScheme("https"));
     }
     #[cfg(not(feature = "http_transport"))]
     let _ = remote_host;

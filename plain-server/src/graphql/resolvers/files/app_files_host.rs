@@ -24,10 +24,18 @@ impl AppFileHostMutation {
             plain_rs::chat::attachments::app_file_store::display_name(&file, &Default::default());
         Ok(AppFile::from_dappfile(file, name))
     }
-    async fn release_app_file(&self, ctx: &Context<'_>, id: String) -> async_graphql::Result<bool> {
+    async fn release_app_file(
+        &self,
+        ctx: &Context<'_>,
+        file_id: String,
+    ) -> async_graphql::Result<bool> {
         ctx.data::<Arc<FileStore>>()?
-            .release(id)
+            .release(file_id)
             .await
             .map_err(async_graphql::Error::new)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/graphql/resolvers/files/app_files_host.rs"]
+mod tests;

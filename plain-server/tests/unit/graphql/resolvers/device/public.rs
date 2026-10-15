@@ -40,34 +40,38 @@ fn fixture(
     stub(host.clone(), handler);
     let directory = dir.path().to_path_buf();
     let (events, _) = tokio::sync::broadcast::channel(16);
-    (
-        dir,
-        crate::graphql::schemas::public::build(host, events, prefs, db, directory),
-    )
+    let schema = crate::graphql::schemas::public::build(host, events, prefs, db, directory);
+    schema
+        .data::<crate::assembly::services::Services>()
+        .unwrap()
+        .logs
+        .set_path(dir.path().join("plain.log"))
+        .unwrap();
+    (dir, schema)
 }
 
-fn device_facts() -> Value {
+fn properties() -> Value {
     json!({
-        "name": "Pixel 8", "platform": "ANDROID", "manufacturer": "Google", "model": "shiba",
-        "osName": "Android", "osVersion": "14", "kernelVersion": "6.1",
-        "appVersion": "1.2.3", "appBuildNumber": "45", "language": "en",
-        "cpuArch": "arm64-v8a", "cpuModel": Value::Null,
-        "totalMemory": 8000000000i64, "totalStorage": 128000000000i64,
-        "display": {"width": 1080, "height": 2400, "density": 2.75},
-        "android": {
-            "sdkVersion": 34, "versionCodeName": "REL", "securityPatch": "2024-01-01",
-            "bootloader": "b", "fingerprint": "fp", "hardware": "hw", "radioVersion": "rv",
-            "board": "bd", "buildBrand": "google", "buildNumber": "UQ1A", "device": "shiba",
-            "javaVmVersion": "17", "glEsVersion": "3.2",
-            "buildTime": "2024-01-01T00:00:00.000Z",
-        },
+        "name": "Test Device", "manufacturer": "Example", "model": "model", "osVersion": "14",
+        "appVersion": "1.2.3", "appBuildNumber": "45", "language": "en", "cpuArch": "arm64-v8a",
+        "socModel": null, "display.width": 1080, "display.height": 2400, "display.density": 2.75,
+        "android.sdkVersion": 34, "android.buildBrand": "example", "android.buildTime": 1704067200000i64,
     })
 }
 
 #[tokio::test]
-async fn device_info_carries_the_hardware_report() {
-    let (_dir, schema) = fixture(|method, _| match method {
-        "systemDeviceInfoFacts" => device_facts(),
+async fn device_info_carries_the_hardware_report_without_combined_host_facts() {
+    let (_dir, schema) = fixture(|method, params| match method {
+        "systemProperties" => {
+            let values = properties();
+            let mut selected = serde_json::Map::new();
+            for name in params["names"].as_array().unwrap() {
+                let name = name.as_str().unwrap();
+                assert!(values.get(name).is_some(), "unexpected property {name}");
+                selected.insert(name.into(), values[name].clone());
+            }
+            Value::Object(selected)
+        }
         other => panic!("unexpected host call {other}"),
     });
     let response = schema
@@ -80,50 +84,47 @@ async fn device_info_carries_the_hardware_report() {
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let info = response.data.into_json().unwrap()["deviceInfo"].clone();
-    assert_eq!(info["name"], "Pixel 8");
-    assert_eq!(info["platform"], "ANDROID");
-    assert_eq!(info["totalMemory"], 8000000000i64);
-    assert_eq!(info["cpuModel"], Value::Null);
-    assert_eq!(info["display"]["density"], 2.75);
-    assert_eq!(info["android"]["sdkVersion"], 34);
-    assert_eq!(info["android"]["buildBrand"], "google");
-    assert_eq!(info["android"]["buildTime"], "2024-01-01T00:00:00.000Z");
+    assert!(info["totalMemory"].as_i64().unwrap() > 0);
+    assert!(info["totalStorage"].as_i64().unwrap() > 0);
+    assert!(!info["name"].as_str().unwrap().is_empty());
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        assert_eq!(info["name"], "Test Device");
+        assert_eq!(info["display"]["density"], 2.75);
+    } else {
+        assert!(info["display"].is_null());
+    }
+    if cfg!(target_os = "android") {
+        assert_eq!(info["platform"], "ANDROID");
+        assert_eq!(info["android"]["sdkVersion"], 34);
+        assert_eq!(info["android"]["buildBrand"], "example");
+        assert_eq!(info["android"]["buildTime"], "2024-01-01T00:00:00.000Z");
+    } else {
+        assert!(info["android"].is_null());
+    }
 }
 
-/// The Android block and the display are platform-specific; on anything
-/// else they are absent, not zeroed.
 #[tokio::test]
-async fn a_non_android_report_omits_the_android_extras() {
-    let (_dir, schema) = fixture(|method, _| match method {
-        "systemDeviceInfoFacts" => {
-            let mut facts = device_facts();
-            facts["platform"] = json!("IOS");
-            facts["android"] = Value::Null;
-            facts["display"] = Value::Null;
-            facts
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+async fn selecting_only_platform_and_nested_type_names_never_reads_sdk_properties() {
+    let (_dir, schema) = fixture(|method, _| panic!("unexpected host call {method}"));
     let response = schema
-        .execute(r#"query { deviceInfo { platform display { width } android { sdkVersion } } }"#)
+        .execute("{ deviceInfo { platform display { __typename } android { __typename } } }")
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let info = response.data.into_json().unwrap()["deviceInfo"].clone();
-    assert_eq!(info["platform"], "IOS");
-    assert_eq!(info["display"], Value::Null);
-    assert_eq!(info["android"], Value::Null);
+    assert_eq!(
+        info["display"].is_null(),
+        !cfg!(any(target_os = "android", target_os = "ios"))
+    );
+    assert_eq!(info["android"].is_null(), !cfg!(target_os = "android"));
 }
 
-/// Battery and memory are "the platform cannot tell"; CPU load and free
-/// storage are real readings and a zero there is meaningful.
 #[tokio::test]
-async fn unreadable_readings_are_null_but_real_zeroes_are_zero() {
+async fn device_status_preserves_optional_battery_and_selected_values() {
     let (_dir, schema) = fixture(|method, _| match method {
-        "systemDeviceStatusFacts" => json!({
-            "uptimeSec": 3600, "batteryLevel": Value::Null, "charging": false,
-            "temperatures": [{"label": "cpu", "celsius": 41.5}],
-            "cpuUsage": 0.0, "memoryAvailable": Value::Null, "storageAvailable": 0,
-        }),
+        "systemBatterySample" => {
+            json!({"level":null,"scale":null,"charging":false,"temperatureTenths":null})
+        }
+        "systemMemoryAvailable" => json!(0),
         other => panic!("unexpected host call {other}"),
     });
     let response = schema
@@ -134,25 +135,44 @@ async fn unreadable_readings_are_null_but_real_zeroes_are_zero() {
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let status = response.data.into_json().unwrap()["deviceStatus"].clone();
-    assert_eq!(status["uptimeSec"], 3600);
-    assert_eq!(status["batteryLevel"], Value::Null);
-    assert_eq!(status["memoryAvailable"], Value::Null);
-    assert_eq!(status["cpuUsage"], 0.0);
-    assert_eq!(status["storageAvailable"], 0);
-    assert_eq!(status["temperatures"][0]["celsius"], 41.5);
+    assert!(status["uptimeSec"].as_i64().unwrap() >= 0);
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        if let Some(level) = status["batteryLevel"].as_i64() {
+            assert!((0..=100).contains(&level));
+        }
+        assert!(status["charging"].is_boolean());
+    } else {
+        assert!(status["batteryLevel"].is_null());
+        assert_eq!(status["charging"], false);
+    }
+    assert!((0.0..=100.0).contains(&status["cpuUsage"].as_f64().unwrap()));
+    assert!(status["storageAvailable"].as_i64().unwrap() >= 0);
+    if cfg!(target_os = "ios") {
+        assert!(status["memoryAvailable"].is_null());
+    } else if cfg!(target_os = "android") {
+        assert_eq!(status["memoryAvailable"], 0);
+    } else {
+        assert!(status["memoryAvailable"].as_i64().unwrap() >= 0);
+    }
+    assert!(status["temperatures"].is_array());
 }
 
 #[tokio::test]
 async fn the_app_root_exposes_the_identity_and_the_capability_lists() {
-    let (_dir, schema) = fixture(|method, _| match method {
-        "systemAppFacts" => json!({
-            "clientId": "stale", "urlToken": "stale", "httpPort": 9999, "httpsPort": 9999,
-            "appDir": "/data/user/0/com.ismartcoding.plain", "deviceName": "stale",
-            "deviceType": "PHONE", "capabilities": ["SMS", "CONTACTS", "WAT"],
-            "buildChannel": "GITHUB", "permissions": ["RECORD_AUDIO", "READ_SMS", "ADB", "NOPE"],
-            "downloadsDir": "/storage/emulated/0/Download", "developerMode": false, "debug": false,
-        }),
-        other => panic!("unexpected host call {other}"),
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    let (_dir, schema) = fixture(move |method, _| {
+        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match method {
+            "systemAppFacts" => json!({
+                "clientId": "stale", "urlToken": "stale", "httpPort": 9999, "httpsPort": 9999,
+                "appDir": "/data/user/0/com.ismartcoding.plain", "deviceName": "stale",
+                "deviceType": "PHONE", "capabilities": ["SMS", "CONTACTS", "WAT"],
+                "buildChannel": "GITHUB", "permissions": ["RECORD_AUDIO", "READ_SMS", "ADB", "NOPE"],
+                "downloadsDir": "/storage/emulated/0/Download", "developerMode": false, "debug": false,
+            }),
+            other => panic!("unexpected host call {other}"),
+        }
     });
     let response = schema
         .execute(
@@ -161,6 +181,7 @@ async fn the_app_root_exposes_the_identity_and_the_capability_lists() {
         )
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     let app = response.data.into_json().unwrap()["app"].clone();
     assert_eq!(app["clientId"], "c1");
     assert_eq!(app["httpPort"], 8080);
@@ -187,19 +208,14 @@ fn unknown_capabilities_and_permissions_are_dropped() {
     assert_eq!(Permission::parse("NOT_A_PERMISSION"), None);
 }
 
-/// A search must not be cut short by the page size: the platform filters
-/// the whole buffer and only then applies offset/limit.
 #[tokio::test]
-async fn a_log_search_passes_the_filter_and_the_page_separately() {
-    let (_dir, schema) = fixture(|method, params| match method {
-        "systemAppLogFacts" => {
-            assert_eq!(params["query"], "boom");
-            assert_eq!(params["offset"], 5);
-            assert_eq!(params["limit"], 10);
-            json!({ "lines": ["e boom 6", "e boom 7"] })
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+async fn a_log_search_filters_before_applying_the_page() {
+    let (dir, schema) = fixture(|method, _| panic!("unexpected host call {method}"));
+    std::fs::write(
+        dir.path().join("plain.log"),
+        "e boom 7\nnoise\ne boom 6\ne boom 5\nnoise\ne boom 4\ne boom 3\ne boom 2\ne boom 1\n",
+    )
+    .unwrap();
     let response = schema
         .execute(r#"query { appLogs(offset:5, limit:10, query:"text:boom size:>1") }"#)
         .await;
@@ -210,49 +226,41 @@ async fn a_log_search_passes_the_filter_and_the_page_separately() {
     );
 }
 
-/// A query with no `text` field filters on nothing — the log view pages the
-/// whole buffer.
 #[tokio::test]
-async fn a_log_query_without_text_sends_an_empty_filter() {
-    let (_dir, schema) = fixture(|method, params| match method {
-        "systemAppLogFacts" => {
-            assert_eq!(params["query"], "");
-            json!({ "lines": [] })
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+async fn a_log_query_without_text_pages_the_entire_file() {
+    let (dir, schema) = fixture(|method, _| panic!("unexpected host call {method}"));
+    std::fs::write(dir.path().join("plain.log"), "old\nnew\n").unwrap();
     let response = schema
         .execute(r#"query { appLogs(offset:0, limit:10, query:"size:>1") }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-}
-
-#[tokio::test]
-async fn the_log_path_is_asked_for_on_its_own() {
-    let (_dir, schema) = fixture(|method, params| match method {
-        "systemAppLogFacts" => {
-            assert_eq!(params["pathOnly"], true);
-            json!({ "path": "/data/logs/plain.log" })
-        }
-        other => panic!("unexpected host call {other}"),
-    });
-    let response = schema.execute(r#"query { appLogPath }"#).await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
-        response.data.into_json().unwrap()["appLogPath"],
-        "/data/logs/plain.log"
+        response.data.into_json().unwrap()["appLogs"],
+        json!(["new", "old"])
     );
 }
 
 #[tokio::test]
-async fn clearing_the_logs_reports_success() {
-    let (_dir, schema) = fixture(|method, _| match method {
-        "systemClearAppLogs" => json!(true),
-        other => panic!("unexpected host call {other}"),
-    });
-    let response = schema.execute(r#"mutation { clearAppLogs }"#).await;
+async fn reading_the_log_path_does_not_open_the_file_or_call_the_host() {
+    let (dir, schema) = fixture(|method, _| panic!("unexpected host call {method}"));
+    let response = schema.execute("{ appLogPath }").await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["appLogPath"],
+        dir.path().join("plain.log").to_string_lossy().as_ref()
+    );
+    assert!(!dir.path().join("plain.log").exists());
+}
+
+#[tokio::test]
+async fn clearing_the_logs_truncates_the_configured_file() {
+    let (dir, schema) = fixture(|method, _| panic!("unexpected host call {method}"));
+    let path = dir.path().join("plain.log");
+    std::fs::write(&path, "old\n").unwrap();
+    let response = schema.execute("mutation { clearAppLogs }").await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(response.data.into_json().unwrap()["clearAppLogs"], true);
+    assert_eq!(std::fs::read(path).unwrap(), Vec::<u8>::new());
 }
 
 #[tokio::test]
@@ -355,11 +363,35 @@ async fn local_app_permissions_use_os_grants_without_web_opt_in() {
 
 #[tokio::test]
 async fn incomplete_app_facts_fail_instead_of_inventing_platform_values() {
-    let (_dir, schema) = fixture(|method, _| match method {
-        "systemAppFacts" => json!({ "permissions": [] }),
-        other => panic!("unexpected host call {other}"),
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    let (_dir, schema) = fixture(move |method, _| {
+        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match method {
+            "systemAppFacts" => json!({ "permissions": [] }),
+            other => panic!("unexpected host call {other}"),
+        }
     });
     let response = schema.execute("{ app { deviceType debug } }").await;
-    assert_eq!(response.errors.len(), 1);
-    assert!(response.errors[0].message.starts_with("invalid app facts:"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(response.errors.len(), 2);
+    assert!(
+        response
+            .errors
+            .iter()
+            .all(|error| error.message.starts_with("invalid app facts:"))
+    );
+}
+
+#[tokio::test]
+async fn app_preferences_do_not_call_the_platform() {
+    let (_dir, schema) = fixture(|method, _| panic!("unexpected host call {method}"));
+    let response = schema
+        .execute("{app{clientId urlToken httpPort httpsPort deviceName developerMode}}")
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["app"]["urlToken"],
+        "dG9rZW4="
+    );
 }

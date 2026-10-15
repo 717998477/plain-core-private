@@ -158,3 +158,101 @@ async fn the_development_bearer_only_admits_the_exact_configured_token() {
     assert!(!dev_bearer_matches(&state, "Bearer plainapp-dev").unwrap());
     core.stop_core().await;
 }
+
+#[tokio::test]
+async fn native_identity_without_the_private_transport_token_cannot_claim_local_origin() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let mut headers = HeaderMap::new();
+    headers.insert("c-id", state.native_client_id().unwrap().parse().unwrap());
+    let body = Bytes::from_static(br#"{"query":"{ sessions { clientId } }"}"#);
+    for token in [
+        None,
+        Some("wrong".to_owned()),
+        Some(core.native_url_token().unwrap()),
+    ] {
+        headers.remove("authorization");
+        if let Some(token) = token {
+            headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+        }
+        assert_eq!(
+            call(State(state.clone()), headers.clone(), body.clone())
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    headers.insert(
+        "authorization",
+        format!("Bearer {}", state.token).parse().unwrap(),
+    );
+    assert_eq!(
+        call(State(state.clone()), headers.clone(), body)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn init_requires_a_client_id_and_returns_forbidden_when_access_is_disabled() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let remote = ConnectInfo("127.0.0.1:12345".parse().unwrap());
+    assert_eq!(
+        init(State(state.clone()), remote, HeaderMap::new(), Bytes::new())
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    state.prefs.set_user("desktop_access", false).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("c-id", "web-client".parse().unwrap());
+    assert_eq!(
+        init(State(state), remote, headers, Bytes::new())
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn native_init_uses_the_owned_url_key_without_creating_a_web_session_or_replacing_the_password()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let id = state.native_client_id().unwrap();
+    assert!(state.db.session_get(&id).unwrap().is_none());
+    state.prefs.set("password", "existing-password").unwrap();
+    let key = plain_rs::utils::base64::base64_decode(&core.native_url_token().unwrap());
+    let mut headers = HeaderMap::new();
+    headers.insert("c-id", id.parse().unwrap());
+    let response = init(
+        State(state.clone()),
+        ConnectInfo("127.0.0.1:1234".parse().unwrap()),
+        headers,
+        Bytes::from(plain_rs::crypto::xchacha_encrypt_raw(&key, b"init").unwrap()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 2048)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(payload["password"], "");
+    assert!(!payload["signaturePublicKey"].as_str().unwrap().is_empty());
+    assert!(payload.get("needsSetup").is_none());
+    assert_eq!(
+        state.prefs.get::<String>("password").unwrap().as_deref(),
+        Some("existing-password")
+    );
+    assert!(state.db.session_get(&id).unwrap().is_none());
+    core.stop_core().await;
+}

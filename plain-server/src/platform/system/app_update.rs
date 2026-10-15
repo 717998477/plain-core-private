@@ -43,7 +43,7 @@ pub fn app_update() -> AppUpdate {
         }
     }
 
-    let cur = crate::platform::system::version::version().to_string();
+    let cur = crate::platform::version::version().to_string();
     let mut res = AppUpdate {
         current_version: normalize_version(&cur),
         latest_version: None,

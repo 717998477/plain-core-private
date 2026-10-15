@@ -189,8 +189,8 @@ async fn tag_query_stubs(
     query: &str,
 ) -> async_graphql::Result<Vec<TagRelationStub>> {
     require_queryable(r#type, query)?;
-    if matches!(r#type, DataType::Call | DataType::Contact) {
-        return Ok(phone_query_keys(ctx, r#type, query)
+    if matches!(r#type, DataType::Call | DataType::Contact | DataType::Sms) {
+        return Ok(provider_query_keys(ctx, r#type, query)
             .await?
             .into_iter()
             .map(|key| TagRelationStub {
@@ -199,26 +199,6 @@ async fn tag_query_stubs(
                 size: Long(0),
             })
             .collect());
-    }
-    if !matches!(
-        r#type,
-        DataType::Audio | DataType::Video | DataType::Image | DataType::Doc
-    ) {
-        let facts = ctx
-            .data_unchecked::<Arc<Host>>()
-            .call(
-                "systemTagQueryStubs",
-                json!({"dataType":data_type_name(r#type),"query":query}),
-            )
-            .await
-            .map_err(async_graphql::Error::new)?;
-        return Ok(crate::graphql::types::facts::rows(&facts, |item| {
-            TagRelationStub {
-                key: crate::graphql::types::facts::text(item, "key"),
-                title: crate::graphql::types::facts::text(item, "title"),
-                size: Long(crate::graphql::types::facts::integer(item, "size")),
-            }
-        }));
     }
     let rows = crate::graphql::resolvers::media::public::library_rows(
         ctx,
@@ -246,31 +226,31 @@ async fn tag_query_keys(
     query: &str,
 ) -> async_graphql::Result<Vec<String>> {
     require_queryable(r#type, query)?;
-    if matches!(r#type, DataType::Call | DataType::Contact) {
-        return phone_query_keys(ctx, r#type, query).await;
-    }
-    if !matches!(
-        r#type,
-        DataType::Audio | DataType::Video | DataType::Image | DataType::Doc
-    ) {
-        let facts = ctx
-            .data_unchecked::<Arc<Host>>()
-            .call(
-                "systemTagQueryKeys",
-                json!({"dataType":data_type_name(r#type),"query":query}),
-            )
-            .await
-            .map_err(async_graphql::Error::new)?;
-        return Ok(crate::graphql::types::facts::strings(&facts, "ids"));
+    if matches!(r#type, DataType::Call | DataType::Contact | DataType::Sms) {
+        return provider_query_keys(ctx, r#type, query).await;
     }
     crate::graphql::resolvers::media::public::library_keys(ctx, r#type, query.to_owned()).await
 }
 
-async fn phone_query_keys(
+async fn provider_query_keys(
     ctx: &Context<'_>,
     kind: DataType,
     query: &str,
 ) -> async_graphql::Result<Vec<String>> {
+    if kind == DataType::Sms {
+        let facts = crate::services::sms::query::execute(
+            db(ctx),
+            ctx.data_unchecked::<Arc<Host>>(),
+            crate::services::sms::query::Request::Ids {
+                query: query.to_owned(),
+                include_trashed: false,
+            },
+        )
+        .await
+        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+        return serde_json::from_value(facts["ids"].clone())
+            .map_err(|error| async_graphql::Error::new(error.to_string()));
+    }
     let method = if kind == DataType::Call {
         "systemCallIds"
     } else {

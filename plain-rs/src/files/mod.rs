@@ -21,3 +21,6 @@ pub mod tasks;
 
 #[cfg(feature = "library")]
 mod audio_moves;
+
+#[cfg(feature = "trash")]
+pub mod trash;

@@ -230,3 +230,7 @@ pub(crate) async fn ble_send(
         .map_err(|e| Failure::Fatal(e.to_string()))?;
     decode_response(status, key, bytes).map_err(|e| Failure::Fatal(e.to_string()))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/peers/peer_sdk.rs"]
+mod tests;

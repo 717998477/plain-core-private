@@ -24,12 +24,30 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
         plain_rs::events::HTTP_SERVER_FAILED,
         plain_rs::events::MEDIA_ACTION_FINISHED,
     ] {
-        assert!(bridge.publish_text(kind, "{}".into()).is_err());
+        assert!(bridge.publish_text(kind, "{}".into()).await.is_err());
         assert!(bridge.publish_binary(kind, vec![]).is_err());
     }
     for kind in HOST_TEXT_TYPES {
-        bridge.publish_text(kind, "{}".into()).unwrap();
-        assert!(public.recv().await.unwrap().is_host_event());
+        if matches!(
+            *kind,
+            "PAIRING_REQUEST_REPORTED"
+                | "PAIRING_RESPONSE_REPORTED"
+                | "PAIRING_CANCEL_REPORTED"
+                | "NOTIFICATION_REPORTED"
+                | "AUDIO_PROGRESS_REPORTED"
+                | "AUDIO_STARTED_REPORTED"
+                | "MEDIA_DURATION_REPORTED"
+                | "IMAGE_INDEX_ERROR_REPORTED"
+        ) {
+            assert!(
+                bridge.publish_text(kind, "{}".into()).await.is_err(),
+                "{kind}"
+            );
+            assert!(public.try_recv().is_err(), "{kind}");
+        } else {
+            bridge.publish_text(kind, "{}".into()).await.unwrap();
+            assert!(public.recv().await.unwrap().is_host_event());
+        }
     }
     for kind in HOST_BINARY_TYPES {
         bridge.publish_binary(kind, vec![1, 2, 3]).unwrap();
@@ -83,6 +101,7 @@ async fn native_requests_reply_and_replacement_cancel_pending_calls() {
     assert!(
         bridge
             .publish_text(HOST_TEXT_TYPES[0], "{}".into())
+            .await
             .is_err()
     );
     drop(bridge);

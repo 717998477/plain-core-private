@@ -14,19 +14,19 @@ pub struct ArchiveEntry {
 #[derive(Clone)]
 pub struct NativeArchives {
     archives: Arc<Archives>,
-    host: Arc<crate::host::bridge::Host>,
+    platform: Arc<crate::services::files::platform::FilePlatform>,
     stop: watch::Receiver<bool>,
 }
 
 impl NativeArchives {
     pub(crate) fn new(
         archives: Arc<Archives>,
-        host: Arc<crate::host::bridge::Host>,
+        platform: Arc<crate::services::files::platform::FilePlatform>,
         stop: watch::Receiver<bool>,
     ) -> Self {
         Self {
             archives,
-            host,
+            platform,
             stop,
         }
     }
@@ -47,11 +47,13 @@ impl NativeArchives {
             {
                 return Err("invalid archive entry".into());
             }
-            crate::services::files::file_access::authorize_read(
-                &self.host,
-                entry.path.to_str().ok_or("invalid file path encoding")?,
-            )
-            .await?;
+            self.platform
+                .authorize(
+                    entry.path.to_str().ok_or("invalid file path encoding")?,
+                    false,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
             items.push((entry.path, entry.name));
         }
         self.archives.build(items, permit, self.stop.clone()).await
