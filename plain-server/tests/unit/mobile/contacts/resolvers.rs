@@ -129,7 +129,11 @@ async fn contacts_map_the_host_facts_onto_the_contract_type() {
     let (_dir, schema) = fixture(json!(["READ_CONTACTS"]));
     stub(schema_host(&schema), |method, params| match method {
         "systemContactFacts" => {
-            assert_eq!(params["query"], json!("text:ada"));
+            assert!(params.get("query").is_none());
+            assert_eq!(
+                params["plan"]["args"],
+                json!(["vnd.android.cursor.item/name", "ada"])
+            );
             assert_eq!(params["offset"], 0);
             assert_eq!(params["limit"], 20);
             json!([contact_fact("raw-1")])
@@ -201,7 +205,10 @@ async fn create_contact_reads_the_new_row_back_through_the_provider_search() {
             Value::from("raw-9")
         }
         "systemContactFacts" => {
-            assert_eq!(params["query"], "id=raw-9");
+            assert_eq!(
+                params["plan"]["args"],
+                json!(["vnd.android.cursor.item/name", "raw-9"])
+            );
             json!([contact_fact("raw-9")])
         }
         other => panic!("unexpected host call {other}"),
@@ -249,7 +256,8 @@ async fn delete_contacts_counts_only_the_ids_the_platform_deleted() {
     let (_dir, schema) = fixture(json!(["WRITE_CONTACTS"]));
     stub(schema_host(&schema), |method, params| match method {
         "systemContactIds" => {
-            assert_eq!(params["query"], "all:true");
+            assert!(params.get("query").is_none());
+            assert_eq!(params["plan"]["clauses"], json!(["mimetype = ?"]));
             json!(["a", "b", "c"])
         }
         "systemDeleteRecords" => {

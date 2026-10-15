@@ -7,13 +7,13 @@ use std::sync::Arc;
 
 pub(crate) enum MediaCatalog {
     Native(Arc<Db>),
-    Platform(Arc<Host>),
+    Platform { db: Arc<Db>, host: Arc<Host> },
 }
 
 impl MediaCatalog {
     pub(crate) fn new(db: Arc<Db>, host: Arc<Host>) -> Self {
         if cfg!(any(target_os = "android", target_os = "ios")) {
-            Self::Platform(host)
+            Self::Platform { db, host }
         } else {
             Self::Native(db)
         }
@@ -28,10 +28,10 @@ impl MediaCatalog {
         offset: u32,
     ) -> Result<Vec<Value>, String> {
         match self {
-            Self::Platform(host) => {
+            Self::Platform { db, host } => {
                 let facts = host.call(
                     "systemMediaRows",
-                    json!({"dataType":kind,"query":query,"sortBy":sort.as_str(),"limit":limit,"offset":offset}),
+                    platform_params(db, host, kind, query, json!({"dataType":kind,"sortBy":sort.as_str(),"limit":limit,"offset":offset})).await?,
                 ).await?;
                 serde_json::from_value(facts).map_err(|error| error.to_string())
             }
@@ -53,8 +53,11 @@ impl MediaCatalog {
 
     pub(crate) async fn count(&self, kind: DataType, query: &str) -> Result<i64, String> {
         match self {
-            Self::Platform(host) => host
-                .call("systemMediaCount", json!({"dataType":kind,"query":query}))
+            Self::Platform { db, host } => host
+                .call(
+                    "systemMediaCount",
+                    platform_params(db, host, kind, query, json!({"dataType":kind})).await?,
+                )
                 .await?
                 .as_i64()
                 .ok_or_else(|| "Invalid media count".to_owned()),
@@ -77,11 +80,15 @@ impl MediaCatalog {
         from_trash: bool,
     ) -> Result<Vec<String>, String> {
         match self {
-            Self::Platform(host) => serde_json::from_value(
-                host.call(
-                    "systemMediaIdsFacts",
-                    json!({"dataType":kind,"query":query,"fromTrash":from_trash}),
-                )
+            Self::Platform { db, host } => serde_json::from_value(
+                host.call("systemMediaIdsFacts", {
+                    let mut params =
+                        platform_params(db, host, kind, query, json!({"dataType":kind})).await?;
+                    if from_trash {
+                        params["plan"]["trash"] = json!(true);
+                    }
+                    params
+                })
                 .await?,
             )
             .map_err(|error| error.to_string()),
@@ -100,7 +107,7 @@ impl MediaCatalog {
 
     pub(crate) async fn buckets(&self, kind: DataType) -> Result<Value, String> {
         match self {
-            Self::Platform(host) => {
+            Self::Platform { host, .. } => {
                 host.call("systemMediaBucketItemFacts", json!({"dataType":kind}))
                     .await
             }
@@ -116,6 +123,24 @@ impl MediaCatalog {
             }
         }
     }
+}
+
+async fn platform_params(
+    db: &Db,
+    host: &Host,
+    kind: DataType,
+    query: &str,
+    params: Value,
+) -> Result<Value, String> {
+    crate::host::query::params(
+        db,
+        host,
+        crate::host::query::media_provider(kind).map_err(|error| error.to_string())?,
+        query,
+        params,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

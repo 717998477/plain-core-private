@@ -26,6 +26,23 @@ pub(crate) async fn host_json(
     serde_json::from_value(facts).map_err(|error| async_graphql::Error::new(error.to_string()))
 }
 
+pub(crate) async fn provider_params(
+    ctx: &Context<'_>,
+    provider: crate::host::query::Provider,
+    query: &str,
+    params: Value,
+) -> async_graphql::Result<Value> {
+    crate::host::query::params(
+        ctx.data_unchecked::<Arc<plain_rs::db::Db>>(),
+        ctx.data_unchecked::<Arc<Host>>(),
+        provider,
+        query,
+        params,
+    )
+    .await
+    .map_err(|error| async_graphql::Error::new(error.to_string()))
+}
+
 pub(crate) fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_string()
 }

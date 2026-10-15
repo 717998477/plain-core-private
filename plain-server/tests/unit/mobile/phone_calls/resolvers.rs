@@ -60,7 +60,8 @@ async fn calls_map_the_provider_rows_onto_the_contract_type() {
     let (_dir, schema) = fixture(json!(["READ_CALL_LOG"]));
     stub(schema_host(&schema), |method, params| match method {
         "systemCallFacts" => {
-            assert_eq!(params["query"], "text:ada");
+            assert!(params.get("query").is_none());
+            assert_eq!(params["plan"]["args"], json!(["ada"]));
             assert_eq!(params["offset"], 0);
             assert_eq!(params["limit"], 20);
             json!([call_fact("c1", 2)])
@@ -147,7 +148,8 @@ async fn delete_calls_counts_only_what_the_platform_deleted() {
     let (_dir, schema) = fixture(json!(["WRITE_CALL_LOG"]));
     stub(schema_host(&schema), |method, params| match method {
         "systemCallIds" => {
-            assert_eq!(params["query"], "all:true");
+            assert!(params.get("query").is_none());
+            assert_eq!(params["plan"]["clauses"], json!([]));
             json!(["a", "b"])
         }
         "systemDeleteRecords" => {

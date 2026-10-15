@@ -63,7 +63,11 @@ async fn platform_catalog_reads_os_facts_without_a_local_catalogue() {
             let method = request["method"].as_str().unwrap();
             let value = match method {
                 "systemMediaRows" => {
-                    assert_eq!(request["params"]["query"], "text:picture");
+                    assert!(request["params"].get("query").is_none());
+                    assert_eq!(
+                        request["params"]["plan"]["args"],
+                        json!(["picture", "picture"])
+                    );
                     assert_eq!(request["params"]["offset"], 4);
                     assert_eq!(request["params"]["limit"], 8);
                     assert_eq!(request["params"]["sortBy"], "NAME_ASC");
@@ -71,7 +75,7 @@ async fn platform_catalog_reads_os_facts_without_a_local_catalogue() {
                 }
                 "systemMediaCount" => json!(1),
                 "systemMediaIdsFacts" => {
-                    assert_eq!(request["params"]["fromTrash"], true);
+                    assert_eq!(request["params"]["plan"]["trash"], true);
                     json!(["42"])
                 }
                 "systemMediaBucketItemFacts" => {
@@ -86,7 +90,9 @@ async fn platform_catalog_reads_os_facts_without_a_local_catalogue() {
         }
         methods
     });
-    let catalog = MediaCatalog::Platform(host);
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Db::open(&dir.path().join("data.db")).unwrap());
+    let catalog = MediaCatalog::Platform { db, host };
     let rows = catalog
         .rows(DataType::Image, "text:picture", FileSortBy::NameAsc, 8, 4)
         .await

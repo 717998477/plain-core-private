@@ -189,6 +189,17 @@ async fn tag_query_stubs(
     query: &str,
 ) -> async_graphql::Result<Vec<TagRelationStub>> {
     require_queryable(r#type, query)?;
+    if matches!(r#type, DataType::Call | DataType::Contact) {
+        return Ok(phone_query_keys(ctx, r#type, query)
+            .await?
+            .into_iter()
+            .map(|key| TagRelationStub {
+                key,
+                title: String::new(),
+                size: Long(0),
+            })
+            .collect());
+    }
     if !matches!(
         r#type,
         DataType::Audio | DataType::Video | DataType::Image | DataType::Doc
@@ -235,6 +246,9 @@ async fn tag_query_keys(
     query: &str,
 ) -> async_graphql::Result<Vec<String>> {
     require_queryable(r#type, query)?;
+    if matches!(r#type, DataType::Call | DataType::Contact) {
+        return phone_query_keys(ctx, r#type, query).await;
+    }
     if !matches!(
         r#type,
         DataType::Audio | DataType::Video | DataType::Image | DataType::Doc
@@ -250,6 +264,28 @@ async fn tag_query_keys(
         return Ok(crate::graphql::types::facts::strings(&facts, "ids"));
     }
     crate::graphql::resolvers::media::public::library_keys(ctx, r#type, query.to_owned()).await
+}
+
+async fn phone_query_keys(
+    ctx: &Context<'_>,
+    kind: DataType,
+    query: &str,
+) -> async_graphql::Result<Vec<String>> {
+    let method = if kind == DataType::Call {
+        "systemCallIds"
+    } else {
+        "systemContactIds"
+    };
+    let provider = crate::host::query::media_provider(kind)
+        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+    let params =
+        crate::graphql::types::facts::provider_params(ctx, provider, query, json!({})).await?;
+    let facts = crate::graphql::types::facts::host_json(ctx, method, params).await?;
+    Ok(facts
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .collect())
 }
 
 /// A blank query would match every row of the kind. That is never what a

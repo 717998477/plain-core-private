@@ -5,10 +5,10 @@
 
 use crate::graphql::resolvers::tags::domain_types::Tag;
 use crate::graphql::types::ActionResult;
-use crate::graphql::types::facts::host_json;
 use crate::graphql::types::facts::instant;
 use crate::graphql::types::facts::integer;
 use crate::graphql::types::facts::text;
+use crate::graphql::types::facts::{host_json, provider_params};
 use crate::host::bridge::Host;
 use crate::host::query as provider_plan;
 use crate::host::query::Provider;
@@ -105,7 +105,13 @@ impl CallsQuery {
         let facts = host_json(
             ctx,
             "systemCallFacts",
-            serde_json::json!({"query": query, "offset": offset, "limit": limit}),
+            provider_params(
+                ctx,
+                crate::host::query::Provider::Call,
+                &query,
+                serde_json::json!({"offset": offset, "limit": limit}),
+            )
+            .await?,
         )
         .await?;
         let host = ctx.data_unchecked::<Arc<Host>>();
@@ -148,7 +154,16 @@ impl CallsQuery {
         }
         let count = ctx
             .data_unchecked::<Arc<Host>>()
-            .call("systemCallCount", serde_json::json!({ "query": query }))
+            .call(
+                "systemCallCount",
+                provider_params(
+                    ctx,
+                    crate::host::query::Provider::Call,
+                    &query,
+                    serde_json::json!({}),
+                )
+                .await?,
+            )
             .await
             .map_err(|error| async_graphql::Error::new(error))?;
         Ok(count.as_i64().unwrap_or_default() as i32)
@@ -181,13 +196,22 @@ impl CallsMutation {
         )
         .await
         .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-        let ids: Vec<Value> =
-            host_json(ctx, "systemCallIds", serde_json::json!({ "query": query }))
-                .await?
-                .iter()
-                .filter_map(Value::as_str)
-                .map(Value::from)
-                .collect();
+        let ids: Vec<Value> = host_json(
+            ctx,
+            "systemCallIds",
+            provider_params(
+                ctx,
+                crate::host::query::Provider::Call,
+                &query,
+                serde_json::json!({}),
+            )
+            .await?,
+        )
+        .await?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(Value::from)
+        .collect();
         let deleted: Vec<Value> = serde_json::from_value(
             ctx.data_unchecked::<Arc<Host>>()
                 .call(

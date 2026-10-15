@@ -4,11 +4,11 @@
 //! same `WHERE` clause the app's own contact provider view uses.
 
 use crate::graphql::types::ActionResult;
-use crate::graphql::types::facts::host_json;
 use crate::graphql::types::facts::instant;
 use crate::graphql::types::facts::integer;
 use crate::graphql::types::facts::list;
 use crate::graphql::types::facts::text;
+use crate::graphql::types::facts::{host_json, provider_params};
 use crate::host::bridge::Host;
 use crate::http::auth::public_gate;
 use crate::mobile::contacts::types::*;
@@ -38,7 +38,13 @@ impl ContactsQuery {
         let facts = host_json(
             ctx,
             "systemContactFacts",
-            json!({"query": query, "offset": offset, "limit": limit}),
+            provider_params(
+                ctx,
+                crate::host::query::Provider::Contact,
+                &query,
+                serde_json::json!({"offset": offset, "limit": limit}),
+            )
+            .await?,
         )
         .await?;
         Ok(facts.iter().map(|fact| contact(fact)).collect())
@@ -52,7 +58,16 @@ impl ContactsQuery {
         }
         let count = ctx
             .data_unchecked::<Arc<Host>>()
-            .call("systemContactCount", json!({ "query": query }))
+            .call(
+                "systemContactCount",
+                provider_params(
+                    ctx,
+                    crate::host::query::Provider::Contact,
+                    &query,
+                    serde_json::json!({}),
+                )
+                .await?,
+            )
             .await
             .map_err(|error| async_graphql::Error::new(error))?;
         Ok(count.as_i64().unwrap_or_default() as i32)
@@ -140,12 +155,22 @@ impl ContactsMutation {
             ));
         }
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[WRITE])?;
-        let ids: Vec<Value> = host_json(ctx, "systemContactIds", json!({ "query": query }))
-            .await?
-            .iter()
-            .filter_map(Value::as_str)
-            .map(Value::from)
-            .collect();
+        let ids: Vec<Value> = host_json(
+            ctx,
+            "systemContactIds",
+            provider_params(
+                ctx,
+                crate::host::query::Provider::Contact,
+                &query,
+                serde_json::json!({}),
+            )
+            .await?,
+        )
+        .await?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(Value::from)
+        .collect();
         let deleted: Vec<Value> = serde_json::from_value(
             ctx.data_unchecked::<Arc<Host>>()
                 .call(
@@ -251,7 +276,13 @@ async fn reload(ctx: &Context<'_>, id: &str, phase: &str) -> async_graphql::Resu
     let facts = host_json(
         ctx,
         "systemContactFacts",
-        json!({"query": format!("id={id}"), "offset": 0, "limit": 1}),
+        provider_params(
+            ctx,
+            crate::host::query::Provider::Contact,
+            &format!("id:{id}"),
+            json!({"offset": 0, "limit": 1}),
+        )
+        .await?,
     )
     .await?;
     let fact = facts

@@ -1,8 +1,6 @@
 use crate::assembly::server::ServerState;
 use crate::host::query::Provider;
-use crate::host::query::dates;
-use crate::host::query::fields;
-use crate::host::query::plan;
+use crate::host::query::prepare;
 use axum::{
     Json,
     extract::State,
@@ -20,27 +18,15 @@ pub(crate) struct Request {
     resolved_parent_id: Option<String>,
 }
 async fn execute(state: &ServerState, request: Request) -> anyhow::Result<Value> {
-    let fields = fields(&state.db, &request.query)?;
-    let dates = dates(&state.host, &fields).await?;
     Ok(serde_json::to_value(
-        if matches!(request.provider, Provider::Call | Provider::Contact) {
-            #[cfg(feature = "mobile")]
-            {
-                crate::mobile::query::plan(request.provider, &fields, &dates)?
-            }
-            #[cfg(not(feature = "mobile"))]
-            {
-                anyhow::bail!("unsupported provider")
-            }
-        } else {
-            plan(
-                request.provider,
-                &fields,
-                &dates,
-                request.resolved_parent_id.as_deref(),
-                request.query.is_empty(),
-            )?
-        },
+        prepare(
+            &state.db,
+            &state.host,
+            request.provider,
+            &request.query,
+            request.resolved_parent_id.as_deref(),
+        )
+        .await?,
     )?)
 }
 pub(crate) async fn call(

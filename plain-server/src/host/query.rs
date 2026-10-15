@@ -235,6 +235,58 @@ fn parse_size_to_bytes(value: &str) -> Option<u64> {
     let bytes = number * multiplier;
     (bytes.is_finite() && bytes >= 0.0 && bytes <= u64::MAX as f64).then_some(bytes as u64)
 }
+pub(crate) async fn prepare(
+    db: &Db,
+    host: &crate::host::bridge::Host,
+    provider: Provider,
+    query: &str,
+    resolved_parent_id: Option<&str>,
+) -> anyhow::Result<Plan> {
+    let fields = fields(db, query)?;
+    let dates = dates(host, &fields).await?;
+    if matches!(provider, Provider::Call | Provider::Contact) {
+        #[cfg(feature = "mobile")]
+        {
+            return crate::mobile::query::plan(provider, &fields, &dates);
+        }
+        #[cfg(not(feature = "mobile"))]
+        {
+            anyhow::bail!("unsupported provider");
+        }
+    }
+    plan(
+        provider,
+        &fields,
+        &dates,
+        resolved_parent_id,
+        query.is_empty(),
+    )
+}
+
+pub(crate) async fn params(
+    db: &Db,
+    host: &crate::host::bridge::Host,
+    provider: Provider,
+    query: &str,
+    mut params: Value,
+) -> anyhow::Result<Value> {
+    params["plan"] = serde_json::to_value(prepare(db, host, provider, query, None).await?)?;
+    Ok(params)
+}
+
+pub(crate) fn media_provider(kind: plain_rs::enums::DataType) -> anyhow::Result<Provider> {
+    use plain_rs::enums::DataType;
+    match kind {
+        DataType::Audio => Ok(Provider::Audio),
+        DataType::Video => Ok(Provider::Video),
+        DataType::Image => Ok(Provider::Image),
+        DataType::Doc => Ok(Provider::Doc),
+        DataType::Call => Ok(Provider::Call),
+        DataType::Contact => Ok(Provider::Contact),
+        _ => anyhow::bail!("unsupported provider: {kind:?}"),
+    }
+}
+
 pub(crate) async fn dates(
     host: &crate::host::bridge::Host,
     fields: &[FilterField],
