@@ -15,7 +15,7 @@ use plain_rs::db::TagRow;
 pub use plain_rs::enums::DataType;
 use plain_rs::tags;
 use plain_rs::tags::records as tag_records;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::sync::Arc;
 
 #[derive(Default)]
@@ -189,19 +189,43 @@ async fn tag_query_stubs(
     query: &str,
 ) -> async_graphql::Result<Vec<TagRelationStub>> {
     require_queryable(r#type, query)?;
-    let facts = host_call(
+    if !matches!(
+        r#type,
+        DataType::Audio | DataType::Video | DataType::Image | DataType::Doc
+    ) {
+        let facts = ctx
+            .data_unchecked::<Arc<Host>>()
+            .call(
+                "systemTagQueryStubs",
+                json!({"dataType":data_type_name(r#type),"query":query}),
+            )
+            .await
+            .map_err(async_graphql::Error::new)?;
+        return Ok(crate::graphql::types::facts::rows(&facts, |item| {
+            TagRelationStub {
+                key: crate::graphql::types::facts::text(item, "key"),
+                title: crate::graphql::types::facts::text(item, "title"),
+                size: Long(crate::graphql::types::facts::integer(item, "size")),
+            }
+        }));
+    }
+    let rows = crate::graphql::resolvers::media::public::library_rows(
         ctx,
-        "systemTagQueryStubs",
-        json!({ "dataType": data_type_name(r#type), "query": query }),
+        r#type,
+        query.to_owned(),
+        crate::graphql::resolvers::files::types::FileSortBy::NameAsc,
+        0,
+        i32::MAX as u32,
     )
     .await?;
-    Ok(crate::graphql::types::facts::rows(&facts, |item| {
-        TagRelationStub {
-            key: crate::graphql::types::facts::text(item, "key"),
-            title: crate::graphql::types::facts::text(item, "title"),
-            size: Long(crate::graphql::types::facts::integer(item, "size")),
-        }
-    }))
+    Ok(rows
+        .into_iter()
+        .map(|row| TagRelationStub {
+            key: crate::graphql::types::facts::text(&row, "id"),
+            title: crate::graphql::types::facts::text(&row, "title"),
+            size: Long(crate::graphql::types::facts::integer(&row, "size")),
+        })
+        .collect())
 }
 
 /// Resolves the query into bare keys, for the removal path.
@@ -211,13 +235,21 @@ async fn tag_query_keys(
     query: &str,
 ) -> async_graphql::Result<Vec<String>> {
     require_queryable(r#type, query)?;
-    let facts = host_call(
-        ctx,
-        "systemTagQueryKeys",
-        json!({ "dataType": data_type_name(r#type), "query": query }),
-    )
-    .await?;
-    Ok(crate::graphql::types::facts::strings(&facts, "ids"))
+    if !matches!(
+        r#type,
+        DataType::Audio | DataType::Video | DataType::Image | DataType::Doc
+    ) {
+        let facts = ctx
+            .data_unchecked::<Arc<Host>>()
+            .call(
+                "systemTagQueryKeys",
+                json!({"dataType":data_type_name(r#type),"query":query}),
+            )
+            .await
+            .map_err(async_graphql::Error::new)?;
+        return Ok(crate::graphql::types::facts::strings(&facts, "ids"));
+    }
+    crate::graphql::resolvers::media::public::library_keys(ctx, r#type, query.to_owned()).await
 }
 
 /// A blank query would match every row of the kind. That is never what a
@@ -282,13 +314,6 @@ fn failed(error: plain_rs::error::DomainError) -> async_graphql::Error {
 
 fn db<'a>(ctx: &'a Context<'_>) -> &'a Arc<Db> {
     ctx.data_unchecked::<Arc<Db>>()
-}
-
-async fn host_call(ctx: &Context<'_>, method: &str, params: Value) -> async_graphql::Result<Value> {
-    ctx.data_unchecked::<Arc<Host>>()
-        .call(method, params)
-        .await
-        .map_err(async_graphql::Error::new)
 }
 
 #[cfg(test)]

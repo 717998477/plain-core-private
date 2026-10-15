@@ -284,3 +284,147 @@ fn media_types_preserve_the_shared_interface() {
         assert!(interface.contains(field), "missing {field}");
     }
 }
+
+fn contract_sdl() -> String {
+    if cfg!(feature = "mobile") {
+        include_str!("../../../../../../plain-rs/testdata/public-schema.graphqls").to_string()
+    } else {
+        include_str!("../../../../../../plain-rs/testdata/public-server-schema.graphqls")
+            .to_string()
+    }
+}
+
+fn root_fields(sdl: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in ["Query", "Mutation", "QueryRoot", "MutationRoot"] {
+        let Some(body) = sdl
+            .split(&format!("type {name} {{"))
+            .nth(1)
+            .and_then(|rest| rest.split_once('}'))
+            .map(|(body, _)| body)
+        else {
+            continue;
+        };
+        for line in body.lines() {
+            let Some(field) = line.trim().split(['(', ':']).next() else {
+                continue;
+            };
+            if field.is_empty()
+                || field.chars().next().is_some_and(|c| c.is_ascii_digit())
+                || !field.chars().all(|c| c.is_alphanumeric() || c == '_')
+            {
+                continue;
+            }
+            out.push(field.to_string());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[test]
+fn desktop_roots_stay_within_the_published_contract() {
+    let desktop = root_fields(&crate::graphql::schemas::desktop::build_schema().sdl());
+    let contract = root_fields(&contract_sdl());
+
+    let desktop_only: Vec<&String> = desktop
+        .iter()
+        .filter(|field| !contract.contains(field))
+        .collect();
+    let mut expected: Vec<&str> = [
+        "channelSystemMessage",
+        "createCopyTask",
+        "createMoveTask",
+        "deleteTrashedFile",
+        "fileTasks",
+        "restoreFiles",
+        "trashFiles",
+        "trashedFileCount",
+        "trashedFiles",
+        "dlnaCast",
+        "dlnaRenderers",
+        "logout",
+        "rebuildMediaIndex",
+        "revokeSession",
+        "sessions",
+    ]
+    .into_iter()
+    .collect();
+    expected.sort_unstable();
+    let mut actual: Vec<&str> = desktop_only.iter().map(|field| field.as_str()).collect();
+    actual.sort_unstable();
+    assert_eq!(
+        actual, expected,
+        "desktop-only roots changed; each one is a field the web console cannot reach"
+    );
+
+    const MOBILE_ONLY: [&str; 57] = [
+        "archiveSmsConversation",
+        "archivedSmsConversations",
+        "call",
+        "callCount",
+        "calls",
+        "cancelImageIndex",
+        "cancelImageModelDownload",
+        "clipboardItemCount",
+        "clipboardItems",
+        "contactCount",
+        "contactGroups",
+        "contactSources",
+        "contacts",
+        "createContact",
+        "createContactGroup",
+        "deleteCalls",
+        "deleteClipboardItems",
+        "deleteContactGroup",
+        "deleteContacts",
+        "deleteNotifications",
+        "deleteSms",
+        "disableImageSearch",
+        "enableImageSearch",
+        "importImageSearchModel",
+        "installPackage",
+        "isScreenMirroring",
+        "notificationCount",
+        "notifications",
+        "openAccessibilitySettings",
+        "openWebSettings",
+        "packageCount",
+        "packageStatuses",
+        "packages",
+        "replyNotification",
+        "requestScreenMirrorAudio",
+        "requestScreenMirrorKeyFrame",
+        "restoreSms",
+        "screenMirrorControlEnabled",
+        "screenMirrorQuality",
+        "screenMirrorVideoCodec",
+        "sendMms",
+        "sendSms",
+        "setClipboard",
+        "sms",
+        "smsBoxCounts",
+        "smsConversationCount",
+        "smsConversations",
+        "smsCount",
+        "startImageIndex",
+        "startScreenMirror",
+        "stopScreenMirror",
+        "trashSms",
+        "unarchiveSmsConversation",
+        "uninstallPackages",
+        "updateContact",
+        "updateContactGroup",
+        "updateScreenMirrorQuality",
+    ];
+    let unaccounted: Vec<&String> = contract
+        .iter()
+        .filter(|field| !desktop.contains(field))
+        .filter(|field| !MOBILE_ONLY.contains(&field.as_str()))
+        .collect();
+    assert!(
+        unaccounted.is_empty(),
+        "contract roots the desktop does not serve and that are not a known platform capability: {unaccounted:?}"
+    );
+}

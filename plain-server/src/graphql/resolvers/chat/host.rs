@@ -14,18 +14,6 @@ pub struct ChatConversation {
 pub struct ChatHostQuery;
 #[Object]
 impl ChatHostQuery {
-    async fn chat_item(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> async_graphql::Result<Option<ChatItem>> {
-        let state = ctx.data::<ServerState>()?;
-        Ok(
-            plain_rs::db::chat_store::messages::get(&state.db, id.as_str())?
-                .as_ref()
-                .map(item),
-        )
-    }
     async fn chat_conversations(
         &self,
         ctx: &Context<'_>,

@@ -383,6 +383,7 @@ type Mutation {
 	removeChatChannelMember(id: ID!, peerId: ID!): ChatChannel!
 	acceptChatChannelInvite(id: ID!): Boolean!
 	declineChatChannelInvite(id: ID!): Boolean!
+	respondChannelInvite(id: ID!, accept: Boolean!): Boolean!
 	sendChatText(target: String!, text: String!): ChatItem!
 	forwardChatItem(id: ID!, target: String!): ChatItem!
 	deliverChatItem(id: ID!, recipients: [ID!]): ChatItem!
@@ -593,8 +594,8 @@ type Query {
 	newest conversation first.
 	"""
 	latestChatItems: [ChatItem!]!
-	chatChannels: [ChatChannel!]!
 	chatItem(id: ID!): ChatItem
+	chatChannels: [ChatChannel!]!
 	chatConversations: [ChatConversation!]!
 	chatRecords(query: String!, offset: Int!, limit: Int!): [ChatItem!]!
 	chatCount(query: String!): Int!

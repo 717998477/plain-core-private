@@ -370,21 +370,24 @@ async fn media_entries(
     data_type: &str,
     query: &str,
 ) -> anyhow::Result<Vec<(PathBuf, String)>> {
-    let facts = state
-        .host
-        .call(
-            "systemMediaRows",
-            json!({
-                "dataType": data_type,
-                "query": query,
-                "offset": 0,
-                "limit": i32::MAX,
-                "sortBy": "DATE_DESC",
-            }),
-        )
-        .await
-        .map_err(anyhow::Error::msg)?;
-    let rows: Vec<Value> = serde_json::from_value(facts)?;
+    let kind = match data_type {
+        "AUDIO" => DataType::Audio,
+        "VIDEO" => DataType::Video,
+        "IMAGE" => DataType::Image,
+        "DOC" => DataType::Doc,
+        other => anyhow::bail!("unsupported media catalog type: {other}"),
+    };
+    let rows =
+        crate::services::files::catalog::MediaCatalog::new(state.db.clone(), state.host.clone())
+            .rows(
+                kind,
+                query,
+                crate::graphql::resolvers::files::types::FileSortBy::DateDesc,
+                i32::MAX as u32,
+                0,
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
     Ok(rows
         .iter()
         .filter_map(|row| Some((PathBuf::from(row["path"].as_str()?), String::new())))
@@ -392,7 +395,10 @@ async fn media_entries(
 }
 
 #[cfg(feature = "mobile")]
-async fn package_entries(state: &ServerState, query: &str) -> anyhow::Result<Vec<(PathBuf, String)>> {
+async fn package_entries(
+    state: &ServerState,
+    query: &str,
+) -> anyhow::Result<Vec<(PathBuf, String)>> {
     let facts = state
         .host
         .call("systemPackageFacts", json!({}))
@@ -405,13 +411,19 @@ async fn package_entries(state: &ServerState, query: &str) -> anyhow::Result<Vec
         .filter_map(|item| {
             let name = item["name"].as_str().unwrap_or_default().replace(' ', "");
             let id = item["id"].as_str().unwrap_or_default();
-            Some((PathBuf::from(item["path"].as_str()?), format!("{name}-{id}.apk")))
+            Some((
+                PathBuf::from(item["path"].as_str()?),
+                format!("{name}-{id}.apk"),
+            ))
         })
         .collect())
 }
 
 #[cfg(not(feature = "mobile"))]
-async fn package_entries(_state: &ServerState, _query: &str) -> anyhow::Result<Vec<(PathBuf, String)>> {
+async fn package_entries(
+    _state: &ServerState,
+    _query: &str,
+) -> anyhow::Result<Vec<(PathBuf, String)>> {
     anyhow::bail!("unsupported provider")
 }
 

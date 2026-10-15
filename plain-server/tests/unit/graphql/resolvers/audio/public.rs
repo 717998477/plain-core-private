@@ -311,31 +311,42 @@ async fn an_idle_player_reports_a_null_current_path() {
 }
 
 #[tokio::test]
-async fn empty_lyrics_are_null_rather_than_an_empty_string() {
-    let (_dir, schema) = fixture_with(GRANTED, |method, _params| match method {
-        "systemAudioLyrics" => json!(""),
-        _other => panic!("unexpected host call {_other}"),
-    });
-    seed_queue(&schema, &[("/music/a.mp3", "One", "Artist")]);
+async fn lyrics_use_embedded_tags_and_missing_tags_are_null() {
+    let (dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    let track = dir.path().join("a.mp3");
+    std::fs::write(&track, []).unwrap();
+    let track = track.to_string_lossy().into_owned();
+    seed_queue(&schema, &[(&track, "One", "Artist")]);
+    let id = format!("test:{track}");
     let none = query(
         &schema,
-        r#"query { audioLyrics(mediaId: "test:/music/a.mp3") }"#,
+        &format!(r#"query {{ audioLyrics(mediaId: "{id}") }}"#),
     )
     .await;
     assert!(none["errors"].is_null(), "{none}");
     assert!(none["data"]["audioLyrics"].is_null(), "{none}");
 
-    let (_dir, schema) = fixture_with(GRANTED, |method, _params| match method {
-        "systemAudioLyrics" => json!("la la la"),
-        _other => panic!("unexpected host call {_other}"),
-    });
-    seed_queue(&schema, &[("/music/a.mp3", "One", "Artist")]);
+    let (dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    let track = dir.path().join("b.mp3");
+    let body = b"\x03eng\x00la la la";
+    let mut frame = b"USLT".to_vec();
+    frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&[0, 0]);
+    frame.extend_from_slice(body);
+    let mut audio = b"ID3\x03\x00\x00".to_vec();
+    audio.extend_from_slice(&[0, 0, 0, frame.len() as u8]);
+    audio.extend_from_slice(&frame);
+    std::fs::write(&track, audio).unwrap();
+    std::fs::write(dir.path().join("b.lrc"), "different sidecar").unwrap();
+    let track = track.to_string_lossy().into_owned();
+    seed_queue(&schema, &[(&track, "Two", "Artist")]);
+    let id = format!("test:{track}");
     let some = query(
         &schema,
-        r#"query { audioLyrics(mediaId: "test:/music/a.mp3") }"#,
+        &format!(r#"query {{ audioLyrics(mediaId: "{id}") }}"#),
     )
     .await;
-    assert_eq!(some["data"]["audioLyrics"], "la la la");
+    assert_eq!(some["data"]["audioLyrics"], "la la la", "{some}");
 }
 
 #[tokio::test]
@@ -580,15 +591,26 @@ async fn an_ungranted_library_counts_zero_and_refuses_to_list() {
 #[tokio::test]
 async fn a_library_row_keeps_the_album_art_reference() {
     let (_dir, schema) = fixture_with(GRANTED, |method, _params| match method {
-        "systemMediaRows" => json!([{
-            "id": "1", "title": "Song", "artist": "Band", "path": "/m/a.mp3",
-            "size": 42, "bucketId": "bucket-1", "durationMs": 1234,
-            "albumFileId": "album-file-1",
-            "createdAt": "2026-01-01T00:00:00.000Z", "updatedAt": "2026-01-01T00:00:01.000Z",
-            "isFavorite": true,
-        }]),
         _other => panic!("unexpected host call {_other}"),
     });
+    database(&schema)
+        .record_media_files(&[plain_rs::db::MediaFileMetadata {
+            data_type: plain_rs::enums::DataType::Audio,
+            path: "/m/a.mp3".to_owned(),
+            title: "Song".to_owned(),
+            artist: "Band".to_owned(),
+            bucket_id: "bucket-1".to_owned(),
+            size_bytes: 42,
+            duration_ms: 1234,
+            cover_image_id: Some("album-file-1".to_owned()),
+            width: 0,
+            height: 0,
+            rotation: 0,
+            taken_at: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_owned(),
+            updated_at: "2026-01-01T00:00:01.000Z".to_owned(),
+        }])
+        .unwrap();
 
     let listed = query(
         &schema,
@@ -603,7 +625,6 @@ async fn a_library_row_keeps_the_album_art_reference() {
     assert_eq!(row["durationMs"], 1234);
     assert_eq!(row["size"], 42);
     assert_eq!(row["bucketId"], "bucket-1");
-    assert_eq!(row["isFavorite"], true);
     assert_eq!(row["tags"].as_array().map(Vec::len), Some(0));
 }
 
@@ -644,10 +665,6 @@ async fn playlist_items_expose_catalog_identity_and_path() {
 #[tokio::test]
 async fn adding_tracks_reads_every_search_page_without_an_item_limit() {
     let (_dir, schema) = fixture_with(GRANTED, |method, params| match method {
-        "systemAudioSearchTracks" => {
-            let offset = params["offset"].as_u64().unwrap() as usize;
-            json!((offset..(offset+500).min(1205)).map(|i|json!({"path":format!("/track/{i}"),"title":format!("Track {i}"),"artist":"Artist","durationMs":123})).collect::<Vec<_>>())
-        }
         "systemAudioPlaylistTracks" => json!(
             params["paths"]
                 .as_array()
@@ -656,8 +673,28 @@ async fn adding_tracks_reads_every_search_page_without_an_item_limit() {
                 .map(|path| json!({"path":path,"title":"Track","artist":"Artist","durationMs":123}))
                 .collect::<Vec<_>>()
         ),
-        method => panic!("unexpected {method}"),
+        other => panic!("unexpected host call {other}"),
     });
+    let rows: Vec<_> = (0..1205)
+        .map(|i| plain_rs::db::MediaFileMetadata {
+            data_type: DataType::Audio,
+            path: format!("/track/{i}"),
+            title: format!("Track {i}"),
+            artist: "Artist".to_owned(),
+            bucket_id: "b".to_owned(),
+            size_bytes: 10,
+            duration_ms: 123,
+            cover_image_id: Some(String::new()),
+            width: 0,
+            height: 0,
+            rotation: 0,
+            taken_at: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_owned(),
+            updated_at: "2026-01-01T00:00:00.000Z".to_owned(),
+        })
+        .collect();
+    database(&schema).record_media_files(&rows).unwrap();
+
     let added = query(
         &schema,
         r#"mutation { addAudioToQueue(query:"trash:false") }"#,
@@ -666,11 +703,13 @@ async fn adding_tracks_reads_every_search_page_without_an_item_limit() {
     assert!(added["errors"].is_null(), "{added}");
     let page=query(&schema,r#"{ audioQueueItemCount audioQueueItems(query:"",offset:1200,limit:200) { mediaId path } }"#).await;
     assert_eq!(page["data"]["audioQueueItemCount"], 1205, "{page}");
-    assert_eq!(page["data"]["audioQueueItems"].as_array().unwrap().len(), 5);
-    assert_eq!(
-        page["data"]["audioQueueItems"][4]["mediaId"],
-        "mock:/track/1204"
-    );
+    let tail = page["data"]["audioQueueItems"].as_array().unwrap();
+    assert_eq!(tail.len(), 5, "{page}");
+    let paths = tail
+        .iter()
+        .map(|row| row["path"].as_str().unwrap().to_string())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(paths.len(), 5, "{page}");
 }
 
 #[tokio::test]

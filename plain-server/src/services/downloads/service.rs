@@ -10,7 +10,6 @@
 //! Progress is reported via `WS_DOWNLOAD_PROGRESS` WebSocket events so the
 //! web client can render a progress overlay with pause / resume / retry.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -18,48 +17,23 @@ use std::time::Instant;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 
-use crate::assembly::context::AppCtx;
-use crate::assembly::context::WS_DOWNLOAD_PROGRESS;
-use crate::assembly::context::WS_MESSAGE_UPDATED;
-use crate::assembly::context::WsEvent;
 use crate::assembly::enums::DownloadStatus;
+use crate::assembly::events::WS_DOWNLOAD_PROGRESS;
+use crate::assembly::events::WS_MESSAGE_UPDATED;
+use crate::assembly::events::WsEvent;
 use plain_rs::chat::attachments::app_file_store::import_attachment;
+use plain_rs::db::Db;
 
-/// Download task state. Mirrors plain-app `DownloadStatus`.
-#[derive(Clone, Debug)]
-pub struct DownloadState {
-    pub message_id: String,
-    pub status: DownloadStatus,
-    pub downloaded: u64,
-    pub total: u64,
-    pub speed: u64,
+#[derive(Clone)]
+pub struct DownloadDeps {
+    pub db: Arc<Db>,
+    pub data_dir: PathBuf,
+    pub events: tokio::sync::broadcast::Sender<WsEvent>,
 }
 
-struct TaskEntry {
-    handle: JoinHandle<()>,
-    abort: Option<tokio::sync::oneshot::Sender<()>>,
-    state: Arc<Mutex<DownloadState>>,
-}
-
-/// Global download manager singleton.
-pub struct DownloadManager {
-    tasks: Mutex<HashMap<String, TaskEntry>>,
-}
-
-impl DownloadManager {
-    fn new() -> Self {
-        Self {
-            tasks: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-fn manager() -> &'static DownloadManager {
-    static MGR: OnceLock<DownloadManager> = OnceLock::new();
-    MGR.get_or_init(DownloadManager::new)
-}
+use super::queue::manager;
+pub use super::queue::{DownloadManager, DownloadState, TaskEntry};
 
 /// reqwest client tolerant of self-signed peer certs (same as
 /// `proxy_file.rs::proxy_client`).
@@ -78,7 +52,7 @@ fn http_client() -> reqwest::Client {
         .clone()
 }
 
-fn emit_progress(ctx: &Arc<AppCtx>, state: &DownloadState) {
+fn emit_progress(deps: &DownloadDeps, state: &DownloadState) {
     let payload = serde_json::json!([{
         "id": state.message_id,
         "messageId": state.message_id,
@@ -88,14 +62,14 @@ fn emit_progress(ctx: &Arc<AppCtx>, state: &DownloadState) {
         "status": state.status,
     }])
     .to_string();
-    let _ = ctx
-        .event_tx
+    let _ = deps
+        .events
         .send(WsEvent::broadcast(WS_DOWNLOAD_PROGRESS, payload));
 }
 
 /// Start (or queue) a download for all `fsid:` files in the given message.
 /// Returns `false` if a download is already in flight for that message.
-pub async fn start_download(ctx: Arc<AppCtx>, message_id: String, peer_id: String) -> bool {
+pub async fn start_download(deps: DownloadDeps, message_id: String, peer_id: String) -> bool {
     let tasks = manager().tasks.lock().await;
     if tasks.contains_key(&message_id) {
         return false;
@@ -112,11 +86,11 @@ pub async fn start_download(ctx: Arc<AppCtx>, message_id: String, peer_id: Strin
 
     let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
 
-    let ctx2 = ctx.clone();
+    let deps2 = deps.clone();
     let mid = message_id.clone();
     let state2 = state.clone();
     let handle = tokio::spawn(async move {
-        execute_download(ctx2, mid, peer_id, state2, abort_rx).await;
+        execute_download(deps2, mid, peer_id, state2, abort_rx).await;
     });
 
     let mut tasks = manager().tasks.lock().await;
@@ -131,23 +105,11 @@ pub async fn start_download(ctx: Arc<AppCtx>, message_id: String, peer_id: Strin
     true
 }
 
-/// Pause an in-flight download. Returns `false` if no active task exists.
-pub async fn pause_download(message_id: &str) -> bool {
-    let mut tasks = manager().tasks.lock().await;
-    if let Some(entry) = tasks.get_mut(message_id) {
-        if let Some(abort) = entry.abort.take() {
-            let _ = abort.send(());
-        }
-        let mut s = entry.state.lock().await;
-        s.status = DownloadStatus::Paused;
-        return true;
-    }
-    false
-}
+pub use super::queue::pause_download;
 
 /// Resume a paused download. The caller must pass the peer id again since
 /// the manager does not cache it.
-pub async fn resume_download(ctx: Arc<AppCtx>, message_id: String, peer_id: String) -> bool {
+pub async fn resume_download(deps: DownloadDeps, message_id: String, peer_id: String) -> bool {
     let mut tasks = manager().tasks.lock().await;
     if let Some(mut entry) = tasks.remove(&message_id) {
         if let Some(abort) = entry.abort.take() {
@@ -156,11 +118,11 @@ pub async fn resume_download(ctx: Arc<AppCtx>, message_id: String, peer_id: Stri
         entry.handle.abort();
     }
     drop(tasks);
-    start_download(ctx, message_id, peer_id).await
+    start_download(deps, message_id, peer_id).await
 }
 
 /// Retry a failed download.
-pub async fn retry_download(ctx: Arc<AppCtx>, message_id: String, peer_id: String) -> bool {
+pub async fn retry_download(deps: DownloadDeps, message_id: String, peer_id: String) -> bool {
     let mut tasks = manager().tasks.lock().await;
     if let Some(mut entry) = tasks.remove(&message_id) {
         if let Some(abort) = entry.abort.take() {
@@ -169,32 +131,32 @@ pub async fn retry_download(ctx: Arc<AppCtx>, message_id: String, peer_id: Strin
         entry.handle.abort();
     }
     drop(tasks);
-    start_download(ctx, message_id, peer_id).await
+    start_download(deps, message_id, peer_id).await
 }
 
 /// Core download loop — downloads every `fsid:` file in the message,
 /// imports each into `app_file_store`, rewrites the content to `fid:`,
 /// and emits progress + completion events.
 async fn execute_download(
-    ctx: Arc<AppCtx>,
+    deps: DownloadDeps,
     message_id: String,
     peer_id: String,
     state: Arc<Mutex<DownloadState>>,
     mut abort_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let chat = match ctx.db.get_chat_by_id(&message_id) {
+    let chat = match deps.db.get_chat_by_id(&message_id) {
         Some(c) => c,
         None => {
-            set_failed(&ctx, &state, "Message not found").await;
+            set_failed(&deps, &state, "Message not found").await;
             cleanup(&message_id).await;
             return;
         }
     };
 
-    let peer = match ctx.db.get_peer_by_id(&peer_id) {
+    let peer = match deps.db.get_peer_by_id(&peer_id) {
         Some(p) => p,
         None => {
-            set_failed(&ctx, &state, "Peer not found").await;
+            set_failed(&deps, &state, "Peer not found").await;
             cleanup(&message_id).await;
             return;
         }
@@ -203,7 +165,7 @@ async fn execute_download(
     let mut content: Value = match serde_json::from_str(&chat.content) {
         Ok(v) => v,
         Err(e) => {
-            set_failed(&ctx, &state, &format!("Invalid content: {e}")).await;
+            set_failed(&deps, &state, &format!("Invalid content: {e}")).await;
             cleanup(&message_id).await;
             return;
         }
@@ -216,7 +178,7 @@ async fn execute_download(
     {
         Some(arr) => arr,
         None => {
-            set_completed(&ctx, &state).await;
+            set_completed(&deps, &state).await;
             cleanup(&message_id).await;
             return;
         }
@@ -243,7 +205,7 @@ async fn execute_download(
     }
 
     if to_download.is_empty() {
-        set_completed(&ctx, &state).await;
+        set_completed(&deps, &state).await;
         cleanup(&message_id).await;
         return;
     }
@@ -255,17 +217,17 @@ async fn execute_download(
         s.total = total;
         s.downloaded = 0;
         s.speed = 0;
-        emit_progress(&ctx, &s);
+        emit_progress(&deps, &s);
     }
 
     let peer_ip = peer.ip.split(',').next().unwrap_or("").trim().to_string();
     if peer_ip.is_empty() {
-        set_failed(&ctx, &state, "Peer has no IP").await;
+        set_failed(&deps, &state, "Peer has no IP").await;
         cleanup(&message_id).await;
         return;
     }
     let Some(peer_port) = peer.port.filter(|port| *port > 0) else {
-        set_failed(&ctx, &state, "Peer has no port").await;
+        set_failed(&deps, &state, "Peer has no port").await;
         cleanup(&message_id).await;
         return;
     };
@@ -277,7 +239,7 @@ async fn execute_download(
         if abort_rx.try_recv().is_ok() {
             let mut s = state.lock().await;
             s.status = DownloadStatus::Paused;
-            emit_progress(&ctx, &s);
+            emit_progress(&deps, &s);
             cleanup(&message_id).await;
             return;
         }
@@ -287,7 +249,7 @@ async fn execute_download(
             .unwrap_or_else(|_| reqwest::Url::parse(&fs_base).expect("valid fs base url"));
 
         match download_one(
-            &ctx,
+            &deps,
             &state,
             url.as_str(),
             file_name,
@@ -310,7 +272,7 @@ async fn execute_download(
     }
 
     if !all_ok {
-        set_failed(&ctx, &state, "Download failed").await;
+        set_failed(&deps, &state, "Download failed").await;
         cleanup(&message_id).await;
         return;
     }
@@ -319,21 +281,21 @@ async fn execute_download(
     // `data` field with re-encrypted `fid:` file ids) so the web client can
     // resolve the new local URLs without a page refresh. Mirrors how
     // `chat_message.rs` emits `WS_MESSAGE_UPDATED` via `chat_to_json`.
-    let updated_chat = match ctx.db.get_chat_by_id(&message_id) {
+    let updated_chat = match deps.db.get_chat_by_id(&message_id) {
         Some(c) => c,
         None => {
-            set_failed(&ctx, &state, "Message unavailable").await;
+            set_failed(&deps, &state, "Message unavailable").await;
             cleanup(&message_id).await;
             return;
         }
     };
     let updated_payload =
         serde_json::json!([plain_rs::chat::service::chat_to_json(&updated_chat)]).to_string();
-    let _ = ctx
-        .event_tx
+    let _ = deps
+        .events
         .send(WsEvent::broadcast(WS_MESSAGE_UPDATED, updated_payload));
 
-    set_completed(&ctx, &state).await;
+    set_completed(&deps, &state).await;
     cleanup(&message_id).await;
 }
 
@@ -341,7 +303,7 @@ async fn execute_download(
 /// import into `app_file_store`. Returns the `fid_suffix` (e.g.
 /// `abc123.jpg`) on success.
 async fn download_one(
-    ctx: &Arc<AppCtx>,
+    deps: &DownloadDeps,
     state: &Arc<Mutex<DownloadState>>,
     url: &str,
     file_name: &str,
@@ -398,7 +360,7 @@ async fn download_one(
                         let mut s = state.lock().await;
                         s.downloaded = *downloaded_so_far;
                         s.speed = speed;
-                        emit_progress(ctx, &s);
+                        emit_progress(deps, &s);
                     }
                     last_progress = now;
                     bytes_since_last = 0;
@@ -422,8 +384,8 @@ async fn download_one(
     drop(file);
 
     let import_result = {
-        let db = ctx.db.clone();
-        let data_dir = ctx.data_dir.clone();
+        let db = deps.db.clone();
+        let data_dir = deps.data_dir.clone();
         let temp_path = temp_path.clone();
         let file_name = file_name.to_string();
         let message_id = message_id.to_owned();
@@ -448,8 +410,8 @@ async fn download_one(
     let _ = tokio::fs::remove_file(&temp_path).await;
     if let Some(chat) = &import_result.chat {
         let payload = serde_json::json!([plain_rs::chat::service::chat_to_json(chat)]).to_string();
-        let _ = ctx
-            .event_tx
+        let _ = deps
+            .events
             .send(WsEvent::broadcast(WS_MESSAGE_UPDATED, payload));
     }
 
@@ -464,20 +426,20 @@ async fn download_one(
     Ok(import_result.fid_suffix)
 }
 
-async fn set_failed(ctx: &Arc<AppCtx>, state: &Arc<Mutex<DownloadState>>, error: &str) {
+async fn set_failed(deps: &DownloadDeps, state: &Arc<Mutex<DownloadState>>, error: &str) {
     log::warn!("[download] failed: {error}");
     let mut s = state.lock().await;
     s.status = DownloadStatus::Failed;
     s.speed = 0;
-    emit_progress(ctx, &s);
+    emit_progress(deps, &s);
 }
 
-async fn set_completed(ctx: &Arc<AppCtx>, state: &Arc<Mutex<DownloadState>>) {
+async fn set_completed(deps: &DownloadDeps, state: &Arc<Mutex<DownloadState>>) {
     let mut s = state.lock().await;
     s.status = DownloadStatus::Completed;
     s.downloaded = s.total;
     s.speed = 0;
-    emit_progress(ctx, &s);
+    emit_progress(deps, &s);
 }
 
 async fn cleanup(message_id: &str) {

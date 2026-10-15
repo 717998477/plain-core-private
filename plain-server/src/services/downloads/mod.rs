@@ -1,2 +1,5 @@
-#[cfg(feature = "api")]
+#[cfg(any(feature = "api", feature = "core"))]
+pub mod queue;
+
+#[cfg(any(feature = "api", feature = "core"))]
 pub mod service;

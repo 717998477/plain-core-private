@@ -170,7 +170,7 @@ pub(crate) fn plan(
             (Provider::Doc, "ext") => plan.add("_display_name LIKE ? ESCAPE '\\'".into(), vec![format!("%.{}", escape_like(&field.value))]),
             (Provider::Doc, "parent") => plan.add("_data LIKE ? ESCAPE '\\'".into(), vec![format!("{}/%", escape_like(field.value.trim_end_matches('/')))]),
             (Provider::Doc, "type") => plan.equal("mime_type", &field.value),
-            (Provider::Doc, "file_size") => {
+            (Provider::File | Provider::Doc | Provider::Audio | Provider::Video | Provider::Image, "file_size" | "size") => {
                 let (op, value) = comparison(field);
                 if ["=", "!=", ">", ">=", "<", "<="].contains(&op) {
                     if let Some(bytes) = parse_size_to_bytes(value) { plan.add(format!("_size {op} ?"), vec![bytes.to_string()]); }
@@ -180,12 +180,6 @@ pub(crate) fn plan(
             (Provider::File, "parent") => plan.add("parent = ?".into(), vec![resolved_parent_id.unwrap_or("-1").to_owned()]),
             (Provider::File, "type") => plan.equal("mime_type", &field.value),
             (Provider::File, "ids") => plan.ids("_id", field.value.split(',').map(str::to_owned).collect()),
-            (Provider::File, "file_size") => {
-                let (op, value) = comparison(field);
-                if ["=", "!=", ">", ">=", "<", "<="] .contains(&op) {
-                    if let Some(bytes) = parse_size_to_bytes(value) { plan.add(format!("_size {op} ?"), vec![bytes.to_string()]); }
-                }
-            }
             (Provider::Audio | Provider::Video | Provider::Image | Provider::Doc, "trash") => {
                 if let Some(flag) = field.value.parse::<bool>().ok() {
                     // The phone's trash is MediaStore's own: `IS_TRASHED` is what

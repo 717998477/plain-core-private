@@ -48,6 +48,29 @@ fn database(schema: &PublicSchema) -> &Arc<Db> {
     schema.data::<Arc<Db>>().unwrap()
 }
 
+fn doc(path: &str) -> plain_rs::db::MediaFileMetadata {
+    plain_rs::db::MediaFileMetadata {
+        data_type: DataType::Doc,
+        path: path.to_owned(),
+        title: std::path::Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        artist: String::new(),
+        bucket_id: "b3".to_owned(),
+        size_bytes: 10,
+        duration_ms: 0,
+        cover_image_id: None,
+        width: 0,
+        height: 0,
+        rotation: 0,
+        taken_at: None,
+        created_at: "2026-01-02T03:04:05.000Z".to_owned(),
+        updated_at: "2026-01-02T03:04:05.000Z".to_owned(),
+    }
+}
+
 /// The ordinals are plain-app's `DataType.value`, stored in the tag tables.
 /// They are not a free ordering — changing one would re-file every existing
 /// tag, so the contract enum and this mapping are pinned.
@@ -219,17 +242,13 @@ async fn a_relation_cannot_cross_kinds() {
 
 #[tokio::test]
 async fn adding_a_tag_to_a_query_attaches_it_to_every_match() {
-    let (_dir, schema) = fixture_with(|method, params| match method {
-        "systemTagQueryStubs" => {
-            assert_eq!(params["dataType"], "DOC");
-            assert_eq!(params["query"], "text:report");
-            json!([
-                {"key": "d1", "title": "a.pdf", "size": 10},
-                {"key": "d2", "title": "b.pdf", "size": 20},
-            ])
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema) = fixture();
+    let stored = database(&schema)
+        .record_media_files(&[
+            doc("/storage/Docs/report-a.pdf"),
+            doc("/storage/Docs/report-b.pdf"),
+        ])
+        .unwrap();
     let response = schema
         .execute(r#"mutation { createTag(type:DOC, name:"work") { id } }"#)
         .await;
@@ -255,20 +274,19 @@ async fn adding_a_tag_to_a_query_attaches_it_to_every_match() {
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(
         keys,
-        ["d1".to_string(), "d2".to_string()].into_iter().collect()
+        stored
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<std::collections::HashSet<_>>()
     );
 }
 
 #[tokio::test]
 async fn removing_a_tag_takes_it_off_every_match() {
-    let (_dir, schema) = fixture_with(|method, params| match method {
-        "systemTagQueryStubs" => json!([{"key": "d1", "title": "a", "size": 1}]),
-        "systemTagQueryKeys" => {
-            assert_eq!(params["dataType"], "DOC");
-            json!({ "ids": ["d1", "d2"] })
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema) = fixture();
+    let stored = database(&schema)
+        .record_media_files(&[doc("/storage/Docs/x1.pdf"), doc("/storage/Docs/x2.pdf")])
+        .unwrap();
     let response = schema
         .execute(r#"mutation { createTag(type:DOC, name:"work") { id } }"#)
         .await;
@@ -276,11 +294,12 @@ async fn removing_a_tag_takes_it_off_every_match() {
         .as_str()
         .unwrap()
         .to_string();
-    for query in [
-        r#"mutation { updateTagRelations(type:DOC, item:{key:"d1", title:"a", size:1}, addTagIds:["ID"], removeTagIds:[]) }"#,
-        r#"mutation { updateTagRelations(type:DOC, item:{key:"d2", title:"b", size:1}, addTagIds:["ID"], removeTagIds:[]) }"#,
-    ] {
-        let response = schema.execute(&query.replace("ID", &id)).await;
+    for row in &stored {
+        let query = format!(
+            r#"mutation {{ updateTagRelations(type:DOC, item:{{key:"{}", title:"t", size:1}}, addTagIds:["{id}"], removeTagIds:[]) }}"#,
+            row.id
+        );
+        let response = schema.execute(&query).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
     }
     let response = schema

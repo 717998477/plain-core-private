@@ -381,27 +381,32 @@ async fn favorite_folders_are_read_from_the_rust_store() {
 }
 
 #[tokio::test]
-async fn recent_files_are_gated_and_projected_from_the_platform() {
-    let (_dir, schema) = fixture_with(GRANTED, |method, _| match method {
-        "systemRecentFileFacts" => json!([
-            {"name":"a.txt","path":"/storage/a.txt","mediaId":"","createdAt":1700000000000i64,
-             "updatedAt":1700000001000i64,"size":12,"isDir":false,"childCount":0},
-            {"name":"b.mp4","path":"/storage/b.mp4","mediaId":"42","createdAt":Value::Null,
-             "updatedAt":1700000002000i64,"size":4096,"isDir":false,"childCount":0},
-        ]),
-        other => panic!("unexpected host call {other}"),
-    });
+async fn recent_files_are_gated_and_projected_from_the_store() {
+    let (dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    let first = dir.path().join("a.txt");
+    let second = dir.path().join("b.mp4");
+    std::fs::write(&first, b"hello world!").unwrap();
+    std::fs::write(&second, vec![0u8; 4096]).unwrap();
+    let prefs = schema
+        .data::<Arc<plain_rs::prefs::Prefs>>()
+        .unwrap()
+        .clone();
+    plain_media::storage::kv::recent::add_recent_file(&prefs, &first.to_string_lossy());
+    plain_media::storage::kv::recent::add_recent_file(&prefs, &second.to_string_lossy());
+
     let response = schema
-        .execute(r#"query { recentFiles { name mediaId createdAt updatedAt size } }"#)
+        .execute(r#"query { recentFiles { name path mediaId size isDir } }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
     let items = data["recentFiles"].as_array().unwrap();
-    assert_eq!(items[0]["mediaId"], Value::Null);
-    assert_eq!(items[0]["updatedAt"], "2023-11-14T22:13:21.000Z");
-    assert_eq!(items[1]["mediaId"], "42");
-    assert_eq!(items[1]["createdAt"], Value::Null);
-    assert_eq!(items[1]["size"], 4096);
+    assert_eq!(items.len(), 2, "{data}");
+    assert_eq!(items[0]["name"], "b.mp4");
+    assert_eq!(items[0]["size"], 4096);
+    assert_eq!(items[1]["name"], "a.txt");
+    assert_eq!(items[1]["size"], 12);
+    assert_eq!(items[1]["mediaId"], Value::Null);
+    assert_eq!(items[0]["isDir"], false);
 }
 
 /// Every mutation returns the whole list, so a client re-renders from the

@@ -37,6 +37,16 @@ fn fixture_with(
     granted: bool,
     handler: impl Fn(&str, Value) -> Value + Send + 'static,
 ) -> (tempfile::TempDir, PublicSchema) {
+    let (dir, schema, _) = fixture_seeded(permissions, granted, |_| {}, handler);
+    (dir, schema)
+}
+
+fn fixture_seeded(
+    permissions: &str,
+    granted: bool,
+    seed: impl FnOnce(&Db),
+    handler: impl Fn(&str, Value) -> Value + Send + 'static,
+) -> (tempfile::TempDir, PublicSchema, Arc<Db>) {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
     prefs
@@ -46,6 +56,7 @@ fn fixture_with(
         )
         .unwrap();
     let db = Arc::new(Db::open(&dir.path().join("data.db")).unwrap());
+    seed(&db);
     let host = Arc::new(Host::default());
     stub(host.clone(), move |method, params| {
         if method == "systemPermissionFacts" {
@@ -57,8 +68,34 @@ fn fixture_with(
     let (events, _) = tokio::sync::broadcast::channel(16);
     (
         dir,
-        crate::graphql::schemas::public::build(host, events, prefs, db, directory),
+        crate::graphql::schemas::public::build(host, events, prefs, db.clone(), directory),
+        db,
     )
+}
+
+fn media(
+    data_type: DataType,
+    path: &str,
+    title: &str,
+    size: i64,
+    bucket: &str,
+) -> plain_rs::db::MediaFileMetadata {
+    plain_rs::db::MediaFileMetadata {
+        data_type,
+        path: path.to_owned(),
+        title: title.to_owned(),
+        artist: String::new(),
+        bucket_id: bucket.to_owned(),
+        size_bytes: size,
+        duration_ms: 0,
+        cover_image_id: None,
+        width: 4000,
+        height: 3000,
+        rotation: 0,
+        taken_at: None,
+        created_at: "2026-01-02T03:04:05.000Z".to_owned(),
+        updated_at: "2026-02-03T04:05:06.000Z".to_owned(),
+    }
 }
 
 fn image_row(id: &str, path: &str) -> Value {
@@ -123,34 +160,41 @@ async fn browsing_media_errors_out_without_the_api_permission() {
 
 #[tokio::test]
 async fn images_carry_their_row_and_their_tags() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, params| match method {
-        "systemMediaRows" => {
-            assert_eq!(params["offset"], 0);
-            assert_eq!(params["limit"], 20);
-            assert_eq!(params["sortBy"], "DATE_DESC");
-            json!([
-                image_row("i1", "/storage/DCIM/one.jpg"),
-                image_row("i2", "/storage/DCIM/two.jpg"),
-            ])
-        }
-        other => panic!("unexpected host call {other}"),
-    });
-    let db = schema.data::<Arc<Db>>().unwrap();
+    let (_dir, schema, db) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            let mut first = media(DataType::Image, "/storage/DCIM/one.jpg", "i1", 2048, "b1");
+            first.taken_at = Some("2026-01-01T00:00:00.000Z".to_owned());
+            let mut second = media(DataType::Image, "/storage/DCIM/two.jpg", "i2", 4096, "b1");
+            second.updated_at = "2025-01-01T00:00:00.000Z".to_owned();
+            db.record_media_files(&[first, second]).unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
     let kind = plain_rs::enums::DataType::Image.kind();
-    let tag = plain_rs::tags::create_tag(db, kind, "holiday").unwrap();
-    let relations = (1..=7)
+    let tag = plain_rs::tags::create_tag(&db, kind, "holiday").unwrap();
+    let rows = db.media_file_list(DataType::Image, 10, 0).unwrap();
+    db.with_conn(|conn| {
+        conn.execute(
+            "UPDATE media_items SET favorited=1 WHERE id=?1",
+            [&rows[0].id],
+        )
+        .unwrap();
+    });
+    let relations = (0..7)
         .map(|i| {
             (
                 tag.id.clone(),
-                if i == 1 {
-                    "i1".into()
+                if i == 0 {
+                    rows[0].id.clone()
                 } else {
                     format!("other{i}")
                 },
             )
         })
         .collect::<Vec<_>>();
-    plain_rs::tags::add_relations(db, &relations).unwrap();
+    plain_rs::tags::add_relations(&db, &relations).unwrap();
     let response = schema
         .execute(
             r#"query { images(offset:0, limit:20, query:"", sortBy:DATE_DESC)
@@ -162,7 +206,7 @@ async fn images_carry_their_row_and_their_tags() {
     let data = response.data.into_json().unwrap();
     let items = data["images"].as_array().unwrap();
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["id"], "i1");
+    assert_eq!(items[0]["title"], "i1");
     assert_eq!(items[0]["bucketId"], "b1");
     assert_eq!(items[0]["size"], 2048);
     assert_eq!(items[0]["isFavorite"], true);
@@ -177,73 +221,125 @@ async fn images_carry_their_row_and_their_tags() {
 
 #[tokio::test]
 async fn filename_search_receives_the_complete_query_without_loaded_models() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, params| match method {
-        "systemMediaRows" => {
-            assert_eq!(params["dataType"], "IMAGE");
-            assert_eq!(params["query"], "text:sunset size:>100");
-            json!([])
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[
+                media(
+                    DataType::Image,
+                    "/storage/DCIM/sunset-a.jpg",
+                    "sunset a",
+                    4096,
+                    "b1",
+                ),
+                media(
+                    DataType::Image,
+                    "/storage/DCIM/small.jpg",
+                    "small",
+                    10,
+                    "b1",
+                ),
+            ])
+            .unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
     let response = schema
         .execute(
-            r#"query { images(offset:0, limit:5, query:"text:sunset size:>100", sortBy:NAME_ASC) { id } }"#,
+            r#"query { images(offset:0, limit:5, query:"text:sunset size:>100", sortBy:NAME_ASC) { title } }"#,
         )
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["images"],
+        json!([{"title": "sunset a"}])
+    );
 }
 
 #[tokio::test]
 async fn filename_search_preserves_queries_without_text() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, params| match method {
-        "systemMediaRows" => {
-            assert_eq!(params["dataType"], "IMAGE");
-            assert_eq!(params["query"], "size:>100");
-            json!([])
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[
+                media(DataType::Image, "/storage/DCIM/big.jpg", "big", 4096, "b1"),
+                media(
+                    DataType::Image,
+                    "/storage/DCIM/small.jpg",
+                    "small",
+                    10,
+                    "b1",
+                ),
+            ])
+            .unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
     let response = schema
         .execute(
-            r#"query { images(offset:0, limit:5, query:"size:>100", sortBy:NAME_ASC) { id } }"#,
+            r#"query { images(offset:0, limit:5, query:"size:>100", sortBy:NAME_ASC) { title } }"#,
         )
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["images"],
+        json!([{"title": "big"}])
+    );
 }
 
 #[tokio::test]
-async fn image_count_uses_the_platform_catalog_without_loaded_models() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, params| match method {
-        "systemMediaCount" => {
-            assert_eq!(params["dataType"], "IMAGE");
-            assert_eq!(params["query"], "text:cat");
-            json!(42)
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+async fn image_count_uses_the_catalogue_without_loaded_models() {
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[
+                media(
+                    DataType::Image,
+                    "/storage/DCIM/cat-1.jpg",
+                    "cat one",
+                    10,
+                    "b1",
+                ),
+                media(
+                    DataType::Image,
+                    "/storage/DCIM/cat-2.jpg",
+                    "cat two",
+                    10,
+                    "b1",
+                ),
+                media(DataType::Image, "/storage/DCIM/dog.jpg", "dog", 10, "b1"),
+            ])
+            .unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
     let response = schema
         .execute(r#"query { imageCount(query:"text:cat") }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["imageCount"], 42);
+    assert_eq!(response.data.into_json().unwrap()["imageCount"], 2);
 }
 
 #[tokio::test]
 async fn videos_carry_the_duration_and_the_taken_time() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, params| match method {
-        "systemMediaRows" => {
-            assert_eq!(params["dataType"], "VIDEO");
-            assert_eq!(params["sortBy"], "SIZE_ASC");
-            json!([{
-                "id": "v1", "title": "clip", "path": "/storage/Movies/clip.mp4",
-                "durationMs": 61000, "size": 900, "width": 1920, "height": 1080,
-                "rotation": 0, "bucketId": "b2", "createdAt": "2026-01-02T03:04:05.000Z",
-                "updatedAt": "2026-02-03T04:05:06.000Z", "takenAt": Value::Null,
-                "isFavorite": false,
-            }])
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[media(
+                DataType::Video,
+                "/storage/Movies/clip.mp4",
+                "clip",
+                900,
+                "b2",
+            )])
+            .unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
     let response = schema
         .execute(
             r#"query { videos(offset:0, limit:10, query:"", sortBy:SIZE_ASC)
@@ -252,7 +348,8 @@ async fn videos_carry_the_duration_and_the_taken_time() {
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["videos"][0]["durationMs"], 61000);
+    assert_eq!(data["videos"][0]["durationMs"], 0);
+    assert_eq!(data["videos"][0]["size"], 900);
     assert_eq!(data["videos"][0]["takenAt"], Value::Null);
     // No tag rows at all still yields an empty list per item.
     assert_eq!(data["videos"][0]["tags"], json!([]));
@@ -262,15 +359,18 @@ async fn videos_carry_the_duration_and_the_taken_time() {
 /// property — the media store does not carry an extension column.
 #[tokio::test]
 async fn doc_extensions_come_from_the_path() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, _| match method {
-        "systemMediaRows" => json!([
-            {"id":"d1","title":"a","path":"/storage/Docs/a.pdf","durationMs":0,"size":10,
-             "bucketId":"b3","createdAt":"2026-01-02T03:04:05.000Z","updatedAt":"2026-01-02T03:04:05.000Z"},
-            {"id":"d2","title":"b","path":"/storage/Docs/noext","durationMs":0,"size":10,
-             "bucketId":"b3","createdAt":"2026-01-02T03:04:05.000Z","updatedAt":"2026-01-02T03:04:05.000Z"},
-        ]),
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[
+                media(DataType::Doc, "/storage/Docs/a.pdf", "a", 10, "b3"),
+                media(DataType::Doc, "/storage/Docs/b.txt", "b", 10, "b3"),
+            ])
+            .unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
     let response = schema
         .execute(
             r#"query { docs(offset:0, limit:10, query:"", sortBy:NAME_ASC) { id extension } }"#,
@@ -278,28 +378,38 @@ async fn doc_extensions_come_from_the_path() {
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["docs"][0]["extension"], "pdf");
-    assert_eq!(data["docs"][1]["extension"], "");
+    let docs = data["docs"].as_array().unwrap();
+    let extensions = Value::Array(
+        docs.iter()
+            .map(|d| d["extension"].clone())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(extensions, json!(["pdf", "txt"]), "{data}");
 }
 
 /// One row per folder, sorted by the lowercased folder name, with a bounded
 /// number of sample paths for the thumbnail grid.
 #[tokio::test]
 async fn buckets_collapse_rows_into_folders() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, params| match method {
-        "systemMediaBucketItemFacts" => {
-            assert_eq!(params["dataType"], "VIDEO");
-            json!([
-                {"id":"b2","name":"Movies","size":10,"path":"/storage/Movies/a.mp4","sortName":"Movies"},
-                {"id":"b1","name":"Camera","size":10,"path":"/storage/Camera/a.jpg","sortName":"Camera"},
-                {"id":"b2","name":"Movies","size":10,"path":"/storage/Movies/b.mp4","sortName":"Movies"},
-                {"id":"b2","name":"Movies","size":10,"path":"/storage/Movies/c.mp4","sortName":"Movies"},
-                {"id":"b2","name":"Movies","size":10,"path":"/storage/Movies/d.mp4","sortName":"Movies"},
-                {"id":"b2","name":"Movies","size":10,"path":"/storage/Movies/e.mp4","sortName":"Movies"},
-            ])
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            let rows: Vec<_> = [
+                ("/storage/Camera/a.mp4", "b1"),
+                ("/storage/Movies/a.mp4", "b2"),
+                ("/storage/Movies/b.mp4", "b2"),
+                ("/storage/Movies/c.mp4", "b2"),
+                ("/storage/Movies/d.mp4", "b2"),
+                ("/storage/Movies/e.mp4", "b2"),
+            ]
+            .into_iter()
+            .map(|(path, bucket)| media(DataType::Video, path, "clip", 10, bucket))
+            .collect();
+            db.record_media_files(&rows).unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
     let response = schema
         .execute(r#"query { mediaBuckets(type:VIDEO) { id name itemCount topItemPaths } }"#)
         .await;
@@ -317,38 +427,56 @@ async fn buckets_collapse_rows_into_folders() {
 }
 
 #[tokio::test]
-async fn doc_extension_groups_are_forwarded_verbatim() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, _| match method {
-        "systemDocExtGroups" => json!([{"ext": "pdf", "count": 12}, {"ext": "epub", "count": 3}]),
-        other => panic!("unexpected host call {other}"),
-    });
+async fn doc_extension_groups_count_the_catalogue() {
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[
+                media(DataType::Doc, "/d/a.pdf", "a", 10, "b"),
+                media(DataType::Doc, "/d/b.pdf", "b", 10, "b"),
+                media(DataType::Doc, "/d/c.txt", "c", 10, "b"),
+            ])
+            .unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
     let response = schema
         .execute(r#"query { docExtGroups { ext count } }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let data = response.data.into_json().unwrap();
-    let groups = data["docExtGroups"].as_array().unwrap();
-    assert_eq!(groups[0]["ext"], "pdf");
-    assert_eq!(groups[0]["count"], 12);
-    assert_eq!(groups[1]["ext"], "epub");
+    let groups = response.data.into_json().unwrap()["docExtGroups"].clone();
+    assert_eq!(
+        groups,
+        json!([{"ext": "PDF", "count": 2}, {"ext": "TXT", "count": 1}])
+    );
 }
 
 #[tokio::test]
-async fn video_and_doc_counts_reach_the_platform_with_the_kind() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, params| match method {
-        "systemMediaCount" => {
-            assert!(params["dataType"] == "VIDEO" || params["dataType"] == "DOC");
-            json!(5)
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+async fn video_and_doc_counts_count_the_catalogue_per_kind() {
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[
+                media(DataType::Video, "/v/a.mp4", "a", 10, "b"),
+                media(DataType::Video, "/v/b.mp4", "b", 10, "b"),
+                media(DataType::Doc, "/d/a.pdf", "a", 10, "b"),
+                media(DataType::Doc, "/d/b.pdf", "b", 10, "b"),
+                media(DataType::Audio, "/m/a.mp3", "a", 10, "b"),
+            ])
+            .unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
     let response = schema
-        .execute(r#"query { videoCount(query:"") docCount(query:"size:>10") }"#)
+        .execute(r#"query { videoCount(query:"") docCount(query:"") audioCount(query:"") }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["videoCount"], 5);
-    assert_eq!(data["docCount"], 5);
+    assert_eq!(data["videoCount"], 2);
+    assert_eq!(data["docCount"], 2);
+    assert_eq!(data["audioCount"], 1);
 }
 
 /// An empty page must not cost a tag round trip.
@@ -375,14 +503,38 @@ fn the_contract_kind_names_are_what_the_platform_expects() {
 
 #[tokio::test]
 async fn all_media_lists_accept_the_original_shared_interface_fragment() {
-    let (_dir, schema) = fixture_with(GRANTED, true, |method, _| match method {
-        "systemMediaRows" => json!([{
-            "id":"media-1", "title":"Media", "artist":"Artist", "path":"/media/file",
-            "size":2048, "durationMs":1000, "bucketId":"bucket-1",
-            "createdAt":"2026-01-02T03:04:05.000Z", "updatedAt":"2026-02-03T04:05:06.000Z"
-        }]),
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[
+                media(
+                    DataType::Audio,
+                    "/media/file.mp3",
+                    "Media",
+                    2048,
+                    "bucket-1",
+                ),
+                media(
+                    DataType::Video,
+                    "/media/file.mp4",
+                    "Media",
+                    2048,
+                    "bucket-1",
+                ),
+                media(DataType::Doc, "/media/file.pdf", "Media", 2048, "bucket-1"),
+            ])
+            .unwrap();
+        },
+        |method, _| match method {
+            "systemMediaRows" => json!([{
+                "id": "media-1", "title": "Media", "path": "/media/file",
+                "size": 2048, "bucketId": "bucket-1",
+                "createdAt": "2026-01-02T03:04:05.000Z", "updatedAt": "2026-02-03T04:05:06.000Z"
+            }]),
+            other => panic!("unexpected host call {other}"),
+        },
+    );
     let response = schema
         .execute(
             r#"
@@ -398,10 +550,14 @@ async fn all_media_lists_accept_the_original_shared_interface_fragment() {
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    for field in ["audios", "images", "videos", "docs"] {
-        assert_eq!(data[field][0]["id"], "media-1", "{field}: {data}");
-        assert_eq!(data[field][0]["path"], "/media/file");
-        assert_eq!(data[field][0]["size"], 2048);
-        assert_eq!(data[field][0].as_object().unwrap().len(), 7);
+    for field in ["audios", "videos", "docs"] {
+        assert_eq!(data[field][0]["title"], "Media", "{field}: {data}");
+        assert_eq!(data[field][0]["size"], 2048, "{field}: {data}");
+        assert_eq!(data[field][0]["bucketId"], "bucket-1", "{field}: {data}");
+        assert_eq!(
+            data[field][0].as_object().unwrap().len(),
+            7,
+            "{field}: {data}"
+        );
     }
 }

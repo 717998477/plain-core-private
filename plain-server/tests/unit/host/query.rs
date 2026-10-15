@@ -427,3 +427,27 @@ async fn a_query_that_builds_no_clause_is_the_one_the_destructive_path_refuses()
         .await
         .expect("blank is refused by the caller's guard, not this one");
 }
+
+#[test]
+fn all_file_media_providers_bind_size_filters_to_the_provider_column() {
+    for provider in [
+        Provider::File,
+        Provider::Doc,
+        Provider::Audio,
+        Provider::Video,
+        Provider::Image,
+    ] {
+        for field in ["size", "file_size"] {
+            let fields = search_dsl::parse(&format!("{field}:>=1.5MB"));
+            let selected = plan_ok(provider, &fields, &Value::Null, None, false);
+            assert!(selected.clauses.iter().any(|clause| clause == "_size >= ?"));
+            assert!(selected.args.contains(&"1572864".to_owned()));
+            assert!(
+                selected
+                    .clauses
+                    .iter()
+                    .all(|clause| !clause.contains("1572864"))
+            );
+        }
+    }
+}

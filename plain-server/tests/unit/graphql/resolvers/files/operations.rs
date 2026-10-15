@@ -55,6 +55,60 @@ fn fixture_with(
     )
 }
 
+fn database(schema: &PublicSchema) -> &Arc<Db> {
+    schema.data::<Arc<Db>>().unwrap()
+}
+
+fn seed_media(
+    schema: &PublicSchema,
+    data_type: plain_rs::enums::DataType,
+    count: usize,
+    trashed: bool,
+    extension: &str,
+) -> Vec<plain_rs::db::MediaFileRow> {
+    let rows: Vec<_> = (1..=count)
+        .map(|i| plain_rs::db::MediaFileMetadata {
+            data_type,
+            path: format!("/media/x{i}.{extension}"),
+            title: format!("x{i}"),
+            artist: String::new(),
+            bucket_id: "b".to_owned(),
+            size_bytes: 10,
+            duration_ms: 0,
+            cover_image_id: Some(String::new()),
+            width: 0,
+            height: 0,
+            rotation: 0,
+            taken_at: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_owned(),
+            updated_at: "2026-01-01T00:00:00.000Z".to_owned(),
+        })
+        .collect();
+    let recorded = database(schema).record_media_files(&rows).unwrap();
+    if trashed {
+        database(schema).with_conn(|conn| {
+            for row in &recorded {
+                conn.execute("UPDATE media_items SET trashed=1 WHERE id=?1", [&row.id])
+                    .unwrap();
+            }
+        });
+    }
+    recorded
+}
+
+type ActionPaths = Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
+
+fn action_paths() -> ActionPaths {
+    Arc::new(std::sync::Mutex::new(Default::default()))
+}
+
+fn remember_paths(paths: &ActionPaths, rows: &[plain_rs::db::MediaFileRow]) {
+    paths
+        .lock()
+        .unwrap()
+        .extend(rows.iter().map(|row| (row.id.clone(), row.path.clone())));
+}
+
 fn file_platform(method: &str, _params: Value) -> Value {
     match method {
         "systemPermissionFacts" => json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}}),
@@ -185,18 +239,26 @@ async fn copy_and_move_use_the_shared_file_tasks() {
 
 #[tokio::test]
 async fn media_trash_and_restore_do_not_need_a_storage_grant() {
-    let (_dir, schema) = fixture_with("[]", |method, params| match method {
+    let paths = action_paths();
+    let receipt = paths.clone();
+    let (_dir, schema) = fixture_with("[]", move |method, params| match method {
         "systemPermissionFacts" => json!({ "granted": { "WRITE_EXTERNAL_STORAGE": true } }),
-        "systemMediaIdsFacts" => {
-            assert_eq!(params["dataType"], "IMAGE");
-            json!((1..=4).map(|i| i.to_string()).collect::<Vec<_>>())
-        }
         "mediaAction" => {
             assert_eq!(params["action"], "TRASH");
-            json!({"successful":params["ids"].as_array().unwrap().iter().map(|id| json!({"id":id,"path":format!("/media/{}",id.as_str().unwrap()),"destinationPath":"/item"})).collect::<Vec<_>>(),"failedIds":[]})
+            let known = receipt.lock().unwrap();
+            json!({"successful":params["ids"].as_array().unwrap().iter().map(|id| {
+                let id = id.as_str().unwrap();
+                let name = std::path::Path::new(known.get(id).map(String::as_str).unwrap_or_default())
+                    .file_name().and_then(|n| n.to_str()).unwrap_or("item");
+                json!({"id":id,"path":known.get(id).cloned().unwrap_or_default(),"destinationPath":format!("/item/{name}")})
+            }).collect::<Vec<_>>(),"failedIds":[]})
         }
         other => panic!("unexpected host call {other}"),
     });
+    remember_paths(
+        &paths,
+        &seed_media(&schema, plain_rs::enums::DataType::Image, 4, false, "jpg"),
+    );
     let response = schema
         .execute(r#"mutation { trashMediaItems(type:IMAGE, query:"text:x") { affectedCount } }"#)
         .await;
@@ -223,19 +285,27 @@ async fn moving_media_is_gated() {
 
 #[tokio::test]
 async fn moving_media_forwards_the_destination() {
-    let (_dir, schema) = fixture_with(GRANTED, |method, params| match method {
+    let paths = action_paths();
+    let receipt = paths.clone();
+    let (_dir, schema) = fixture_with(GRANTED, move |method, params| match method {
         "systemPermissionFacts" => json!({ "granted": { "WRITE_EXTERNAL_STORAGE": true } }),
-        "systemMediaIdsFacts" => {
-            assert_eq!(params["dataType"], "DOC");
-            json!((1..=2).map(|i| i.to_string()).collect::<Vec<_>>())
-        }
         "mediaAction" => {
             assert_eq!(params["action"], "MOVE");
             assert_eq!(params["destDir"], "/storage/Docs");
-            json!({"successful":params["ids"].as_array().unwrap().iter().map(|id| json!({"id":id,"path":format!("/media/{}",id.as_str().unwrap()),"destinationPath":"/storage/Docs/item"})).collect::<Vec<_>>(),"failedIds":[]})
+            let known = receipt.lock().unwrap();
+            json!({"successful":params["ids"].as_array().unwrap().iter().map(|id| {
+                let id = id.as_str().unwrap();
+                let name = std::path::Path::new(known.get(id).map(String::as_str).unwrap_or_default())
+                    .file_name().and_then(|n| n.to_str()).unwrap_or("item");
+                json!({"id":id,"path":known.get(id).cloned().unwrap_or_default(),"destinationPath":format!("/storage/Docs/{name}")})
+            }).collect::<Vec<_>>(),"failedIds":[]})
         }
         other => panic!("unexpected host call {other}"),
     });
+    remember_paths(
+        &paths,
+        &seed_media(&schema, plain_rs::enums::DataType::Doc, 2, false, "pdf"),
+    );
     let response = schema
         .execute(
             r#"mutation { moveMediaItems(type:DOC, query:"text:x", destDir:"/storage/Docs") { affectedCount } }"#,
@@ -441,40 +511,42 @@ async fn a_media_action_refuses_a_query_that_selects_nothing_and_all_true_still_
 async fn media_batches_commit_successes_and_notify_only_confirmed_ids() {
     let batches = Arc::new(std::sync::Mutex::new(Vec::new()));
     let calls = batches.clone();
+    let paths = action_paths();
+    let receipt = paths.clone();
+    let doomed: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+    let fails = doomed.clone();
     let (_dir, schema) = fixture_with(GRANTED, move |method, params| match method {
         "systemAppFacts" => json!({"capabilities":["MEDIA_TRASH"]}),
-        "systemMediaIdsFacts" => {
-            assert_eq!(params["fromTrash"], true);
-            json!(
-                (0..501)
-                    .map(|i| i.to_string())
-                    .chain(["0".into()])
-                    .collect::<Vec<_>>()
-            )
-        }
         "mediaAction" => {
             assert_eq!(params["fromTrash"], true);
             let ids = params["ids"].as_array().unwrap();
             calls.lock().unwrap().push(ids.len());
-            let successful = ids.iter().filter(|id| **id != json!("1")).map(|id| json!({"id":id,"path":format!("/media/{}", id.as_str().unwrap()),"destinationPath":""})).collect::<Vec<_>>();
+            let target = fails.lock().unwrap().clone().unwrap_or_default();
+            let known = receipt.lock().unwrap();
+            let receipt_for = |id: &str| json!({"id":id,"path":known.get(id).cloned().unwrap_or_default(),"destinationPath":""});
+            let successful = ids
+                .iter()
+                .filter(|id| id.as_str() != Some(target.as_str()))
+                .map(|id| receipt_for(id.as_str().unwrap()))
+                .collect::<Vec<_>>();
             let failed = ids
                 .iter()
-                .filter(|id| **id == json!("1"))
-                .cloned()
+                .filter(|id| id.as_str() == Some(target.as_str()))
+                .map(|id| json!(id))
                 .collect::<Vec<_>>();
             json!({"successful":successful,"failedIds":failed})
         }
         other => panic!("unexpected platform operation {other}"),
     });
+    let rows = seed_media(&schema, plain_rs::enums::DataType::Video, 501, true, "mp4");
+    remember_paths(&paths, &rows);
+    let casualty = rows[6].id.clone();
+    *doomed.lock().unwrap() = Some(casualty.clone());
     let db = schema.data::<Arc<Db>>().unwrap();
     let tag =
         plain_rs::tags::create_tag(db, plain_rs::enums::DataType::Video.kind(), "keep failed")
             .unwrap();
-    plain_rs::tags::add_relations(
-        db,
-        &[(tag.id.clone(), "0".into()), (tag.id.clone(), "1".into())],
-    )
-    .unwrap();
+    plain_rs::tags::add_relations(db, &[(tag.id.clone(), casualty.clone())]).unwrap();
     let mut events = schema
         .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()
         .unwrap()
@@ -491,7 +563,7 @@ async fn media_batches_commit_successes_and_notify_only_confirmed_ids() {
     assert_eq!(*batches.lock().unwrap(), vec![500, 1]);
     assert_eq!(
         plain_rs::tags::keys_for_tag(db, &tag.id).unwrap(),
-        vec!["1"]
+        vec![casualty.clone()]
     );
     let mut committed = Vec::new();
     let mut refreshes = 0;
@@ -516,5 +588,5 @@ async fn media_batches_commit_successes_and_notify_only_confirmed_ids() {
     }
     assert_eq!(refreshes, 2);
     assert_eq!(committed.len(), 500);
-    assert!(!committed.contains(&"1".to_string()));
+    assert!(!committed.contains(&casualty));
 }

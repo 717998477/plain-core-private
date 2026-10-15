@@ -63,22 +63,16 @@ impl MediaActions {
                     .iter()
                     .any(|kind| kind == "MEDIA_TRASH")
             });
-        let wire_kind = match kind {
-            DataType::Audio => "AUDIO",
-            DataType::Video => "VIDEO",
-            DataType::Image => "IMAGE",
-            DataType::Doc => "DOC",
-            _ => return Err("unsupported media kind".into()),
-        };
-        let ids: Vec<String> = serde_json::from_value(
-            self.host
-                .call(
-                    "systemMediaIdsFacts",
-                    json!({"dataType":wire_kind,"query":query,"fromTrash":from_trash}),
-                )
-                .await
-                .map_err(async_graphql::Error::new)?,
-        )?;
+        if !matches!(
+            kind,
+            DataType::Audio | DataType::Video | DataType::Image | DataType::Doc
+        ) {
+            return Err("unsupported media kind".into());
+        }
+        let ids = super::catalog::MediaCatalog::new(self.db.clone(), self.host.clone())
+            .ids(kind, query, from_trash)
+            .await
+            .map_err(async_graphql::Error::new)?;
         let mut seen = std::collections::HashSet::new();
         let ids: Vec<_> = ids
             .into_iter()
@@ -152,17 +146,17 @@ impl MediaActions {
                         && !before.path.is_empty()
                         && successful.iter().any(|item| item.path == before.path)
                     {
-                        if action==Action::Move {
-                            audio_commands::clear_engine(db,&prefs,engine)?;
+                        if action == Action::Move {
+                            audio_commands::clear_engine(db, &prefs, engine)?;
                         } else {
-                        audio_commands::command(
-                            db,
-                            &prefs,
-                            engine,
-                            audio_commands::Action::Clear,
-                            0,
-                            1.0,
-                        )?;
+                            audio_commands::command(
+                                db,
+                                &prefs,
+                                engine,
+                                audio_commands::Action::Clear,
+                                0,
+                                1.0,
+                            )?;
                         }
                     }
                     Ok(count)

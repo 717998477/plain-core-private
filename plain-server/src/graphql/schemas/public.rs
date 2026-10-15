@@ -28,6 +28,7 @@ use crate::graphql::resolvers::database::public::DbMutation;
 use crate::graphql::resolvers::database::public::DbQuery;
 use crate::graphql::resolvers::device::public::DeviceMutation;
 use crate::graphql::resolvers::device::public::DeviceQuery;
+use crate::graphql::resolvers::downloads::public::DownloadMutation;
 use crate::graphql::resolvers::favorites::favorite_folder::{
     FavoriteFolderMutation, FavoriteFolderQuery,
 };
@@ -117,6 +118,7 @@ pub struct Mutation(
     FileOpsMutation,
     MediaActionMutation,
     DeviceMutation,
+    DownloadMutation,
 );
 
 pub type PublicSchema = Schema<Query, Mutation, EmptySubscription>;

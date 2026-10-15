@@ -540,3 +540,34 @@ async fn no_root_field_fails_for_unregistered_schema_data() {
          registered: {unregistered:#?}"
     );
 }
+
+#[test]
+fn download_controls_are_mutations_and_never_queries() {
+    let schema = sdl();
+    let query = schema
+        .split("type Query {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    let mutation = schema
+        .split("type Mutation {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    for field in [
+        "downloadPeerFile",
+        "pauseDownload",
+        "resumeDownload",
+        "retryDownload",
+    ] {
+        assert!(
+            !query.contains(&format!("{field}(")),
+            "{field} must not run as a query"
+        );
+        assert!(mutation.contains(&format!("{field}(")), "missing {field}");
+    }
+}

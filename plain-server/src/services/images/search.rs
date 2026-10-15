@@ -1,6 +1,7 @@
 use crate::assembly::server::ServerState;
+use crate::graphql::resolvers::files::types::FileSortBy;
 use crate::graphql::resolvers::images::public_index::ImageSearchStatusType;
-use crate::host::bridge::Host;
+use crate::services::files::catalog::MediaCatalog;
 use crate::services::images::models::Runtime;
 use axum::{
     Json,
@@ -8,6 +9,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use plain_rs::enums::DataType;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -15,23 +17,31 @@ use std::collections::HashSet;
 fn enabled(models: &Runtime, text: &str) -> bool {
     !text.trim().is_empty() && models.snapshot().status.status == ImageSearchStatusType::Ready
 }
+
+fn sort_by(value: &str) -> Result<FileSortBy, String> {
+    serde_json::from_value(Value::String(value.to_owned())).map_err(|error| error.to_string())
+}
+
 async fn filename_rows(
-    host: &Host,
+    catalog: &MediaCatalog,
     query: &str,
     offset: i32,
     limit: i32,
-    sort: &str,
+    sort: FileSortBy,
 ) -> Result<Vec<Value>, String> {
-    let rows = host
-        .call(
-            "systemMediaRows",
-            json!({"dataType":"IMAGE", "query":query,"offset":offset,"limit":limit,"sortBy":sort}),
+    catalog
+        .rows(
+            DataType::Image,
+            query,
+            sort,
+            limit.max(0) as u32,
+            offset.max(0) as u32,
         )
-        .await?;
-    serde_json::from_value(rows).map_err(|e| e.to_string())
+        .await
 }
+
 pub(crate) async fn rows(
-    host: &Host,
+    catalog: &MediaCatalog,
     models: &Runtime,
     text: &str,
     query: &str,
@@ -42,11 +52,12 @@ pub(crate) async fn rows(
     if offset < 0 || limit < 0 {
         return Err("Invalid image pagination".into());
     }
+    let sort = sort_by(sort)?;
     if !enabled(models, text) {
-        return filename_rows(host, query, offset, limit, sort).await;
+        return filename_rows(catalog, query, offset, limit, sort).await;
     }
     let semantic = models.search(text, 50).await?;
-    let mut items = filename_rows(host, query, 0, i32::MAX, sort).await?;
+    let mut items = filename_rows(catalog, query, 0, i32::MAX, sort).await?;
     let ids = items
         .iter()
         .filter_map(|row| row["id"].as_str())
@@ -58,7 +69,7 @@ pub(crate) async fn rows(
         .collect::<Vec<_>>();
     if !extra.is_empty() {
         let query = format!("ids:{} trash:false", extra.join(","));
-        let mut found = filename_rows(host, &query, 0, extra.len() as i32, sort).await?;
+        let mut found = filename_rows(catalog, &query, 0, extra.len() as i32, sort).await?;
         found.sort_by_key(|row| {
             extra
                 .iter()
@@ -73,29 +84,21 @@ pub(crate) async fn rows(
         .take(limit as usize)
         .collect())
 }
+
 pub(crate) async fn count(
-    host: &Host,
+    catalog: &MediaCatalog,
     models: &Runtime,
     text: &str,
     query: &str,
 ) -> Result<i32, String> {
     if !enabled(models, text) {
-        return host
-            .call(
-                "systemMediaCount",
-                json!({"dataType":"IMAGE","query":query}),
-            )
-            .await?
-            .as_i64()
-            .and_then(|n| i32::try_from(n).ok())
-            .ok_or("Invalid image count".into());
+        return catalog
+            .count(DataType::Image, query)
+            .await
+            .and_then(|count| i32::try_from(count).map_err(|error| error.to_string()));
     }
     let semantic = models.search(text, 50).await?;
-    let ids: Vec<String> = serde_json::from_value(
-        host.call("systemImageIdsFacts", json!({"query":query}))
-            .await?,
-    )
-    .map_err(|e| e.to_string())?;
+    let ids = catalog.ids(DataType::Image, query, false).await?;
     let mut ids = ids.into_iter().collect::<HashSet<_>>();
     ids.extend(semantic.into_iter().map(|row| row.image_id));
     i32::try_from(ids.len()).map_err(|e| e.to_string())
@@ -132,7 +135,7 @@ pub(crate) async fn call(
             limit,
             sort_by,
         } => rows(
-            &state.host,
+            &MediaCatalog::new(state.db.clone(), state.host.clone()),
             &state.image_models,
             &text,
             &query,
@@ -142,9 +145,14 @@ pub(crate) async fn call(
         )
         .await
         .map(|items| json!({"items":items})),
-        Command::Count { text, query } => count(&state.host, &state.image_models, &text, &query)
-            .await
-            .map(|count| json!({"count":count})),
+        Command::Count { text, query } => count(
+            &MediaCatalog::new(state.db.clone(), state.host.clone()),
+            &state.image_models,
+            &text,
+            &query,
+        )
+        .await
+        .map(|count| json!({"count":count})),
     };
     match result {
         Ok(value) => Json(value).into_response(),

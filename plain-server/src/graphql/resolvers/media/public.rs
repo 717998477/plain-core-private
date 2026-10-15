@@ -1,13 +1,3 @@
-//! Public `/graphql` media-library roots: buckets, and the image / video /
-//! document lists with their counts.
-//!
-//! The catalogue lives in the platform's media store, so every row and every
-//! count here is a host fact — Rust cannot enumerate a MediaStore. What Rust
-//! does own is the contract shape and the degradation rule: plain-app shows
-//! an empty library rather than an error when storage is not granted, while
-//! an explicit browse still errors out, because a silently empty page and a
-//! denied page mean different things to the caller.
-
 use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
 use crate::graphql::types::facts::id;
@@ -19,7 +9,8 @@ use crate::host::bridge::Host;
 use crate::http::auth::public_gate;
 use async_graphql::{Context, Object};
 use chrono::{DateTime, Utc};
-use serde_json::{Value, json};
+use plain_rs::enums::DataType;
+use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 
 pub(crate) const STORAGE: &str = "WRITE_EXTERNAL_STORAGE";
@@ -65,12 +56,11 @@ impl MediaQuery {
         if !public_gate::require_granted(ctx, &[STORAGE]).await? {
             return Ok(Vec::new());
         }
-        let facts = host_call(
-            ctx,
-            "systemMediaBucketItemFacts",
-            json!({ "dataType": r#type.as_str() }),
-        )
-        .await?;
+        let data_type = data_type_of(r#type.as_str())?;
+        let facts = catalog(ctx)
+            .buckets(data_type)
+            .await
+            .map_err(async_graphql::Error::new)?;
         Ok(aggregate_buckets(&facts)
             .into_iter()
             .map(Bucket::into_media)
@@ -151,12 +141,20 @@ pub(crate) fn text_field(query: &str) -> String {
 }
 
 /// One page of library rows, still in the host's raw JSON shape.
-pub(crate) async fn media_rows(
-    ctx: &Context<'_>,
-    method: &str,
-    params: Value,
-) -> async_graphql::Result<Value> {
-    host_call(ctx, method, params).await
+pub(crate) async fn media_rows(ctx: &Context<'_>, params: Value) -> async_graphql::Result<Value> {
+    let request: RowsRequest = serde_json::from_value(params)?;
+    Ok(Value::Array(
+        catalog(ctx)
+            .rows(
+                request.data_type,
+                &request.query,
+                request.sort_by,
+                request.limit,
+                request.offset,
+            )
+            .await
+            .map_err(async_graphql::Error::new)?,
+    ))
 }
 
 pub(crate) async fn media_count(
@@ -164,29 +162,72 @@ pub(crate) async fn media_count(
     data_type: &str,
     query: String,
 ) -> async_graphql::Result<i32> {
-    let count = host_call(
-        ctx,
-        "systemMediaCount",
-        json!({ "dataType": data_type, "query": query }),
+    let count = catalog(ctx)
+        .count(data_type_of(data_type)?, &query)
+        .await
+        .map_err(async_graphql::Error::new)?;
+    i32::try_from(count).map_err(|error| async_graphql::Error::new(error.to_string()))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RowsRequest {
+    data_type: DataType,
+    query: String,
+    sort_by: crate::graphql::resolvers::files::types::FileSortBy,
+    limit: u32,
+    offset: u32,
+}
+
+fn data_type_of(value: &str) -> async_graphql::Result<DataType> {
+    Ok(match value {
+        "AUDIO" => DataType::Audio,
+        "VIDEO" => DataType::Video,
+        "IMAGE" => DataType::Image,
+        "DOC" => DataType::Doc,
+        other => {
+            return Err(async_graphql::Error::new(format!(
+                "Unsupported media catalog type: {other}"
+            )));
+        }
+    })
+}
+
+pub(crate) fn catalog(ctx: &Context<'_>) -> crate::services::files::catalog::MediaCatalog {
+    crate::services::files::catalog::MediaCatalog::new(
+        ctx.data_unchecked::<Arc<plain_rs::db::Db>>().clone(),
+        ctx.data_unchecked::<Arc<Host>>().clone(),
     )
-    .await?;
-    Ok(count.as_i64().unwrap_or_default() as i32)
+}
+
+pub(crate) async fn library_rows(
+    ctx: &Context<'_>,
+    data_type: DataType,
+    query: String,
+    sort_by: crate::graphql::resolvers::files::types::FileSortBy,
+    offset: u32,
+    limit: u32,
+) -> async_graphql::Result<Vec<Value>> {
+    catalog(ctx)
+        .rows(data_type, &query, sort_by, limit, offset)
+        .await
+        .map_err(async_graphql::Error::new)
+}
+
+pub(crate) async fn library_keys(
+    ctx: &Context<'_>,
+    data_type: DataType,
+    query: String,
+) -> async_graphql::Result<Vec<String>> {
+    catalog(ctx)
+        .ids(data_type, &query, false)
+        .await
+        .map_err(async_graphql::Error::new)
 }
 
 pub(crate) fn instant(value: &Value, key: &str) -> Instant {
     optional_instant(value, key)
         .unwrap_or_else(|| Instant(DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_default()))
-}
-
-pub(crate) async fn host_call(
-    ctx: &Context<'_>,
-    method: &str,
-    params: Value,
-) -> async_graphql::Result<Value> {
-    ctx.data_unchecked::<Arc<Host>>()
-        .call(method, params)
-        .await
-        .map_err(async_graphql::Error::new)
 }
 
 pub(crate) fn prefs<'a>(ctx: &'a Context<'_>) -> &'a Arc<plain_rs::prefs::Prefs> {

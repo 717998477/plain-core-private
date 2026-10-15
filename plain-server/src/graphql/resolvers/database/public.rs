@@ -1,13 +1,11 @@
 //! Public `/graphql` database-browser roots — the web console's developer
 //! view over the app's SQLite file.
 //!
-//! The native host provides the Room database path; all browsing and SQL use
-//! the shared Rust sqlite_browse core.
 
 use crate::graphql::types::Long;
 use crate::host::bridge::Host;
 use async_graphql::{Context, Enum, Object, SimpleObject};
-use serde_json::Value;
+use plain_rs::db::devtools::SqliteFile;
 use std::sync::Arc;
 
 #[derive(SimpleObject, Clone, Debug, Default)]
@@ -59,15 +57,22 @@ pub struct DbQuery;
 #[Object]
 impl DbQuery {
     async fn db_path(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
-        Ok(crate::graphql::types::facts::text(
-            &host_call(ctx, "systemDbFacts", empty()).await?,
-            "path",
-        ))
+        Ok(app_db(ctx).await?.path().to_string_lossy().into_owned())
     }
 
     async fn db_tables(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<String>> {
-        let facts = host_call(ctx, "systemDbFacts", empty()).await?;
-        Ok(crate::graphql::types::facts::strings(&facts, "tables"))
+        let file = app_db(ctx).await?;
+        if !has_path(&file) {
+            return Ok(vec![]);
+        }
+        spawn(move || {
+            Ok(file
+                .tables()?
+                .into_iter()
+                .filter(|name| !name.starts_with("android_") && !name.starts_with("room_"))
+                .collect())
+        })
+        .await
     }
 
     async fn db_table_row_count(
@@ -75,8 +80,11 @@ impl DbQuery {
         ctx: &Context<'_>,
         table: String,
     ) -> async_graphql::Result<Long> {
-        let count = host_call(ctx, "systemDbRowCount", table_arg(&table)).await?;
-        Ok(Long(count.as_i64().unwrap_or_default()))
+        let file = app_db(ctx).await?;
+        if !has_path(&file) {
+            return Ok(Long(0));
+        }
+        spawn(move || file.table_row_count(&table).map(Long)).await
     }
 
     /// Rows come back as pre-rendered JSON strings, one per row — the
@@ -89,13 +97,11 @@ impl DbQuery {
         offset: i32,
         limit: i32,
     ) -> async_graphql::Result<Vec<String>> {
-        let facts = host_call(
-            ctx,
-            "systemDbRows",
-            serde_json::json!({ "table": table, "offset": offset, "limit": limit }),
-        )
-        .await?;
-        Ok(crate::graphql::types::facts::strings(&facts, "rows"))
+        let file = app_db(ctx).await?;
+        if !has_path(&file) {
+            return Ok(vec![]);
+        }
+        spawn(move || file.table_rows_text(&table, offset as i64, limit as i64)).await
     }
 
     async fn db_table_columns(
@@ -103,22 +109,24 @@ impl DbQuery {
         ctx: &Context<'_>,
         table: String,
     ) -> async_graphql::Result<Vec<DbTableColumn>> {
-        let facts = host_call(ctx, "systemDbColumns", table_arg(&table)).await?;
-        Ok(crate::graphql::types::facts::list(
-            &facts,
-            "columns",
-            |column| DbTableColumn {
-                name: crate::graphql::types::facts::text(column, "name"),
-                data_type: DbColumnType::parse(&crate::graphql::types::facts::text(
-                    column, "dataType",
-                )),
-                not_null: crate::graphql::types::facts::flag(column, "notNull"),
-                default_value: column["defaultValue"]
-                    .as_str()
-                    .map(|value| value.to_string()),
-                primary_key: crate::graphql::types::facts::flag(column, "primaryKey"),
-            },
-        ))
+        let file = app_db(ctx).await?;
+        if !has_path(&file) {
+            return Ok(vec![]);
+        }
+        spawn(move || {
+            Ok(file
+                .table_columns(&table)?
+                .into_iter()
+                .map(|column| DbTableColumn {
+                    name: column.name,
+                    data_type: DbColumnType::parse(&column.data_type),
+                    not_null: column.not_null,
+                    default_value: column.default_value,
+                    primary_key: column.primary_key,
+                })
+                .collect())
+        })
+        .await
     }
 
     async fn db_table_info(
@@ -126,10 +134,18 @@ impl DbQuery {
         ctx: &Context<'_>,
         table: String,
     ) -> async_graphql::Result<DbTableInfo> {
-        let facts = host_call(ctx, "systemDbInfo", table_arg(&table)).await?;
-        Ok(DbTableInfo {
-            id_key: crate::graphql::types::facts::text(&facts, "idKey"),
+        let file = app_db(ctx).await?;
+        if !has_path(&file) {
+            return Ok(DbTableInfo {
+                id_key: "id".to_string(),
+            });
+        }
+        spawn(move || {
+            Ok(DbTableInfo {
+                id_key: file.table_id_key(&table)?,
+            })
         })
+        .await
     }
 }
 
@@ -147,13 +163,21 @@ impl DbMutation {
         table: String,
         row: String,
     ) -> async_graphql::Result<bool> {
-        let row = host_call(
-            ctx,
-            "systemCreateDbRow",
-            serde_json::json!({ "table": table, "row": row }),
-        )
-        .await?;
-        Ok(row.as_bool().unwrap_or(false))
+        let file = app_db(ctx).await?;
+        if !has_path(&file) {
+            return Ok(false);
+        }
+        Ok(spawn(move || {
+            let mut row: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&row)?;
+            for value in row.values_mut() {
+                if value.is_null() {
+                    *value = serde_json::Value::String("null".into());
+                }
+            }
+            file.insert_table_row(&table, &row).map(|_| true)
+        })
+        .await
+        .unwrap_or(false))
     }
 
     async fn delete_db_table_rows(
@@ -165,104 +189,43 @@ impl DbMutation {
         if ids.is_empty() {
             return Ok(false);
         }
-        let deleted = host_call(
-            ctx,
-            "systemDeleteDbRows",
-            serde_json::json!({ "table": table, "ids": ids }),
+        let file = app_db(ctx).await?;
+        if !has_path(&file) {
+            return Ok(false);
+        }
+        Ok(
+            spawn(move || file.delete_table_rows(&table, &ids).map(|_| true))
+                .await
+                .unwrap_or(false),
         )
-        .await?;
-        Ok(deleted.as_bool().unwrap_or(false))
     }
 }
 
-fn empty() -> Value {
-    serde_json::json!({})
-}
-
-fn table_arg(table: &str) -> Value {
-    serde_json::json!({ "table": table })
-}
-
-async fn host_call(ctx: &Context<'_>, method: &str, params: Value) -> async_graphql::Result<Value> {
-    let host = ctx.data_unchecked::<Arc<Host>>();
-    let path = host
-        .call("systemDbPath", empty())
+async fn app_db(ctx: &Context<'_>) -> async_graphql::Result<SqliteFile> {
+    let path = ctx
+        .data_unchecked::<Arc<Host>>()
+        .call("systemDbPath", serde_json::json!({}))
         .await
         .map_err(async_graphql::Error::new)?
         .as_str()
         .unwrap_or_default()
         .to_owned();
-    let method = method.to_owned();
-    tokio::task::spawn_blocking(move || {
-        let result = execute(&path, &method, &params);
-        if matches!(method.as_str(), "systemCreateDbRow" | "systemDeleteDbRows") {
-            Ok(result.unwrap_or(serde_json::json!(false)))
-        } else {
-            result
-        }
-    })
-    .await
-    .map_err(|e| async_graphql::Error::new(e.to_string()))?
-    .map_err(|e| async_graphql::Error::new(e.to_string()))
+    Ok(SqliteFile::new(path))
 }
-fn execute(path: &str, method: &str, params: &Value) -> anyhow::Result<Value> {
-    use browse::rusqlite::{Connection, OpenFlags};
-    use plain_rs::sqlite_browse as browse;
-    if path.is_empty() {
-        return Ok(match method {
-            "systemDbFacts" => serde_json::json!({"path":"","tables":[]}),
-            "systemDbRowCount" => serde_json::json!(0),
-            "systemDbRows" => serde_json::json!({"rows":[]}),
-            "systemDbColumns" => serde_json::json!({"columns":[]}),
-            "systemDbInfo" => serde_json::json!({"idKey":"id"}),
-            _ => serde_json::json!(false),
-        });
-    }
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    if method == "systemDbFacts" {
-        let tables: Vec<_> = browse::tables(&conn)
-            .into_iter()
-            .filter(|name| !name.starts_with("android_") && !name.starts_with("room_"))
-            .collect();
-        return Ok(serde_json::json!({"path":path,"tables":tables}));
-    }
-    let table = params["table"].as_str().unwrap_or_default();
-    anyhow::ensure!(
-        browse::table_exists(&conn, table),
-        "Table not found or invalid identifier: {table}"
-    );
-    Ok(match method {
-        "systemDbRowCount" => serde_json::json!(browse::row_count(&conn, table)?),
-        "systemDbRows" => {
-            serde_json::json!({"rows":browse::rows_page_text(&conn,table,params["offset"].as_i64().unwrap_or_default(),params["limit"].as_i64().unwrap_or_default())?})
-        }
-        "systemDbColumns" => {
-            serde_json::json!({"columns":browse::table_columns(&conn,table).into_iter().map(|column|serde_json::json!({"name":column.name,"dataType":column.data_type,"notNull":column.not_null,"defaultValue":column.default_value,"primaryKey":column.primary_key})).collect::<Vec<_>>()})
-        }
-        "systemDbInfo" => {
-            serde_json::json!({"idKey":browse::primary_key_column(&conn,table).unwrap_or_else(||"id".into())})
-        }
-        "systemCreateDbRow" => {
-            let mut row: serde_json::Map<String, Value> =
-                serde_json::from_str(params["row"].as_str().unwrap_or_default())?;
-            for value in row.values_mut() {
-                if value.is_null() {
-                    *value = Value::String("null".into());
-                }
-            }
-            browse::insert_row(&conn, table, &row)?;
-            serde_json::json!(true)
-        }
-        "systemDeleteDbRows" => {
-            let ids: Vec<String> = serde_json::from_value(params["ids"].clone())?;
-            anyhow::ensure!(!ids.is_empty(), "ids must not be empty");
-            let key = browse::primary_key_column(&conn, table).unwrap_or_else(|| "id".into());
-            browse::delete_rows(&conn, table, &key, &ids)?;
-            serde_json::json!(true)
-        }
-        _ => anyhow::bail!("Unsupported database operation"),
-    })
+
+fn has_path(file: &SqliteFile) -> bool {
+    !file.path().as_os_str().is_empty()
+}
+
+async fn spawn<T, F>(work: F) -> async_graphql::Result<T>
+where
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| async_graphql::Error::new(error.to_string()))?
+        .map_err(|error| async_graphql::Error::new(error.to_string()))
 }
 
 #[cfg(test)]

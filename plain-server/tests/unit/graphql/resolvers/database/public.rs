@@ -1,5 +1,6 @@
 use super::*;
 use crate::graphql::schemas::public::PublicSchema;
+use serde_json::Value;
 use serde_json::json;
 fn fixture() -> (tempfile::TempDir, PublicSchema) {
     let dir = tempfile::tempdir().unwrap();

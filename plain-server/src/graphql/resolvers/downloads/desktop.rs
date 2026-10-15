@@ -8,8 +8,18 @@
 use async_graphql::{Context, Object, Result as GqlResult};
 use std::sync::Arc;
 
+fn deps(ctx: &Context<'_>) -> DownloadDeps {
+    let c = ctx.data_unchecked::<Arc<AppCtx>>();
+    DownloadDeps {
+        db: c.db.clone(),
+        data_dir: c.data_dir.clone(),
+        events: c.event_tx.clone(),
+    }
+}
+
 use crate::assembly::context::AppCtx;
 use crate::services::downloads::service as download;
+use crate::services::downloads::service::DownloadDeps;
 
 #[derive(Default)]
 pub struct DownloadMutation;
@@ -25,15 +35,12 @@ impl DownloadMutation {
         message_id: String,
         peer_id: String,
     ) -> GqlResult<bool> {
-        let c = ctx.data_unchecked::<Arc<AppCtx>>().clone();
-        let ok = download::start_download(c, message_id, peer_id).await;
-        Ok(ok)
+        Ok(download::start_download(deps(ctx), message_id, peer_id).await)
     }
 
     /// Pause an in-flight download. Returns `false` if no active task
     /// exists for the message.
-    async fn pause_download(&self, ctx: &Context<'_>, message_id: String) -> GqlResult<bool> {
-        let _ = ctx.data_unchecked::<Arc<AppCtx>>();
+    async fn pause_download(&self, message_id: String) -> GqlResult<bool> {
         Ok(download::pause_download(&message_id).await)
     }
 
@@ -45,8 +52,7 @@ impl DownloadMutation {
         message_id: String,
         peer_id: String,
     ) -> GqlResult<bool> {
-        let c = ctx.data_unchecked::<Arc<AppCtx>>().clone();
-        Ok(download::resume_download(c, message_id, peer_id).await)
+        Ok(download::resume_download(deps(ctx), message_id, peer_id).await)
     }
 
     /// Retry a failed download.
@@ -56,7 +62,6 @@ impl DownloadMutation {
         message_id: String,
         peer_id: String,
     ) -> GqlResult<bool> {
-        let c = ctx.data_unchecked::<Arc<AppCtx>>().clone();
-        Ok(download::retry_download(c, message_id, peer_id).await)
+        Ok(download::retry_download(deps(ctx), message_id, peer_id).await)
     }
 }

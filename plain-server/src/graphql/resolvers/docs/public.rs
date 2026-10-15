@@ -1,28 +1,17 @@
-//! Public `/graphql` media-library roots: buckets, and the image / video /
-//! document lists with their counts.
-//!
-//! The catalogue lives in the platform's media store, so every row and every
-//! count here is a host fact — Rust cannot enumerate a MediaStore. What Rust
-//! does own is the contract shape and the degradation rule: plain-app shows
-//! an empty library rather than an error when storage is not granted, while
-//! an explicit browse still errors out, because a silently empty page and a
-//! denied page mean different things to the caller.
-
 use crate::graphql::resolvers::tags::domain_types::Tag;
 use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
 use crate::graphql::types::facts::id;
-use crate::graphql::types::facts::integer;
 use crate::graphql::types::facts::rows;
 use crate::graphql::types::facts::text;
 use crate::http::auth::public_gate;
 use async_graphql::{Context, Enum, Object, SimpleObject};
 use chrono::{DateTime, Utc};
+use plain_rs::enums::DataType;
 use serde_json::{Value, json};
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use crate::graphql::resolvers::media::public::STORAGE;
-use crate::graphql::resolvers::media::public::host_call;
 use crate::graphql::resolvers::media::public::media_count;
 use crate::graphql::resolvers::media::public::media_rows;
 use crate::graphql::resolvers::media::public::prefs;
@@ -85,7 +74,6 @@ impl DocsQuery {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         let items = media_rows(
             ctx,
-            "systemMediaRows",
             json!({
                 "dataType": "DOC", "query": query,
                 "offset": offset, "limit": limit, "sortBy": sort_by.as_str(),
@@ -116,10 +104,29 @@ impl DocsQuery {
         if !public_gate::require_granted(ctx, &[STORAGE]).await? {
             return Ok(Vec::new());
         }
-        let facts = host_call(ctx, "systemDocExtGroups", json!({})).await?;
-        Ok(rows(&facts, |item| DocExtGroup {
-            ext: text(item, "ext"),
-            count: integer(item, "count") as i32,
-        }))
+        let rows = crate::graphql::resolvers::media::public::library_rows(
+            ctx,
+            DataType::Doc,
+            String::new(),
+            crate::graphql::resolvers::files::types::FileSortBy::NameAsc,
+            0,
+            i32::MAX as u32,
+        )
+        .await?;
+        let mut counts: std::collections::BTreeMap<String, i32> = Default::default();
+        for row in rows {
+            let path = text(&row, "path");
+            let ext = Path::new(&path)
+                .extension()
+                .map(|value| value.to_string_lossy().to_uppercase())
+                .unwrap_or_default();
+            if !ext.is_empty() {
+                *counts.entry(ext).or_default() += 1;
+            }
+        }
+        Ok(counts
+            .into_iter()
+            .map(|(ext, count)| DocExtGroup { ext, count })
+            .collect())
     }
 }

@@ -7,6 +7,7 @@ use crate::services::audio::host::Audio as AudioService;
 use async_graphql::{Context, Object, SimpleObject};
 use plain_rs::db::PlayHistory;
 use plain_rs::db::Playlist;
+use plain_rs::enums::DataType;
 use plain_rs::media::audio::queue as domain;
 use plain_rs::media::audio::queue::AudioTrack;
 use serde_json::{Value, json};
@@ -112,13 +113,7 @@ impl AudioQuery {
         if !public_gate::require_granted(ctx, &[STORAGE]).await? {
             return Ok(0);
         }
-        let count = host_call(
-            ctx,
-            "systemMediaCount",
-            json!({ "dataType": "AUDIO", "query": query }),
-        )
-        .await?;
-        Ok(count.as_i64().unwrap_or_default() as i32)
+        crate::graphql::resolvers::media::public::media_count(ctx, "AUDIO", query).await
     }
 
     async fn audios(
@@ -131,9 +126,8 @@ impl AudioQuery {
     ) -> async_graphql::Result<Vec<Audio>> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         let items = crate::graphql::types::facts::rows(
-            &host_call(
+            &crate::graphql::resolvers::media::public::media_rows(
                 ctx,
-                "systemMediaRows",
                 json!({
                     "dataType": "AUDIO", "query": query,
                     "offset": offset, "limit": limit, "sortBy": sort_by.as_str(),
@@ -175,11 +169,8 @@ impl AudioQuery {
                 Ok(domain::track_by_id(db, media_id.as_str())?.path)
             })
             .await?;
-        let lyrics = host_call(ctx, "systemAudioLyrics", json!({"path":path})).await?;
-        Ok(lyrics
-            .as_str()
-            .filter(|value| !value.is_empty())
-            .map(str::to_string))
+        let lyrics = read_lyrics(ctx, path).await?;
+        Ok(Some(lyrics).filter(|value| !value.trim().is_empty()))
     }
     async fn audio_queue_items(
         &self,
@@ -537,21 +528,50 @@ pub(crate) async fn search_tracks(
     let mut tracks = Vec::new();
     let mut offset = 0;
     loop {
-        let facts = host_call(
+        let page = crate::graphql::resolvers::media::public::library_rows(
             ctx,
-            "systemAudioSearchTracks",
-            json!({"query":query,"offset":offset,"limit":500,"sortBy":sort_by.as_str()}),
+            DataType::Audio,
+            query.to_owned(),
+            sort_by,
+            offset,
+            500,
         )
         .await?;
-        let page = crate::graphql::types::facts::rows(&facts, track);
         let count = page.len();
-        tracks.extend(page);
+        tracks.extend(page.into_iter().map(|row| AudioTrack {
+            media_id: row["id"].as_str().map(str::to_owned),
+            path: crate::graphql::types::facts::text(&row, "path"),
+            title: crate::graphql::types::facts::text(&row, "title"),
+            artist: crate::graphql::types::facts::text(&row, "artist"),
+            album_id: String::new(),
+            duration_ms: crate::graphql::types::facts::integer(&row, "durationMs"),
+        }));
         if count < 500 {
             break;
         }
-        offset += count;
+        offset += count as u32;
     }
     Ok(tracks)
+}
+
+async fn read_lyrics(ctx: &Context<'_>, path: String) -> async_graphql::Result<String> {
+    #[cfg(all(feature = "media", not(any(target_os = "android", target_os = "ios"))))]
+    {
+        let _ = ctx;
+        tokio::task::spawn_blocking(move || {
+            plain_media::metadata::audio::lyrics::extract_lyrics_from_path(&path)
+        })
+        .await
+        .map_err(|error| async_graphql::Error::new(error.to_string()))
+    }
+    #[cfg(not(all(feature = "media", not(any(target_os = "android", target_os = "ios")))))]
+    {
+        Ok(host_call(ctx, "systemAudioLyrics", json!({"path":path}))
+            .await?
+            .as_str()
+            .unwrap_or_default()
+            .to_owned())
+    }
 }
 
 fn item(track: AudioTrack) -> AudioItem {
@@ -571,20 +591,6 @@ fn playlist_item(row: plain_rs::db::PlaylistItem) -> AudioItem {
         artist: row.artist,
         path: row.audio_path,
         duration_ms: Long(row.duration_ms),
-    }
-}
-
-fn track(value: &Value) -> AudioTrack {
-    AudioTrack {
-        media_id: value
-            .get("mediaId")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        path: crate::graphql::types::facts::text(value, "path"),
-        title: crate::graphql::types::facts::text(value, "title"),
-        artist: crate::graphql::types::facts::text(value, "artist"),
-        album_id: String::new(),
-        duration_ms: crate::graphql::types::facts::integer(value, "durationMs"),
     }
 }
 

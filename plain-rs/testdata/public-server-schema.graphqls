@@ -749,6 +749,7 @@ type Mutation {
 	removeChatChannelMember(id: ID!, peerId: ID!): ChatChannel!
 	acceptChatChannelInvite(id: ID!): Boolean!
 	declineChatChannelInvite(id: ID!): Boolean!
+	respondChannelInvite(id: ID!, accept: Boolean!): Boolean!
 	pairDevice(input: PairingDeviceInput!): Boolean!
 	cancelPairing(deviceId: ID!): Boolean!
 	respondToPairing(input: PairingRequestInput!, accepted: Boolean!): Boolean!
@@ -885,6 +886,10 @@ type Mutation {
 	updateDeviceName(name: String!): Boolean!
 	startDiscovery: Boolean!
 	stopDiscovery: Boolean!
+	pauseDownload(messageId: String!): Boolean!
+	downloadPeerFile(messageId: String!, peerId: String!): Boolean!
+	resumeDownload(messageId: String!, peerId: String!): Boolean!
+	retryDownload(messageId: String!, peerId: String!): Boolean!
 }
 
 type Note {
@@ -1078,6 +1083,7 @@ type Query {
 	newest conversation first.
 	"""
 	latestChatItems: [ChatItem!]!
+	chatItem(id: ID!): ChatItem
 	chatChannels: [ChatChannel!]!
 	peers: [Peer!]!
 	"""

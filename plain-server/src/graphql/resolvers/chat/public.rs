@@ -123,6 +123,18 @@ impl ChatQuery {
         Ok(db(ctx)?.get_all_latest_chats().iter().map(item).collect())
     }
 
+    async fn chat_item(
+        &self,
+        ctx: &Context<'_>,
+        id: async_graphql::ID,
+    ) -> async_graphql::Result<Option<ChatItem>> {
+        Ok(
+            plain_rs::db::chat_store::messages::get(db(ctx)?, id.as_str())?
+                .as_ref()
+                .map(item),
+        )
+    }
+
     async fn chat_channels(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<ChatChannel>> {
         let facts = plain_rs::chat::events::public_channels(db(ctx)?)?;
         Ok(rows(&facts, channel))
@@ -281,6 +293,17 @@ impl ChatMutation {
         id: async_graphql::ID,
     ) -> async_graphql::Result<bool> {
         flag(ctx, "decline", &[("id", json!(id.as_str()))]).await
+    }
+
+    async fn respond_channel_invite(
+        &self,
+        ctx: &Context<'_>,
+        id: async_graphql::ID,
+        accept: bool,
+    ) -> async_graphql::Result<bool> {
+        let action = if accept { "accept" } else { "decline" };
+        flag(ctx, action, &[("id", json!(id.as_str()))]).await?;
+        Ok(accept)
     }
 }
 

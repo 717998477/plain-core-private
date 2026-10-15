@@ -114,7 +114,7 @@ async fn native_file_resolution_uses_actual_os_read_authorization() {
 }
 
 #[tokio::test]
-async fn bucket_dispatch_uses_the_same_core_catalog_as_rows_and_count() {
+async fn media_buckets_are_served_by_the_core_catalog() {
     let directory = Directory::new();
     let core = Arc::new(ContentServer::open(&directory.0).unwrap());
     let path = directory.0.join("report.txt");
@@ -138,35 +138,6 @@ async fn bucket_dispatch_uses_the_same_core_catalog_as_rows_and_count() {
         }])
         .unwrap();
     let runtime = Runtime::new(core.clone(), vec![]);
-    let buckets = runtime
-        .dispatch(
-            "systemMediaBucketItemFacts",
-            serde_json::json!({"dataType":"DOC"}),
-        )
-        .await
-        .unwrap();
-    let count = runtime
-        .dispatch(
-            "systemMediaCount",
-            serde_json::json!({"dataType":"DOC","query":""}),
-        )
-        .await
-        .unwrap();
-    let rows = runtime.dispatch("systemMediaRows",serde_json::json!({"dataType":"DOC","query":"","sortBy":"NAME_ASC","limit":10,"offset":0})).await.unwrap();
-    assert_eq!(count, serde_json::json!(1));
-    assert_eq!(buckets.as_array().unwrap().len(), 1);
-    assert_eq!(buckets[0]["id"], rows[0]["bucketId"]);
-    assert_eq!(buckets[0]["path"], rows[0]["path"]);
-    assert_eq!(buckets[0]["size"], rows[0]["size"]);
-    assert!(
-        runtime
-            .dispatch(
-                "systemMediaBucketItemFacts",
-                serde_json::json!({"dataType":"DOC","query":"trash:true"})
-            )
-            .await
-            .is_err()
-    );
     let runtime = Arc::new(runtime);
     let runner = tokio::spawn(runtime.clone().run());
     let response = core
@@ -184,15 +155,6 @@ async fn bucket_dispatch_uses_the_same_core_catalog_as_rows_and_count() {
     );
     core.stop_core().await;
     runner.await.unwrap().unwrap();
-    assert!(
-        runtime
-            .dispatch(
-                "systemMediaBucketItemFacts",
-                serde_json::json!({"dataType":"DOC"})
-            )
-            .await
-            .is_err()
-    );
 }
 
 #[tokio::test]
@@ -313,25 +275,12 @@ async fn thumbnails_and_regular_file_probes_use_the_shared_media_engine() {
 }
 
 #[tokio::test]
-async fn recent_files_and_image_info_reuse_shared_storage_and_metadata() {
+async fn image_info_uses_the_shared_media_metadata_engine() {
     let directory = Directory::new();
     let path = directory.0.join("photo.png");
     image::RgbImage::new(8, 4).save(&path).unwrap();
     let core = Arc::new(ContentServer::open(&directory.0).unwrap());
     let runtime = Runtime::new(core.clone(), Vec::new());
-    let prefs = core.preferences().unwrap();
-    plain_media::storage::kv::recent::add_recent_file(prefs, path.to_str().unwrap());
-    plain_media::storage::kv::recent::add_recent_file(
-        prefs,
-        directory.0.join("missing").to_str().unwrap(),
-    );
-    let rows = runtime
-        .dispatch("systemRecentFileFacts", serde_json::json!({}))
-        .await
-        .unwrap();
-    assert_eq!(rows.as_array().unwrap().len(), 1);
-    assert_eq!(rows[0]["path"], path.to_str().unwrap());
-    assert_eq!(rows[0]["name"], "photo.png");
     let info = runtime
         .dispatch("systemImageFileInfo", serde_json::json!({"path":path}))
         .await

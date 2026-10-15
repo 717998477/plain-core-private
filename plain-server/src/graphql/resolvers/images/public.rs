@@ -1,13 +1,3 @@
-//! Public `/graphql` media-library roots: buckets, and the image / video /
-//! document lists with their counts.
-//!
-//! The catalogue lives in the platform's media store, so every row and every
-//! count here is a host fact — Rust cannot enumerate a MediaStore. What Rust
-//! does own is the contract shape and the degradation rule: plain-app shows
-//! an empty library rather than an error when storage is not granted, while
-//! an explicit browse still errors out, because a silently empty page and a
-//! denied page mean different things to the caller.
-
 use crate::graphql::resolvers::tags::domain_types::Tag;
 use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
@@ -15,7 +5,6 @@ use crate::graphql::types::facts::flag;
 use crate::graphql::types::facts::id;
 use crate::graphql::types::facts::optional_instant;
 use crate::graphql::types::facts::rows;
-use crate::host::bridge::Host;
 use crate::http::auth::public_gate;
 use async_graphql::{Context, Enum, Object, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -68,7 +57,7 @@ impl ImagesQuery {
             return Ok(0);
         }
         crate::services::images::search::count(
-            ctx.data_unchecked::<Arc<Host>>(),
+            &crate::graphql::resolvers::media::public::catalog(ctx),
             ctx.data_unchecked::<Arc<crate::services::images::models::Runtime>>(),
             &text_field(&query),
             &query,
@@ -88,7 +77,7 @@ impl ImagesQuery {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         let items = Value::Array(
             crate::services::images::search::rows(
-                ctx.data_unchecked::<Arc<Host>>(),
+                &crate::graphql::resolvers::media::public::catalog(ctx),
                 ctx.data_unchecked::<Arc<crate::services::images::models::Runtime>>(),
                 &text_field(&query),
                 &query,

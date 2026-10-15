@@ -37,6 +37,9 @@ use std::{path::Path, sync::Arc};
 
 const STORAGE: &str = "WRITE_EXTERNAL_STORAGE";
 
+#[cfg(all(feature = "media", not(any(target_os = "android", target_os = "ios"))))]
+const RECENT_FILE_LIMIT: usize = 500;
+
 #[derive(Default)]
 pub struct FilesQuery;
 
@@ -53,8 +56,41 @@ impl FilesQuery {
     /// gates — plain-app's `recentFiles` calls `checkEnabledAsync`.
     async fn recent_files(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<File>> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        let facts = host_call(ctx, "systemRecentFileFacts", json!({})).await?;
-        Ok(rows(&facts, file))
+        #[cfg(not(all(feature = "media", not(any(target_os = "android", target_os = "ios")))))]
+        {
+            return Ok(rows(
+                &host_call(ctx, "systemRecentFileFacts", json!({})).await?,
+                file,
+            ));
+        }
+        #[cfg(all(feature = "media", not(any(target_os = "android", target_os = "ios"))))]
+        {
+            let recent =
+                plain_media::storage::kv::recent::get_recent_files(prefs(ctx), RECENT_FILE_LIMIT);
+            let mut listed = Vec::new();
+            for path in recent {
+                let Ok(entry) =
+                    plain_rs::files::filesystem::stat(std::path::Path::new(&path)).await
+                else {
+                    continue;
+                };
+                listed.push(File {
+                    media_id: None,
+                    name: std::path::Path::new(&entry.path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or_default()
+                        .to_owned(),
+                    path: entry.path,
+                    created_at: Some(instant(entry.created_at.timestamp_millis())),
+                    updated_at: instant(entry.updated_at.timestamp_millis()),
+                    size: Long(entry.size),
+                    is_dir: entry.is_dir,
+                    child_count: entry.child_count as i32,
+                });
+            }
+            Ok(listed)
+        }
     }
 
     /// One page of a directory listing, filtered and sorted by the search

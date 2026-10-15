@@ -28,25 +28,6 @@ impl Runtime {
             return linux::dispatch(&self.core, method, params).await;
         }
         match method {
-            "systemRecentFileFacts" => {
-                let paths = plain_media::storage::kv::recent::get_recent_files(
-                    self.core.preferences()?,
-                    500,
-                );
-                let mut rows = Vec::new();
-                for path in paths {
-                    if let Ok(entry) =
-                        plain_rs::files::filesystem::stat(std::path::Path::new(&path)).await
-                    {
-                        rows.push(serde_json::json!({
-                            "name":std::path::Path::new(&entry.path).file_name().and_then(|name|name.to_str()).unwrap_or_default(),
-                            "path":entry.path,"isDir":entry.is_dir,"size":entry.size,"childCount":entry.child_count,
-                            "createdAt":entry.created_at.timestamp_millis(),"updatedAt":entry.updated_at.timestamp_millis(),
-                        }));
-                    }
-                }
-                Ok(Value::Array(rows))
-            }
             "systemImageFileInfo" | "systemVideoFileInfo" | "systemAudioFileInfo" => {
                 let path = params["path"]
                     .as_str()
@@ -130,28 +111,9 @@ impl Runtime {
                 .map_err(|error| error.to_string())??;
                 Ok(Value::Bool(allowed))
             }
-            "systemMediaBucketItemFacts" => {
-                let core = self.core.clone();
-                let rows = tokio::task::spawn_blocking(move || {
-                    core.native_media_catalog()?.bucket_item_facts(params)
-                })
-                .await
-                .map_err(|error| error.to_string())??;
-                Ok(Value::Array(rows))
-            }
 
             method if crate::native::audio::handles(method) => {
                 self.core.native_audio()?.handle(method, params).await
-            }
-
-            "systemMediaRows" => {
-                let core = self.core.clone();
-                let rows = tokio::task::spawn_blocking(move || {
-                    core.native_media_catalog()?.rows_facts(params)
-                })
-                .await
-                .map_err(|error| error.to_string())??;
-                Ok(Value::Array(rows))
             }
 
             "mediaAction" => {
@@ -162,24 +124,6 @@ impl Runtime {
                 .await
                 .map_err(|error| error.to_string())??;
                 serde_json::to_value(outcome).map_err(|error| error.to_string())
-            }
-            "systemMediaIdsFacts" => {
-                let core = self.core.clone();
-                let ids = tokio::task::spawn_blocking(move || {
-                    core.native_media_catalog()?.ids_facts(params)
-                })
-                .await
-                .map_err(|error| error.to_string())??;
-                Ok(serde_json::json!(ids))
-            }
-            "systemMediaCount" => {
-                let core = self.core.clone();
-                let count = tokio::task::spawn_blocking(move || {
-                    core.native_media_catalog()?.count_facts(params)
-                })
-                .await
-                .map_err(|error| error.to_string())??;
-                Ok(serde_json::json!(count))
             }
 
             "thumbnailAuthorize" => {

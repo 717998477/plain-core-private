@@ -1,13 +1,3 @@
-//! Public `/graphql` media-library roots: buckets, and the image / video /
-//! document lists with their counts.
-//!
-//! The catalogue lives in the platform's media store, so every row and every
-//! count here is a host fact — Rust cannot enumerate a MediaStore. What Rust
-//! does own is the contract shape and the degradation rule: plain-app shows
-//! an empty library rather than an error when storage is not granted, while
-//! an explicit browse still errors out, because a silently empty page and a
-//! denied page mean different things to the caller.
-
 use crate::graphql::resolvers::tags::domain_types::Tag;
 use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
@@ -84,7 +74,6 @@ impl VideosQuery {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         let items = media_rows(
             ctx,
-            "systemMediaRows",
             json!({
                 "dataType": "VIDEO", "query": query,
                 "offset": offset, "limit": limit, "sortBy": sort_by.as_str(),
