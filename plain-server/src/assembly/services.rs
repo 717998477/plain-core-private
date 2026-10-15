@@ -1,6 +1,7 @@
 use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct Services {
+    pub store: Arc<plain_rs::kv::LazyDb>,
     pub archives: Arc<crate::services::files::archives::Archives>,
     pub app_files: Arc<plain_rs::files::app_files::FileStore>,
     pub shares: Arc<plain_rs::files::shares::Service>,
@@ -70,8 +71,11 @@ impl Services {
         directory: std::path::PathBuf,
         shared: crate::assembly::shared_services::SharedServices,
     ) -> Self {
-        let duration_cache = Arc::new(plain_rs::media::duration_cache::DurationCache::new(
+        let store = Arc::new(plain_rs::kv::LazyDb::new(plain_rs::kv::default_db_path(
             &directory,
+        )));
+        let duration_cache = Arc::new(plain_rs::media::duration_cache::DurationCache::with_store(
+            store.clone(),
         ));
         let audio = Arc::new(crate::services::audio::host::Audio::new(
             db.clone(),
@@ -101,6 +105,7 @@ impl Services {
             duration_cache.clone(),
         ));
         Self {
+            store,
             duration_cache,
             archives: Arc::new(crate::services::files::archives::Archives::new(
                 directory.join("archives"),
@@ -140,6 +145,7 @@ impl Services {
             .data(host)
             .data(prefs)
             .data(events)
+            .data(self.store)
             .data(self.duration_cache)
             .data(self.app_files)
             .data(self.shares)

@@ -1,8 +1,8 @@
-use crate::kv::Db;
+use crate::kv::{Db, LazyDb};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::path::Path;
+use std::sync::Arc;
 
 const PREFIX: &str = "android_media_duration:";
 
@@ -18,27 +18,21 @@ pub struct Duration {
 }
 
 pub struct DurationCache {
-    directory: PathBuf,
-    db: Mutex<Option<Db>>,
+    store: Arc<LazyDb>,
 }
 
 impl DurationCache {
     pub fn new(data_dir: &Path) -> Self {
-        Self {
-            directory: crate::kv::default_db_path(data_dir),
-            db: Mutex::new(None),
-        }
+        Self::with_store(Arc::new(LazyDb::new(crate::kv::default_db_path(data_dir))))
+    }
+
+    pub fn with_store(store: Arc<LazyDb>) -> Self {
+        Self { store }
     }
 
     fn with_db<T>(&self, run: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
-        let mut db = self
-            .db
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Duration cache poisoned"))?;
-        if db.is_none() {
-            *db = Some(Db::open(&self.directory)?);
-        }
-        run(db.as_ref().unwrap())
+        let db = self.store.get()?;
+        run(&db)
     }
 
     pub fn all(&self) -> Result<Vec<Duration>> {

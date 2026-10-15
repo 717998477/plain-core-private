@@ -76,3 +76,16 @@ fn pending_batch_keeps_the_shared_engine_alive() {
         Some(&b"value"[..])
     );
 }
+
+#[test]
+fn lazy_store_opens_only_when_used_and_returns_its_owned_handle() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("store");
+    let store = LazyDb::new(path.clone());
+    assert!(!path.exists());
+    let first = store.get().unwrap();
+    first.insert("owned", "value").unwrap();
+    let second = store.get().unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(second.get("owned").unwrap().as_deref(), Some(&b"value"[..]));
+}

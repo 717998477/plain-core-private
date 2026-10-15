@@ -90,6 +90,31 @@ impl Db {
         Ok(())
     }
 }
+pub struct LazyDb {
+    path: PathBuf,
+    db: Mutex<Option<Arc<Db>>>,
+}
+
+impl LazyDb {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            db: Mutex::new(None),
+        }
+    }
+
+    pub fn get(&self) -> Result<Arc<Db>> {
+        let mut stored = self
+            .db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("KV store poisoned"))?;
+        if stored.is_none() {
+            *stored = Some(Arc::new(Db::open(&self.path)?));
+        }
+        Ok(stored.as_ref().unwrap().clone())
+    }
+}
+
 pub struct Batch {
     inner: fjall::OwnedWriteBatch,
     store: Arc<Inner>,

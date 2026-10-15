@@ -22,6 +22,7 @@ use tokio::{
 };
 #[derive(Clone)]
 pub(crate) struct ServerState {
+    pub(crate) store: Arc<plain_rs::kv::LazyDb>,
     #[cfg(feature = "http_transport")]
     pub(crate) public_server: Arc<tokio::sync::Mutex<Option<PublicServer>>>,
     #[cfg(feature = "http_transport")]
@@ -394,6 +395,7 @@ impl ContentServer {
             services.index.clone(),
             events.clone(),
         );
+        let store = services.store.clone();
         let public = crate::graphql::schemas::public::build_with_runtime(
             host.clone(),
             events.clone(),
@@ -426,6 +428,7 @@ impl ContentServer {
         ));
         let dlna = Arc::new(crate::services::casting::receiver::receiver_engine::DlnaEngine::new());
         let state = ServerState {
+            store,
             #[cfg(feature = "media")]
             media_scans: Arc::new(crate::services::files::media_scans::MediaScans::new(
                 events.clone(),

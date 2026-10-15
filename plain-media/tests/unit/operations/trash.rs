@@ -1,22 +1,23 @@
-//! Unit tests for `src/trash.rs` — moved out-of-line; compiled
-//! as the `tests` child module via `#[cfg(test)] #[path]` there.
 use super::*;
-use std::env;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-static SEQ: AtomicUsize = AtomicUsize::new(0);
-fn fresh_db() {
-    // Set up an isolated database path for tests.
-    let id = SEQ.fetch_add(1, Ordering::SeqCst);
-    let path = env::temp_dir().join(format!("plain-trash-test-{id}"));
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).unwrap();
-    // `set_var` is unsafe in edition 2024 (it can race with other
-    // threads reading the env). Tests run with no other readers
-    // contending for this var, so the unsafe block is fine.
-    unsafe {
-        std::env::set_var("PLAINAPP_DATA_DIR", &path);
+fn item(directory: &Path) -> TrashItem {
+    TrashItem {
+        id: "owned".into(),
+        kind: "file".into(),
+        original_path: directory.join("report.txt").to_string_lossy().into_owned(),
+        disk: directory.to_string_lossy().into_owned(),
+        trash_rel_path: "data/2026/01/f_owned_report.txt".into(),
+        deleted_at: 1_700_000_000,
+        uid: 0,
+        gid: 0,
+        mode: 0o600,
+        size: Some(7),
+        entry_count: None,
     }
+}
+
+fn store(directory: &Path) -> Trash {
+    Trash::new(Arc::new(crate::storage::kv::Db::open(directory).unwrap()))
 }
 
 #[test]
@@ -31,37 +32,69 @@ fn bucket_path_layout() {
 }
 
 #[test]
-fn unique_path_appends_index() {
-    // The `unique_path` helper lives in `crate::file_tasks` and
-    // `crate::chunked_upload` (both private). The trash flow never
-    // renames to a path that might already exist in the trash
-    // bucket (each file gets a content-derived sub-dir + filename),
-    // so the trash module doesn't carry its own `unique_path`. This
-    // placeholder test stays so `cargo test` still exercises the
-    // surrounding helpers when run on this module.
+fn metadata_and_indexes_use_only_the_supplied_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let left = store(&directory.path().join("left"));
+    let right = store(&directory.path().join("right"));
+    let row = item(directory.path());
+    left.store_item(&row).unwrap();
+    assert_eq!(
+        left.load_item("owned").unwrap().unwrap().original_path,
+        row.original_path
+    );
+    assert!(right.load_item("owned").unwrap().is_none());
+    assert_eq!(left.trash_count().unwrap(), 1);
+    assert_eq!(right.trash_count().unwrap(), 0);
+    assert_eq!(
+        left.list_trash(0, 10, "report", SortOrder::NameAsc)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(left.db.iter().count(), 5);
+    left.delete_item_keys(&row).unwrap();
+    assert_eq!(left.db.iter().count(), 0);
 }
 
-#[test]
-fn round_trip_store_load() {
-    fresh_db();
-    // Note: this requires db::get_default() to be opened with PLAINAPP_DATA_DIR
-    // before the test is run. Cargo runs tests in parallel; for simplicity we
-    // just exercise the serializer.
-    let item = TrashItem {
-        id: "abc".into(),
-        kind: "file".into(),
-        original_path: "/tmp/foo".into(),
-        disk: "/".into(),
-        trash_rel_path: "data/2026/01/f_abc".into(),
-        deleted_at: 1700000000,
-        uid: 0,
-        gid: 0,
-        mode: 0o644,
-        size: None,
-        entry_count: None,
-    };
-    let s = serde_json::to_string(&item).unwrap();
-    let back: TrashItem = serde_json::from_str(&s).unwrap();
-    assert_eq!(back.id, "abc");
-    assert_eq!(back.kind, "file");
+#[tokio::test]
+async fn restore_preserves_an_existing_destination_and_removes_owned_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let trash = store(&directory.path().join("store"));
+    let row = item(directory.path());
+    let source = abs_trash_path(&row.disk, &row.trash_rel_path);
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"restore").unwrap();
+    std::fs::write(&row.original_path, b"existing").unwrap();
+    trash.store_item(&row).unwrap();
+    let restored = trash.restore_paths(vec!["owned".into()]).await.unwrap();
+    assert_eq!(
+        restored,
+        vec![
+            directory
+                .path()
+                .join("report (restored).txt")
+                .to_string_lossy()
+        ]
+    );
+    assert_eq!(std::fs::read(&restored[0]).unwrap(), b"restore");
+    assert_eq!(std::fs::read(&row.original_path).unwrap(), b"existing");
+    assert!(!source.exists());
+    assert_eq!(trash.trash_count().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn permanent_delete_removes_file_and_all_owned_indexes() {
+    let directory = tempfile::tempdir().unwrap();
+    let trash = store(&directory.path().join("store"));
+    let row = item(directory.path());
+    let source = abs_trash_path(&row.disk, &row.trash_rel_path);
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"deleted").unwrap();
+    trash.store_item(&row).unwrap();
+    trash
+        .delete_trash_by_path(source.to_str().unwrap())
+        .await
+        .unwrap();
+    assert!(!source.exists());
+    assert_eq!(trash.db.iter().count(), 0);
 }

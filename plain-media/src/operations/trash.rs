@@ -100,53 +100,291 @@ fn sort_size(it: &TrashItem) -> i64 {
     it.size.unwrap_or(0)
 }
 
+pub struct Trash {
+    db: Arc<crate::storage::kv::Db>,
+}
+
+impl Trash {
+    pub fn new(db: Arc<crate::storage::kv::Db>) -> Self {
+        Self { db }
+    }
+
+    pub fn load_item(&self, id: &str) -> Result<Option<TrashItem>> {
+        let db = &self.db;
+        match db.get(item_key(id))? {
+            Some(ivec) => {
+                let v: TrashItem = serde_json::from_slice(&ivec)?;
+                if v.id.trim().is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(v))
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn store_item(&self, it: &TrashItem) -> Result<()> {
+        if it.id.trim().is_empty() {
+            bail!("invalid trash item");
+        }
+        let df = dir_flag(it);
+        let name_lc = display_name_lower(it);
+        let size = sort_size(it);
+        let json = serde_json::to_vec(it)?;
+        let db = &self.db;
+        db.insert(item_key(&it.id), json)?;
+        db.insert(by_deleted_key(it.deleted_at, &it.id), b"")?;
+        db.insert(by_deleted_df_key(it.deleted_at, df, &it.id), b"")?;
+        db.insert(by_name_df_key(df, &name_lc, &it.id), b"")?;
+        db.insert(by_size_df_key(df, size, &it.id), b"")?;
+        db.flush()?;
+        Ok(())
+    }
+
+    pub fn delete_item_keys(&self, it: &TrashItem) -> Result<()> {
+        let df = dir_flag(it);
+        let rev = REVERSED_MAX - it.deleted_at;
+        let name_lc = display_name_lower(it);
+        let size = sort_size(it);
+        let db = &self.db;
+        db.remove(item_key(&it.id))?;
+        db.remove(format!("{NS_BY_DELETED}{rev:020}:{}", it.id))?;
+        db.remove(format!("{NS_BY_DELETED_DF}{df}:{rev:020}:{}", it.id))?;
+        db.remove(format!("{NS_BY_NAME_DF}{df}:{name_lc}:{}", it.id))?;
+        db.remove(format!("{NS_BY_SIZE_DF}{df}:{size:020}:{}", it.id))?;
+        Ok(())
+    }
+
+    pub async fn trash_paths(&self, paths: Vec<String>) -> Result<Vec<String>> {
+        let mut out = Vec::with_capacity(paths.len());
+        for raw in paths {
+            let src = PathBuf::from(&raw).clean_path();
+            validate_trashable_path(&src)?;
+            let meta = std::fs::symlink_metadata(&src)?;
+            let kind = if meta.is_dir() { "dir" } else { "file" };
+            let now = Utc::now();
+            let deleted_at = now.timestamp();
+            let id = shortid::new_id();
+
+            // Probe mountpoint at the directory entry itself; for symlinks use parent.
+            let probe = if meta.file_type().is_symlink() {
+                src.parent().unwrap_or(&src).to_path_buf()
+            } else {
+                src.clone()
+            };
+            let disk_mount = match mountinfo::resolve_mount_point(&probe) {
+                Ok(m) => m,
+                Err(_) => {
+                    // Fallback: try canonicalize and use parent. This handles the
+                    // common dev/case where the path lives in a tmpfs that isn't
+                    // recorded in /proc/self/mountinfo.
+                    let canon = std::fs::canonicalize(&probe).unwrap_or(probe.clone());
+                    let parent = canon.parent().map(|p| p.to_path_buf()).unwrap_or(canon);
+                    parent.to_string_lossy().to_string()
+                }
+            };
+            let base = src
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            let rel = compute_bucket_rel_path(kind, &id, &base, now);
+            let dst = abs_trash_path(&disk_mount, &rel);
+
+            let lock = lock_for_disk(&disk_mount);
+            let _g = lock.lock().await;
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            match std::fs::rename(&src, &dst) {
+            Ok(()) => {}
+            Err(e) if e.raw_os_error() == Some(18) /* EXDEV */ => {
+                bail!("cross-filesystem rename forbidden: {e}");
+            }
+            Err(e) => bail!("rename failed: {e}"),
+        }
+            let (uid, gid, mode) = owner_mode(&meta);
+            let item = TrashItem {
+                id: id.clone(),
+                kind: kind.to_string(),
+                original_path: src.to_string_lossy().to_string(),
+                disk: disk_mount.clone(),
+                trash_rel_path: rel,
+                deleted_at,
+                uid,
+                gid,
+                mode,
+                size: None,
+                entry_count: None,
+            };
+            if let Err(e) = self.store_item(&item) {
+                // Roll back the rename so metadata stays the single source of truth.
+                let _ = std::fs::rename(&dst, &src);
+                bail!("failed to write trash metadata: {e}");
+            }
+            out.push(dst.to_string_lossy().to_string());
+        }
+        Ok(out)
+    }
+
+    pub async fn restore_paths(&self, trashed_paths: Vec<String>) -> Result<Vec<String>> {
+        let mut out = Vec::with_capacity(trashed_paths.len());
+        for raw in trashed_paths {
+            let src = PathBuf::from(&raw).clean_path();
+            let id = validate_restore_path(&src)?;
+            let item = self
+                .load_item(&id)?
+                .ok_or_else(|| anyhow!("trash item not found"))?;
+            let trash_path = abs_trash_path(&item.disk, &item.trash_rel_path);
+            let target = PathBuf::from(&item.original_path).clean_path();
+            if target.as_os_str().is_empty()
+                || target == PathBuf::from(".")
+                || target == PathBuf::from("/")
+            {
+                bail!("invalid original path");
+            }
+            // Enforce same-disk restore.
+            if !target.starts_with(Path::new(&item.disk)) {
+                bail!("restore target must be on original disk");
+            }
+            let lock = lock_for_disk(&item.disk);
+            let _g = lock.lock().await;
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            let mut final_target = target.clone();
+            if final_target.exists() {
+                final_target = unique_restored_path(&final_target);
+            }
+            std::fs::rename(&trash_path, &final_target).context("rename from trash")?;
+            // Best-effort chown/chmod (may be restricted to root).
+            #[cfg(unix)]
+            {
+                let _ = std::os::unix::fs::chown(&final_target, Some(item.uid), Some(item.gid));
+                let _ = std::fs::set_permissions(
+                    &final_target,
+                    std::fs::Permissions::from_mode(item.mode),
+                );
+            }
+            if let Err(e) = self.delete_item_keys(&item) {
+                // Roll back the physical restore so metadata stays truth.
+                let _ = std::fs::rename(&final_target, &trash_path);
+                bail!("failed to delete trash metadata: {e}");
+            }
+            out.push(final_target.to_string_lossy().to_string());
+        }
+        Ok(out)
+    }
+
+    pub async fn delete_trash_by_path(&self, trashed_path: &str) -> Result<()> {
+        let p = PathBuf::from(trashed_path).clean_path();
+        if !is_in_plain_trash(&p) {
+            bail!("not a trash path");
+        }
+        let id = parse_trash_id_from_path(&p).ok_or_else(|| anyhow!("invalid trash path"))?;
+        if let Some(it) = self.load_item(&id)? {
+            let lock = lock_for_disk(&it.disk);
+            let _g = lock.lock().await;
+            let abs = abs_trash_path(&it.disk, &it.trash_rel_path);
+            crate::operations::fsx::remove(&abs).await?;
+            self.delete_item_keys(&it)?;
+        } else {
+            crate::operations::fsx::remove(&p).await?;
+        }
+        Ok(())
+    }
+
+    pub fn list_trash(
+        &self,
+        offset: usize,
+        limit: usize,
+        text: &str,
+        order: SortOrder,
+    ) -> Result<Vec<TrashItem>> {
+        let db = &self.db;
+        let needle = text.trim().to_lowercase();
+        let mut items: Vec<TrashItem> = Vec::new();
+        for kv in db.iter() {
+            let (k, _v) = kv?;
+            let k = String::from_utf8_lossy(&k).to_string();
+            if !k.starts_with(NS_ITEM) {
+                continue;
+            }
+            let v = db.get(&k)?.ok_or_else(|| anyhow!("missing item body"))?;
+            let it: TrashItem = serde_json::from_slice(&v)?;
+            if !needle.is_empty() {
+                let hay = it.original_path.to_lowercase();
+                if !hay.contains(&needle) {
+                    continue;
+                }
+            }
+            items.push(it);
+        }
+        match order {
+            SortOrder::DeletedAtNewest => {
+                items.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at).then(a.id.cmp(&b.id)))
+            }
+            SortOrder::DeletedAtOldest => {
+                items.sort_by(|a, b| a.deleted_at.cmp(&b.deleted_at).then(a.id.cmp(&b.id)))
+            }
+            SortOrder::NameAsc => items.sort_by(|a, b| {
+                dir_flag(a)
+                    .cmp(dir_flag(b))
+                    .then(display_name_lower(a).cmp(&display_name_lower(b)))
+                    .then(a.id.cmp(&b.id))
+            }),
+            SortOrder::NameDesc => items.sort_by(|a, b| {
+                dir_flag(a)
+                    .cmp(dir_flag(b))
+                    .then(display_name_lower(b).cmp(&display_name_lower(a)))
+                    .then(a.id.cmp(&b.id))
+            }),
+            SortOrder::SizeAsc => items.sort_by(|a, b| {
+                dir_flag(a)
+                    .cmp(dir_flag(b))
+                    .then(sort_size(a).cmp(&sort_size(b)))
+                    .then(a.id.cmp(&b.id))
+            }),
+            SortOrder::SizeDesc => items.sort_by(|a, b| {
+                dir_flag(a)
+                    .cmp(dir_flag(b))
+                    .then(sort_size(b).cmp(&sort_size(a)))
+                    .then(a.id.cmp(&b.id))
+            }),
+        }
+        let end = (offset + limit).min(items.len());
+        if offset >= items.len() {
+            return Ok(vec![]);
+        }
+        Ok(items.drain(offset..end).collect())
+    }
+
+    pub fn trash_count(&self) -> Result<usize> {
+        let db = &self.db;
+        let mut n = 0;
+        for kv in db.scan_prefix(NS_ITEM) {
+            let (k, _) = kv?;
+            if String::from_utf8_lossy(&k).starts_with(NS_ITEM) {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+}
+
 // ----- Load / Store -----
 
 pub fn load_item(id: &str) -> Result<Option<TrashItem>> {
-    let db = get_default();
-    match db.get(item_key(id))? {
-        Some(ivec) => {
-            let v: TrashItem = serde_json::from_slice(&ivec)?;
-            if v.id.trim().is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(v))
-            }
-        }
-        None => Ok(None),
-    }
+    Trash::new(Arc::new(get_default().clone())).load_item(id)
 }
 
 pub fn store_item(it: &TrashItem) -> Result<()> {
-    if it.id.trim().is_empty() {
-        bail!("invalid trash item");
-    }
-    let df = dir_flag(it);
-    let name_lc = display_name_lower(it);
-    let size = sort_size(it);
-    let json = serde_json::to_vec(it)?;
-    let db = get_default();
-    db.insert(item_key(&it.id), json)?;
-    db.insert(by_deleted_key(it.deleted_at, &it.id), b"")?;
-    db.insert(by_deleted_df_key(it.deleted_at, df, &it.id), b"")?;
-    db.insert(by_name_df_key(df, &name_lc, &it.id), b"")?;
-    db.insert(by_size_df_key(df, size, &it.id), b"")?;
-    db.flush()?;
-    Ok(())
+    Trash::new(Arc::new(get_default().clone())).store_item(it)
 }
 
 pub fn delete_item_keys(it: &TrashItem) -> Result<()> {
-    let df = dir_flag(it);
-    let rev = REVERSED_MAX - it.deleted_at;
-    let name_lc = display_name_lower(it);
-    let size = sort_size(it);
-    let db = get_default();
-    db.remove(item_key(&it.id))?;
-    db.remove(format!("{NS_BY_DELETED}{rev:020}:{}", it.id))?;
-    db.remove(format!("{NS_BY_DELETED_DF}{df}:{rev:020}:{}", it.id))?;
-    db.remove(format!("{NS_BY_NAME_DF}{df}:{name_lc}:{}", it.id))?;
-    db.remove(format!("{NS_BY_SIZE_DF}{df}:{size:020}:{}", it.id))?;
-    Ok(())
+    Trash::new(Arc::new(get_default().clone())).delete_item_keys(it)
 }
 
 // ----- Per-disk in-process lock (serialises trash ops on the same disk) -----
@@ -251,75 +489,9 @@ fn unique_restored_path(target: &Path) -> PathBuf {
 /// Move each path into its disk-local `.plain-trash` (single rename).
 /// Returns the new trashed physical paths.
 pub async fn trash_paths(paths: Vec<String>) -> Result<Vec<String>> {
-    let mut out = Vec::with_capacity(paths.len());
-    for raw in paths {
-        let src = PathBuf::from(&raw).clean_path();
-        validate_trashable_path(&src)?;
-        let meta = std::fs::symlink_metadata(&src)?;
-        let kind = if meta.is_dir() { "dir" } else { "file" };
-        let now = Utc::now();
-        let deleted_at = now.timestamp();
-        let id = shortid::new_id();
-
-        // Probe mountpoint at the directory entry itself; for symlinks use parent.
-        let probe = if meta.file_type().is_symlink() {
-            src.parent().unwrap_or(&src).to_path_buf()
-        } else {
-            src.clone()
-        };
-        let disk_mount = match mountinfo::resolve_mount_point(&probe) {
-            Ok(m) => m,
-            Err(_) => {
-                // Fallback: try canonicalize and use parent. This handles the
-                // common dev/case where the path lives in a tmpfs that isn't
-                // recorded in /proc/self/mountinfo.
-                let canon = std::fs::canonicalize(&probe).unwrap_or(probe.clone());
-                let parent = canon.parent().map(|p| p.to_path_buf()).unwrap_or(canon);
-                parent.to_string_lossy().to_string()
-            }
-        };
-        let base = src
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        let rel = compute_bucket_rel_path(kind, &id, &base, now);
-        let dst = abs_trash_path(&disk_mount, &rel);
-
-        let lock = lock_for_disk(&disk_mount);
-        let _g = lock.lock().await;
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        match std::fs::rename(&src, &dst) {
-            Ok(()) => {}
-            Err(e) if e.raw_os_error() == Some(18) /* EXDEV */ => {
-                bail!("cross-filesystem rename forbidden: {e}");
-            }
-            Err(e) => bail!("rename failed: {e}"),
-        }
-        let (uid, gid, mode) = owner_mode(&meta);
-        let item = TrashItem {
-            id: id.clone(),
-            kind: kind.to_string(),
-            original_path: src.to_string_lossy().to_string(),
-            disk: disk_mount.clone(),
-            trash_rel_path: rel,
-            deleted_at,
-            uid,
-            gid,
-            mode,
-            size: None,
-            entry_count: None,
-        };
-        if let Err(e) = store_item(&item) {
-            // Roll back the rename so metadata stays the single source of truth.
-            let _ = std::fs::rename(&dst, &src);
-            bail!("failed to write trash metadata: {e}");
-        }
-        out.push(dst.to_string_lossy().to_string());
-    }
-    Ok(out)
+    Trash::new(Arc::new(get_default().clone()))
+        .trash_paths(paths)
+        .await
 }
 
 fn validate_restore_path(p: &Path) -> Result<String> {
@@ -358,68 +530,17 @@ fn parse_trash_id_from_path(p: &Path) -> Option<String> {
 }
 
 pub async fn restore_paths(trashed_paths: Vec<String>) -> Result<Vec<String>> {
-    let mut out = Vec::with_capacity(trashed_paths.len());
-    for raw in trashed_paths {
-        let src = PathBuf::from(&raw).clean_path();
-        let id = validate_restore_path(&src)?;
-        let item = load_item(&id)?.ok_or_else(|| anyhow!("trash item not found"))?;
-        let trash_path = abs_trash_path(&item.disk, &item.trash_rel_path);
-        let target = PathBuf::from(&item.original_path).clean_path();
-        if target.as_os_str().is_empty()
-            || target == PathBuf::from(".")
-            || target == PathBuf::from("/")
-        {
-            bail!("invalid original path");
-        }
-        // Enforce same-disk restore.
-        if !target.starts_with(Path::new(&item.disk)) {
-            bail!("restore target must be on original disk");
-        }
-        let lock = lock_for_disk(&item.disk);
-        let _g = lock.lock().await;
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        let mut final_target = target.clone();
-        if final_target.exists() {
-            final_target = unique_restored_path(&final_target);
-        }
-        std::fs::rename(&trash_path, &final_target).context("rename from trash")?;
-        // Best-effort chown/chmod (may be restricted to root).
-        #[cfg(unix)]
-        {
-            let _ = std::os::unix::fs::chown(&final_target, Some(item.uid), Some(item.gid));
-            let _ =
-                std::fs::set_permissions(&final_target, std::fs::Permissions::from_mode(item.mode));
-        }
-        if let Err(e) = delete_item_keys(&item) {
-            // Roll back the physical restore so metadata stays truth.
-            let _ = std::fs::rename(&final_target, &trash_path);
-            bail!("failed to delete trash metadata: {e}");
-        }
-        out.push(final_target.to_string_lossy().to_string());
-    }
-    Ok(out)
+    Trash::new(Arc::new(get_default().clone()))
+        .restore_paths(trashed_paths)
+        .await
 }
 
 /// Permanently delete a trashed entry. The path may be the physical trash
 /// path or a raw id.
 pub async fn delete_trash_by_path(trashed_path: &str) -> Result<()> {
-    let p = PathBuf::from(trashed_path).clean_path();
-    if !is_in_plain_trash(&p) {
-        bail!("not a trash path");
-    }
-    let id = parse_trash_id_from_path(&p).ok_or_else(|| anyhow!("invalid trash path"))?;
-    if let Some(it) = load_item(&id)? {
-        let lock = lock_for_disk(&it.disk);
-        let _g = lock.lock().await;
-        let abs = abs_trash_path(&it.disk, &it.trash_rel_path);
-        crate::operations::fsx::remove(&abs).await?;
-        delete_item_keys(&it)?;
-    } else {
-        crate::operations::fsx::remove(&p).await?;
-    }
-    Ok(())
+    Trash::new(Arc::new(get_default().clone()))
+        .delete_trash_by_path(trashed_path)
+        .await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -438,74 +559,11 @@ pub fn list_trash(
     text: &str,
     order: SortOrder,
 ) -> Result<Vec<TrashItem>> {
-    let db = get_default();
-    let needle = text.trim().to_lowercase();
-    let mut items: Vec<TrashItem> = Vec::new();
-    for kv in db.iter() {
-        let (k, _v) = kv?;
-        let k = String::from_utf8_lossy(&k).to_string();
-        if !k.starts_with(NS_ITEM) {
-            continue;
-        }
-        let v = db.get(&k)?.ok_or_else(|| anyhow!("missing item body"))?;
-        let it: TrashItem = serde_json::from_slice(&v)?;
-        if !needle.is_empty() {
-            let hay = it.original_path.to_lowercase();
-            if !hay.contains(&needle) {
-                continue;
-            }
-        }
-        items.push(it);
-    }
-    match order {
-        SortOrder::DeletedAtNewest => {
-            items.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at).then(a.id.cmp(&b.id)))
-        }
-        SortOrder::DeletedAtOldest => {
-            items.sort_by(|a, b| a.deleted_at.cmp(&b.deleted_at).then(a.id.cmp(&b.id)))
-        }
-        SortOrder::NameAsc => items.sort_by(|a, b| {
-            dir_flag(a)
-                .cmp(dir_flag(b))
-                .then(display_name_lower(a).cmp(&display_name_lower(b)))
-                .then(a.id.cmp(&b.id))
-        }),
-        SortOrder::NameDesc => items.sort_by(|a, b| {
-            dir_flag(a)
-                .cmp(dir_flag(b))
-                .then(display_name_lower(b).cmp(&display_name_lower(a)))
-                .then(a.id.cmp(&b.id))
-        }),
-        SortOrder::SizeAsc => items.sort_by(|a, b| {
-            dir_flag(a)
-                .cmp(dir_flag(b))
-                .then(sort_size(a).cmp(&sort_size(b)))
-                .then(a.id.cmp(&b.id))
-        }),
-        SortOrder::SizeDesc => items.sort_by(|a, b| {
-            dir_flag(a)
-                .cmp(dir_flag(b))
-                .then(sort_size(b).cmp(&sort_size(a)))
-                .then(a.id.cmp(&b.id))
-        }),
-    }
-    let end = (offset + limit).min(items.len());
-    if offset >= items.len() {
-        return Ok(vec![]);
-    }
-    Ok(items.drain(offset..end).collect())
+    Trash::new(Arc::new(get_default().clone())).list_trash(offset, limit, text, order)
 }
 
 pub fn trash_count() -> Result<usize> {
-    let db = get_default();
-    let mut n = 0;
-    for kv in db.scan_prefix(NS_ITEM) {
-        let (k, _) = kv?;
-        if String::from_utf8_lossy(&k).starts_with(NS_ITEM) {
-            n += 1;
-        }
-    }
-    Ok(n)
+    Trash::new(Arc::new(get_default().clone())).trash_count()
 }
 
 // ----- Background stats worker (size / entry_count) -----
