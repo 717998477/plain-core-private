@@ -44,7 +44,6 @@ impl NativeAudio {
         tokio::task::spawn_blocking(move || match method.as_str() {
             "audioLibraryResolve" => service.resolve(params),
             "audioMetadata" => service.metadata(params),
-            "systemAudioSearchTracks" => service.search(params),
             "systemAudioLyrics" => {
                 let path = params["path"].as_str().ok_or("Audio path required")?;
                 Ok(Value::String(
@@ -112,16 +111,6 @@ impl NativeAudio {
         };
         serde_json::to_value(item).map_err(|error| error.to_string())
     }
-
-    fn search(&self, mut params: Value) -> Result<Value, String> {
-        params["dataType"] = json!("AUDIO");
-        let mut rows = crate::native::media_catalog::NativeMediaCatalog::new(self.state.clone())
-            .rows_facts(params)?;
-        for row in &mut rows {
-            row["mediaId"] = row["id"].clone();
-        }
-        Ok(Value::Array(rows))
-    }
 }
 
 fn command(params: Value) -> Result<Value, String> {
@@ -139,11 +128,7 @@ fn command(params: Value) -> Result<Value, String> {
 pub fn handles(method: &str) -> bool {
     matches!(
         method,
-        "audioLibraryResolve"
-            | "audioMetadata"
-            | "systemAudioSearchTracks"
-            | "systemAudioLyrics"
-            | "systemAudioPlaybackState"
+        "audioLibraryResolve" | "audioMetadata" | "systemAudioLyrics" | "systemAudioPlaybackState"
             | "audioEngineCommand"
     )
 }

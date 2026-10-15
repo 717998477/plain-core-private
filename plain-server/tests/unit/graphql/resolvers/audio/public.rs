@@ -35,7 +35,7 @@ fn stub(host: Arc<Host>, db: Arc<Db>, handler: impl Fn(&str, Value) -> Value + S
                     if rows.iter().any(|row| row["path"] == *path) {
                         continue;
                     }
-                    let facts = handler("systemAudioPlaylistTracks", json!({"paths":[path]}));
+                    let facts = handler("syntheticAudioTracks", json!({"paths":[path]}));
                     for mut track in facts.as_array().unwrap().iter().cloned() {
                         track["mediaId"] =
                             json!(format!("mock:{}", track["path"].as_str().unwrap()));
@@ -56,16 +56,6 @@ fn stub(host: Arc<Host>, db: Arc<Db>, handler: impl Fn(&str, Value) -> Value + S
                             .collect::<Vec<_>>()
                     )
                 }
-            } else if request["method"] == "systemAudioSearchTracks" {
-                let mut rows = handler("systemAudioSearchTracks", request["params"].clone());
-                if let Some(items) = rows.as_array_mut() {
-                    for item in items {
-                        item["mediaId"] = json!(format!("mock:{}", item["path"].as_str().unwrap()));
-                    }
-                }
-                rows
-            } else if request["method"] == "systemAudioPlaybackPermission" {
-                json!(true)
             } else {
                 handler(
                     &request["method"].as_str().unwrap_or_default(),
@@ -87,7 +77,7 @@ const GRANTED: &str = r#"["WRITE_EXTERNAL_STORAGE"]"#;
 
 fn fixture() -> (tempfile::TempDir, PublicSchema) {
     fixture_with(GRANTED, |method, params| match method {
-        "systemAudioPlaylistTracks" => json!(
+        "syntheticAudioTracks" => json!(
             params["paths"]
                 .as_array()
                 .unwrap()
@@ -100,19 +90,9 @@ fn fixture() -> (tempfile::TempDir, PublicSchema) {
         ),
         "systemAudioPlaybackState" => json!({ "isPlaying": false, "positionMs": 0 }),
         "audioEngineCommand" => engine_report(&params),
-        "systemAudioSearchTracks" => json!([{
-            "title": "Queued", "artist": "Artist", "path": "/music/one.mp3", "durationMs": 1000,
-        }]),
         "systemMediaRows" => json!([]),
         "systemMediaCount" => json!(0),
         "systemAudioLyrics" => json!(""),
-        // The playback order is the library plus the queue, so the library
-        // half has to answer even when nothing is queued from it.
-        "audioLibraryCount" => json!(0),
-        "audioLibraryPath" => Value::Null,
-        "audioLibraryPage" => json!([]),
-        "audioLibraryLocate" => json!(-1),
-        "audioLibraryContains" => json!(false),
         _other => panic!("unexpected host call {_other}"),
     })
 }
@@ -205,7 +185,7 @@ async fn the_queue_is_paged_and_its_count_matches() {
 #[tokio::test]
 async fn playback_joins_the_queue_state_and_the_player_state() {
     let (_dir, schema) = fixture_with(GRANTED, |method, params| match method {
-        "systemAudioPlaylistTracks" => json!(
+        "syntheticAudioTracks" => json!(
             params["paths"]
                 .as_array()
                 .unwrap()
@@ -251,7 +231,7 @@ async fn playback_joins_the_queue_state_and_the_player_state() {
 #[tokio::test]
 async fn playing_a_track_never_changes_the_queue() {
     let (_dir, schema) = fixture_with(GRANTED, |method, params| match method {
-        "systemAudioPlaylistTracks" => json!([{
+        "syntheticAudioTracks" => json!([{
             "title": "Track", "artist": "Artist",
             "path": params["paths"][0].as_str().unwrap(), "durationMs": 1000,
         }]),
@@ -665,7 +645,7 @@ async fn playlist_items_expose_catalog_identity_and_path() {
 #[tokio::test]
 async fn adding_tracks_reads_every_search_page_without_an_item_limit() {
     let (_dir, schema) = fixture_with(GRANTED, |method, params| match method {
-        "systemAudioPlaylistTracks" => json!(
+        "syntheticAudioTracks" => json!(
             params["paths"]
                 .as_array()
                 .unwrap()
