@@ -5,6 +5,9 @@ use std::sync::Arc;
 
 fn register(db: &Db) -> String {
     db.record_media_files(&[MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type: DataType::Audio,
         path: "/track.mp3".into(),
         title: "Track".into(),

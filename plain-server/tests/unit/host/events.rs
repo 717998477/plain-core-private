@@ -22,6 +22,10 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
         "PAIRING_SUCCESS",
         "CONTENT_CHANGED",
         "UNKNOWN_EVENT",
+        "IMAGE_INDEX_ERROR_REPORTED",
+        plain_rs::events::NETWORK_CHANGED,
+        plain_rs::events::AUDIO_LIBRARY_UPDATED,
+        plain_rs::events::MEDIA_LIBRARY_UPDATED,
         plain_rs::events::HTTP_SERVER_FAILED,
         plain_rs::events::MEDIA_ACTION_FINISHED,
     ] {
@@ -37,8 +41,9 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
                 | "NOTIFICATION_REPORTED"
                 | "AUDIO_PROGRESS_REPORTED"
                 | "AUDIO_STARTED_REPORTED"
-                | "IMAGE_INDEX_ERROR_REPORTED"
+                | "AUDIO_COMPLETED_REPORTED"
                 | "IMAGE_CATALOG_CHANGED"
+                | "MEDIA_CATALOG_CHANGED"
                 | "NETWORK_INTERFACES_CHANGED"
                 | "BLE_ADVERTISEMENT_REPORTED"
                 | "SMS_PART_SENT_REPORTED"
@@ -233,6 +238,9 @@ async fn raw_ble_advertisements_are_consumed_without_public_rebroadcast() {
         .publish_text("NETWORK_INTERFACES_CHANGED", "null".into())
         .await
         .unwrap();
+    let changed = public.try_recv().unwrap();
+    assert_eq!(changed.event_type, plain_rs::events::NETWORK_CHANGED);
+    assert!(!changed.is_host_event());
     assert!(public.try_recv().is_err());
     assert!(
         bridge
@@ -240,5 +248,28 @@ async fn raw_ble_advertisements_are_consumed_without_public_rebroadcast() {
             .await
             .is_err()
     );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn client_request_errors_cannot_overwrite_shared_image_model_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = server(&directory);
+    let bridge = server.host_events();
+    let state = server.runtime_state();
+    let before = state.image_models.snapshot();
+    assert!(
+        bridge
+            .publish_text(
+                "IMAGE_INDEX_ERROR_REPORTED",
+                json!("Client transport failed").to_string()
+            )
+            .await
+            .is_err()
+    );
+    let after = state.image_models.snapshot();
+    assert_eq!(before.status.error_message, after.status.error_message);
+    assert_eq!(before.status.status, after.status.status);
+    assert_eq!(before.version, after.version);
     server.shutdown().await;
 }

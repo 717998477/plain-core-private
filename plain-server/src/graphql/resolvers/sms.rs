@@ -170,24 +170,6 @@ impl SmsQuery {
         Ok(strings(&receipt, "ids").into_iter().map(ID::from).collect())
     }
 
-    async fn mms_text_ids(
-        &self,
-        ctx: &Context<'_>,
-        filters: Vec<String>,
-    ) -> async_graphql::Result<Vec<ID>> {
-        if !public_gate::require_granted(ctx, &[READ]).await? {
-            return Ok(Vec::new());
-        }
-        let receipt = sms_query::execute(
-            ctx.data_unchecked::<Arc<Db>>(),
-            ctx.data_unchecked::<Arc<Host>>(),
-            sms_query::Request::TextIds { filters },
-        )
-        .await
-        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-        Ok(strings(&receipt, "ids").into_iter().map(ID::from).collect())
-    }
-
     async fn sms_conversation_date(
         &self,
         ctx: &Context<'_>,

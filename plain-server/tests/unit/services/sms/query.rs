@@ -240,7 +240,7 @@ async fn conversation_provider_reports_raw_candidates_and_rust_filters_own_numbe
     let responder = tokio::spawn(async move {
         let request = requests.recv().await.unwrap();
         assert_eq!(request["method"], "systemSmsConversationFacts");
-        replies.reply(generation, serde_json::json!({"id":request["id"],"result":{"items":[{"id":"thread","date":"2026-10-16T00:00:00Z","snippet":"Message","messageCount":1,"read":true,"addresses":["+1 602 555 0100","+1 480 555 0101"]}],"ownNumbers":["6025550100"],"snippets":{}}})).unwrap();
+        replies.reply(generation, serde_json::json!({"id":request["id"],"result":{"items":[{"id":"thread","date":"2026-10-16T00:00:00Z","snippet":"Message","messageCount":1,"read":true,"addresses":["+1 602 555 0100","+1 480 555 0101"]}],"ownNumbers":["6025550100"],"snippetCandidates":{}}})).unwrap();
     });
     let result = execute(
         &db,
@@ -260,4 +260,26 @@ async fn conversation_provider_reports_raw_candidates_and_rust_filters_own_numbe
     );
     responder.await.unwrap();
     host.disconnect(generation);
+}
+
+#[test]
+fn mms_page_uses_raw_parts_for_body_attachments_and_address_fallback() {
+    let row = serde_json::json!({
+        "id":"mms_1", "body":"", "isMms":true, "address":"",
+        "date":"2026-10-16T00:00:00Z",
+        "addressCandidates":[{"value":"insert-address-token","isSender":true}],
+        "parts":[
+            {"path":"text","contentType":"text/plain","name":"","fileName":"","hasData":false,"text":" message "},
+            {"path":"content://mms/part/2","contentType":"image/jpeg","name":"","fileName":"photo.jpg","hasData":true,"text":""}
+        ]
+    });
+    let items = page(vec![row], 0, 10, "canonical").unwrap();
+    assert_eq!(items[0]["body"], "message");
+    assert_eq!(items[0]["address"], "canonical");
+    assert_eq!(
+        items[0]["attachments"],
+        serde_json::json!([{"path":"content://mms/part/2","contentType":"image/jpeg","name":"photo.jpg"}])
+    );
+    assert!(items[0].get("parts").is_none());
+    assert!(page(vec![serde_json::json!({"isMms":true,"date":"2026-10-16T00:00:00Z","addressCandidates":[]})], 0, 10, "").is_err());
 }

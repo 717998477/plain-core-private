@@ -96,6 +96,15 @@ async fn rust_sweep_honors_radio_pause_and_real_tls_verdicts() {
     let peer = chat_store::peers::get(&state.db, "live").unwrap().unwrap();
     assert_eq!(peer.key, "preserved-key");
     assert_eq!(peer.name, "fixture");
+    let peer_update = events.recv().await.unwrap();
+    assert_eq!(
+        peer_update.event_type,
+        plain_rs::chat::events::WS_PEER_UPDATED
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&peer_update.payload).unwrap(),
+        json!({"id":"live"})
+    );
     let invalidation = events.recv().await.unwrap();
     assert_eq!(invalidation.event_type, EVENT_UPDATED);
     let first = events.recv().await.unwrap();
@@ -167,5 +176,71 @@ async fn nearby_invalidation_and_public_device_payloads_have_distinct_contracts(
     Context::from(&state).seen(device, true, false).unwrap();
     assert_eq!(events.recv().await.unwrap().event_type, EVENT_UPDATED);
     assert!(events.try_recv().is_err());
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn resident_peer_changes_emit_one_committed_notice_without_secrets_or_visibility_inference() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = server.runtime_state();
+    let mut peer = plain_rs::db::DPeer::new(
+        "fixture-peer",
+        "old",
+        "192.0.2.1",
+        Some(2443),
+        plain_rs::chat::enums::DeviceType::Phone,
+    );
+    peer.status = plain_rs::chat::enums::PeerStatus::Paired;
+    peer.key = "fixture-chat-key".into();
+    peer.token = "fixture-session-token".into();
+    plain_rs::db::chat_store::peers::save(
+        &state.db,
+        &[peer],
+        plain_rs::db::chat_store::SaveMode::Insert,
+    )
+    .unwrap();
+    let mut events = state.events.subscribe();
+    let device = Device {
+        id: "fixture-peer".into(),
+        name: "new".into(),
+        ips: vec!["192.0.2.2".into()],
+        port: 8443,
+        device_type: "COMPUTER".into(),
+        version: "1".into(),
+        platform: "test".into(),
+        last_seen_at: "2026-10-10T00:00:00.000Z".into(),
+        discovery_methods: vec!["LAN".into()],
+    };
+    let context = Context::from(&state);
+    context.seen(device.clone(), false, true).unwrap();
+    let event = events.try_recv().unwrap();
+    assert_eq!(event.event_type, plain_rs::chat::events::WS_PEER_UPDATED);
+    assert!(!event.is_internal());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&event.payload).unwrap(),
+        json!({"id":"fixture-peer"})
+    );
+    let peer = plain_rs::db::chat_store::peers::get(&state.db, "fixture-peer")
+        .unwrap()
+        .unwrap();
+    assert_eq!(peer.name, "new");
+    assert_eq!(peer.ip, "192.0.2.2");
+    assert_eq!(peer.port, Some(8443));
+    assert_eq!(peer.key, "fixture-chat-key");
+    assert!(events.try_recv().is_err());
+    context.seen(device.clone(), false, true).unwrap();
+    assert!(events.try_recv().is_err());
+    let mut transient = device.clone();
+    transient.name = "not-resident".into();
+    context.seen(transient, false, false).unwrap();
+    assert!(events.try_recv().is_err());
+    assert_eq!(
+        plain_rs::db::chat_store::peers::get(&state.db, "fixture-peer")
+            .unwrap()
+            .unwrap()
+            .name,
+        "new"
+    );
     server.shutdown().await;
 }

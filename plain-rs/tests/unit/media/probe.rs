@@ -310,3 +310,47 @@ fn metadata_reader_skips_cover_payloads_while_preserving_text_and_duration() {
         reader.bytes_read
     );
 }
+
+#[test]
+fn audio_probe_preserves_album_and_album_artist_from_the_shared_reader() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/audio-album-tagged.mp3");
+    let facts = probe_media(path.to_str().unwrap(), "audio");
+    assert!(facts.parsed);
+    assert_eq!(facts.title, "Album Fixture");
+    assert_eq!(facts.artist, "Track Artist");
+    assert_eq!(facts.album, "Shared Album");
+    assert_eq!(facts.album_artist, "Album Artist");
+    assert!(facts.duration_ms > 0);
+}
+
+#[test]
+fn oversized_album_tags_keep_duration_but_are_unavailable_for_replacing_stored_tags() {
+    let payload = vec![7; 2 * 1024 * 1024];
+    let mut frame = b"TALB".to_vec();
+    frame.extend((payload.len() as u32).to_be_bytes());
+    frame.extend([0, 0]);
+    frame.extend(payload);
+    let mut bytes = b"ID3\x03\0\0".to_vec();
+    for shift in [21, 14, 7, 0] {
+        bytes.push(((frame.len() >> shift) & 127) as u8);
+    }
+    bytes.extend(frame);
+    bytes.extend(
+        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/audio-untagged.mp3"))
+            .unwrap(),
+    );
+    let mut source = CountedAudio {
+        reader: std::io::Cursor::new(bytes),
+        bytes_read: 0,
+    };
+    let facts = probe_audio_reader(&mut source);
+    assert!(!facts.parsed);
+    assert!(facts.duration_available);
+    assert!(facts.duration_ms > 0);
+    assert!(facts.album.is_empty());
+    assert!(
+        source.bytes_read < 128 * 1024,
+        "{} bytes read",
+        source.bytes_read
+    );
+}

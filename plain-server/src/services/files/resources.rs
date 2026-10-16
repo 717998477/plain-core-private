@@ -54,6 +54,22 @@ pub(crate) async fn read(
     native(operation, path, params).await
 }
 
+pub(crate) async fn write(host: &Host, source: &Path, destination: &str) -> Result<(), String> {
+    if !destination.starts_with("content://") {
+        return Err("Unsupported writable resource".into());
+    }
+    let result = host
+        .call_wait(
+            "systemFileResource",
+            json!({"operation":"write", "path":destination, "params":{"source":source}}),
+        )
+        .await?;
+    if result.as_bool() != Some(true) {
+        return Err("Resource write failed".into());
+    }
+    Ok(())
+}
+
 async fn native(operation: &str, path: &str, params: Value) -> Result<Value, String> {
     match operation {
         "mime" => Ok(Value::String(

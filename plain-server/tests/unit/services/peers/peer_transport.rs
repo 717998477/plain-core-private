@@ -1,5 +1,6 @@
 #![cfg(feature = "http_transport")]
 use super::*;
+use plain_rs::db::chat_store::peers;
 use std::sync::Arc;
 fn peer() -> DPeer {
     let mut p = DPeer::new(
@@ -45,7 +46,20 @@ async fn rust_falls_back_from_unavailable_socket_and_authenticates_raw_ble_busin
         while let Some(request) = receiver.recv().await {
             let response = match request["method"].as_str().unwrap() {
                 "peerTransportCapabilities" => json!({"id":request["id"],"result":["BLE","AWARE"]}),
+                "peerStartAware" | "peerStopAware" => {
+                    json!({"id":request["id"],"result":true})
+                }
                 "peerTransportSocketOpen" => {
+                    let params = request["params"].as_object().unwrap();
+                    assert_eq!(params.len(), 2);
+                    assert!(
+                        params
+                            .get("peerId")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some()
+                    );
+                    assert!(params.contains_key("token"));
+
                     json!({"id":request["id"],"error":"SDK network unavailable"})
                 }
                 "peerTransportSocketClose" | "peerTransportSocketCloseAll" => {
@@ -124,7 +138,8 @@ async fn cancel_releases_route_and_malformed_raw_ble_response_is_terminal() {
 async fn aware_config_uses_current_pairing_identity_and_rejects_corrupt_keys() {
     let (_dir, server, state) = state();
     state.prefs.set_user("https_port", 2443).unwrap();
-    let config = aware_config(&state, "fixture").unwrap();
+    let config =
+        aware_config_for_peer(&state, &peers::get(&state.db, "fixture").unwrap().unwrap()).unwrap();
     assert!(config.is_client);
     assert_eq!(config.local_port, 2443);
     assert_eq!(
@@ -132,11 +147,21 @@ async fn aware_config_uses_current_pairing_identity_and_rejects_corrupt_keys() {
         plain_rs::utils::base64::base64_encode(&[7; 32])
     );
     let native = server.native_graphql().unwrap();
-    let response = native.execute(async_graphql::Request::new("{ activePeerTransfers { peerId transport } peerAwareConfig(id: \"fixture\") { isClient localPort pmk } }")).await;
+    let response = native
+        .execute(async_graphql::Request::new(
+            "{ activePeerTransfers { peerId transport } }",
+        ))
+        .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
     assert_eq!(data["activePeerTransfers"], json!([]));
-    assert_eq!(data["peerAwareConfig"]["localPort"], 2443);
+    let removed = native
+        .execute(async_graphql::Request::new(
+            "{ __type(name: \"PeerAwareConfig\") { name } }",
+        ))
+        .await;
+    assert!(removed.errors.is_empty(), "{:?}", removed.errors);
+    assert!(removed.data.into_json().unwrap()["__type"].is_null());
     let mut corrupt = peers::get(&state.db, "fixture").unwrap().unwrap();
     corrupt.key = "%%%".into();
     peers::save(
@@ -145,6 +170,8 @@ async fn aware_config_uses_current_pairing_identity_and_rejects_corrupt_keys() {
         plain_rs::db::chat_store::SaveMode::Update,
     )
     .unwrap();
-    assert!(aware_config(&state, "fixture").is_err());
+    assert!(
+        aware_config_for_peer(&state, &peers::get(&state.db, "fixture").unwrap().unwrap()).is_err()
+    );
     server.shutdown().await;
 }

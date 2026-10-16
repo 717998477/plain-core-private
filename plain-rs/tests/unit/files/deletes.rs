@@ -66,6 +66,9 @@ fn deleted_receipts_cascade_atomically_and_preserve_failed_and_foreign_records()
 
 fn catalog_file(data_type: DataType, path: &str) -> crate::db::MediaFileMetadata {
     crate::db::MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type,
         path: path.into(),
         title: "Title".into(),

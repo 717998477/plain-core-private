@@ -10,6 +10,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 const WS_MDNS_UPDATED: &'static str = "MDNS_UPDATED";
+#[cfg(test)]
+pub(crate) static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static OWNER: tokio::sync::Mutex<Option<String>> = tokio::sync::Mutex::const_new(None);
 struct Session {
     browser: MdnsServiceBrowser,
@@ -24,6 +26,7 @@ struct Session {
     manual_scanning: bool,
     manual_capture: bool,
     debug_sessions: std::collections::HashSet<uuid::Uuid>,
+    discovery_sessions: plain_rs::discovery::sessions::DiscoverySessions,
 }
 impl Session {
     fn set_scanning(&self, active: bool) -> Result<bool> {
@@ -87,6 +90,8 @@ impl Default for Runtime {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Request {
+    Acquire { token: uuid::Uuid, owner: String },
+    Release { token: uuid::Uuid, owner: String },
     Receiver {},
     Start {},
     Stop {},
@@ -158,17 +163,6 @@ impl Runtime {
         {
             Vec::new()
         }
-    }
-
-    /// Whether the manual scan loop the discovery UI drives is running. This
-    /// is the value behind the `isDiscovering` query, not the host
-    /// responder's own running flag.
-    pub(crate) fn manual_scanning(&self) -> bool {
-        self.session
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|session| session.manual_scanning)
     }
 
     pub(crate) fn snapshot(&self) -> Value {
@@ -357,6 +351,7 @@ impl Runtime {
             manual_scanning: false,
             manual_capture: false,
             debug_sessions: std::collections::HashSet::new(),
+            discovery_sessions: Default::default(),
         });
         *owner = Some(self.id.clone());
         host_responder::ensure_started(&hostname.read().unwrap());
@@ -374,6 +369,7 @@ impl Runtime {
         if matches!(
             request,
             Request::Stop {}
+                | Request::Release { .. }
                 | Request::Unpublish {}
                 | Request::Restart {}
                 | Request::Update {}
@@ -396,6 +392,17 @@ impl Runtime {
         if !matches!(
             request,
             Request::Stop {}
+                | Request::Release { .. }
+                | Request::Unpublish {}
+                | Request::DebugStop { .. }
+                | Request::Capture { enabled: false }
+        ) {
+            crate::services::capabilities::require(&state.host, "PEER_DISCOVERY").await?;
+        }
+        if !matches!(
+            request,
+            Request::Stop {}
+                | Request::Release { .. }
                 | Request::Unpublish {}
                 | Request::DebugStop { .. }
                 | Request::Capture { enabled: false }
@@ -420,6 +427,22 @@ impl Runtime {
             let mut guard = self.session.lock().unwrap();
             let session = guard.as_mut().unwrap();
             match request {
+                Request::Acquire { token, owner } => {
+                    let mut sessions = session.discovery_sessions.clone();
+                    sessions.acquire(&owner, token)?;
+                    started = session.set_scanning(true)?;
+                    session.discovery_sessions = sessions;
+                }
+                Request::Release { token, owner } => {
+                    let mut sessions = session.discovery_sessions.clone();
+                    sessions.release(&owner, token)?;
+                    session.set_scanning(
+                        session.manual_scanning
+                            || !session.debug_sessions.is_empty()
+                            || sessions.active(),
+                    )?;
+                    session.discovery_sessions = sessions;
+                }
                 Request::Receiver {} => {}
                 Request::Capture { enabled } => {
                     session.manual_capture = enabled;
@@ -440,21 +463,28 @@ impl Runtime {
                 }
                 Request::DebugStop { token } => {
                     let token = uuid::Uuid::parse_str(&token)?;
+                    session.set_scanning(
+                        session.manual_scanning
+                            || session.discovery_sessions.active()
+                            || session
+                                .debug_sessions
+                                .iter()
+                                .any(|existing| existing != &token),
+                    )?;
                     session.debug_sessions.remove(&token);
                     plain_rs::protocols::mdns::packet_capture::set_enabled(
                         session.manual_capture || !session.debug_sessions.is_empty(),
                     );
-                    session.set_scanning(
-                        session.manual_scanning || !session.debug_sessions.is_empty(),
-                    )?;
                 }
                 Request::Start {} => {
                     started = session.set_scanning(true)?;
                     session.manual_scanning = true;
                 }
                 Request::Stop {} => {
+                    session.set_scanning(
+                        !session.debug_sessions.is_empty() || session.discovery_sessions.active(),
+                    )?;
                     session.manual_scanning = false;
-                    session.set_scanning(!session.debug_sessions.is_empty())?;
                 }
                 Request::Browse {} => session.browser.send_ptr_query(),
                 Request::Restart {} => {
@@ -487,6 +517,48 @@ impl Runtime {
         snapshot["started"] = json!(started);
         Ok(snapshot)
     }
+    fn release_discovery_owner_locked(&self, owner: &str) -> Result<()> {
+        let mut guard = self.session.lock().unwrap();
+        let Some(session) = guard.as_mut() else {
+            return Ok(());
+        };
+        let mut sessions = session.discovery_sessions.clone();
+        if !sessions.release_owner(owner) {
+            return Ok(());
+        }
+        session.set_scanning(
+            session.manual_scanning || !session.debug_sessions.is_empty() || sessions.active(),
+        )?;
+        session.discovery_sessions = sessions;
+        self.emit(&session.context, None, false);
+        Ok(())
+    }
+
+    pub(crate) async fn release_native_scope(
+        &self,
+        scope: &crate::native::graphql::NativeRequestScope,
+    ) -> Result<()> {
+        let _operation = self.operation.lock().await;
+        self.release_discovery_owner_locked(&format!("native:{}", scope.id()))
+    }
+
+    pub(crate) async fn release_discovery_client(
+        &self,
+        state: &ServerState,
+        client_id: &str,
+    ) -> Result<()> {
+        let _operation = self.operation.lock().await;
+        if state
+            .main_ws
+            .snapshot()
+            .iter()
+            .any(|client| client == client_id)
+        {
+            return Ok(());
+        }
+        self.release_discovery_owner_locked(&remote_discovery_owner(client_id))
+    }
+
     pub(crate) async fn host_connected(state: ServerState, generation: u64) {
         if state.mdns.session.lock().unwrap().is_none() {
             return;
@@ -602,4 +674,8 @@ fn browser_services(
     #[cfg(target_os = "macos")]
     services.extend(session.system_browser.snapshot());
     services
+}
+
+pub(crate) fn remote_discovery_owner(client_id: &str) -> String {
+    format!("remote:{client_id}")
 }

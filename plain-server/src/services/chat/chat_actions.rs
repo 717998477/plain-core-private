@@ -34,19 +34,40 @@ pub(crate) async fn send_many(
     targets: Vec<String>,
     content: String,
 ) -> Result<Vec<DChat>> {
-    ensure!(targets.len() <= 128, "Too many share targets");
-    let targets = targets
-        .iter()
-        .map(|target| message_commands::target(target))
-        .collect::<Result<Vec<_>>>()?;
+    let targets = validate_targets(&targets)?;
+    if targets.is_empty() {
+        return Ok(vec![]);
+    }
     let rows =
         plain_rs::chat::messages::message_lifecycle::create_many(&state.db, &targets, &content)?;
+    deliver_many(state, rows).await
+}
+
+pub(crate) async fn forward_many(
+    state: &ServerState,
+    id: &str,
+    targets: Vec<String>,
+) -> Result<Vec<DChat>> {
+    let targets = validate_targets(&targets)?;
+    let rows = plain_rs::chat::messages::message_lifecycle::forward_many(&state.db, id, &targets)?;
+    deliver_many(state, rows).await
+}
+
+async fn deliver_many(state: &ServerState, rows: Vec<DChat>) -> Result<Vec<DChat>> {
     for row in &rows {
         committed(state, row, events::WS_MESSAGE_CREATED);
     }
     futures_util::future::join_all(rows.into_iter().map(|row| deliver(state, row)))
         .await
         .into_iter()
+        .collect()
+}
+
+pub(crate) fn validate_targets(targets: &[String]) -> Result<Vec<(String, String)>> {
+    ensure!(targets.len() <= 128, "Too many share targets");
+    targets
+        .iter()
+        .map(|target| message_commands::target(target))
         .collect()
 }
 

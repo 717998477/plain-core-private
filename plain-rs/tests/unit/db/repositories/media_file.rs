@@ -2,6 +2,9 @@ use super::*;
 
 fn metadata(path: &str) -> MediaFileMetadata {
     MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type: DataType::Image,
         path: path.into(),
         title: "Photo".into(),
@@ -170,4 +173,65 @@ fn availability_aware_batches_are_atomic_and_new_unknown_files_are_not_hidden() 
         .remove(0);
     assert_eq!(inserted.path, "/photos/new.heic");
     assert_eq!(db.media_file_count(DataType::Image).unwrap(), 2);
+}
+
+#[test]
+fn forgetting_returns_the_exact_committed_types_and_retains_the_count_contract() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(&directory.path().join("data.db")).unwrap();
+    let image = metadata("/shared");
+    let mut audio = image.clone();
+    audio.data_type = DataType::Audio;
+    db.record_media_files(&[image, audio]).unwrap();
+    let mut types = db.forget_media_file_types("/shared").unwrap();
+    types.sort_unstable();
+    assert_eq!(types, [1, 3]);
+    assert_eq!(db.forget_media_file("/shared").unwrap(), 0);
+    db.record_media_files(&[metadata("/another")]).unwrap();
+    assert_eq!(db.forget_media_file("/another").unwrap(), 1);
+}
+
+#[test]
+fn native_album_grouping_survives_failed_probes_and_clears_removed_album_tags() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(&directory.path().join("data.db")).unwrap();
+    let mut one = metadata("/album/one.mp3");
+    one.data_type = DataType::Audio;
+    one.album = "Shared Album".into();
+    one.album_artist = "Album Artist".into();
+    one.artist = "Track One".into();
+    let mut two = one.clone();
+    two.path = "/album/two.mp3".into();
+    two.artist = "Track Two".into();
+    let rows = db.record_media_files(&[one.clone(), two]).unwrap();
+    assert!(!rows[0].album_id.is_empty());
+    assert_eq!(rows[0].album_id, rows[1].album_id);
+    let track = crate::media::audio::queue::track_by_id(&db, &rows[0].id).unwrap();
+    assert_eq!(track.album_id, rows[0].album_id);
+    let mut unreadable = one.clone();
+    unreadable.album.clear();
+    unreadable.album_artist.clear();
+    let retained = db
+        .record_media_file_reads(&[MediaFileMetadataRead {
+            metadata: unreadable.clone(),
+            available: Default::default(),
+        }])
+        .unwrap()
+        .remove(0);
+    assert_eq!(retained.album, "Shared Album");
+    assert_eq!(retained.album_artist, "Album Artist");
+    assert_eq!(retained.album_id, rows[0].album_id);
+    let cleared = db.record_media_files(&[unreadable]).unwrap().remove(0);
+    assert_eq!(cleared.id, rows[0].id);
+    assert!(cleared.album_id.is_empty());
+    assert!(
+        crate::media::audio::queue::track_by_id(&db, &cleared.id)
+            .unwrap()
+            .album_id
+            .is_empty()
+    );
+    one.album = "New Album".into();
+    let changed = db.record_media_files(&[one]).unwrap().remove(0);
+    assert_eq!(changed.id, rows[0].id);
+    assert_ne!(changed.album_id, rows[0].album_id);
 }

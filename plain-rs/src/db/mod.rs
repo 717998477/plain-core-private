@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+mod state;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -26,8 +27,8 @@ pub use repositories::browse;
 pub use repositories::devtools;
 #[cfg(feature = "library")]
 pub use repositories::{
-    audio_catalog, audio_queue, favorite_folder, image_editor_project, media_play_history,
-    notes_feeds, tag,
+    audio_catalog, audio_queue, favorite_folder, image_catalog, image_editor_project,
+    media_play_history, notes_feeds, tag,
 };
 #[cfg(feature = "chat")]
 pub use repositories::{bookmark, chat_store};
@@ -49,7 +50,7 @@ pub use repositories::db_time::{iso_from_unix_millis, now_iso, now_millis, short
 #[derive(Clone)]
 pub struct Db(
     Arc<Mutex<Connection>>,
-    Arc<Mutex<()>>,
+    Arc<state::State>,
     #[cfg(feature = "library")] Arc<crate::media::audio::state::Runtime>,
 );
 
@@ -69,10 +70,9 @@ impl Db {
         }
         #[cfg(not(feature = "library"))]
         {
-            Ok(Self(
-                Arc::new(Mutex::new(Self::open_connection(db_path)?)),
-                Arc::new(Mutex::new(())),
-            ))
+            let connection = Self::open_connection(db_path)?;
+            let state = state::State::new(&connection);
+            Ok(Self(Arc::new(Mutex::new(connection)), Arc::new(state)))
         }
     }
 
@@ -81,9 +81,11 @@ impl Db {
         db_path: &Path,
         prefs: Arc<crate::prefs::Prefs>,
     ) -> rusqlite::Result<Self> {
+        let connection = Self::open_connection(db_path)?;
+        let state = state::State::new(&connection);
         Ok(Self(
-            Arc::new(Mutex::new(Self::open_connection(db_path)?)),
-            Arc::new(Mutex::new(())),
+            Arc::new(Mutex::new(connection)),
+            Arc::new(state),
             Arc::new(
                 crate::media::audio::state::Runtime::new(prefs)
                     .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
@@ -130,12 +132,15 @@ impl Db {
         schema::init(&conn)?;
         #[cfg(feature = "library")]
         repositories::audio_catalog::init(&conn)?;
+        #[cfg(feature = "library")]
+        repositories::image_catalog::init(&conn)?;
         Ok(conn)
     }
 
     #[cfg(feature = "chat")]
     pub(crate) fn app_files_lock(&self) -> std::io::Result<std::sync::MutexGuard<'_, ()>> {
         self.1
+            .app_files
             .lock()
             .map_err(|_| std::io::Error::other("app file store lock poisoned"))
     }
@@ -176,6 +181,11 @@ impl Db {
             let _ = std::fs::remove_file(path);
         }
         result
+    }
+
+    #[cfg(feature = "chat")]
+    pub fn peer_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.1.peers.subscribe()
     }
 
     pub fn with_conn<F, T>(&self, f: F) -> T

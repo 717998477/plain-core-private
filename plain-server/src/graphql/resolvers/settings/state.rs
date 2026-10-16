@@ -77,6 +77,17 @@ impl PreferencesMutation {
                 return Ok(updated(changed));
             }
         }
+        if matches!(
+            command,
+            plain_rs::prefs::system::Command::PatchUpdate { .. }
+        ) {
+            if let Some(state) = ctx.data_opt::<crate::assembly::server::ServerState>() {
+                let changed =
+                    crate::services::settings::updates::apply_settings(state, command).await?;
+                notify(ctx, changed);
+                return Ok(updated(changed));
+            }
+        }
         let changed = command.apply(prefs)?;
         notify(ctx, changed);
         Ok(updated(changed))

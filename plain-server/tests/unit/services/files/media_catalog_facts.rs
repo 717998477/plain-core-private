@@ -2,6 +2,10 @@ use super::*;
 
 fn row(data_type: DataType) -> MediaFileRow {
     MediaFileRow {
+        album: String::new(),
+        album_artist: String::new(),
+        album_id: "native-album".into(),
+
         id: "id".into(),
         data_type: data_type.kind(),
         path: "/media/one".into(),
@@ -49,6 +53,7 @@ fn audio_facts_carry_the_audio_only_fields() {
     assert_eq!(facts["artist"], json!("Artist"));
     assert_eq!(facts["durationMs"], json!(10));
     assert_eq!(facts["albumFileId"], json!("album"));
+    assert_eq!(facts["albumId"], json!("native-album"));
     for key in ["takenAt", "width", "height", "rotation"] {
         assert!(facts.get(key).is_none());
     }

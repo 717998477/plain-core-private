@@ -59,22 +59,9 @@ fn record(r: plain_rs::db::PomodoroItemRow) -> async_graphql::Result<PomodoroRec
     })
 }
 #[derive(Default)]
-pub struct PomodoroHostMutation;
+pub struct PomodoroControlMutation;
 #[Object]
-impl PomodoroHostMutation {
-    async fn configure_pomodoro_day(
-        &self,
-        ctx: &Context<'_>,
-        date: String,
-        day_start: Instant,
-    ) -> async_graphql::Result<PomodoroToday> {
-        Ok(ctx
-            .data::<Arc<Service>>()?
-            .configure_day(&date, day_start.0)?)
-    }
-    async fn tick_pomodoro(&self, ctx: &Context<'_>) -> async_graphql::Result<PomodoroTickResult> {
-        Ok(ctx.data::<Arc<Service>>()?.tick(false)?)
-    }
+impl PomodoroControlMutation {
     async fn skip_pomodoro(&self, ctx: &Context<'_>) -> async_graphql::Result<PomodoroTickResult> {
         Ok(ctx.data::<Arc<Service>>()?.tick(true)?)
     }

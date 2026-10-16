@@ -247,3 +247,99 @@ fn a_collision_after_merge_destination_selection_never_overwrites_the_other_writ
     assert_eq!(std::fs::read(&committed).unwrap(), b"uploaded");
     assert!(!staged.exists());
 }
+
+#[tokio::test]
+async fn empty_chunk_atomically_replaces_existing_file_without_losing_raw_byte_support() {
+    let directory = tempfile::tempdir().unwrap();
+    let chunks = directory.path().join("chunks");
+    tokio::fs::create_dir(&chunks).await.unwrap();
+    tokio::fs::write(chunks.join("chunk_0"), []).await.unwrap();
+    let target = directory.path().join("existing.bin");
+    tokio::fs::write(&target, [0, 255, 128, 0]).await.unwrap();
+    let (_, size) = merge(
+        None,
+        &chunks,
+        1,
+        0,
+        Kind::File {
+            path: target.clone(),
+            replace: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(size, 0);
+    assert_eq!(tokio::fs::read(target).await.unwrap(), Vec::<u8>::new());
+}
+
+#[tokio::test]
+async fn resource_commit_receives_complete_bytes_and_staging_is_removed_afterward() {
+    let directory = tempfile::tempdir().unwrap();
+    let chunks = directory.path().join("chunks");
+    tokio::fs::create_dir(&chunks).await.unwrap();
+    tokio::fs::write(chunks.join("chunk_0"), [0, 255])
+        .await
+        .unwrap();
+    tokio::fs::write(chunks.join("chunk_1"), [128, 0])
+        .await
+        .unwrap();
+    let staged = Arc::new(Mutex::new(None));
+    let observed = staged.clone();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    let kind = Kind::Resource {
+        name: "fixture.bin".into(),
+        write: Arc::new(move |path| {
+            let observed = observed.clone();
+            let count = count.clone();
+            Box::pin(async move {
+                assert_eq!(tokio::fs::read(&path).await?, [0, 255, 128, 0]);
+                *observed.lock().unwrap() = Some(path);
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+        }),
+    };
+    assert_eq!(
+        merge(None, &chunks, 2, 4, kind).await.unwrap(),
+        ("fixture.bin".into(), 4)
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!staged.lock().unwrap().as_ref().unwrap().exists());
+}
+
+#[tokio::test]
+async fn incomplete_upload_never_opens_a_writable_resource() {
+    let directory = tempfile::tempdir().unwrap();
+    tokio::fs::write(directory.path().join("chunk_0"), [1])
+        .await
+        .unwrap();
+    let kind = Kind::Resource {
+        name: "fixture.bin".into(),
+        write: Arc::new(|_| {
+            Box::pin(async { panic!("Incomplete input must never reach the platform writer") })
+        }),
+    };
+    assert!(merge(None, directory.path(), 2, 2, kind).await.is_err());
+}
+
+#[tokio::test]
+async fn resource_failure_removes_merged_staging_and_preserves_input_chunks_for_retry() {
+    let directory = tempfile::tempdir().unwrap();
+    tokio::fs::write(directory.path().join("chunk_0"), [1, 255])
+        .await
+        .unwrap();
+    let staged = Arc::new(Mutex::new(None));
+    let observed = staged.clone();
+    let kind = Kind::Resource {
+        name: "fixture.bin".into(),
+        write: Arc::new(move |path| {
+            *observed.lock().unwrap() = Some(path);
+            Box::pin(async { anyhow::bail!("Fixture resource write failure") })
+        }),
+    };
+    let error = merge(None, directory.path(), 1, 2, kind).await.unwrap_err();
+    assert!(error.to_string().contains("Fixture resource write failure"));
+    assert!(!staged.lock().unwrap().as_ref().unwrap().exists());
+    assert!(directory.path().join("chunk_0").exists());
+}

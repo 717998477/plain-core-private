@@ -77,13 +77,6 @@ impl ImageModelsQuery {
 pub struct ImageModelsMutation;
 #[Object]
 impl ImageModelsMutation {
-    async fn restore_image_search(&self, ctx: &Context<'_>) -> Result<bool> {
-        ctx.data::<Arc<Runtime>>()?
-            .enable(true)
-            .await
-            .map_err(async_graphql::Error::new)?;
-        Ok(true)
-    }
     async fn release_image_model_memory(&self, ctx: &Context<'_>) -> Result<bool> {
         ctx.data::<Arc<Runtime>>()?
             .release()

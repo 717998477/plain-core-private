@@ -3,6 +3,9 @@ use plain_rs::db::MediaFileMetadata;
 
 fn file(data_type: DataType, path: &str, title: &str, size_bytes: i64) -> MediaFileMetadata {
     MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type,
         path: path.into(),
         title: title.into(),

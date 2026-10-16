@@ -84,27 +84,27 @@ async fn startup_properties_need_no_host_and_keep_dynamic_samples_fresh() {
         .unwrap();
     assert_eq!(fixed, json!({"appVersion":"1.2.3","model":"device"}));
     let (generation, mut incoming) = host.connect();
-    for address in ["first", "second"] {
+    for active in [true, false] {
         let caller = host.clone();
         let request = tokio::spawn(async move {
             caller
                 .call(
                     "systemProperties",
-                    json!({"names":["model","ipv4Addresses"]}),
+                    json!({"names":["model","wifiAwareRunning"]}),
                 )
                 .await
                 .unwrap()
         });
         let sample = incoming.recv().await.unwrap();
-        assert_eq!(sample["params"]["names"], json!(["ipv4Addresses"]));
+        assert_eq!(sample["params"]["names"], json!(["wifiAwareRunning"]));
         host.reply(
             generation,
-            json!({"id":sample["id"],"result":{"ipv4Addresses":[address]}}),
+            json!({"id":sample["id"],"result":{"wifiAwareRunning":active}}),
         )
         .unwrap();
         assert_eq!(
             request.await.unwrap(),
-            json!({"model":"device","ipv4Addresses":[address]})
+            json!({"model":"device","wifiAwareRunning":active})
         );
     }
     assert!(incoming.try_recv().is_err());
@@ -112,7 +112,6 @@ async fn startup_properties_need_no_host_and_keep_dynamic_samples_fresh() {
 #[test]
 fn dynamic_properties_cannot_be_frozen_as_startup_information() {
     for key in [
-        "ipv4Addresses",
         "wifiAwareRunning",
         "display.width",
         "batteryLevel",
@@ -139,6 +138,11 @@ fn startup_values_are_validated_before_the_host_is_created() {
         ("android.sdkVersion", json!(-1)),
         ("android.sdkVersion", json!(2147483648_i64)),
         ("android.buildTime", json!("today")),
+        ("supportedAbis", json!("arm64-v8a")),
+        ("supportedAbis", json!(["arm64-v8a", 1])),
+        ("supportedAbis", json!([""])),
+        ("updateSource", json!("https://example.test/releases")),
+        ("updateSource", json!({"url":123})),
     ] {
         let properties = [(key.into(), value)].into_iter().collect();
         let error = Host::with_startup_properties(properties).err().unwrap();
@@ -151,6 +155,20 @@ fn startup_values_are_validated_before_the_host_is_created() {
     assert!(Host::with_startup_properties(properties).is_ok());
 }
 
+#[test]
+fn startup_accepts_sdk_abi_arrays_and_optional_update_sources() {
+    for properties in [
+        json!({"supportedAbis":["arm64-v8a","armeabi-v7a"],"updateSource":{"url":"https://example.test/releases","pageUrl":"https://example.test","assets":[{"nameSuffix":".apk"}]}}),
+        json!({"supportedAbis":[],"updateSource":null}),
+    ] {
+        let properties = properties.as_object().unwrap().clone();
+        let host = Host::with_startup_properties(properties.clone()).unwrap();
+        for (key, value) in properties {
+            assert_eq!(host.startup_property(&key), Some(&value));
+        }
+    }
+}
+
 #[tokio::test]
 async fn absent_fixed_values_fail_without_a_host_request() {
     let host = Host::default();
@@ -158,7 +176,7 @@ async fn absent_fixed_values_fail_without_a_host_request() {
     let error = host
         .call(
             "systemProperties",
-            json!({"names":["model","ipv4Addresses"]}),
+            json!({"names":["model","wifiAwareRunning"]}),
         )
         .await
         .unwrap_err();
@@ -170,7 +188,7 @@ async fn absent_fixed_values_fail_without_a_host_request() {
 async fn unknown_properties_never_fall_back_to_dynamic_host_requests() {
     let host = Host::default();
     let (_generation, mut incoming) = host.connect();
-    for name in ["dataDir", "systemDbPath", "unknown"] {
+    for name in ["dataDir", "systemDbPath", "ipv4Addresses", "unknown"] {
         let error = host
             .call("systemProperties", json!({"names":["language", name]}))
             .await

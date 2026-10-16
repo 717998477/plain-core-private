@@ -84,11 +84,22 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
             }
             let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
             let result = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => json!([]),
                 "peerStartAware" => {
+                    let port = if count == 0 { 443 } else { 5443 };
+                    assert_eq!(
+                        request["params"],
+                        json!({
+                            "peer":{"id":"peer","port":port},
+                            "config":{"pmk":plain_rs::utils::base64::base64_encode(&[7;32]),"isClient":true,"localPort":8443}
+                        })
+                    );
+
                     let result = json!(count == 1);
                     count += 1;
                     result
                 }
+                "peerStopAware" => json!(true),
                 "peerTransportCapabilities" => json!(["BLE"]),
                 "peerTransportBleExchange" => {
                     let wire = crate::services::discovery::ble_http::test_peer_wire(
@@ -171,6 +182,11 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
     assert_eq!(messages::get(&db, id).unwrap().unwrap().from_id, "peer");
     assert!(content["data"]["renamed"][0]["channelId"].is_null());
     for expected in [false, true] {
+        if expected {
+            let mut current = peers::get(&db, "peer").unwrap().unwrap();
+            current.port = Some(5443);
+            peers::save(&db, &[current], SaveMode::Update).unwrap();
+        }
         let response = client
             .post(&public_url)
             .header("c-id", "peer")

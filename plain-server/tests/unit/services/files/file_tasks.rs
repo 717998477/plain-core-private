@@ -20,7 +20,7 @@ async fn call(port: u16, token: &str, doc: String) -> Value {
 async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_authorization() {
     let temp = tempfile::tempdir().unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[12; 32]);
-    let db_path = temp.path().join("tasks.db");
+    let db_path = temp.path().join("core/tasks.db");
     let server = ContentServer::start(
         db_path.parent().unwrap(),
         &token,
@@ -40,7 +40,7 @@ async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_auth
                 json!({"id":request["id"],"error":"synthetic permission revoked"})
             } else {
                 match request["method"].as_str().unwrap() {
-                    "fileTaskAuthorize" => {}
+                    "systemPermissionFacts" => {}
                     "fileTaskScan" => records.lock().unwrap().extend(
                         request["params"]["paths"]
                             .as_array()
@@ -50,7 +50,7 @@ async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_auth
                     ),
                     method => panic!("unexpected method {method}"),
                 }
-                json!({"id":request["id"],"result":true})
+                json!({"id":request["id"],"result":if request["method"] == "systemPermissionFacts" {json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}})} else {json!(true)}})
             };
             socket
                 .send(Message::Text(reply.to_string().into()))
@@ -134,7 +134,7 @@ async fn media_move_case(missing_destination: bool) {
     }
     let destination = base.join("target");
     std::fs::write(&destination, b"existing").unwrap();
-    let db_path = base.join("db");
+    let db_path = base.join("core/db");
     let token = plain_rs::utils::base64::base64_encode(&[16; 32]);
     let server = ContentServer::start(
         db_path.parent().unwrap(),
@@ -154,7 +154,8 @@ async fn media_move_case(missing_destination: bool) {
 
         Ok(())
     }).unwrap();
-    let duration_cache = plain_rs::media::duration_cache::DurationCache::new(&base);
+    let duration_cache =
+        plain_rs::media::duration_cache::DurationCache::new(db_path.parent().unwrap());
     duration_cache
         .save(plain_rs::media::duration_cache::Duration {
             media_type: "audio".into(),
@@ -197,7 +198,8 @@ async fn media_move_case(missing_destination: bool) {
             let request: Value = serde_json::from_str(&text).unwrap();
             let params = &request["params"];
             let result = match request["method"].as_str().unwrap() {
-                "fileTaskAuthorize" | "fileTaskScan" => json!(true),
+                "fileTaskScan" => json!(true),
+                "systemPermissionFacts" => json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}}),
                 "fileTaskMediaSnapshot" => {
                     let rows = params["paths"].as_array().unwrap().iter().filter_map(|path| {
                         let path = path.as_str().unwrap();
@@ -207,7 +209,7 @@ async fn media_move_case(missing_destination: bool) {
                             "audio" => (1,1), "video" => (2,2), "image" => (3,3), "document" => (24,4), _ => panic!("unexpected path"),
                         };
                         assert!(PathBuf::from(path).is_file());
-                        Some(json!({"mediaType":kind,"mediaId":(if old{id}else{id+10}).to_string(),"path":path}))
+                        Some(json!({"providerType":match kind {1=>2,2=>3,3=>1,_=>0},"id":(if old{id}else{id+10}).to_string(),"mimeType":if kind==24 {"text/plain"} else {"application/octet-stream"},"path":path}))
                     }).collect::<Vec<_>>();
                     json!(rows)
                 }
@@ -425,4 +427,69 @@ async fn completion_between_state_read_and_wait_is_not_lost() {
     .unwrap();
     assert_eq!(result, "done");
     assert_eq!(reads, 2);
+}
+
+#[tokio::test]
+async fn main_create_task_can_wait_for_completion_and_returns_partial_failure_receipts() {
+    let temp = tempfile::tempdir().unwrap();
+    let server = ContentServer::open(&temp.path().join("core")).unwrap();
+    let state = server.runtime_state();
+    let (_generation, mut requests) = state.host.connect();
+    let source = temp.path().join("source.txt");
+    std::fs::write(&source, b"source").unwrap();
+    let copied = temp.path().join("copied.txt");
+    let native = server.native_graphql().unwrap();
+    let document = r#"mutation($ops:[FileTaskOpInput!]!){createFileTask(type:COPY,title:"Paste selection",ops:$ops,waitForCompletion:true){id title status error doneBytes completedOps{src dst}}}"#;
+    let response = native
+        .execute(async_graphql::Request::new(document).variables(
+            async_graphql::Variables::from_json(
+                json!({"ops":[{"src":source,"dst":copied,"overwrite":false}]}),
+            ),
+        ))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let result = response.data.into_json().unwrap();
+    let task = &result["createFileTask"];
+    assert_eq!(task["status"], "DONE");
+    assert_eq!(task["title"], "Paste selection");
+    assert_eq!(task["doneBytes"], 6);
+    assert_eq!(task["completedOps"], json!([{"src":source,"dst":copied}]));
+    assert_eq!(std::fs::read(&copied).unwrap(), b"source");
+    let tree = temp.path().join("tree");
+    std::fs::create_dir(&tree).unwrap();
+    std::fs::write(tree.join("file.txt"), b"tree").unwrap();
+    let partial = temp.path().join("partial.txt");
+    let response = native.execute(async_graphql::Request::new(document).variables(async_graphql::Variables::from_json(json!({"ops":[{"src":source,"dst":partial,"overwrite":false},{"src":tree,"dst":tree.join("child"),"overwrite":false}]})))).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let result = response.data.into_json().unwrap();
+    let task = &result["createFileTask"];
+    assert_eq!(task["status"], "ERROR");
+    assert!(!task["error"].as_str().unwrap().is_empty());
+    assert_eq!(task["completedOps"], json!([{"src":source,"dst":partial}]));
+    assert_eq!(std::fs::read(&partial).unwrap(), b"source");
+    assert_eq!(std::fs::read(tree.join("file.txt")).unwrap(), b"tree");
+    assert!(requests.try_recv().is_err());
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn destructive_path_batches_validate_every_target_before_touching_any_file_or_host() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    state.file_platform.use_sdk_for_test();
+    let (_generation, mut requests) = state.host.connect();
+    let path = directory.path().join("preserved.txt");
+    std::fs::write(&path, b"preserve me").unwrap();
+    for invalid in ["", " \t\n", "/", "."] {
+        let paths = vec![path.to_string_lossy().into_owned(), invalid.into()];
+        assert!(state.files.trash_paths(paths.clone()).await.is_err());
+        assert!(state.files.delete_many(paths).await.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"preserve me");
+        assert!(requests.try_recv().is_err());
+    }
+    assert_eq!(state.files.trash_paths(vec![]).await.unwrap(), 0);
+    assert_eq!(state.files.delete_many(vec![]).await.unwrap(), 0);
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
 }

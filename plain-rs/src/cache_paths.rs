@@ -24,6 +24,12 @@ impl CachePaths {
     pub fn video_cache(&self) -> PathBuf {
         self.root.join("video_cache")
     }
+    pub fn app_updates(&self) -> PathBuf {
+        self.root.join("updates")
+    }
+    pub fn web_assets(&self) -> PathBuf {
+        self.root.join("web_assets")
+    }
     pub fn pdf_previews(&self) -> PathBuf {
         self.root.join("preview_pdf")
     }
@@ -46,11 +52,16 @@ impl CachePaths {
                 "Cache directory cannot contain persistent application data",
             ));
         }
-        for path in [self.image_cache(), self.video_cache()] {
+        for path in [
+            self.image_cache(),
+            self.video_cache(),
+            self.web_assets(),
+            self.app_updates(),
+        ] {
             if std::fs::symlink_metadata(path)
                 .is_ok_and(|metadata| metadata.is_symlink() || !metadata.is_dir())
             {
-                return Err(invalid("Invalid media cache directory"));
+                return Err(invalid("Invalid application cache directory"));
             }
         }
         Ok(())

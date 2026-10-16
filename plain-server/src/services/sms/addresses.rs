@@ -62,10 +62,14 @@ pub(crate) struct MmsAddress {
     pub is_sender: bool,
 }
 pub(crate) fn mms(candidates: &[MmsAddress]) -> &str {
+    let valid = |value: &&MmsAddress| {
+        !value.value.is_empty() && !value.value.eq_ignore_ascii_case("insert-address-token")
+    };
     candidates
         .iter()
-        .find(|value| value.is_sender && !value.value.is_empty())
-        .or_else(|| candidates.iter().find(|value| !value.value.is_empty()))
+        .filter(valid)
+        .find(|value| value.is_sender)
+        .or_else(|| candidates.iter().find(valid))
         .map(|value| value.value.as_str())
         .unwrap_or_default()
 }

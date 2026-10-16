@@ -173,9 +173,15 @@ async fn the_access_switch_and_the_method_gate_every_asset() {
         .set_user("desktop_access", serde_json::json!(false))
         .unwrap();
     assert!(
-        serve(&prefs, Some(&bundle.root), None, &Method::GET, "/assets/app.js")
-            .await
-            .is_none()
+        serve(
+            &prefs,
+            Some(&bundle.root),
+            None,
+            &Method::GET,
+            "/assets/app.js"
+        )
+        .await
+        .is_none()
     );
     assert!(
         serve(&prefs, Some(&bundle.root), None, &Method::POST, "/")
@@ -198,9 +204,21 @@ async fn an_embedded_bundle_serves_the_ui_without_a_directory() {
         .await
         .expect("a client route falls back to the shell");
     assert!(text(route).await.contains("<title>embedded</title>"));
-    assert!(get_from(None, Some(&bundle), "/assets/missing.js").await.is_none());
-    assert!(get_from(None, Some(&bundle), "/../secret.txt").await.is_none());
-    assert!(get_from(None, Some(&bundle), "/assets/../../secret.txt").await.is_none());
+    assert!(
+        get_from(None, Some(&bundle), "/assets/missing.js")
+            .await
+            .is_none()
+    );
+    assert!(
+        get_from(None, Some(&bundle), "/../secret.txt")
+            .await
+            .is_none()
+    );
+    assert!(
+        get_from(None, Some(&bundle), "/assets/../../secret.txt")
+            .await
+            .is_none()
+    );
     assert!(get_from(None, None, "/").await.is_none());
 }
 
@@ -269,4 +287,41 @@ async fn a_bundle_root_reached_through_a_symlink_still_serves() {
     symlink(&bundle.root, &link);
     assert!(get(&link, "/assets/app.js").await.is_some());
     assert!(get(&link, "/").await.is_some());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn serves_a_read_only_packaged_bundle_without_staging_or_a_completion_stamp() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bundle = bundle();
+    let source = std::fs::read(bundle.root.join("index.html")).unwrap();
+    std::fs::set_permissions(&bundle.root, std::fs::Permissions::from_mode(0o555)).unwrap();
+    std::fs::set_permissions(
+        bundle.root.join("assets"),
+        std::fs::Permissions::from_mode(0o555),
+    )
+    .unwrap();
+    let shell = get_from(Some(&bundle.root), None, "/").await;
+    let asset = get_from(Some(&bundle.root), None, "/assets/app.js").await;
+    std::fs::set_permissions(&bundle.root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(
+        bundle.root.join("assets"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+
+    assert_eq!(shell.as_ref().unwrap().status(), StatusCode::OK);
+    assert!(
+        text(shell.unwrap())
+            .await
+            .contains("window.__SERVER_TIME__=")
+    );
+    assert_eq!(text(asset.unwrap()).await, "console.log(1)");
+    assert_eq!(
+        std::fs::read(bundle.root.join("index.html")).unwrap(),
+        source
+    );
+    assert_eq!(std::fs::read_dir(&bundle.root).unwrap().count(), 2);
+    assert!(!bundle.root.join(".complete").exists());
 }

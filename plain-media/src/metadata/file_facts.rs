@@ -66,6 +66,8 @@ pub fn read_file_metadata_with_availability(
                 probed.title
             },
             artist: probed.artist,
+            album: probed.album,
+            album_artist: probed.album_artist,
             path: path_str,
             bucket_id,
             size_bytes,

@@ -160,3 +160,86 @@ fn lofty_still_decodes_original_text_encodings_and_duration_after_sparse_project
         assert!(metadata.duration_ms > 0);
     }
 }
+
+#[test]
+fn album_frames_survive_projection_in_all_supported_id3_versions() {
+    for version in [2, 3, 4] {
+        let album_id = if version == 2 {
+            b"TAL".as_slice()
+        } else {
+            b"TALB".as_slice()
+        };
+        let artist_id = if version == 2 {
+            b"TP2".as_slice()
+        } else {
+            b"TPE2".as_slice()
+        };
+        let mut frames = frame(version, album_id, b"\0Album");
+        frames.extend(frame(version, artist_id, b"\0Album Artist"));
+        let mut expected = tag(version, &frames, 0);
+        let picture_id = if version == 2 {
+            b"PIC".as_slice()
+        } else {
+            b"APIC".as_slice()
+        };
+        let picture = frame(version, picture_id, &vec![7; 2 * 1024 * 1024]);
+        let start = 10 + frames.len() + if version == 2 { 6 } else { 10 };
+        let end = 10 + frames.len() + picture.len();
+        frames.extend(picture);
+        let mut bytes = tag(version, &frames, 0);
+        bytes.extend(b"audio");
+        expected.extend(b"audio");
+        let mut source = Counted {
+            cursor: Cursor::new(bytes),
+            reads: vec![],
+        };
+        let mut projected = reader(&mut source, true).unwrap();
+        assert!(projected.tags_complete);
+        let mut actual = vec![];
+        projected.read_to_end(&mut actual).unwrap();
+        assert_eq!(actual, expected);
+        drop(projected);
+        assert!(
+            source
+                .reads
+                .iter()
+                .all(|range| range.end <= start as u64 || range.start >= end as u64)
+        );
+    }
+}
+
+#[test]
+fn oversized_album_text_is_skipped_without_falling_back_to_the_whole_tag() {
+    let oversized = frame(3, b"TALB", &vec![7; MAX_TEXT_BYTES + 1]);
+    let artist = frame(3, b"TPE2", b"\0Album Artist");
+    let mut frames = oversized.clone();
+    frames.extend(&artist);
+    let mut bytes = tag(3, &frames, 0);
+    bytes.extend(b"audio");
+    let mut source = Counted {
+        cursor: Cursor::new(bytes),
+        reads: vec![],
+    };
+    let mut projected = reader(&mut source, true).unwrap();
+    assert!(!projected.tags_complete);
+    let mut actual = vec![];
+    projected.read_to_end(&mut actual).unwrap();
+    let mut expected = tag(3, &artist, 0);
+    expected.extend(b"audio");
+    assert_eq!(actual, expected);
+    drop(projected);
+    assert!(
+        source
+            .reads
+            .iter()
+            .all(|range| range.end <= 20 || range.start >= (10 + oversized.len()) as u64)
+    );
+    assert!(
+        source
+            .reads
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum::<u64>()
+            < 200
+    );
+}

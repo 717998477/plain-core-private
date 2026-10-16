@@ -1,16 +1,3 @@
-//! SPA static assets for the public web UI.
-//!
-//! The Vue bundle is 11 MB / 1000+ files and ships inside the APK / iOS
-//! bundle, which the Rust crate cannot read on its own. The host extracts it
-//! once into a version-stamped directory under the app data dir and passes
-//! that path to `start_public`; everything after that — path safety, SPA
-//! fallback, cache headers, the `__SERVER_TIME__` bootstrap — is decided here.
-//!
-//! Embedding the bundle in the crate instead would duplicate 11 MB in every
-//! `.so`/framework and force a full plain-rs rebuild on every web-only change.
-//! That is why the embed lives in the headless CLI: `WebBundle` carries the
-//! same bytes here without any consumer paying for them unless it asks.
-
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -209,11 +196,7 @@ pub(crate) async fn fallback(
     request: Request,
 ) -> Response {
     let root = state.web_root.read().ok().and_then(|guard| guard.clone());
-    let embedded = state
-        .web_bundle
-        .read()
-        .ok()
-        .and_then(|guard| guard.clone());
+    let embedded = state.web_bundle.read().ok().and_then(|guard| guard.clone());
     serve(
         &state.prefs,
         root.as_deref(),

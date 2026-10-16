@@ -5,7 +5,7 @@ use plain_rs::chat::enums::PeerStatus;
 use plain_rs::db::DPeer;
 use plain_rs::db::chat_store::SaveMode;
 use plain_rs::db::chat_store::peers;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 fn root(id: &str) -> (tempfile::TempDir, ContentServer, Vec<u8>, String) {
@@ -72,7 +72,21 @@ async fn aware_host_only_moves_raw_socket_bytes_rust_performs_tls_crypto_and_gra
                 .unwrap_or_default()
                 .to_string();
             match request["method"].as_str().unwrap() {
+                "peerStartAware" | "peerStopAware" => {
+                    host.reply(generation, json!({"id":request["id"],"result":true}))
+                        .unwrap();
+                }
                 "peerTransportSocketOpen" => {
+                    let params = request["params"].as_object().unwrap();
+                    assert_eq!(params.len(), 2);
+                    assert!(
+                        params
+                            .get("peerId")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some()
+                    );
+                    assert!(params.contains_key("token"));
+
                     let (read, write) = tokio::net::TcpStream::connect(("127.0.0.1", port))
                         .await
                         .unwrap()
@@ -201,34 +215,5 @@ async fn ble_incoming_file_uses_root_encrypted_fid_and_eof_without_native_http_b
         assert_eq!(body, expected);
     }
     assert!(!state.host.connected());
-    server.shutdown().await;
-}
-#[tokio::test]
-async fn aware_configuration_preserves_unpaired_channel_link_and_reads_current_root_key_and_port() {
-    let (_dir, server, kp, token) = root("local");
-    let state = server.runtime_state();
-    let mut p = peer("remote", 443, &kp[32..], "");
-    p.key.clear();
-    peers::save(&state.db, &[p.clone()], SaveMode::Insert).unwrap();
-    state.prefs.set_user("https_port", 2443).unwrap();
-    async fn config(server: &ContentServer, _token: &str) -> Value {
-        let response = server
-            .native_graphql()
-            .unwrap()
-            .execute(r#"{peerAwareConfig(id:"remote"){pmk localPort isClient}}"#.into())
-            .await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
-        response.data.into_json().unwrap()["peerAwareConfig"].clone()
-    }
-    let v = config(&server, &token).await;
-    assert!(v["pmk"].is_null());
-    assert_eq!(v["localPort"], 2443);
-    assert_eq!(v["isClient"], true);
-    p.key = plain_rs::utils::base64::base64_encode(&[9; 32]);
-    peers::save(&state.db, &[p], SaveMode::Update).unwrap();
-    state.prefs.set_user("https_port", 3443).unwrap();
-    let v = config(&server, &token).await;
-    assert_eq!(v["pmk"], plain_rs::utils::base64::base64_encode(&[9; 32]));
-    assert_eq!(v["localPort"], 3443);
     server.shutdown().await;
 }

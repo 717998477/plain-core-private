@@ -47,3 +47,6 @@ pub mod media_file;
 pub mod audio_catalog;
 #[cfg(feature = "library")]
 pub mod media_play_history;
+
+#[cfg(feature = "library")]
+pub mod image_catalog;

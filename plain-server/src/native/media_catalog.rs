@@ -103,7 +103,7 @@ impl NativeMediaCatalog {
                     },
                     metadata = self.read_file(data_type, &reference) => metadata?,
                 };
-                session.record_when_running(|| self.record_file_reads(&[metadata])).await?;
+                session.record_when_running(|| self.persist_file_reads(&[metadata])).await?;
             }
             Ok(())
         }.await;
@@ -176,12 +176,10 @@ impl NativeMediaCatalog {
             return Ok(false);
         }
         let runtime = tokio::runtime::Handle::try_current().map_err(|error| error.to_string())?;
-        let state = self.state.clone();
         let catalog_state = self.state.clone();
         let handle = crate::services::files::media_watch::start(&roots, move |path, kind| {
             // `notify` delivers on its own thread, so the work moves onto the
             // runtime rather than blocking the watcher.
-            let state = state.clone();
             let path = path.to_path_buf();
             let kind = kind.clone();
             let cache = policy.cache_directory.clone();
@@ -209,7 +207,7 @@ impl NativeMediaCatalog {
                     }
                     crate::services::files::media_watch::Effect::Forget => {
                         let name = path.to_string_lossy().into_owned();
-                        if let Err(error) = state.db.forget_media_file(&name) {
+                        if let Err(error) = catalog.forget_file(&name) {
                             log::debug!("media watch forget failed: {error}");
                         }
                     }
@@ -397,7 +395,7 @@ impl NativeMediaCatalog {
                         return Err("Media file escaped scan directory".into());
                     }
                     session
-                        .record_when_running(|| self.record_file_reads(&[metadata]))
+                        .record_when_running(|| self.persist_file_reads(&[metadata]))
                         .await?;
                 }
                 let total = producer.await.map_err(|error| error.to_string())??;
@@ -455,13 +453,31 @@ impl NativeMediaCatalog {
 
     pub fn record_files(&self, files: &[MediaFileMetadata]) -> Result<Vec<MediaFileRow>, String> {
         self.state.native_client_id()?;
-        self.state
+        let rows = self
+            .state
             .db
             .record_media_files(files)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        crate::services::files::catalog_events::publish(
+            &self.state.events,
+            rows.iter().map(|row| row.data_type),
+        );
+        Ok(rows)
     }
 
     pub fn record_file_reads(
+        &self,
+        files: &[plain_rs::db::MediaFileMetadataRead],
+    ) -> Result<Vec<MediaFileRow>, String> {
+        let rows = self.persist_file_reads(files)?;
+        crate::services::files::catalog_events::publish(
+            &self.state.events,
+            rows.iter().map(|row| row.data_type),
+        );
+        Ok(rows)
+    }
+
+    fn persist_file_reads(
         &self,
         files: &[plain_rs::db::MediaFileMetadataRead],
     ) -> Result<Vec<MediaFileRow>, String> {
@@ -470,6 +486,18 @@ impl NativeMediaCatalog {
             .db
             .record_media_file_reads(files)
             .map_err(|error| error.to_string())
+    }
+
+    fn forget_file(&self, path: &str) -> Result<usize, String> {
+        self.state.native_client_id()?;
+        let types = self
+            .state
+            .db
+            .forget_media_file_types(path)
+            .map_err(|error| error.to_string())?;
+        let count = types.len();
+        crate::services::files::catalog_events::publish(&self.state.events, types);
+        Ok(count)
     }
 
     pub fn by_path(&self, data_type: DataType, path: &str) -> Result<Option<MediaFileRow>, String> {

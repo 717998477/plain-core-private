@@ -256,7 +256,7 @@ pub(crate) fn start(state: ServerState) {
                 _ = async {
                     loop {
                         match events.recv().await {
-                            Ok(event) if matches!(event.event_type, "PREFS_UPDATED" | "NETWORK_INTERFACES_CHANGED" | "EXECUTION_STATE_CHANGED" | "FEEDS_FETCHED" | "CONTENT_CHANGED") => break,
+                            Ok(event) if matches!(event.event_type, "PREFS_UPDATED" | plain_rs::events::NETWORK_CHANGED | "EXECUTION_STATE_CHANGED" | "FEEDS_FETCHED" | "CONTENT_CHANGED") => break,
                             Err(_) => break,
                             _ => {},
                         }

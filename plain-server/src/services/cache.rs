@@ -91,6 +91,23 @@ pub(crate) async fn clear(
         .map_err(|error| error.to_string())
 }
 
+pub(crate) async fn clear_application(
+    state: &crate::assembly::server::ServerState,
+) -> Result<(), String> {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let download = state.update_checks.download.clone();
+        let _downloads = download.lock_for_cache_clear().await;
+        download
+            .reset_after_cache_clear(&state)
+            .map_err(|error| error.to_string())?;
+        clear(&state.cache, &state.host).await?;
+        crate::services::web_assets::restore(&state).await
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 #[path = "../../tests/unit/services/cache.rs"]
 mod tests;

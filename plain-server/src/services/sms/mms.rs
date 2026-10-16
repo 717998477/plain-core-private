@@ -35,9 +35,8 @@ struct Pending {
 struct Candidate {
     id: i64,
     address_candidates: Vec<super::addresses::MmsAddress>,
-    body: String,
+    parts: Vec<super::parts::Part>,
     thread_id: String,
-    attachment_content_types: Vec<String>,
 }
 impl Candidate {
     fn address(&self) -> &str {
@@ -108,14 +107,19 @@ impl Runtime {
                 })?;
             let facts = self
                 .host
-                .call("fileMetadataFacts", json!({"path": path}))
+                .call("systemResourceMimeType", json!({"path": path}))
                 .await
                 .map_err(anyhow::Error::msg)?;
-            let mime = facts["mimeType"]
+            let mime = facts
                 .as_str()
-                .filter(|value| !value.is_empty())
-                .unwrap_or("application/octet-stream")
-                .to_owned();
+                .ok_or_else(|| anyhow::anyhow!("Invalid resource MIME type"))?
+                .trim();
+            let mime = if mime.is_empty() {
+                "application/octet-stream"
+            } else {
+                mime
+            }
+            .to_owned();
             let body = resources
                 .resource(path, stop)
                 .await
@@ -400,13 +404,14 @@ fn matching(pending: &Pending, candidates: Vec<Candidate>) -> Vec<i64> {
     let candidates: Vec<_> = candidates
         .into_iter()
         .filter(|candidate| {
+            let message = super::parts::message(&candidate.parts);
             (pending.thread_id.is_empty() || candidate.thread_id == pending.thread_id)
-                && (pending.body.is_empty() || candidate.body.trim() == pending.body.trim())
+                && (pending.body.is_empty() || message.body.trim() == pending.body.trim())
                 && normalized_types(
-                    candidate
-                        .attachment_content_types
+                    message
+                        .attachments
                         .iter()
-                        .map(String::as_str),
+                        .map(|part| part.content_type.as_str()),
                 ) == types
         })
         .collect();

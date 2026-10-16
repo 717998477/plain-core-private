@@ -299,9 +299,9 @@ async fn directory_scan_uses_core_policy_real_walker_and_existing_catalog() {
                 _ = &mut finish => break,
                 request=requests.recv() => {
                     let request=request.unwrap();
-                    assert_eq!(request["method"],"fileTaskAuthorize");
-                    assert_eq!(request["params"]["operation"],"read");
-                    host.reply(generation,serde_json::json!({"id":request["id"],"result":true})).unwrap();
+                    assert_eq!(request["method"],"systemPermissionFacts");
+                    assert_eq!(request["params"]["permissions"],serde_json::json!(["WRITE_EXTERNAL_STORAGE"]));
+                    host.reply(generation,serde_json::json!({"id":request["id"],"result":{"granted":{"WRITE_EXTERNAL_STORAGE":true}}})).unwrap();
                 },
             }
         }
@@ -686,4 +686,35 @@ async fn filesystem_watch_events_from_an_os_thread_update_the_shared_catalog() {
         observed.is_ok(),
         "OS watcher events must reach the owning Tokio runtime"
     );
+}
+
+#[cfg(feature = "media")]
+#[tokio::test]
+async fn native_catalog_records_and_removal_publish_one_typed_change_per_batch() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("song.mp3");
+    std::fs::write(&path, b"unrecognized audio bytes").unwrap();
+    let path = path.canonicalize().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let catalog = core.native_media_catalog().unwrap();
+    let mut events = core.runtime_state().events.subscribe();
+    let file = plain_media::metadata::file_facts::read_file_metadata(
+        &path,
+        plain_rs::enums::DataType::Audio,
+    )
+    .unwrap();
+    catalog.record_files(&[file.clone(), file]).unwrap();
+    let event = events.try_recv().unwrap();
+    assert_eq!(event.event_type, plain_rs::events::MEDIA_LIBRARY_UPDATED);
+    assert_eq!(event.payload, r#"{"types":[1]}"#);
+    assert!(events.try_recv().is_err());
+    assert_eq!(catalog.forget_file(path.to_str().unwrap()).unwrap(), 1);
+    assert_eq!(
+        events.try_recv().unwrap().event_type,
+        plain_rs::events::MEDIA_LIBRARY_UPDATED
+    );
+    assert!(events.try_recv().is_err());
+    assert_eq!(catalog.forget_file(path.to_str().unwrap()).unwrap(), 0);
+    assert!(events.try_recv().is_err());
+    core.stop_core().await;
 }

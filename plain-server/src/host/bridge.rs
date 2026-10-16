@@ -85,12 +85,7 @@ fn is_startup_property(key: &str) -> bool {
 fn is_dynamic_property(key: &str) -> bool {
     matches!(
         key,
-        "language"
-            | "display.width"
-            | "display.height"
-            | "display.density"
-            | "ipv4Addresses"
-            | "wifiAwareRunning"
+        "language" | "display.width" | "display.height" | "display.density" | "wifiAwareRunning"
     )
 }
 impl Host {
@@ -107,6 +102,15 @@ impl Host {
                     .is_some_and(|path| std::path::Path::new(path).is_absolute()),
                 "debug" | "wifiAwareSupported" | "files.recentCatalog" => value.is_boolean(),
                 "socModel" | "files.recentRoot" => value.is_null() || value.is_string(),
+                "supportedAbis" => value.as_array().is_some_and(|abis| {
+                    abis.iter()
+                        .all(|abi| abi.as_str().is_some_and(|abi| !abi.is_empty()))
+                }),
+                "updateSource" => {
+                    value.is_null()
+                        || serde_json::from_value::<plain_rs::updates::Source>(value.clone())
+                            .is_ok()
+                }
                 "android.sdkVersion" => value
                     .as_i64()
                     .is_some_and(|number| number > 0 && number <= i32::MAX as i64),

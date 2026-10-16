@@ -11,9 +11,13 @@ use std::{
 };
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
+pub trait ImageSource: std::io::Read + std::io::Seek {}
+impl<T: std::io::Read + std::io::Seek> ImageSource for T {}
+
 pub trait ImageEncoder: Send + Sync {
     fn release(&self) {}
     fn image(&self, path: &Path) -> Result<Option<Vec<f32>>, String>;
+    fn image_reader(&self, source: &mut dyn ImageSource) -> Result<Option<Vec<f32>>, String>;
 }
 pub struct Engine {
     pub manifest: Manifest,
@@ -206,6 +210,14 @@ impl Engine {
     }
 }
 impl ImageEncoder for Engine {
+    fn image_reader(&self, source: &mut dyn ImageSource) -> Result<Option<Vec<f32>>, String> {
+        crate::preprocess::tensor_reader(
+            std::io::BufReader::new(source),
+            &self.manifest.preprocess,
+        )?
+        .map(|values| self.image_tensor(values))
+        .transpose()
+    }
     fn release(&self) {
         self.release_image();
     }

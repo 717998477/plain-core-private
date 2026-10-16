@@ -121,7 +121,8 @@ pub(crate) fn event_sink(
                 .load(std::sync::atomic::Ordering::SeqCst)
             {
                 let result = (|| -> Result<(), String> {
-                    let mut roots = plain_rs::prefs::media::source_directories(&prefs)?;
+                    let mut roots = plain_rs::prefs::media::source_directories(&prefs)
+                        .map_err(|error| error.to_string())?;
                     if include_mounted {
                         roots.extend(
                             mounted_directories(&prefs)

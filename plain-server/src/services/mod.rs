@@ -57,3 +57,6 @@ pub(crate) mod crash_reports;
 
 #[cfg(feature = "core")]
 pub(crate) mod http_server;
+
+#[cfg(feature = "core")]
+pub mod web_assets;

@@ -18,6 +18,7 @@ pub struct VideoInfo {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub album_artist: String,
     pub genre: String,
     pub writer: String,
     pub composer: String,

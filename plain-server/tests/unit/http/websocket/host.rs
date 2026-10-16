@@ -300,7 +300,11 @@ async fn native_event_socket_registers_without_a_session_and_encrypts_events_wit
         tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid={id}", core.port))
             .await
             .unwrap();
-    let frame = plain_rs::crypto::xchacha_encrypt_raw(&key, b"1700000000000").unwrap();
+    let frame = plain_rs::crypto::xchacha_encrypt_raw(
+        &key,
+        chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
+    )
+    .unwrap();
     socket
         .send(tokio_tungstenite::tungstenite::Message::Binary(
             frame.into(),
@@ -357,4 +361,90 @@ async fn confirm_login(
         return Err(error.message.clone());
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn encrypted_timed_controls_forward_exact_json_and_touch_inputs_once_and_refuse_replay() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+    let (_directory, core) = public_fixture();
+    let state = core.runtime_state();
+    let key = plain_rs::utils::base64::base64_decode(&plain_rs::prefs::identity::ensure_url_token(
+        &state.prefs,
+    ));
+    let client = state.native_client_id().unwrap();
+    let (generation, mut requests) = state.host.connect();
+    let host = state.host.clone();
+    let (sent, mut received) = tokio::sync::mpsc::channel(8);
+    let responder = tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            let result = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => json!([]),
+                "systemScreenMirrorResetTouch" => json!(true),
+                "systemScreenMirrorControls" => {
+                    sent.send(request["params"]["inputs"].clone())
+                        .await
+                        .unwrap();
+                    json!(true)
+                }
+                method => panic!("Unexpected platform primitive: {method}"),
+            };
+            let _ = host.reply(generation, json!({"id":request["id"],"result":result}));
+        }
+    });
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid={client}", core.port))
+            .await
+            .unwrap();
+    socket
+        .send(ClientMessage::Binary(
+            plain_rs::crypto::xchacha_encrypt_raw(
+                &key,
+                chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
+            )
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let json_control = br#"{"type":"screenMirrorControl","input":{"action":"BACK"}}"#;
+    let touch = [0x54, 1, 0xff, 0xff, 0, 7, 0x34, 0x12, 0x78, 0x56, 0, 0];
+    let mut last = Vec::new();
+    for payload in [json_control.as_slice(), touch.as_slice()] {
+        let mut plain = chrono::Utc::now().timestamp_millis().to_be_bytes().to_vec();
+        plain.extend_from_slice(payload);
+        last = plain_rs::crypto::xchacha_encrypt_raw(&key, &plain).unwrap();
+        socket
+            .send(ClientMessage::Binary(last.clone().into()))
+            .await
+            .unwrap();
+        let inputs = tokio::time::timeout(Duration::from_secs(3), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(inputs, Value::Array(controls(payload)));
+    }
+    socket
+        .send(ClientMessage::Binary(last.into()))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(message) = socket.next().await {
+            if let ClientMessage::Close(Some(close)) = message.unwrap() {
+                assert_eq!(u16::from(close.code), 1013);
+                assert_eq!(close.reason, "invalid_request");
+                return;
+            }
+        }
+        panic!("Replayed control must receive an explicit rejection");
+    })
+    .await
+    .unwrap();
+    assert!(received.try_recv().is_err());
+    core.shutdown().await;
+    state.host.disconnect(generation);
+    tokio::time::timeout(Duration::from_secs(3), responder)
+        .await
+        .unwrap()
+        .unwrap();
 }

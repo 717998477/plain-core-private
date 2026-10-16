@@ -45,6 +45,13 @@ fn stub(host: Arc<Host>, db: Arc<Db>, handler: impl Fn(&str, Value) -> Value + S
                     request["params"].clone(),
                 )
             };
+            let result = if request["method"] == "systemMediaRows"
+                && request["params"]["includeRevision"] == true
+            {
+                json!({"rows":result,"revisionBefore":null,"revisionAfter":null})
+            } else {
+                result
+            };
             let _ = host.reply(generation, json!({ "id": id, "result": result }));
         }
     });
@@ -559,6 +566,9 @@ async fn a_library_row_keeps_the_album_art_reference() {
     });
     database(&schema)
         .record_media_files(&[plain_rs::db::MediaFileMetadata {
+            album: String::new(),
+            album_artist: String::new(),
+
             data_type: plain_rs::enums::DataType::Audio,
             path: "/m/a.mp3".to_owned(),
             title: "Song".to_owned(),
@@ -641,6 +651,9 @@ async fn adding_tracks_reads_every_search_page_without_an_item_limit() {
     });
     let rows: Vec<_> = (0..1205)
         .map(|i| plain_rs::db::MediaFileMetadata {
+            album: String::new(),
+            album_artist: String::new(),
+
             data_type: DataType::Audio,
             path: format!("/track/{i}"),
             title: format!("Track {i}"),
@@ -929,6 +942,255 @@ async fn main_audio_cover_extracts_original_bytes_and_preserves_nullable_absence
             .execute(request("/not-read.mp3"))
             .await
             .errors
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn playlist_covers_use_the_shared_catalog_without_platform_requests() {
+    let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    let db = database(&schema);
+    db.use_platform_audio_catalog().unwrap();
+    db.cache_platform_audio(
+        &[plain_rs::db::audio_catalog::AudioMedia {
+            media_id: Some("track".into()),
+            aliases: Vec::new(),
+            track: AudioTrack {
+                album_id: "album".into(),
+                ..track("/music/a.mp3", "A", "Artist")
+            },
+        }],
+        false,
+    )
+    .unwrap();
+    db.with_conn(|conn| conn.execute(
+        "INSERT INTO audio_playlist_items(id,playlist_id,media_id,sort_order,added_at) VALUES('item','playlist','track',0,'now')", [],
+    )).unwrap();
+    let result = query(&schema, r#"query { audioPlaylistCovers(ids: ["playlist", "empty"]) { id albums { albumId trackCount candidatePaths } } }"#).await;
+    assert!(result["errors"].is_null(), "{result}");
+    assert_eq!(
+        result["data"]["audioPlaylistCovers"],
+        json!([
+            {"id":"playlist","albums":[{"albumId":"album","trackCount":1,"candidatePaths":["/music/a.mp3"]}]},
+            {"id":"empty","albums":[]},
+        ])
+    );
+}
+
+#[tokio::test]
+async fn browser_selection_advances_in_rust_without_dispatching_the_server_player() {
+    let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    seed_queue(
+        &schema,
+        &[("/one.mp3", "One", "Artist"), ("/two.mp3", "Two", "Artist")],
+    );
+    domain::save_audio_current(database(&schema), "/one.mp3").unwrap();
+    let before = plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap();
+    let document = format!(
+        r#"mutation {{ advanceAudioSelection(action:NEXT,expectedPath:"/one.mp3",expectedRevision:{}) {{ track {{ mediaId path }} revision positionMs }} }}"#,
+        before.revision
+    );
+    let result = query(&schema, &document).await;
+    assert!(result["errors"].is_null(), "{result}");
+    assert_eq!(
+        result["data"]["advanceAudioSelection"]["track"]["path"],
+        "/two.mp3"
+    );
+    assert_eq!(result["data"]["advanceAudioSelection"]["positionMs"], 0);
+    assert_ne!(
+        result["data"]["advanceAudioSelection"]["revision"],
+        before.revision
+    );
+    let duplicate = query(&schema, &document).await;
+    assert!(duplicate["errors"].is_null(), "{duplicate}");
+    assert!(duplicate["data"]["advanceAudioSelection"].is_null());
+    assert_eq!(
+        domain::get_audio_current(database(&schema)).unwrap(),
+        "/two.mp3"
+    );
+    let mode = query(&schema, "mutation { cycleAudioPlayMode }").await;
+    assert!(mode["errors"].is_null(), "{mode}");
+    assert_eq!(mode["data"]["cycleAudioPlayMode"], "REPEAT_ONE");
+}
+
+#[tokio::test]
+async fn playback_snapshot_reuses_identity_and_reads_sdk_playback_facts_once() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    let (_dir, schema) = fixture_with(GRANTED, move |method, _| {
+        assert_eq!(method, "systemAudioPlaybackState");
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        json!({"isPlaying":true,"positionMs":123})
+    });
+    seed_queue(&schema, &[("/one.mp3", "One", "Artist")]);
+    domain::save_audio_current(database(&schema), "/one.mp3").unwrap();
+    let expected = plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap();
+    let result = query(
+        &schema,
+        "{ audioPlayback { mediaId path revision isPlaying positionMs } }",
+    )
+    .await;
+    assert!(result["errors"].is_null(), "{result}");
+    assert_eq!(result["data"]["audioPlayback"]["path"], "/one.mp3");
+    assert_eq!(
+        result["data"]["audioPlayback"]["revision"],
+        expected.revision
+    );
+    assert_eq!(result["data"]["audioPlayback"]["positionMs"], 123);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn overview_projects_the_authoritative_catalog_without_sdk_metadata_calls() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    let (_dir, schema) = fixture_with(GRANTED, move |method, _| {
+        assert_eq!(method, "systemCapabilities");
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        json!(["AUDIO_LIBRARY"])
+    });
+    seed_queue(
+        &schema,
+        &[("/one.mp3", "One", "Artist"), ("/two.mp3", "Two", "Artist")],
+    );
+    database(&schema)
+        .media_play_history_start("test:/two.mp3", 0)
+        .unwrap();
+    let result = query(&schema,"{ audioOverview { artists { name itemCount playCount samplePath } recentItems { id path } } }").await;
+    assert!(result["errors"].is_null(), "{result}");
+    assert_eq!(
+        result["data"]["audioOverview"]["artists"],
+        json!([
+            {"name":"Artist","itemCount":2,"playCount":1,"samplePath":"/one.mp3"},
+        ])
+    );
+    assert_eq!(
+        result["data"]["audioOverview"]["recentItems"],
+        json!([{"id":"test:/two.mp3","path":"/two.mp3"}])
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn overview_requires_an_implemented_audio_library_capability() {
+    let (_dir, schema) = fixture_with(GRANTED, |method, _| {
+        assert_eq!(method, "systemCapabilities");
+        json!([])
+    });
+    let result = query(&schema, "{ audioOverview { artists { name } } }").await;
+    assert!(result["errors"].is_array(), "{result}");
+    assert!(
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("AUDIO_LIBRARY")
+    );
+}
+
+#[cfg(feature = "media")]
+#[tokio::test]
+async fn native_album_tags_reach_playlist_covers_without_platform_catalog_calls() {
+    let (directory, schema) =
+        fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../plain-rs/testdata/audio-album-tagged.mp3"),
+    )
+    .unwrap();
+    let first = directory.path().join("one.mp3");
+    let second = directory.path().join("two.mp3");
+    std::fs::write(&first, &bytes).unwrap();
+    let mut guest = bytes;
+    let offset = guest
+        .windows(b"Track Artist".len())
+        .position(|part| part == b"Track Artist")
+        .unwrap();
+    guest[offset..offset + b"Guest Artist".len()].copy_from_slice(b"Guest Artist");
+    std::fs::write(&second, guest).unwrap();
+    let metadata = [&first, &second]
+        .into_iter()
+        .map(|path| {
+            plain_media::metadata::file_facts::read_file_metadata(path, DataType::Audio).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let rows = database(&schema).record_media_files(&metadata).unwrap();
+    assert_eq!(rows[0].artist, "Track Artist");
+    assert_eq!(rows[1].artist, "Guest Artist");
+    assert_eq!(rows[0].album_id, rows[1].album_id);
+    assert!(!rows[0].album_id.is_empty());
+    let tracks = rows
+        .iter()
+        .map(|row| domain::track_by_id(database(&schema), &row.id).unwrap())
+        .collect::<Vec<_>>();
+    let playlist = domain::create_playlist(database(&schema), "Album").unwrap();
+    domain::add_playlist_items(database(&schema), &playlist.id, &tracks).unwrap();
+    let result = query(&schema,&format!(r#"{{ audioPlaylistCovers(ids:["{}"]) {{ albums {{ albumId trackCount candidatePaths }} }} }}"#,playlist.id)).await;
+    assert!(result["errors"].is_null(), "{result}");
+    assert_eq!(
+        result["data"]["audioPlaylistCovers"][0]["albums"],
+        json!([{
+            "albumId":rows[0].album_id,"trackCount":2,"candidatePaths":[rows[0].path,rows[1].path],
+        }])
+    );
+}
+
+#[tokio::test]
+async fn browser_actual_start_and_progress_use_main_history_without_host_commands() {
+    let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    seed_queue(&schema, &[("/one.mp3", "One", "Artist")]);
+    let db = database(&schema);
+    let selected =
+        plain_rs::media::audio::playback::prepare_track(db, &track("/one.mp3", "One", "Artist"))
+            .unwrap();
+    let mut events = schema
+        .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()
+        .unwrap()
+        .subscribe();
+    for (started, position, changed) in [(true, 123, true), (true, 234, false), (false, 456, false)]
+    {
+        let response = query(&schema, &format!(r#"mutation {{ reportAudioPlayback(path:"/one.mp3",revision:{},positionMs:{position},started:{started}) }}"#, selected.revision)).await;
+        assert!(response["errors"].is_null(), "{response}");
+        assert_eq!(response["data"]["reportAudioPlayback"], true);
+        if changed {
+            assert_eq!(
+                events.try_recv().unwrap().event_type,
+                plain_rs::events::AUDIO_LIBRARY_UPDATED
+            );
+        }
+        assert!(events.try_recv().is_err());
+    }
+    let history = domain::history_page(db, 0, 10, "").unwrap();
+    assert_eq!(history[0].play_count, 1);
+    assert_eq!(
+        db.media_play_history_get(&history[0].media_id)
+            .unwrap()
+            .unwrap()
+            .position_ms,
+        456
+    );
+    plain_rs::media::audio::playback::prepare_track(db, &track("/one.mp3", "One", "Artist"))
+        .unwrap();
+    let stale = query(&schema, &format!(r#"mutation {{ reportAudioPlayback(path:"/one.mp3",revision:{},positionMs:999,started:true) }}"#, selected.revision)).await;
+    assert_eq!(stale["data"]["reportAudioPlayback"], false);
+    assert!(events.try_recv().is_err());
+    assert_eq!(
+        domain::history_page(db, 0, 10, "").unwrap()[0].play_count,
+        1
+    );
+}
+
+#[tokio::test]
+async fn browser_playback_report_requires_storage_authorization() {
+    let (_dir, schema) = fixture_with("[]", |method, _| panic!("unexpected host call {method}"));
+    let response = query(
+        &schema,
+        r#"mutation { reportAudioPlayback(path:"/one.mp3",revision:1,positionMs:0,started:true) }"#,
+    )
+    .await;
+    assert!(!response["errors"].is_null(), "{response}");
+    assert!(
+        domain::history_page(database(&schema), 0, 10, "")
+            .unwrap()
             .is_empty()
     );
 }

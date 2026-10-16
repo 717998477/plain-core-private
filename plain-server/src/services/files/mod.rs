@@ -103,3 +103,6 @@ pub(crate) mod source_files;
 
 #[cfg(feature = "core")]
 pub(crate) mod note_images;
+
+#[cfg(feature = "core")]
+pub(crate) mod catalog_events;

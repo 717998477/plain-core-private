@@ -22,9 +22,24 @@ fn candidate(id: i64, address: &str, body: &str, thread: &str, types: &[&str]) -
             value: address.into(),
             is_sender: false,
         }],
-        body: body.into(),
+        parts: std::iter::once(super::super::parts::Part {
+            path: "text".into(),
+            content_type: "text/plain".into(),
+            name: String::new(),
+            file_name: String::new(),
+            has_data: false,
+            text: body.into(),
+        })
+        .chain(types.iter().map(|mime| super::super::parts::Part {
+            path: "attachment".into(),
+            content_type: (*mime).into(),
+            name: String::new(),
+            file_name: String::new(),
+            has_data: true,
+            text: String::new(),
+        }))
+        .collect(),
         thread_id: thread.into(),
-        attachment_content_types: types.iter().map(|s| s.to_string()).collect(),
     }
 }
 #[test]

@@ -23,7 +23,7 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TEMP VIEW audio_media AS
             SELECT media_id,path,title,artist,duration_ms,album_id FROM platform_audio_media
             UNION ALL
-            SELECT id,path,title,artist,duration_ms,'' FROM media_items
+            SELECT id,path,title,artist,duration_ms,album_id FROM media_items
             WHERE data_type=1 AND trashed=0 AND NOT EXISTS(SELECT 1 FROM platform_audio_catalog);",
     )
 }

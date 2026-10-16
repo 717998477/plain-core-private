@@ -95,9 +95,17 @@ impl FileTasks {
         kind: FileTaskType,
         ops: Vec<FileTaskOp>,
     ) -> Result<FileTask> {
-        let task = self
-            .create(client_id, kind, &format!("{kind:?}").to_uppercase(), ops)
-            .await?;
+        self.create_and_wait(client_id, kind, &format!("{kind:?}").to_uppercase(), ops)
+            .await
+    }
+    pub async fn create_and_wait(
+        &self,
+        client_id: &str,
+        kind: FileTaskType,
+        title: &str,
+        ops: Vec<FileTaskOp>,
+    ) -> Result<FileTask> {
+        let task = self.create(client_id, kind, title, ops).await?;
         let service = self.service()?;
         wait_for_completion(&self.completion, || {
             let current = service

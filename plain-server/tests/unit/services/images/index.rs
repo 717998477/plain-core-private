@@ -2,17 +2,12 @@ use super::*;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 async fn wait(service: &ImageIndex) {
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while service.status().is_running {
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), service.wait_until_idle())
+        .await
+        .unwrap();
 }
 fn setup(
     fail_page: bool,
-    fail_end: bool,
 ) -> (
     Arc<ImageIndex>,
     tokio::task::JoinHandle<()>,
@@ -22,15 +17,14 @@ fn setup(
     let host = Arc::new(Host::default());
     let (generation, mut requests) = host.connect();
     let ended = Arc::new(AtomicUsize::new(0));
-    let end_count = ended.clone();
     let peer = host.clone();
     let task = tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
             let id = &request["id"];
             let p = &request["params"];
             let result = match request["method"].as_str().unwrap() {
-                "imageIndexBegin" => json!({"revision":"one","total":300}),
-                "imageIndexPage" => {
+                "imageCatalogSnapshot" => json!({"revision":"one","total":300}),
+                "imageCatalogPage" => {
                     if fail_page {
                         peer.reply(generation, json!({"id":id,"error":"permission denied"}))
                             .unwrap();
@@ -40,7 +34,7 @@ fn setup(
                     let end = (offset + 128).min(300);
                     json!({"revision":"one","items":(offset..end).map(|n|json!({"id":n.to_string(),"path":format!("/synthetic/{n}")})).collect::<Vec<_>>(),"nextCursor":end.to_string(),"done":end==300})
                 }
-                "imageIndexResolve" => json!(
+                "imageCatalogResolve" => json!(
                     p["ids"]
                         .as_array()
                         .unwrap()
@@ -50,11 +44,7 @@ fn setup(
                         )
                         .collect::<Vec<_>>()
                 ),
-                "imageIndexEnd" => {
-                    end_count.fetch_add(1, Ordering::SeqCst);
-                    json!(!fail_end)
-                }
-                "imageIndexVerify" | "imageIndexProgress" => json!(true),
+                "imageCatalogVerify" => json!(true),
                 method => panic!("unexpected {method}"),
             };
             peer.reply(generation, json!({"id":id,"result":result}))
@@ -63,21 +53,33 @@ fn setup(
     });
     let service = Arc::new(ImageIndex::new(
         db,
-        host,
+        host.clone(),
         tokio::sync::broadcast::channel(16).0,
+        Arc::new(crate::host::resources::NativeResources::new(host)),
+        std::env::temp_dir(),
     ));
-    struct Encoder;
+    service.use_system_catalog_for_test();
+    struct Encoder(Arc<AtomicUsize>);
     impl plain_inference::embedding::ImageEncoder for Encoder {
+        fn release(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        fn image_reader(
+            &self,
+            _: &mut dyn plain_inference::embedding::ImageSource,
+        ) -> Result<Option<Vec<f32>>, String> {
+            panic!("Synthetic local images must use the direct file path")
+        }
         fn image(&self, _: &std::path::Path) -> Result<Option<Vec<f32>>, String> {
             Ok(Some(vec![1.0]))
         }
     }
-    service.set_encoder(Some(Arc::new(Encoder)));
+    service.set_encoder(Some(Arc::new(Encoder(ended.clone()))));
     (service, task, ended)
 }
 #[tokio::test]
 async fn host_job_runs_bounded_scan_and_releases_engine_before_completion() {
-    let (service, task, ended) = setup(false, false);
+    let (service, task, ended) = setup(false);
     service.start(false).unwrap();
     wait(&service).await;
     assert_eq!(service.status().indexed_images, 300);
@@ -88,22 +90,16 @@ async fn host_job_runs_bounded_scan_and_releases_engine_before_completion() {
 }
 #[tokio::test]
 async fn host_errors_are_visible_and_release_the_engine() {
-    let (service, task, ended) = setup(true, false);
+    let (service, task, ended) = setup(true);
     service.start(false).unwrap();
     wait(&service).await;
     assert!(service.status().error_message.contains("permission denied"));
     assert_eq!(ended.load(Ordering::SeqCst), 1);
     task.abort();
-    let (service, task, ended) = setup(false, true);
-    service.selected(vec!["one".into()]).unwrap();
-    wait(&service).await;
-    assert!(service.status().error_message.contains("cleanup failed"));
-    assert_eq!(ended.load(Ordering::SeqCst), 2);
-    task.abort();
 }
 #[tokio::test]
 async fn cancelled_generation_cannot_resurrect_deleted_embeddings() {
-    let (service, task, _) = setup(false, false);
+    let (service, task, _) = setup(false);
     let control = IndexControl {
         generation: 0,
         state: service.state.clone(),
@@ -119,4 +115,138 @@ async fn cancelled_generation_cannot_resurrect_deleted_embeddings() {
     assert!(control.save(&service.db, &[input]).is_err());
     assert_eq!(image_embeddings::count(&service.db).unwrap(), 0);
     task.abort();
+}
+
+#[tokio::test]
+async fn native_full_and_selected_indexing_use_local_catalog_and_encoder_without_host_requests() {
+    struct Encoder;
+    impl plain_inference::embedding::ImageEncoder for Encoder {
+        fn release(&self) {}
+        fn image_reader(
+            &self,
+            _: &mut dyn plain_inference::embedding::ImageSource,
+        ) -> Result<Option<Vec<f32>>, String> {
+            panic!("Native catalog must provide local file paths")
+        }
+        fn image(&self, path: &std::path::Path) -> Result<Option<Vec<f32>>, String> {
+            Ok(
+                (std::fs::read(path).map_err(|error| error.to_string())? == b"supported")
+                    .then_some(vec![1.0]),
+            )
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    let supported = directory.path().join("supported.png");
+    let unsupported = directory.path().join("unsupported.image");
+    std::fs::write(&supported, b"supported").unwrap();
+    std::fs::write(&unsupported, b"unsupported").unwrap();
+    db.with_conn(|connection| {
+        for (id, path) in [("first", &supported), ("second", &unsupported)] {
+            connection.execute("INSERT INTO media_items(id,data_type,path,mime_type,file_name,title,artist,bucket_id,size_bytes,duration_ms,width,height,rotation,created_at,updated_at) VALUES(?1,3,?2,'image/png',?1,?1,'','',1,0,1,1,0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')", rusqlite::params![id,path.to_string_lossy()]).unwrap();
+        }
+    });
+    image_embeddings::save(
+        &db,
+        &[EmbeddingInput {
+            id: "obsolete".into(),
+            path: "/obsolete.png".into(),
+            embedding_base64: plain_rs::utils::base64::base64_encode(&1.0f32.to_be_bytes()),
+        }],
+    )
+    .unwrap();
+    let host = Arc::new(Host::default());
+    let (_generation, mut requests) = host.connect();
+    let service = Arc::new(ImageIndex::new(
+        db.clone(),
+        host.clone(),
+        tokio::sync::broadcast::channel(16).0,
+        Arc::new(crate::host::resources::NativeResources::new(host)),
+        directory.path().join("cache"),
+    ));
+    service.use_native_catalog_for_test();
+    assert!(!service.uses_system_catalog());
+    service.set_encoder(Some(Arc::new(Encoder)));
+    service.start(true).unwrap();
+    wait(&service).await;
+    assert_eq!(image_embeddings::ids(&db).unwrap(), ["first"]);
+    assert_eq!(service.status().total_images, 2);
+    assert_eq!(service.status().skipped_images, 1);
+    assert!(requests.try_recv().is_err());
+    image_embeddings::delete(&db, &["first".into()]).unwrap();
+    service
+        .selected(vec!["first".into(), "missing".into()])
+        .unwrap();
+    wait(&service).await;
+    assert_eq!(image_embeddings::ids(&db).unwrap(), ["first"]);
+    assert!(requests.try_recv().is_err());
+    assert!(!directory.path().join("cache").exists());
+}
+
+#[tokio::test]
+async fn cancellation_waits_for_actual_worker_exit_and_notifies_all_idle_waiters() {
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    let host = Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    let service = Arc::new(ImageIndex::new(
+        db,
+        host.clone(),
+        tokio::sync::broadcast::channel(16).0,
+        Arc::new(crate::host::resources::NativeResources::new(host.clone())),
+        std::env::temp_dir(),
+    ));
+    service.use_system_catalog_for_test();
+    service.start(false).unwrap();
+    let request = requests.recv().await.unwrap();
+    assert_eq!(request["method"], "imageCatalogSnapshot");
+    service.cancel().unwrap();
+    let mut waiting = Vec::new();
+    for _ in 0..2 {
+        let index = service.clone();
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            started.send(()).unwrap();
+            index.wait_until_idle().await;
+        });
+        started_rx.await.unwrap();
+        assert!(!task.is_finished());
+        waiting.push(task);
+    }
+    host.reply(
+        generation,
+        json!({"id":request["id"],"result":{"revision":"empty","total":0}}),
+    )
+    .unwrap();
+    for task in waiting {
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(!service.status().is_running);
+    assert!(requests.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn generation_failure_finishes_the_worker_and_idle_is_immediately_ready() {
+    use futures_util::FutureExt;
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    let host = Arc::new(Host::default());
+    let service = Arc::new(ImageIndex::new(
+        db,
+        host.clone(),
+        tokio::sync::broadcast::channel(16).0,
+        Arc::new(crate::host::resources::NativeResources::new(host)),
+        std::env::temp_dir(),
+    ));
+    assert!(service.wait_until_idle().now_or_never().is_some());
+    service.state.lock().unwrap().generation = u64::MAX;
+    service.start(false).unwrap();
+    wait(&service).await;
+    assert_eq!(
+        service.status().error_message,
+        "image index generation overflow"
+    );
+    assert!(!service.status().is_running);
+    assert!(service.wait_until_idle().now_or_never().is_some());
 }

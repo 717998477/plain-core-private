@@ -68,20 +68,7 @@ async fn execute(state: &ServerState, request: Action) -> Result<(), String> {
             }
         }
         Action::Stop => {
-            state.peer_status.outgoing.stop().await;
-            let previous = state.peer_status.connections.snapshot(&state.db);
-            state.peer_status.connections.clear_hints();
-            let current = state.peer_status.connections.snapshot(&state.db);
-            if let Some(previous_ids) = previous["online"].as_array() {
-                for id in previous_ids.iter().filter_map(|v| v.as_str()) {
-                    let still_online = current["online"]
-                        .as_array()
-                        .is_some_and(|ids| ids.iter().any(|c| c.as_str() == Some(id)));
-                    if !still_online {
-                        emit(state, id, false);
-                    }
-                }
-            }
+            stop(state).await;
             Ok(())
         }
         Action::Reconnect => {
@@ -93,5 +80,22 @@ async fn execute(state: &ServerState, request: Action) -> Result<(), String> {
             Ok(())
         }
         Action::EnsureAware => unreachable!(),
+    }
+}
+
+pub(crate) async fn stop(state: &ServerState) {
+    state.peer_status.outgoing.stop().await;
+    let previous = state.peer_status.connections.snapshot(&state.db);
+    state.peer_status.connections.clear_hints();
+    let current = state.peer_status.connections.snapshot(&state.db);
+    if let Some(previous_ids) = previous["online"].as_array() {
+        for id in previous_ids.iter().filter_map(|v| v.as_str()) {
+            let still_online = current["online"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|c| c.as_str() == Some(id)));
+            if !still_online {
+                emit(state, id, false);
+            }
+        }
     }
 }

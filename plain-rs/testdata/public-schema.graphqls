@@ -31,6 +31,7 @@ type App {
 	httpsPort: Int!
 	deviceName: String!
 	developerMode: Boolean!
+	network: NetworkStatus!
 	appDir: String!
 	deviceType: DeviceType!
 	capabilities: [Capability!]!
@@ -65,6 +66,24 @@ type AppUpdate {
 	url: String
 }
 
+type AppUpdateDownload {
+	coreId: ID!
+	taskId: ID!
+	revision: Long!
+	status: AppUpdateDownloadStatus!
+	progress: Int!
+	filePath: String!
+	error: String!
+}
+
+enum AppUpdateDownloadStatus {
+	IDLE
+	DOWNLOADING
+	COMPLETED
+	FAILED
+	CANCELLED
+}
+
 enum AppUpdateStatus {
 	AVAILABLE
 	UP_TO_DATE
@@ -86,6 +105,19 @@ type Audio implements MediaItem {
 	isFavorite: Boolean!
 	albumFileId: String!
 	tags: [Tag!]!
+}
+
+type AudioAlbumCover {
+	albumId: ID!
+	trackCount: Int!
+	candidatePaths: [String!]!
+}
+
+type AudioArtist {
+	name: String!
+	itemCount: Int!
+	playCount: Long!
+	samplePath: String!
 }
 
 type AudioArtistPlayCount {
@@ -118,6 +150,11 @@ type AudioItem {
 	durationMs: Long!
 }
 
+type AudioOverview {
+	artists: [AudioArtist!]!
+	recentItems: [Audio!]!
+}
+
 type AudioPlayHistory {
 	mediaId: ID!
 	path: String!
@@ -129,6 +166,7 @@ type AudioPlayHistory {
 }
 
 type AudioPlayback {
+	revision: Long!
 	mediaId: ID
 	path: String
 	mode: MediaPlayMode!
@@ -148,6 +186,24 @@ type AudioPlaylist {
 	itemCount: Int!
 	createdAt: Instant!
 	updatedAt: Instant!
+}
+
+type AudioPlaylistCovers {
+	id: ID!
+	albums: [AudioAlbumCover!]!
+}
+
+type AudioSelection {
+	track: AudioItem
+	path: String!
+	positionMs: Long!
+	revision: Long!
+}
+
+enum AudioSelectionAction {
+	NEXT
+	PREVIOUS
+	COMPLETED
 }
 
 type AuditEvent {
@@ -231,6 +287,17 @@ enum CallType {
 }
 
 enum Capability {
+	PEER_DISCOVERY
+	BLE_DISCOVERY
+	WIFI_AWARE
+	BACKGROUND_SERVICE
+	LAUNCHER_SHORTCUTS
+	FILE_BROWSER
+	IMAGE_LIBRARY
+	AUDIO_LIBRARY
+	VIDEO_LIBRARY
+	DOCUMENT_LIBRARY
+	SOUND_METER
 	BACKGROUND_TIMER
 	BACKGROUND_WAKE
 	FILE_EXPORT
@@ -280,6 +347,7 @@ enum ChannelMemberStatus {
 }
 
 type ChatChannel {
+	actions: ChatChannelActions!
 	id: ID!
 	ownerId: ID!
 	name: String!
@@ -294,12 +362,21 @@ type ChatChannel {
 	updatedAt: Instant!
 }
 
+type ChatChannelActions {
+	isOwner: Boolean!
+	canRename: Boolean!
+	canManageMembers: Boolean!
+	canLeave: Boolean!
+	canDelete: Boolean!
+}
+
 type ChatChannelMember {
 	peerId: ID!
 	status: ChannelMemberStatus!
 }
 
 type ChatChannelRecord {
+	actions: ChatChannelActions!
 	id: ID!
 	name: String!
 	key: String!
@@ -1266,6 +1343,8 @@ type Mount {
 type Mutation {
 	clearAppCache: Boolean!
 	restartHttpServer(httpPort: Int, httpsPort: Int): HttpServerState!
+	startAppUpdateDownload: AppUpdateDownload!
+	cancelAppUpdateDownload: AppUpdateDownload!
 	checkAppUpdate(automatic: Boolean! = false): AppUpdateStatus!
 	controlDlnaReceiver(input: DlnaReceiverInput!): JSON!
 	regenerateTlsCertificate: [Int!]!
@@ -1287,6 +1366,8 @@ type Mutation {
 	resumeChatDownload(id: ID!): Boolean!
 	retryChatDownload(id: ID!): Boolean!
 	removeChatDownload(id: ID!): Boolean!
+	acquireDiscovery(token: ID!): Boolean!
+	releaseDiscovery(token: ID!): Boolean!
 	beginBleScan: ID!
 	endBleScan(scanId: ID!): Boolean!
 	startMdnsReceiver: MdnsState!
@@ -1322,8 +1403,9 @@ type Mutation {
 	seekDlna(positionMs: Long!): DlnaSenderState!
 	removeDlnaItemAt(index: Int!): DlnaSenderState!
 	reorderDlnaItems(from: Int!, to: Int!): DlnaSenderState!
-	restoreImageSearch: Boolean!
 	releaseImageModelMemory: Boolean!
+	reportAudioPlayback(path: String!, revision: Long!, positionMs: Long!, started: Boolean!): Boolean!
+	advanceAudioSelection(action: AudioSelectionAction!, expectedPath: String!, expectedRevision: Long!, shuffle: Boolean! = false): AudioSelection
 	audioCommand(action: AudioCommandAction!, positionMs: Long!, speed: Float!): AudioPlaybackState!
 	audioPlayTrack(mediaId: ID!): AudioPlaybackState!
 	audioPlayPath(path: String!): AudioPlaybackState!
@@ -1332,8 +1414,12 @@ type Mutation {
 	selectNextAudio(isNext: Boolean!, shuffle: Boolean!): AudioItem
 	selectAudio(mediaId: ID): Boolean!
 	addAudioPlaylistMedia(id: ID!, mediaIds: [ID!]!): Int!
+	sendChatItems(targets: [String!]!, content: String!): [ChatItem!]!
+	sendShare(targets: [String!]!, shareId: ID!): [ChatItem!]!
+	sendFolderShare(targets: [String!]!, path: String!, name: String!, expiresAt: Instant): [ChatItem!]!
 	sendChatText(target: String!, text: String!): ChatItem!
 	forwardChatItem(id: ID!, target: String!): ChatItem!
+	forwardChatItems(id: ID!, targets: [String!]!): [ChatItem!]!
 	deliverChatItem(id: ID!, recipients: [ID!]): ChatItem!
 	createChatItem(target: String!, content: String!): ChatItem!
 	replaceChatFiles(id: ID!, content: String!): ChatItem
@@ -1342,7 +1428,7 @@ type Mutation {
 	createCopyTask(ops: [FileTaskOpInput!]!): FileTask!
 	createMoveTask(ops: [FileTaskOpInput!]!): FileTask!
 	removeFileTask(id: ID!): Boolean!
-	createFileTask(type: FileTaskType!, title: String!, ops: [FileTaskOpInput!]!): FileTask!
+	createFileTask(type: FileTaskType!, title: String!, ops: [FileTaskOpInput!]!, waitForCompletion: Boolean! = false): FileTask!
 	saveVideoPlayProgress(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
 	recordVideoPlay(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
 	deleteVideoPlayProgress(mediaId: ID!): Boolean!
@@ -1369,8 +1455,6 @@ type Mutation {
 	recordClipboard(input: ClipboardRecordInput!): ClipboardRecordResult!
 	deleteClipboardItemsByIds(ids: [ID!]!): ActionResult!
 	fetchBookmarkMetadata(id: ID!): Bookmark
-	configurePomodoroDay(date: String!, dayStart: Instant!): PomodoroToday!
-	tickPomodoro: PomodoroTickResult!
 	skipPomodoro: PomodoroTickResult!
 	adjustPomodoro(durationSec: Int!): PomodoroToday!
 	confirmWebLogin(requestId: String!, allowed: Boolean!): Boolean!
@@ -1404,10 +1488,6 @@ type Mutation {
 	clearNotificationFilterApps: ActionResult!
 	deletePlaylistVideos(paths: [String!]!): ActionResult!
 	uninstallPackages(ids: [ID!]!): Boolean!
-	"""
-	Bundle unpacking is heavy disk I/O, so the platform side keeps it off
-	the engine thread; a failure surfaces as `Installation failed: …`.
-	"""
 	installPackage(path: String!): PackageInstallPending!
 	createContact(input: ContactInput!): Contact!
 	updateContact(id: ID!, input: ContactInput!): Contact!
@@ -1470,6 +1550,7 @@ type Mutation {
 	cacheAudioCover(path: String!): String
 	playAudio(mediaId: ID!): AudioItem!
 	playAudioByPath(path: String!): AudioItem!
+	cycleAudioPlayMode: MediaPlayMode!
 	updateAudioPlayMode(mode: MediaPlayMode!): Boolean!
 	clearAudioQueue: Boolean!
 	removeAudioFromQueue(mediaId: ID!): Boolean!
@@ -1591,11 +1672,6 @@ type Mutation {
 	deleteDbTableRows(table: String!, ids: [String!]!): Boolean!
 	createFile(path: String!): File!
 	renameFilePath(path: String!, name: String!): String
-	"""
-	Counts what was actually removed. A path that was already gone
-	counts as zero, so the number is the delta rather than the request
-	size.
-	"""
 	deleteFiles(paths: [String!]!): ActionResult!
 	createZipArchive(paths: [String!]!, target: String!): String!
 	extractZipArchive(path: String!, target: String!): String!
@@ -1670,6 +1746,12 @@ type NearbyDevice {
 	discoveryMethods: [String!]!
 	bestIp: String!
 	status: String!
+}
+
+type NetworkStatus {
+	ipv4Addresses: [String!]!
+	primaryIpv4: String!
+	vpnActive: Boolean!
 }
 
 type Note {
@@ -1807,12 +1889,6 @@ type Peer {
 	createdAt: Instant!
 	updatedAt: Instant!
 	online: Boolean!
-}
-
-type PeerAwareConfig {
-	pmk: String
-	isClient: Boolean!
-	localPort: Int!
 }
 
 input PeerLoginInput {
@@ -1992,6 +2068,7 @@ enum PostalType {
 }
 
 type Query {
+	appUpdateDownload: AppUpdateDownload!
 	appCacheSize: Long!
 	httpServer: HttpServerState!
 	dlnaReceiver: JSON!
@@ -2005,7 +2082,6 @@ type Query {
 	sharedDownloadQueue: SharedDownloadQueue!
 	chatDownloadQueue: ChatDownloadQueue!
 	activePeerTransfers: [ActivePeerTransfer!]!
-	peerAwareConfig(id: ID!): PeerAwareConfig!
 	mdnsDebug: MdnsDebug!
 	discoveryReply: DiscoveryReply!
 	discoveryBleAdvertisement: String!
@@ -2065,6 +2141,7 @@ type Query {
 	systemSettings: SystemSettings!
 	userSettings: UserSettings!
 	verifyAdbToken(token: String!): Boolean!
+	packageManifest(id: ID!): String!
 	packages(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Package!]!
 	packageCount(query: String!): Int!
 	packageStatuses(ids: [ID!]!): [PackageStatus!]!
@@ -2079,7 +2156,6 @@ type Query {
 	contactGroups: [ContactGroup!]!
 	sms(query: String!, offset: Int!, limit: Int!, includeTrashed: Boolean! = false): [Sms!]!
 	smsIds(query: String!, includeTrashed: Boolean! = false): [ID!]!
-	mmsTextIds(filters: [String!]!): [ID!]!
 	smsConversationDate(id: ID!): Instant
 	smsArchiveRecords: [SmsArchiveRecord!]!
 	trashedSmsIds: [ID!]!
@@ -2112,6 +2188,7 @@ type Query {
 	feedEntryCount(query: String!): Int!
 	feedEntry(id: ID!): FeedEntry
 	feedEntries(query: String!, offset: Int!, limit: Int!): [FeedEntry!]!
+	audioOverview: AudioOverview!
 	audioMetadata(path: String!): AudioItem!
 	audioCount(query: String!): Int!
 	audios(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Audio!]!
@@ -2121,6 +2198,7 @@ type Query {
 	audioQueueItemCount: Int!
 	audioPlaylists: [AudioPlaylist!]!
 	audioPlaylistItems(id: ID!, query: String!, offset: Int!, limit: Int!): [AudioItem!]!
+	audioPlaylistCovers(ids: [ID!]!): [AudioPlaylistCovers!]!
 	audioPlaylistItemCount(id: ID!, query: String!): Int!
 	audioPlayHistory(query: String!, offset: Int!, limit: Int!): [AudioPlayHistory!]!
 	audioPlayHistoryCount: Int!
@@ -2429,7 +2507,6 @@ input SharedDownloadInput {
 	urlToken: String!
 	entries: [SharedEntryInput!]!
 	targetDir: String!
-	downloadsBase: String!
 	zipName: String!
 }
 

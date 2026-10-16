@@ -118,3 +118,42 @@ fn path_playback_is_temporary_and_never_enqueues_or_fabricates_an_id() {
     let reopened = Db::open(&path).unwrap();
     assert_eq!(audio_queue::get_audio_current(&reopened).unwrap(), "");
 }
+
+#[test]
+fn completion_checks_path_revision_and_duplicates_before_advancing_the_queue() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("db")).unwrap();
+    let prefs = Prefs::load(&dir.path().join("prefs.json")).unwrap();
+    let mut engine = Fake {
+        commands: vec![],
+        fail: false,
+    };
+    fixtures::register_audio_tracks(
+        &db,
+        &[
+            AudioTrack::from_path_stem("one"),
+            AudioTrack::from_path_stem("two"),
+        ],
+    );
+    let first = play_path(&db, &prefs, &mut engine, "one").unwrap();
+    audio_queue::enqueue(&db, &[AudioTrack::from_path_stem("two")], false).unwrap();
+    let seeked = command(&db, &prefs, &mut engine, Action::Seek, 4000, 1.0).unwrap();
+    let calls = engine.commands.len();
+    assert!(!completed(&db, &prefs, &mut engine, "one", first.revision).unwrap());
+    assert!(!completed(&db, &prefs, &mut engine, "other", seeked.revision).unwrap());
+    assert_eq!(engine.commands.len(), calls);
+    assert_eq!(audio_playback::snapshot(&db).unwrap(), seeked);
+    assert!(completed(&db, &prefs, &mut engine, "one", seeked.revision).unwrap());
+    let next = audio_playback::snapshot(&db).unwrap();
+    assert_eq!(next.path, "two");
+    assert!(!completed(&db, &prefs, &mut engine, "one", seeked.revision).unwrap());
+    assert_eq!(engine.commands.len(), calls + 1);
+    audio_queue::save_audio_mode(&prefs, "REPEAT_ONE").unwrap();
+    assert!(completed(&db, &prefs, &mut engine, "two", next.revision).unwrap());
+    let repeated = audio_playback::snapshot(&db).unwrap();
+    assert_eq!(repeated.path, "two");
+    assert_ne!(repeated.revision, next.revision);
+    assert!(!completed(&db, &prefs, &mut engine, "two", next.revision).unwrap());
+    assert!(completed(&db, &prefs, &mut engine, "", repeated.revision).is_err());
+    assert!(completed(&db, &prefs, &mut engine, "two", -1).is_err());
+}

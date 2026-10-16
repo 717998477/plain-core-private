@@ -19,7 +19,7 @@ description = "Shared Plain server assembly and desktop/mobile adapters"
 "image-inference" = ["dep:plain-inference"]
 "http_transport" = ["dep:serde_json", "dep:reqwest", "reqwest/rustls-tls", "dep:axum", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile", "tokio/net", "tokio/rt", "tokio/sync", "tokio/time", "plain-rs/tls"]
 "api" = ["core"]
-"core" = ["dep:netdev", "dep:tempfile", "dep:sysinfo", "plain-rs/linux-system", "dep:rustls-pemfile", "dep:serde_json", "dep:chrono", "dep:rusqlite", "ble", "crypto", "dep:image", "sqlite_browse", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tokio-rustls", "dep:tower", "dep:zip", "dep:tokio-tungstenite", "tokio-tungstenite/rustls-tls-webpki-roots", "dep:rustls", "dep:hmac", "dep:sha2_mac", "dep:anyhow", "chat", "library", "dep:regex", "dep:async-graphql", "dep:axum", "dep:reqwest", "reqwest/rustls-tls", "dep:futures-util", "tokio/net", "tokio/rt-multi-thread", "tokio/sync", "tokio/time", "tokio/fs", "tokio/macros", "dep:subtle", "plain-rs/services", "plain-rs/filesystem", "plain-rs/trash", "plain-rs/html", "plain-rs/feeds", "plain-rs/tls", "plain-rs/graphql", "image-inference"]
+"core" = ["dep:dirs", "dep:netdev", "dep:tempfile", "dep:sysinfo", "plain-rs/linux-system", "dep:rustls-pemfile", "dep:serde_json", "dep:chrono", "dep:rusqlite", "ble", "crypto", "dep:image", "sqlite_browse", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tokio-rustls", "dep:tower", "dep:zip", "dep:tokio-tungstenite", "tokio-tungstenite/rustls-tls-webpki-roots", "dep:rustls", "dep:hmac", "dep:sha2_mac", "dep:anyhow", "chat", "library", "dep:regex", "dep:async-graphql", "dep:axum", "dep:reqwest", "reqwest/rustls-tls", "dep:futures-util", "tokio/net", "tokio/rt-multi-thread", "tokio/sync", "tokio/time", "tokio/fs", "tokio/macros", "dep:subtle", "plain-rs/services", "plain-rs/filesystem", "plain-rs/trash", "plain-rs/html", "plain-rs/feeds", "plain-rs/tls", "plain-rs/graphql", "image-inference"]
 "mounts" = ["dep:sysinfo", "dep:serde_json"]
 "mobile" = ["core"]
 "system" = ["api", "dep:ureq", "dep:http"]
@@ -55,7 +55,7 @@ parking_lot = "0.12"
 "hmac" = { "version" = "0.13", "optional" = true }
 "sha2_mac" = { "package" = "sha2", "version" = "0.11", "optional" = true }
 "rand" = "0.8"
-"uuid" = { "version" = "1", "features" = ["v4"] }
+"uuid" = { "version" = "1", "features" = ["v4", "serde"] }
 "log" = "0.4"
 "libc" = "0.2"
 "rusqlite" = { "version" = "0.32", "features" = ["bundled"], "optional" = true }
@@ -94,7 +94,8 @@ parking_lot = "0.12"
 plain-rs = { path = "../plain-rs", default-features = false, features = ["linux-platform"] }
 
 [target.'cfg(not(target_os = "ios"))'.dependencies]
+netdev = { version = "0.46.3", optional = true, default-features = false, features = ["gateway", "apple-system-configuration-extra"] }
 sysinfo = { version = "0.32", default-features = false, features = ["system"], optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-netdev = { version = "0.46.3", optional = true, default-features = false, features = ["gateway", "apple-system-configuration-extra"] }
+dirs = { version = "7.0.0", optional = true }

@@ -98,7 +98,7 @@ async fn enqueue(
     let response = server.native_graphql().unwrap().execute(Request::new("mutation($input: SharedDownloadInput!) { enqueueSharedDownload(input: $input) }").variables(Variables::from_json(json!({"input":{
         "messageId":format!("message-{path}"),"kind":"FILE","link":{"host":"127.0.0.1","port":port,"sharedId":"fixture","token":plain_rs::base64_encode(&[7;32]),"pageUrl":""},
         "urlToken":plain_rs::base64_encode(&[8;32]),"entries":[{"name":format!("{path}.bin"),"virtualPath":path,"isDir":false,"size":3,"mimeType":"application/octet-stream","hasThumb":false}],
-        "targetDir":target.to_str().unwrap(),"downloadsBase":target.to_str().unwrap(),"zipName":""
+        "targetDir":target.to_str().unwrap(),"zipName":""
     }})))).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     response.data.into_json().unwrap()["enqueueSharedDownload"]
@@ -234,4 +234,47 @@ async fn pause_invalidates_the_generation_and_late_tls_bytes_cannot_commit_a_fil
     }));
     server.shutdown().await;
     tls.abort();
+}
+
+#[test]
+fn default_shared_download_layout_uses_startup_root_without_another_host_call() {
+    let root = tempfile::tempdir().unwrap();
+    let host = crate::host::bridge::Host::with_startup_properties(
+        json!({"downloadsDir":root.path()})
+            .as_object()
+            .unwrap()
+            .clone(),
+    )
+    .unwrap();
+    let (_generation, mut requests) = host.connect();
+    for _ in 0..3 {
+        assert_eq!(
+            downloads_directory(&host, "").unwrap(),
+            root.path().join("PlainApp").to_str().unwrap()
+        );
+    }
+    let selected = root.path().join("selected");
+    assert_eq!(
+        downloads_directory(&host, selected.to_str().unwrap()).unwrap(),
+        selected.to_str().unwrap()
+    );
+    assert!(requests.try_recv().is_err());
+    assert!(!root.path().join("PlainApp").exists());
+}
+
+#[test]
+fn invalid_default_download_roots_fail_without_replacing_an_explicit_target() {
+    let root = tempfile::tempdir().unwrap();
+    for value in ["", "relative", "bad\0path"] {
+        let host = crate::host::bridge::Host::with_startup_properties(
+            json!({"downloadsDir":value}).as_object().unwrap().clone(),
+        )
+        .unwrap();
+        assert!(downloads_directory(&host, "").is_err());
+        assert_eq!(
+            downloads_directory(&host, root.path().to_str().unwrap()).unwrap(),
+            root.path().to_str().unwrap()
+        );
+        assert!(downloads_directory(&host, "relative").is_err());
+    }
 }

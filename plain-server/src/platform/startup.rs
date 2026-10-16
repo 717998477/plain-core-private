@@ -12,7 +12,7 @@ pub(crate) fn properties() -> serde_json::Map<String, serde_json::Value> {
             "supportedAbis":[std::env::consts::ARCH],
             "appVersion":crate::platform::version::version(),
             "buildChannel":"GITHUB",
-            "downloadsDir":"",
+            "downloadsDir":dirs::download_dir().and_then(|path| path.into_os_string().into_string().ok()).unwrap_or_default(),
             "debug":cfg!(debug_assertions)
         })
         .as_object()

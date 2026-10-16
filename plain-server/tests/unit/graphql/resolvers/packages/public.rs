@@ -40,12 +40,12 @@ fn fixture(permissions: Value) -> (tempfile::TempDir, PublicSchema, Arc<Prefs>) 
 }
 
 fn fact(id: &str, kind: &str, size: i64) -> Value {
-    json!({"item":{
+    json!({
         "id":id,"name":id,"type":kind,"version":"1.0","path":"/data/app.apk","size":size,
         "installedAt":"2026-10-01T00:00:00.000Z","updatedAt":"2026-10-05T00:00:00.000Z",
         "certs":[{"issuer":"issuer","subject":"subject","serialNumber":"0x1",
                   "validFrom":"2026-01-01T00:00:00.000Z","validTo":"2036-01-01T00:00:00.000Z"}],
-    },"nameSortKey":id})
+    })
 }
 
 #[tokio::test]
@@ -73,6 +73,14 @@ async fn packages_maps_host_facts_into_the_contract_types() {
     assert_eq!(
         packages[0]["certs"][0]["validTo"],
         "2036-01-01T00:00:00.000Z"
+    );
+    let response = schema
+        .execute(r#"query { packages(offset:1, limit:1, query:"", sortBy:NAME_DESC) { id } }"#)
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["packages"],
+        json!([{"id":"com.a"}])
     );
     drop(dir);
 }
@@ -128,17 +136,30 @@ async fn package_statuses_keep_missing_packages_in_the_reply() {
 }
 
 #[tokio::test]
-async fn install_package_reports_the_platform_failure_verbatim() {
-    let (_dir, schema, _prefs) = fixture(json!(["QUERY_ALL_PACKAGES"]));
+async fn install_package_parses_identity_in_rust_and_dispatches_only_sdk_execution() {
+    let (dir, schema, _prefs) = fixture(json!(["QUERY_ALL_PACKAGES"]));
+    let path = dir.path().join("source.apk");
+    std::fs::write(
+        &path,
+        crate::services::packages::manifest::tests::apk("com.a", None),
+    )
+    .unwrap();
+    let expected = path.clone();
     let host = schema_host(&schema);
-    stub(host.clone(), |method, _| match method {
+    stub(host.clone(), move |method, params| match method {
         "systemInstallPackage" => {
+            assert_eq!(params["paths"], json!([expected]));
+            assert_eq!(params["packageName"], "com.a");
+            assert_eq!(params["session"], false);
             json!({"packageName":"com.a","lastUpdateTime": Value::Null,"isNew": true})
         }
         other => panic!("unexpected host call {other}"),
     });
     let response = schema
-        .execute(r#"mutation { installPackage(path:"/tmp/a.apk") { id updatedAt isNew } }"#)
+        .execute(format!(
+            "mutation {{ installPackage(path:{}) {{ id updatedAt isNew }} }}",
+            serde_json::to_string(&path.to_string_lossy()).unwrap()
+        ))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let pending = response.data.into_json().unwrap()["installPackage"].clone();
@@ -151,4 +172,53 @@ async fn install_package_reports_the_platform_failure_verbatim() {
 /// through every fixture.
 fn schema_host(schema: &PublicSchema) -> Arc<Host> {
     schema.data::<Arc<Host>>().unwrap().clone()
+}
+
+#[tokio::test]
+async fn package_manifest_uses_the_installed_path_and_no_platform_parser() {
+    let (dir, schema, _prefs) = fixture(json!(["QUERY_ALL_PACKAGES"]));
+    let path = dir.path().join("installed.apk");
+    std::fs::write(
+        &path,
+        crate::services::packages::manifest::tests::apk("com.a", None),
+    )
+    .unwrap();
+    let host = schema_host(&schema);
+    stub(host, move |method, params| match method {
+        "systemPackageStatuses" => {
+            assert_eq!(params, json!({"ids":["com.a"]}));
+            json!({"com.a":{"path":path}})
+        }
+        other => panic!("unexpected platform operation {other}"),
+    });
+    let response = schema.execute("{packageManifest(id:\"com.a\")}").await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let value = response.data.into_json().unwrap();
+    let xml = value["packageManifest"].as_str().unwrap();
+    assert!(xml.contains("<manifest package=\"com.a\">"));
+    assert!(xml.contains("</manifest>"));
+}
+
+#[tokio::test]
+async fn package_manifest_preserves_package_permission_and_missing_package_errors() {
+    let (_dir, schema, _prefs) = fixture(json!([]));
+    let response = schema.execute("{packageManifest(id:\"com.a\")}").await;
+    assert!(
+        response
+            .errors
+            .iter()
+            .any(|error| error.message == "no_permission")
+    );
+    let (_dir, schema, _prefs) = fixture(json!(["QUERY_ALL_PACKAGES"]));
+    stub(schema_host(&schema), |method, _| match method {
+        "systemPackageStatuses" => json!({"com.a":null}),
+        other => panic!("unexpected platform operation {other}"),
+    });
+    let response = schema.execute("{packageManifest(id:\"com.a\")}").await;
+    assert!(
+        response
+            .errors
+            .iter()
+            .any(|error| error.message == "Package not found")
+    );
 }

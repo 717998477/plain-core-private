@@ -22,11 +22,107 @@ impl From<playback::Playback> for AudioPlaybackState {
     }
 }
 
+#[derive(SimpleObject)]
+pub struct AudioSelection {
+    track: Option<AudioItem>,
+    path: String,
+    position_ms: Long,
+    revision: Long,
+}
+
 #[derive(Default)]
 pub struct AudioCommandsMutation;
 
 #[Object]
 impl AudioCommandsMutation {
+    async fn report_audio_playback(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+        revision: Long,
+        position_ms: Long,
+        started: bool,
+    ) -> Result<bool> {
+        crate::http::auth::public_gate::require(
+            ctx,
+            ctx.data::<Arc<Prefs>>()?,
+            &["WRITE_EXTERNAL_STORAGE"],
+        )?;
+        let report = ctx
+            .data::<Arc<Audio>>()?
+            .run_playback(move |db, _| {
+                playback::report_selection(
+                    db,
+                    &playback::Playback {
+                        path,
+                        revision: revision.0,
+                        position_ms: position_ms.0,
+                    },
+                    started,
+                )
+            })
+            .await?;
+        if report.history_changed {
+            crate::services::audio::reports::publish_library_updated(
+                ctx.data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?,
+            );
+        }
+        Ok(report.accepted)
+    }
+
+    async fn advance_audio_selection(
+        &self,
+        ctx: &Context<'_>,
+        action: plain_rs::media::audio::selection::AudioSelectionAction,
+        expected_path: String,
+        expected_revision: Long,
+        #[graphql(default)] shuffle: bool,
+    ) -> Result<Option<AudioSelection>> {
+        if expected_revision.0 < 0 {
+            return Err(async_graphql::Error::new(
+                "invalid audio selection revision",
+            ));
+        }
+        let prefs = ctx.data::<Arc<Prefs>>()?.clone();
+        let selection = ctx
+            .data::<Arc<Audio>>()?
+            .run_playback(move |db, engine| {
+                use commands::Engine;
+                let current = playback::snapshot(db)?;
+                if current.path != expected_path || current.revision != expected_revision.0 {
+                    return Ok(None);
+                }
+                engine.refresh()?;
+                plain_rs::media::audio::selection::advance_with_shuffle(
+                    db,
+                    &prefs,
+                    action,
+                    &playback::Playback {
+                        path: expected_path,
+                        revision: expected_revision.0,
+                        position_ms: 0,
+                    },
+                    shuffle,
+                    |path| engine.metadata(path),
+                )
+            })
+            .await?;
+        if selection.is_some() {
+            let _ = ctx
+                .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?
+                .send(plain_rs::events::WsEvent::broadcast(
+                    "CONTENT_CHANGED",
+                    "{}".into(),
+                ));
+        }
+        Ok(selection.map(|selection| AudioSelection {
+            track: selection.track.map(Into::into),
+            path: selection.playback.path,
+            position_ms: Long(selection.playback.position_ms),
+            revision: Long(selection.playback.revision),
+        }))
+    }
+
     async fn audio_command(
         &self,
         ctx: &Context<'_>,

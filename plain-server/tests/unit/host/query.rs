@@ -400,10 +400,8 @@ async fn a_query_that_builds_no_clause_is_the_one_the_destructive_path_refuses()
 
     for (provider, query) in [
         (Provider::Audio, "text:x"),
-        // Always narrowed by a clause of the provider's own, so the guard can
-        // never fire for them however the query is spelled.
-        (Provider::Doc, "trash:false"),
-        (Provider::File, "trash:false"),
+        (Provider::Doc, "ids:1"),
+        (Provider::File, "text:example"),
     ] {
         require_narrowing(&db, provider, query)
             .unwrap_or_else(|e| panic!("{provider:?} {query:?} was refused: {e}"));
@@ -471,4 +469,30 @@ fn call_date_filters_are_resolved_by_rust_without_a_host() {
     )
     .unwrap();
     assert!(invalid["plan"]["clauses"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn destructive_doc_queries_must_narrow_beyond_the_provider_defaults() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(&directory.path().join("db")).unwrap();
+    for query in [
+        "all:false",
+        "trash:false",
+        "show_hidden:false",
+        "root_path:/",
+        "unsupported_scope:value",
+    ] {
+        assert!(
+            require_narrowing(&db, Provider::Doc, query).is_err(),
+            "{query}"
+        );
+    }
+    for provider in [
+        Provider::Audio,
+        Provider::Video,
+        Provider::Image,
+        Provider::Doc,
+    ] {
+        assert!(require_narrowing(&db, provider, "ids:1,2").is_ok());
+    }
 }

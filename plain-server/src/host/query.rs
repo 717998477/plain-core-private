@@ -129,7 +129,10 @@ pub(crate) fn plan(
 
     if matches!(provider, Provider::Doc) {
         plan.add(
-            "(mime_type LIKE ? OR mime_type IN (?,?,?,?,?))".into(),
+            format!(
+                "(mime_type LIKE ? OR mime_type IN ({}))",
+                vec!["?"; plain_rs::media::documents::MIME_TYPES.len()].join(",")
+            ),
             std::iter::once("text/%".to_owned())
                 .chain(
                     plain_rs::media::documents::MIME_TYPES
@@ -286,28 +289,8 @@ pub(crate) fn dates(fields: &[FilterField]) -> Value {
     }
 }
 
-/// Refuses a request that acts on a query naming no selection.
-///
-/// `plan` drops the fields it does not act on — `trash` and `show_hidden`
-/// ride along from a media view, `type` carries over from Apps — and an empty
-/// clause list is what `ContentWhere` renders as `1=1`. On a listing that only
-/// means "everything", which is what those fields ask for anyway. On the path
-/// that turns a query into the id set `deleteMediaItems` / `trashMediaItems` /
-/// `restoreMediaItems` / `moveMediaItems` / `deleteCalls` act on, it means the
-/// operation covers the whole table, so those ask this first.
-///
-/// It asks the built plan rather than the field names, because "did this name
-/// narrow anything" is not a property of the name: the same field produces a
-/// clause on one provider (`type` is a Call column and nothing at all on the
-/// media providers, whose own kind is the provider choice) and none on another.
-/// Audio lost the unconditional `duration > 0` its Kotlin helper used to add,
-/// which is how a `type:` leak from the Apps view became a whole-table delete.
-///
-/// Providers that always contribute a clause of their own cannot come back
-/// empty and need no case here: Contact pins `mimetype`, Doc its mime types,
-/// File the dotfile exclusion.
 pub(crate) fn require_narrowing_with(
-    builder: impl FnOnce(Provider, &[FilterField], &Value, Option<&str>, bool) -> anyhow::Result<Plan>,
+    builder: impl Fn(Provider, &[FilterField], &Value, Option<&str>, bool) -> anyhow::Result<Plan>,
     db: &Db,
     provider: Provider,
     query: &str,
@@ -318,22 +301,18 @@ pub(crate) fn require_narrowing_with(
         return Ok(());
     }
     let parsed = fields(db, query)?;
-    if parsed.iter().any(|f| f.name == "all") {
-        return Ok(());
-    }
-    // `trash:true` names the trashed set, which is a scope of its own: it is
-    // answered by the MediaStore query argument rather than a clause, so the
-    // clause list stays empty for a query that is anything but the whole table.
-    // `trash:false` is the complement and narrows nothing — it is the case the
-    // empty-list check below exists to refuse.
     if parsed
         .iter()
-        .any(|f| f.name == "trash" && f.value.eq_ignore_ascii_case("true"))
+        .any(|f| f.name == "all" && f.value.eq_ignore_ascii_case("true"))
     {
         return Ok(());
     }
     let plan = builder(provider, &parsed, &dates(&parsed), None, query.is_empty())?;
-    if plan.clauses.is_empty() {
+    if plan.trash == Some(true) {
+        return Ok(());
+    }
+    let baseline = builder(provider, &[], &Value::Null, None, false)?;
+    if plan.clauses.len() <= baseline.clauses.len() && plan.ids.is_empty() {
         return Err(anyhow::anyhow!(
             "query {query:?} selects no {provider:?} row — nothing in it narrows the selection, so \
              the operation would cover the whole table; pass 'all:true' to target every row on \

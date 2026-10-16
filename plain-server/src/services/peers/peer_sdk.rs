@@ -30,6 +30,10 @@ impl Drop for Lease {
     }
 }
 async fn socket(state: &ServerState, peer: &plain_rs::db::DPeer) -> Result<(DuplexStream, Lease)> {
+    ensure!(
+        state.aware.subscribe(state, &peer.id).await?,
+        "Aware unavailable"
+    );
     let token = plain_rs::utils::short_uuid::short_uuid();
     let mut lease = Lease {
         host: state.host.clone(),
@@ -40,7 +44,7 @@ async fn socket(state: &ServerState, peer: &plain_rs::db::DPeer) -> Result<(Dupl
         .host
         .call(
             "peerTransportSocketOpen",
-            json!({"token":token,"peer":crate::services::peers::peer_address::view(peer)}),
+            json!({"token":token,"peerId":peer.id}),
         )
         .await
         .map_err(anyhow::Error::msg)?;

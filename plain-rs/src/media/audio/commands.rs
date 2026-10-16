@@ -91,23 +91,14 @@ pub fn command(
     let mut track = None;
     let playback = match action {
         Action::Next | Action::Previous | Action::Completed => {
-            let mode = audio_queue::play_mode(prefs)?;
-            let selected = if matches!(action, Action::Completed)
-                && mode == crate::media::audio::play_mode::MediaPlayMode::RepeatOne
-            {
-                let path = audio_queue::get_audio_current(db)?;
-                if path.is_empty() {
-                    None
-                } else {
-                    Some(engine.metadata(&path)?)
-                }
-            } else {
-                audio_queue::select_next(
-                    db,
-                    !matches!(action, Action::Previous),
-                    mode == crate::media::audio::play_mode::MediaPlayMode::Shuffle,
-                )?
+            let selection = match action {
+                Action::Next => super::selection::AudioSelectionAction::Next,
+                Action::Previous => super::selection::AudioSelectionAction::Previous,
+                Action::Completed => super::selection::AudioSelectionAction::Completed,
+                _ => unreachable!(),
             };
+            let selected =
+                super::selection::select(db, prefs, selection, |path| engine.metadata(path))?;
             if let Some(selected) = selected {
                 track = Some(selected);
                 actual = Action::Play;
@@ -151,6 +142,24 @@ pub fn command(
         new_track,
     )
 }
+pub fn completed(
+    db: &Db,
+    prefs: &Prefs,
+    engine: &mut impl Engine,
+    path: &str,
+    revision: i64,
+) -> DomainResult<bool> {
+    if path.is_empty() || revision < 0 {
+        return Err(DomainError::Other("invalid audio completion".into()));
+    }
+    let current = audio_playback::snapshot(db)?;
+    if current.path != path || current.revision != revision {
+        return Ok(false);
+    }
+    command(db, prefs, engine, Action::Completed, 0, 1.0)?;
+    Ok(true)
+}
+
 pub fn clear_engine(db: &Db, prefs: &Prefs, engine: &mut impl Engine) -> DomainResult<Playback> {
     let playback = audio_playback::invalidate(db)?;
     dispatch(

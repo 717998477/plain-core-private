@@ -120,3 +120,31 @@ fn retry_merges_current_recipient_results_and_protects_content_and_creation() {
             .is_none()
     );
 }
+
+#[test]
+fn forwarding_creates_one_atomic_batch_from_the_stored_message() {
+    let db = db();
+    let source = create(&db, "local", "", TEXT).unwrap();
+    let targets = vec![
+        ("local".into(), String::new()),
+        ("peer".into(), String::new()),
+    ];
+    db.with_conn(|connection| connection.execute_batch("CREATE TRIGGER reject_forward BEFORE INSERT ON chats WHEN NEW.to_id='peer' BEGIN SELECT RAISE(ABORT,'fixture failure'); END;")).unwrap();
+    assert!(forward_many(&db, &source.id, &targets).is_err());
+    assert_eq!(db.get_all_chats().len(), 1);
+    db.with_conn(|connection| connection.execute_batch("DROP TRIGGER reject_forward;"))
+        .unwrap();
+    let rows = forward_many(&db, &source.id, &targets).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .all(|row| row.content == TEXT && row.from_id == "me")
+    );
+    assert_eq!(rows[0].status, ChatStatus::Sent);
+    assert_eq!(rows[1].status, ChatStatus::Pending);
+    assert_ne!(rows[0].id, rows[1].id);
+    assert_ne!(rows[0].id, source.id);
+    assert!(forward_many(&db, "missing", &targets).is_err());
+    assert!(forward_many(&db, "missing", &[]).unwrap().is_empty());
+    assert_eq!(db.get_all_chats().len(), 3);
+}

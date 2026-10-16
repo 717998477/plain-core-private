@@ -16,6 +16,8 @@ pub struct ProbedMeta {
     pub duration_available: bool,
     pub artist: String,
     pub title: String,
+    pub album: String,
+    pub album_artist: String,
     /// False preserves existing tags when the file cannot be parsed.
     pub parsed: bool,
 }
@@ -32,6 +34,8 @@ pub fn probe_media(path: &str, kind: &str) -> ProbedMeta {
             duration_available: duration.is_some(),
             artist: String::new(),
             title: String::new(),
+            album: String::new(),
+            album_artist: String::new(),
             parsed: duration.is_some(),
         };
     }
@@ -54,6 +58,8 @@ pub fn probe_audio_reader(reader: &mut (impl Read + Seek)) -> ProbedMeta {
                 duration_available: duration.is_some(),
                 artist: facts.artist,
                 title: facts.title,
+                album: facts.album,
+                album_artist: facts.album_artist,
                 parsed: true,
             })
             .unwrap_or_default();
@@ -64,22 +70,19 @@ pub fn probe_audio_reader(reader: &mut (impl Read + Seek)) -> ProbedMeta {
     let Ok(projected) = id3::reader(&mut *reader, true) else {
         return ProbedMeta::default();
     };
+    let tags_complete = projected.tags_complete;
     let result = Probe::new(BufReader::new(projected))
         .options(ParseOptions::new().read_cover_art(false))
         .guess_file_type()
         .ok()
         .and_then(|probe| probe.read().ok());
-    let (mut duration, artist, title, parsed) = match result {
-        Some(file) => {
-            let (artist, title) = tag_strings(&file);
-            (
-                i64::try_from(file.properties().duration().as_millis()).ok(),
-                artist,
-                title,
-                true,
-            )
-        }
-        None => (None, String::new(), String::new(), false),
+    let (mut duration, tags, parsed) = match result {
+        Some(file) => (
+            i64::try_from(file.properties().duration().as_millis()).ok(),
+            tag_strings(&file),
+            true,
+        ),
+        None => (None, TagStrings::default(), false),
     };
     if duration.is_none_or(|duration| duration == 0) {
         let raw = super::raw_audio::milliseconds(reader);
@@ -95,9 +98,11 @@ pub fn probe_audio_reader(reader: &mut (impl Read + Seek)) -> ProbedMeta {
         duration_secs: seconds(duration.unwrap_or_default()),
         duration_ms: duration.unwrap_or_default(),
         duration_available: duration.is_some(),
-        artist,
-        title,
-        parsed,
+        artist: tags.artist,
+        title: tags.title,
+        album: tags.album,
+        album_artist: tags.album_artist,
+        parsed: parsed && tags_complete,
     }
 }
 
@@ -143,51 +148,49 @@ pub fn probe_duration_reader(reader: &mut (impl Read + Seek)) -> Option<i64> {
     i64::try_from(file.properties().duration().as_millis()).ok()
 }
 
-fn tag_strings(tagged_file: &lofty::file::TaggedFile) -> (String, String) {
-    let mut artist = String::new();
-    let mut title = String::new();
-    for tag_type in [
+#[derive(Default)]
+struct TagStrings {
+    artist: String,
+    title: String,
+    album: String,
+    album_artist: String,
+}
+
+fn tag_strings(tagged_file: &lofty::file::TaggedFile) -> TagStrings {
+    let mut fields = TagStrings::default();
+    let tags = [
         TagType::Id3v2,
         TagType::Ape,
         TagType::Id3v1,
         TagType::VorbisComments,
         TagType::Mp4Ilst,
-    ] {
-        if let Some(tag) = tagged_file.tag(tag_type) {
-            if artist.is_empty()
-                && let Some(a) = tag.artist()
-                && !a.trim().is_empty()
-            {
-                artist = a.trim().to_string();
-            }
-            if title.is_empty()
-                && let Some(t) = tag.title()
-                && !t.trim().is_empty()
-            {
-                title = t.trim().to_string();
-            }
-        }
-    }
-    if artist.is_empty() || title.is_empty() {
-        if let Some(tag) = tagged_file
+    ]
+    .into_iter()
+    .filter_map(|kind| tagged_file.tag(kind))
+    .chain(
+        tagged_file
             .primary_tag()
-            .or_else(|| tagged_file.first_tag())
-        {
-            if artist.is_empty()
-                && let Some(a) = tag.artist()
-                && !a.trim().is_empty()
-            {
-                artist = a.trim().to_string();
-            }
-            if title.is_empty()
-                && let Some(t) = tag.title()
-                && !t.trim().is_empty()
-            {
-                title = t.trim().to_string();
+            .or_else(|| tagged_file.first_tag()),
+    );
+    for tag in tags {
+        for (target, value) in [
+            (&mut fields.artist, tag.artist()),
+            (&mut fields.title, tag.title()),
+            (&mut fields.album, tag.album()),
+            (
+                &mut fields.album_artist,
+                tag.get_string(&lofty::tag::ItemKey::AlbumArtist)
+                    .map(std::borrow::Cow::Borrowed),
+            ),
+        ] {
+            if target.is_empty() {
+                if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+                    *target = value.trim().to_owned();
+                }
             }
         }
     }
-    (artist, title)
+    fields
 }
 
 #[cfg(test)]

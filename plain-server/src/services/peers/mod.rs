@@ -44,3 +44,6 @@ pub mod status_socket;
 
 #[cfg(feature = "core")]
 pub(crate) mod shared_transfer;
+
+#[cfg(feature = "core")]
+pub(crate) mod aware;

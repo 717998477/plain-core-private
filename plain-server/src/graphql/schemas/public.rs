@@ -48,6 +48,7 @@ use std::sync::Arc;
 
 #[derive(MergedObject, Default)]
 pub struct Query(
+    crate::graphql::resolvers::settings::updates::AppUpdateQuery,
     crate::graphql::resolvers::app::cache::CacheQuery,
     crate::graphql::resolvers::settings::http_server::HttpServerQuery,
     crate::graphql::resolvers::casting::receiver::DlnaReceiverQuery,
@@ -71,7 +72,7 @@ pub struct Query(
     crate::graphql::resolvers::tags::access::TagHostQuery,
     crate::graphql::resolvers::media::aux::MediaAuxQuery,
     crate::graphql::resolvers::images::host_index::ImageIndexTaskQuery,
-    crate::graphql::resolvers::pomodoro::host::PomodoroRecordQuery,
+    crate::graphql::resolvers::pomodoro::state::PomodoroRecordQuery,
     crate::graphql::resolvers::images::editor_host::ImageEditorItemsQuery,
     crate::graphql::resolvers::device::sessions::SessionsQuery,
     crate::graphql::resolvers::media::scan::MediaScanQuery,
@@ -131,7 +132,7 @@ pub struct Mutation(
     crate::graphql::resolvers::images::host_index::ImageIndexTaskMutation,
     crate::graphql::resolvers::clipboard::host::ClipboardHostMutation,
     crate::graphql::resolvers::bookmarks::metadata::BookmarkMetadataMutation,
-    crate::graphql::resolvers::pomodoro::host::PomodoroHostMutation,
+    crate::graphql::resolvers::pomodoro::state::PomodoroControlMutation,
     crate::graphql::resolvers::device::sessions::SessionsMutation,
     crate::graphql::resolvers::peers::runtime::PeerRuntimeMutation,
     crate::graphql::resolvers::app::platform::PlatformMutation,

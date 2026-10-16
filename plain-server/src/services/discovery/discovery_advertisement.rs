@@ -41,29 +41,23 @@ pub(crate) async fn device_type(state: &ServerState) -> Result<plain_rs::chat::e
 }
 
 async fn aware_flags(state: &ServerState) -> Result<(bool, bool)> {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        let value = state
-            .host
-            .call(
-                "systemProperties",
-                json!({"names":["wifiAwareSupported", "wifiAwareRunning"]}),
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-        let supported = value["wifiAwareSupported"]
-            .as_bool()
-            .ok_or_else(|| anyhow::anyhow!("Invalid Wi-Fi Aware support reading"))?;
-        let running = value["wifiAwareRunning"]
-            .as_bool()
-            .ok_or_else(|| anyhow::anyhow!("Invalid Wi-Fi Aware state reading"))?;
-        Ok((supported, running))
+    let supported = state
+        .host
+        .startup_property("wifiAwareSupported")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !supported {
+        return Ok((false, false));
     }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let _ = state;
-        Ok((false, false))
-    }
+    let sample = state
+        .host
+        .call("systemProperties", json!({"names":["wifiAwareRunning"]}))
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let running = sample["wifiAwareRunning"]
+        .as_bool()
+        .ok_or_else(|| anyhow::anyhow!("Invalid Wi-Fi Aware state reading"))?;
+    Ok((true, running))
 }
 async fn facts(state: &ServerState) -> Result<Facts> {
     let name = crate::services::device::info::default_device_name(&state.host)
@@ -76,47 +70,25 @@ async fn facts(state: &ServerState) -> Result<Facts> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("Missing startup app version"))?
         .to_owned();
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        let value = state
-            .host
-            .call(
-                "systemProperties",
-                json!({"names":["ipv4Addresses", "wifiAwareSupported", "wifiAwareRunning"]}),
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-        #[derive(serde::Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Properties {
-            ipv4_addresses: Vec<String>,
-            wifi_aware_supported: bool,
-            wifi_aware_running: bool,
-        }
-        let value: Properties = serde_json::from_value(value)?;
-        Ok(Facts {
-            name,
-            device_type,
-            version,
-            platform: std::env::consts::OS.to_uppercase(),
-            ips: value.ipv4_addresses,
-            aware_supported: value.wifi_aware_supported,
-            aware_running: value.wifi_aware_running,
-        })
-    }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        Ok(Facts {
-            name,
-            device_type,
-            version,
-            platform: std::env::consts::OS.to_uppercase(),
-            ips: plain_rs::protocols::mdns::host_responder::local_ipv4_strs(),
-            aware_supported: false,
-            aware_running: false,
-        })
-    }
+    let (network, (aware_supported, aware_running)) = tokio::try_join!(
+        async {
+            crate::platform::network::snapshot()
+                .await
+                .map_err(anyhow::Error::msg)
+        },
+        aware_flags(state),
+    )?;
+    Ok(Facts {
+        name,
+        device_type,
+        version,
+        platform: std::env::consts::OS.to_uppercase(),
+        ips: network.ipv4_addresses,
+        aware_supported,
+        aware_running,
+    })
 }
+
 #[cfg(test)]
 #[path = "../../../tests/unit/services/discovery/discovery_advertisement.rs"]
 mod tests;

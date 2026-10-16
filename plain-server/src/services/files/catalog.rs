@@ -10,6 +10,45 @@ pub(crate) enum MediaCatalog {
     Platform { db: Arc<Db>, host: Arc<Host> },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MediaVolumeRevision {
+    volume: String,
+    version: String,
+    generation: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct MediaPage {
+    pub rows: Vec<Value>,
+    pub revision_before: Option<Vec<MediaVolumeRevision>>,
+    pub revision_after: Option<Vec<MediaVolumeRevision>>,
+}
+
+impl MediaPage {
+    fn validate(mut self) -> Result<Self, String> {
+        for volumes in [&mut self.revision_before, &mut self.revision_after]
+            .into_iter()
+            .flatten()
+        {
+            if volumes.len() > 64 {
+                return Err("too many media volumes".into());
+            }
+            volumes.sort_by(|a, b| a.volume.cmp(&b.volume));
+            if volumes.iter().any(|volume| {
+                volume.volume.is_empty() || volume.version.is_empty() || volume.generation < 0
+            }) || volumes
+                .windows(2)
+                .any(|pair| pair[0].volume == pair[1].volume)
+            {
+                return Err("invalid media volume revision".into());
+            }
+        }
+        Ok(self)
+    }
+}
+
 impl MediaCatalog {
     pub(crate) fn new(db: Arc<Db>, host: Arc<Host>) -> Self {
         if cfg!(any(target_os = "android", target_os = "ios")) {
@@ -48,6 +87,32 @@ impl MediaCatalog {
                 .await
                 .map_err(|error| error.to_string())?
             }
+        }
+    }
+
+    pub(crate) async fn sampled_rows(
+        &self,
+        kind: DataType,
+        query: &str,
+        sort: FileSortBy,
+        limit: u32,
+        offset: u32,
+    ) -> Result<MediaPage, String> {
+        match self {
+            Self::Platform { db, host } => {
+                let facts = host.call("systemMediaRows", platform_params(
+                    db, kind, query,
+                    json!({"dataType":kind,"sortBy":sort.as_str(),"limit":limit,"offset":offset,"includeRevision":true}),
+                )?).await?;
+                serde_json::from_value::<MediaPage>(facts)
+                    .map_err(|error| error.to_string())?
+                    .validate()
+            }
+            Self::Native(_) => Ok(MediaPage {
+                rows: self.rows(kind, query, sort, limit, offset).await?,
+                revision_before: None,
+                revision_after: None,
+            }),
         }
     }
 
@@ -107,7 +172,7 @@ impl MediaCatalog {
     pub(crate) async fn buckets(&self, kind: DataType) -> Result<Value, String> {
         match self {
             Self::Platform { host, .. } => {
-                host.call("systemMediaBucketItemFacts", json!({"dataType":kind}))
+                host.call("systemMediaBucketItemFacts", json!({"dataType":kind,"plan":super::media_buckets::platform_plan(kind).map_err(|error| error.to_string())?}))
                     .await
             }
             Self::Native(db) => {

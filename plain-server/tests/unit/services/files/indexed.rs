@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex};
 
 fn seed(db: &Db, path: &str, size: i64) {
     db.record_media_files(&[MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type: DataType::Doc,
         path: path.into(),
         title: "Catalog title".into(),

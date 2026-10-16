@@ -1,3 +1,30 @@
+pub(crate) fn platform_plan(
+    kind: plain_rs::enums::DataType,
+) -> anyhow::Result<crate::host::query::Plan> {
+    anyhow::ensure!(
+        matches!(
+            kind,
+            plain_rs::enums::DataType::Image
+                | plain_rs::enums::DataType::Video
+                | plain_rs::enums::DataType::Audio
+                | plain_rs::enums::DataType::Doc
+        ),
+        "unsupported media bucket type"
+    );
+    let mut plan = crate::host::query::plan(
+        crate::host::query::media_provider(kind)?,
+        &[],
+        &serde_json::Value::Null,
+        None,
+        true,
+    )?;
+    if kind == plain_rs::enums::DataType::Audio {
+        plan.add("duration > 0".into(), vec![]);
+    }
+    plan.add("bucket_display_name != ''".into(), vec![]);
+    Ok(plan)
+}
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

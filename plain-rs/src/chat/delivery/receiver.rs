@@ -49,7 +49,10 @@ impl<T: PeerTransport + 'static> ChatService<T> {
     ) -> bool {
         let kp_bytes = base64_decode(&self.identity.ed25519_keypair);
         let ok = channel_handler::handle(self, from_id, msg_type, payload, &kp_bytes);
-        self.emit(WS_CHANNELS_UPDATED, channels_updated_payload(&self.db));
+        self.emit(
+            WS_CHANNELS_UPDATED,
+            channels_updated_payload(&self.db, &self.identity.client_id),
+        );
         ok
     }
 }

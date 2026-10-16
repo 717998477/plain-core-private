@@ -35,8 +35,11 @@ fn only_acknowledged_successes_are_cleaned_and_type_isolated() {
             2
         );
         assert_eq!(
-            c.query_row("SELECT m.path FROM audio_queue_items q JOIN audio_media m USING(media_id)", [], |r| r
-                .get::<_, String>(0))?,
+            c.query_row(
+                "SELECT m.path FROM audio_queue_items q JOIN audio_media m USING(media_id)",
+                [],
+                |r| r.get::<_, String>(0)
+            )?,
             "/failed"
         );
         Ok::<_, rusqlite::Error>(())
@@ -133,6 +136,9 @@ fn video_cleanup_keeps_other_types_and_move_keeps_user_tags() {
 
 fn catalog_file(path: &str) -> crate::db::MediaFileMetadata {
     crate::db::MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type: DataType::Doc,
         path: path.into(),
         title: "document".into(),

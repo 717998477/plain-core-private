@@ -29,7 +29,10 @@ impl ServerState {
         *self.http_failure.lock().unwrap() = None;
         let generation = crate::assembly::lifecycle::next_generation();
         let failure = listeners.failures();
+        let discovery =
+            crate::assembly::lifecycle::PublicDiscovery::start(self.clone(), receiver.clone());
         *guard = Some(PublicServer {
+            discovery,
             listeners,
             stop,
             generation,

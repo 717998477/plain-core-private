@@ -11,8 +11,9 @@ use tokio::{io::AsyncWriteExt, sync::broadcast};
 pub enum Kind {
     File { path: PathBuf, replace: bool },
     AppFile { name: String },
+    Resource { name: String, write: Completion },
 }
-type Completion = Arc<
+pub type Completion = Arc<
     dyn Fn(
             PathBuf,
         )
@@ -162,7 +163,7 @@ impl Runtime {
         let completed = self.completed.clone();
         let parent = match &kind {
             Kind::File { path, .. } => path.parent().map(Path::to_path_buf),
-            Kind::AppFile { .. } => None,
+            Kind::AppFile { .. } | Kind::Resource { .. } => None,
         };
         let runtime = Arc::downgrade(self);
         let task_id = id.clone();
@@ -251,6 +252,10 @@ pub async fn merge(
         "Merge integrity failed: expected {expected}, got {written}"
     );
     let value = match kind {
+        Kind::Resource { name, write } => {
+            write(temp.0.clone()).await?;
+            name
+        }
         Kind::AppFile { name } => {
             let record = store
                 .ok_or_else(|| anyhow::anyhow!("App file store is required"))?
@@ -295,6 +300,10 @@ fn commit_file(
     mut destination: PathBuf,
     replace: bool,
 ) -> std::io::Result<PathBuf> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(staged)?
+        .sync_all()?;
     if replace {
         std::fs::rename(staged, &destination)?;
         return Ok(destination);

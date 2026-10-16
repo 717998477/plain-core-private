@@ -25,6 +25,7 @@ pub(crate) struct Snapshot {
 }
 struct ModelState {
     version: u64,
+    published_version: Option<u64>,
     fingerprint: String,
     status: ImageSearchStatusType,
     progress: i32,
@@ -43,6 +44,8 @@ pub(crate) struct Runtime {
     prefs: Arc<Prefs>,
     index: Arc<ImageIndex>,
     state: Mutex<ModelState>,
+    #[cfg(test)]
+    snapshot_reads: std::sync::atomic::AtomicUsize,
     engine: Mutex<Option<Arc<plain_inference::embedding::Engine>>>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     operations: tokio::sync::Mutex<()>,
@@ -67,11 +70,14 @@ impl Runtime {
             events,
             state: Mutex::new(ModelState {
                 version: 0,
+                published_version: None,
                 fingerprint: String::new(),
                 status: ImageSearchStatusType::Unavailable,
                 progress: 0,
                 error: String::new(),
             }),
+            #[cfg(test)]
+            snapshot_reads: std::sync::atomic::AtomicUsize::new(0),
             engine: Mutex::new(None),
             task: Mutex::new(None),
             operations: tokio::sync::Mutex::new(()),
@@ -81,6 +87,8 @@ impl Runtime {
         })
     }
     pub fn snapshot(&self) -> Snapshot {
+        #[cfg(test)]
+        self.snapshot_reads.fetch_add(1, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap();
         let index = self.index.status();
         let mut snapshot = Snapshot {
@@ -144,12 +152,20 @@ impl Runtime {
             task.abort();
         }
     }
-    pub(crate) fn report_error(&self, message: String) {
+    fn report_error(&self, message: String) {
         self.state.lock().unwrap().error = message;
         self.publish();
     }
     fn publish(&self) {
         let snapshot = self.snapshot();
+        let mut state = self.state.lock().unwrap();
+        if state
+            .published_version
+            .is_some_and(|version| version >= snapshot.version)
+        {
+            return;
+        }
+        state.published_version = Some(snapshot.version);
         let _ = self.events.send(WsEvent::broadcast(
             "IMAGE_MODELS_UPDATED",
             serde_json::to_string(&snapshot).unwrap(),
@@ -281,9 +297,11 @@ impl Runtime {
             .set_user("ai_image_search_enabled", true)
             .map_err(|e| e.to_string())?;
         if !self.observing.load(Ordering::Acquire) {
-            self.host
-                .call("systemImageModelsObserve", json!({"enabled":true}))
-                .await?;
+            if self.index.uses_system_catalog() {
+                self.host
+                    .call("systemImageModelsObserve", json!({"enabled":true}))
+                    .await?;
+            }
             self.observing.store(true, Ordering::Release);
         }
         self.index.start(false).map_err(|e| e.to_string())?;
@@ -423,13 +441,9 @@ impl Runtime {
     }
     async fn pause_index(&self) -> Result<(), String> {
         self.index.cancel().map_err(|e| e.to_string())?;
-        tokio::time::timeout(Duration::from_secs(45), async {
-            while self.index.status().is_running {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        })
-        .await
-        .map_err(|_| "Image index cancellation timed out".to_owned())?;
+        tokio::time::timeout(Duration::from_secs(45), self.index.wait_until_idle())
+            .await
+            .map_err(|_| "Image index cancellation timed out".to_owned())?;
         Ok(())
     }
     async fn close_models(&self) -> Result<(), String> {
@@ -438,9 +452,11 @@ impl Runtime {
         self.index.set_encoder(None);
         *self.engine.lock().unwrap() = None;
         if self.observing.swap(false, Ordering::AcqRel) {
-            self.host
-                .call("systemImageModelsObserve", json!({"enabled":false}))
-                .await?;
+            if self.index.uses_system_catalog() {
+                self.host
+                    .call("systemImageModelsObserve", json!({"enabled":false}))
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -506,15 +522,28 @@ impl Runtime {
         self.set_status(ImageSearchStatusType::Unavailable, String::new());
     }
     pub fn follow(self: &Arc<Self>, mut stop: tokio::sync::watch::Receiver<bool>) {
+        self.publish();
         let runtime = self.clone();
+        let mut catalog_events = self.events.subscribe();
         tokio::spawn(async move {
-            let mut previous = String::new();
+            if !*stop.borrow() {
+                tokio::select! {
+                    _ = stop.changed() => {},
+                    result = runtime.enable(true) => {
+                        if let Err(error) = result { runtime.report_error(error); }
+                    },
+                }
+            }
             while !*stop.borrow() {
-                tokio::select! {_=stop.changed()=>break,_=tokio::time::sleep(Duration::from_millis(500))=>{}}
-                let current = serde_json::to_string(&runtime.snapshot()).unwrap();
-                if previous != current {
-                    runtime.publish();
-                    previous = current;
+                tokio::select! {
+                    _ = stop.changed() => break,
+                    event = catalog_events.recv() => match event {
+                        Ok(event) if event.event_type == "IMAGE_INDEX_UPDATED" => runtime.publish(),
+                        Ok(event) if event.event_type == plain_rs::events::MEDIA_LIBRARY_UPDATED && crate::services::files::catalog_events::includes(&event.payload, plain_rs::enums::DataType::Image) => runtime.catalog_changed(),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { runtime.catalog_changed(); runtime.publish(); },
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        _ => continue,
+                    },
                 }
             }
             runtime.shutdown().await;

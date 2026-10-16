@@ -21,3 +21,6 @@ pub mod prewarm;
 
 #[cfg(feature = "core")]
 pub mod share_card;
+
+#[cfg(feature = "core")]
+pub(crate) mod share_send;

@@ -9,7 +9,7 @@ use plain_rs::prefs::Prefs;
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 #[derive(Clone, Deserialize, Serialize, SimpleObject)]
 #[serde(rename_all = "camelCase")]
@@ -37,7 +37,8 @@ pub enum PomodoroState {
     ShortBreak,
     LongBreak,
 }
-#[derive(Clone, SimpleObject)]
+#[derive(Clone, Serialize, SimpleObject)]
+#[serde(rename_all = "camelCase")]
 pub struct PomodoroToday {
     pub date: Instant,
     pub completed_count: i32,
@@ -60,6 +61,7 @@ struct Runtime {
     round: i32,
     remaining: i32,
     total: i32,
+    settings_duration: i32,
     deadline: Option<DateTime<Utc>>,
     paused: bool,
     state: PomodoroState,
@@ -77,6 +79,7 @@ pub struct Service {
     prefs: Arc<Prefs>,
     events: broadcast::Sender<WsEvent>,
     runtime: Mutex<Option<Runtime>>,
+    changed: watch::Sender<u64>,
 }
 impl Service {
     pub fn new(db: Arc<Db>, prefs: Arc<Prefs>, events: broadcast::Sender<WsEvent>) -> Arc<Self> {
@@ -85,6 +88,7 @@ impl Service {
             prefs,
             events,
             runtime: Mutex::new(None),
+            changed: watch::channel(0).0,
         })
     }
     pub fn settings(&self) -> anyhow::Result<PomodoroSettings> {
@@ -107,8 +111,8 @@ impl Service {
             PomodoroState::LongBreak => settings.long_break_duration_min,
         }) * 60
     }
-    fn initial_runtime(settings: &PomodoroSettings) -> anyhow::Result<Runtime> {
-        let today = chrono::Local::now().date_naive();
+    fn initial_runtime(settings: &PomodoroSettings, now: DateTime<Utc>) -> anyhow::Result<Runtime> {
+        let today = now.with_timezone(&chrono::Local).date_naive();
         let day_start = today
             .and_hms_opt(0, 0, 0)
             .unwrap()
@@ -122,6 +126,7 @@ impl Service {
             round: 1,
             remaining: settings.work_duration_min * 60,
             total: settings.work_duration_min * 60,
+            settings_duration: settings.work_duration_min * 60,
             deadline: None,
             paused: false,
             state: PomodoroState::Work,
@@ -130,10 +135,24 @@ impl Service {
     fn runtime(
         &self,
         settings: &PomodoroSettings,
+        now: DateTime<Utc>,
     ) -> anyhow::Result<parking_lot::MutexGuard<'_, Option<Runtime>>> {
         let mut runtime = self.runtime.lock();
-        if runtime.is_none() {
-            *runtime = Some(Self::initial_runtime(settings)?);
+        let local = Self::initial_runtime(settings, now)?;
+        if let Some(r) = runtime.as_mut() {
+            if r.calendar_date != local.calendar_date {
+                r.round = 1;
+            }
+            r.calendar_date = local.calendar_date;
+            r.day_start = local.day_start;
+            let duration = Self::duration(settings, r.state);
+            if r.deadline.is_none() && !r.paused && r.settings_duration != duration {
+                r.remaining = duration;
+                r.total = duration;
+                r.settings_duration = duration;
+            }
+        } else {
+            *runtime = Some(local);
         }
         Ok(runtime)
     }
@@ -161,36 +180,21 @@ impl Service {
         })
     }
     pub fn today(&self) -> anyhow::Result<PomodoroToday> {
-        let settings = self.settings()?;
-        let runtime = self.runtime(&settings)?;
-        self.db
-            .with_conn(|c| Self::snapshot(c, runtime.as_ref().unwrap(), Utc::now()))
-    }
-    pub fn configure_day(&self, date: &str, start: DateTime<Utc>) -> anyhow::Result<PomodoroToday> {
-        let parsed = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")?;
-        anyhow::ensure!(parsed.to_string() == date, "invalid calendar date");
-        let settings = self.settings()?;
-        let mut runtime = self.runtime(&settings)?;
-        let mut r = runtime.as_ref().unwrap().clone();
-        let today = self.db.with_conn(|c| {
-            if r.calendar_date != date {
-                r.round = 1;
-            }
-            r.calendar_date = date.into();
-            r.day_start = start;
-            if r.deadline.is_none() && !r.paused {
-                r.remaining = Self::duration(&settings, r.state);
-                r.total = r.remaining;
-            }
-            Self::snapshot(c, &r, Utc::now())
-        })?;
-        *runtime = Some(r);
-        Ok(today)
+        Ok(self.tick_at(false, Utc::now())?.today)
     }
     pub fn command(&self, action: &str, duration: Option<i32>) -> anyhow::Result<PomodoroToday> {
-        let settings = self.settings()?;
         let now = Utc::now();
-        let mut runtime = self.runtime(&settings)?;
+        self.tick_at(false, now)?;
+        self.command_at(action, duration, now)
+    }
+    fn command_at(
+        &self,
+        action: &str,
+        duration: Option<i32>,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<PomodoroToday> {
+        let settings = self.settings()?;
+        let mut runtime = self.runtime(&settings, now)?;
         let mut r = runtime.as_ref().unwrap().clone();
         let today = self.db.with_conn(|c| {
             match action {
@@ -227,31 +231,83 @@ impl Service {
         })?;
         *runtime = Some(r);
         self.publish(action, &today, None);
+        self.changed
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
         Ok(today)
     }
     pub fn tick(&self, skip: bool) -> anyhow::Result<PomodoroTickResult> {
+        self.tick_at(skip, Utc::now())
+    }
+    fn tick_at(&self, skip: bool, now: DateTime<Utc>) -> anyhow::Result<PomodoroTickResult> {
+        self.advance_at(skip, now, false)
+    }
+    fn advance_at(
+        &self,
+        skip: bool,
+        now: DateTime<Utc>,
+        progress: bool,
+    ) -> anyhow::Result<PomodoroTickResult> {
         let settings = self.settings()?;
-        let now = Utc::now();
-        let mut runtime = self.runtime(&settings)?;
+        let mut runtime = self.runtime(&settings, now)?;
         let mut r = runtime.as_ref().unwrap().clone();
-        let result=self.db.with_conn(|c| {let tx=c.unchecked_transaction()?;
-            let completed= if skip || (r.deadline.is_some() && r.remaining(now)==0) {Some(r.state)} else {None};
-            if let Some(state)=completed {
-                let count: Option<i32>=tx.query_row("SELECT completed_count FROM pomodoro_items WHERE date=?1",[&r.calendar_date],|row|row.get(0)).optional()?;
-                let mut count=count.unwrap_or(0);
-                if !skip {
-                    let work=if state==PomodoroState::Work {r.total} else {0};
-                    let rest=if state!=PomodoroState::Work {r.total} else {0};
-                    let increment=i32::from(state==PomodoroState::Work);
-                    let existing:Option<String>=tx.query_row("SELECT id FROM pomodoro_items WHERE date=?1",[&r.calendar_date],|row|row.get(0)).optional()?;
-                    if let Some(id)=existing {tx.execute("UPDATE pomodoro_items SET completed_count=completed_count+?1,total_work_secs=total_work_secs+?2,total_break_secs=total_break_secs+?3,updated_at=?4 WHERE id=?5",params![increment,work,rest,now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),id])?;}
-                    else {tx.execute("INSERT INTO pomodoro_items(id,date,completed_count,total_work_secs,total_break_secs,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",params![uuid::Uuid::new_v4().to_string(),r.calendar_date,increment,work,rest,now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)])?;}
-                    count+=increment;
-                }
-                r.state=if state==PomodoroState::Work {if count>0 && count%settings.pomodoros_before_long_break==0 {PomodoroState::LongBreak} else {PomodoroState::ShortBreak}} else {r.round+=1;PomodoroState::Work};
-                r.deadline=None;r.paused=false;r.remaining=Self::duration(&settings,r.state);r.total=r.remaining;
+        if !skip && !(r.deadline.is_some() && r.remaining(now) == 0) {
+            let today = self.db.with_conn(|c| Self::snapshot(c, &r, now))?;
+            *runtime = Some(r);
+            if progress {
+                self.publish("progress", &today, None);
             }
-            let today=Self::snapshot(&tx,&r,now)?;tx.commit()?;Ok::<_,anyhow::Error>(PomodoroTickResult {today,completed_state:completed}) })?;
+            return Ok(PomodoroTickResult {
+                today,
+                completed_state: None,
+            });
+        }
+        let result = self.db.with_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let completed = r.state;
+            let count: Option<i32> = tx.query_row(
+                "SELECT completed_count FROM pomodoro_items WHERE date=?1",
+                [&r.calendar_date], |row| row.get(0),
+            ).optional()?;
+            let mut count = count.unwrap_or(0);
+            if !skip {
+                let work = if completed == PomodoroState::Work { r.total } else { 0 };
+                let rest = if completed != PomodoroState::Work { r.total } else { 0 };
+                let increment = i32::from(completed == PomodoroState::Work);
+                let existing: Option<String> = tx.query_row(
+                    "SELECT id FROM pomodoro_items WHERE date=?1",
+                    [&r.calendar_date], |row| row.get(0),
+                ).optional()?;
+                let timestamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                if let Some(id) = existing {
+                    tx.execute(
+                        "UPDATE pomodoro_items SET completed_count=completed_count+?1,total_work_secs=total_work_secs+?2,total_break_secs=total_break_secs+?3,updated_at=?4 WHERE id=?5",
+                        params![increment, work, rest, timestamp, id],
+                    )?;
+                } else {
+                    tx.execute(
+                        "INSERT INTO pomodoro_items(id,date,completed_count,total_work_secs,total_break_secs,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",
+                        params![uuid::Uuid::new_v4().to_string(), r.calendar_date, increment, work, rest, timestamp],
+                    )?;
+                }
+                count += increment;
+            }
+            r.state = match completed {
+                PomodoroState::Work if count > 0 && count % settings.pomodoros_before_long_break == 0 => PomodoroState::LongBreak,
+                PomodoroState::Work => PomodoroState::ShortBreak,
+                PomodoroState::ShortBreak | PomodoroState::LongBreak => {
+                    r.round += 1;
+                    PomodoroState::Work
+                }
+            };
+            r.deadline = None;
+            r.paused = false;
+            r.remaining = Self::duration(&settings, r.state);
+            r.total = r.remaining;
+            r.settings_duration = r.total;
+            let today = Self::snapshot(&tx, &r, now)?;
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(PomodoroTickResult { today, completed_state: Some(completed) })
+        })?;
         *runtime = Some(r);
         if result.completed_state.is_some() {
             self.publish(
@@ -260,10 +316,76 @@ impl Service {
                 if skip { None } else { result.completed_state },
             );
         }
+        if skip {
+            self.changed
+                .send_modify(|revision| *revision = revision.wrapping_add(1));
+        }
         Ok(result)
     }
+    pub fn follow(
+        self: &Arc<Self>,
+        mut stop: watch::Receiver<bool>,
+    ) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        let mut changed = self.changed.subscribe();
+        let mut events = self.events.subscribe();
+        tokio::spawn(async move {
+            let mut initialized = false;
+            loop {
+                if *stop.borrow() {
+                    break;
+                }
+                let current = service.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let result = current.advance_at(false, Utc::now(), initialized)?;
+                    Ok::<_, anyhow::Error>(result.today)
+                })
+                .await;
+                initialized = true;
+                let delay = match result {
+                    Ok(Ok(today)) if today.is_running => std::time::Duration::from_secs(1),
+                    Ok(Ok(_)) => Self::until_next_day(Utc::now()),
+                    Ok(Err(error)) => {
+                        log::warn!("Pomodoro lifecycle: {error}");
+                        std::time::Duration::from_secs(5)
+                    }
+                    Err(error) => {
+                        log::warn!("Pomodoro lifecycle task: {error}");
+                        break;
+                    }
+                };
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => break,
+                    _ = changed.changed() => {},
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = async {
+                        loop {
+                            match events.recv().await {
+                                Ok(event) if matches!(event.event_type, "PREFS_UPDATED" | "POMODORO_SETTINGS_UPDATE") => break,
+                                Ok(_) => {},
+                                Err(broadcast::error::RecvError::Lagged(_)) => break,
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                    } => {},
+                }
+            }
+        })
+    }
+    fn until_next_day(now: DateTime<Utc>) -> std::time::Duration {
+        let local = now.with_timezone(&chrono::Local);
+        local
+            .date_naive()
+            .succ_opt()
+            .and_then(|day| day.and_hms_opt(0, 0, 0))
+            .and_then(|date| date.and_local_timezone(chrono::Local).earliest())
+            .and_then(|date| (date.with_timezone(&Utc) - now).to_std().ok())
+            .filter(|delay| !delay.is_zero())
+            .unwrap_or(std::time::Duration::from_secs(60))
+    }
     fn publish(&self, action: &str, today: &PomodoroToday, completed_state: Option<PomodoroState>) {
-        let payload = serde_json::json!({"action":action,"timeLeftSec":today.time_left_sec,"totalTimeSec":today.total_time_sec,"completedCount":today.completed_count,"round":today.current_round,"state":today.state,"completedState":completed_state});
+        let payload = serde_json::json!({"action":action,"timeLeftSec":today.time_left_sec,"totalTimeSec":today.total_time_sec,"completedCount":today.completed_count,"round":today.current_round,"state":today.state,"completedState":completed_state,"today":today});
         let _ = self
             .events
             .send(WsEvent::broadcast(WS_POMODORO_ACTION, payload.to_string()));

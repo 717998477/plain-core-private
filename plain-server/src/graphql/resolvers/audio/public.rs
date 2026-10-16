@@ -112,7 +112,21 @@ pub struct AudioPlaylist {
 }
 
 #[derive(SimpleObject, Clone, Debug)]
+pub struct AudioAlbumCover {
+    pub album_id: async_graphql::ID,
+    pub track_count: i32,
+    pub candidate_paths: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct AudioPlaylistCovers {
+    pub id: async_graphql::ID,
+    pub albums: Vec<AudioAlbumCover>,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
 pub struct AudioPlayback {
+    pub revision: Long,
     pub media_id: Option<async_graphql::ID>,
     pub path: Option<String>,
     pub mode: MediaPlayMode,
@@ -122,11 +136,55 @@ pub struct AudioPlayback {
     pub position_ms: Long,
 }
 
+#[derive(SimpleObject, Clone, Debug)]
+pub struct AudioArtist {
+    pub name: String,
+    pub item_count: i32,
+    pub play_count: Long,
+    pub sample_path: String,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct AudioOverview {
+    pub artists: Vec<AudioArtist>,
+    pub recent_items: Vec<Audio>,
+}
+
 #[derive(Default)]
 pub struct AudioQuery;
 
 #[Object]
 impl AudioQuery {
+    async fn audio_overview(&self, ctx: &Context<'_>) -> async_graphql::Result<AudioOverview> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        crate::services::capabilities::require(ctx.data::<Arc<Host>>()?, "AUDIO_LIBRARY")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+        let mut summary = crate::services::audio::overview::read(
+            ctx.data::<Arc<plain_rs::db::Db>>()?.clone(),
+            crate::graphql::resolvers::media::public::catalog(ctx),
+        )
+        .await
+        .map_err(async_graphql::Error::new)?;
+        ctx.data::<Arc<crate::services::files::duration_updates::Runtime>>()?
+            .enrich(DataType::Audio, &mut summary.recent_items)
+            .await
+            .map_err(async_graphql::Error::new)?;
+        Ok(AudioOverview {
+            artists: summary
+                .artists
+                .into_iter()
+                .map(|artist| AudioArtist {
+                    name: artist.name,
+                    item_count: artist.item_count,
+                    play_count: Long(artist.play_count),
+                    sample_path: artist.sample_path,
+                })
+                .collect(),
+            recent_items: summary.recent_items.iter().map(audio_from_facts).collect(),
+        })
+    }
+
     async fn audio_metadata(
         &self,
         ctx: &Context<'_>,
@@ -163,27 +221,7 @@ impl AudioQuery {
             .await?,
             |item| item.clone(),
         );
-        Ok(items
-            .iter()
-            .map(|item| {
-                let id = crate::graphql::types::facts::id(item, "id");
-                Audio {
-                    id: id.clone(),
-                    title: crate::graphql::types::facts::text(item, "title"),
-                    artist: crate::graphql::types::facts::text(item, "artist"),
-                    path: crate::graphql::types::facts::text(item, "path"),
-                    duration_ms: Long(crate::graphql::types::facts::integer(item, "durationMs")),
-                    size: Long(crate::graphql::types::facts::integer(item, "size")),
-                    bucket_id: crate::graphql::types::facts::id(item, "bucketId"),
-                    album_id: crate::graphql::types::facts::text(item, "albumId").into(),
-                    album_file_id: crate::graphql::types::facts::text(item, "albumFileId"),
-                    album_art_uri: crate::graphql::types::facts::text(item, "albumArtUri"),
-                    created_at: crate::graphql::types::facts::instant(item, "createdAt"),
-                    updated_at: crate::graphql::types::facts::instant(item, "updatedAt"),
-                    is_favorite: crate::graphql::types::facts::flag(item, "isFavorite"),
-                }
-            })
-            .collect())
+        Ok(items.iter().map(audio_from_facts).collect())
     }
 
     async fn embedded_audio_lyrics(
@@ -270,6 +308,32 @@ impl AudioQuery {
             .collect())
     }
 
+    async fn audio_playlist_covers(
+        &self,
+        ctx: &Context<'_>,
+        ids: Vec<async_graphql::ID>,
+    ) -> async_graphql::Result<Vec<AudioPlaylistCovers>> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let ids = ids.into_iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        Ok(audio(ctx)?
+            .run(move |db, _| plain_rs::media::audio::playlist_covers::playlist_covers(db, &ids))
+            .await?
+            .into_iter()
+            .map(|row| AudioPlaylistCovers {
+                id: row.id.into(),
+                albums: row
+                    .albums
+                    .into_iter()
+                    .map(|album| AudioAlbumCover {
+                        album_id: album.album_id.into(),
+                        track_count: album.track_count,
+                        candidate_paths: album.candidate_paths,
+                    })
+                    .collect(),
+            })
+            .collect())
+    }
+
     async fn audio_playlist_item_count(
         &self,
         ctx: &Context<'_>,
@@ -304,17 +368,20 @@ impl AudioQuery {
     }
 
     async fn audio_playback(&self, ctx: &Context<'_>) -> async_graphql::Result<AudioPlayback> {
-        let current = audio(ctx)?
-            .run(|db, _| domain::get_audio_current(db))
+        let (current, media_id) = audio(ctx)?
+            .run(|db, _| {
+                Ok((
+                    plain_rs::media::audio::playback::snapshot(db)?,
+                    db.audio_current_media_id(),
+                ))
+            })
             .await?;
         let mode = domain::play_mode(prefs(ctx))?;
         let player = host_call(ctx, "systemAudioPlaybackState", json!({})).await?;
         Ok(AudioPlayback {
-            media_id: audio(ctx)?
-                .run_playback(|db, _| Ok(db.audio_current_media_id()))
-                .await?
-                .map(Into::into),
-            path: Some(current).filter(|path| !path.is_empty()),
+            revision: Long(current.revision),
+            media_id: media_id.map(Into::into),
+            path: Some(current.path).filter(|path| !path.is_empty()),
             mode,
             is_playing: crate::graphql::types::facts::flag(&player, "isPlaying"),
             position_ms: Long(crate::graphql::types::facts::integer(&player, "positionMs")),
@@ -349,7 +416,7 @@ impl AudioMutation {
             .run(move |db, lib| {
                 lib.cache_ids(&[media_id.to_string()])?;
                 let track = domain::track_by_id(db, media_id.as_str())?;
-                domain::save_audio_current(db, &track.path)?;
+                plain_rs::media::audio::playback::prepare_track(db, &track)?;
                 Ok(track)
             })
             .await?;
@@ -365,11 +432,28 @@ impl AudioMutation {
             .run(move |db, lib| {
                 use plain_rs::media::audio::commands::Engine;
                 let track = lib.metadata(&path)?;
-                domain::save_audio_current(db, &track.path)?;
+                plain_rs::media::audio::playback::prepare_track(db, &track)?;
                 Ok(track)
             })
             .await?;
         Ok(item(track))
+    }
+
+    async fn cycle_audio_play_mode(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<MediaPlayMode> {
+        let prefs = prefs(ctx).clone();
+        let mode = audio(ctx)?
+            .run_playback(move |_, _| MediaPlayMode::cycle(&prefs))
+            .await?;
+        let _ = ctx
+            .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?
+            .send(plain_rs::events::WsEvent::broadcast(
+                "PREFS_UPDATED",
+                "{}".into(),
+            ));
+        Ok(mode)
     }
 
     async fn update_audio_play_mode(
@@ -683,3 +767,24 @@ async fn host_call(ctx: &Context<'_>, method: &str, params: Value) -> async_grap
 #[cfg(test)]
 #[path = "../../../../tests/unit/graphql/resolvers/audio/public.rs"]
 mod tests;
+
+pub(crate) fn audio_from_facts(item: &Value) -> Audio {
+    let id = crate::graphql::types::facts::id(item, "id");
+    Audio {
+        id: id.clone(),
+        title: crate::graphql::types::facts::text(item, "title"),
+        artist: plain_rs::media::audio::metadata::normalize_artist(
+            &crate::graphql::types::facts::text(item, "artist"),
+        ),
+        path: crate::graphql::types::facts::text(item, "path"),
+        duration_ms: Long(crate::graphql::types::facts::integer(item, "durationMs")),
+        size: Long(crate::graphql::types::facts::integer(item, "size")),
+        bucket_id: crate::graphql::types::facts::id(item, "bucketId"),
+        album_id: crate::graphql::types::facts::text(item, "albumId").into(),
+        album_file_id: crate::graphql::types::facts::text(item, "albumFileId"),
+        album_art_uri: crate::graphql::types::facts::text(item, "albumArtUri"),
+        created_at: crate::graphql::types::facts::instant(item, "createdAt"),
+        updated_at: crate::graphql::types::facts::instant(item, "updatedAt"),
+        is_favorite: crate::graphql::types::facts::flag(item, "isFavorite"),
+    }
+}

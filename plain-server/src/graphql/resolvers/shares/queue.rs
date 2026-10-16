@@ -4,9 +4,9 @@ use super::client::{
 use crate::assembly::server::ServerState;
 use crate::graphql::types::Long;
 use async_graphql::{Context, Enum, InputObject, Object, SimpleObject};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(InputObject, Serialize)]
+#[derive(InputObject)]
 struct SharedDownloadInput {
     message_id: async_graphql::ID,
     kind: SharedDownloadKind,
@@ -14,7 +14,6 @@ struct SharedDownloadInput {
     url_token: String,
     entries: Vec<SharedEntryInput>,
     target_dir: String,
-    downloads_base: String,
     zip_name: String,
 }
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Deserialize)]
@@ -88,8 +87,22 @@ impl SharedDownloadMutation {
         ctx: &Context<'_>,
         input: SharedDownloadInput,
     ) -> async_graphql::Result<async_graphql::ID> {
-        let runtime = ctx.data::<ServerState>()?.shared_batches.clone();
-        let intent = domain(input)?;
+        let state = ctx.data::<ServerState>()?;
+        let runtime = state.shared_batches.clone();
+        let downloads_base = crate::services::peers::shared_batch::downloads_directory(
+            &state.host,
+            &input.target_dir,
+        )?;
+        let intent = plain_rs::files::shares::batch_queue::Intent {
+            message_id: input.message_id.to_string(),
+            kind: input.kind.into(),
+            link: domain(input.link)?,
+            url_token: input.url_token,
+            entries: domain(input.entries)?,
+            target_dir: input.target_dir,
+            downloads_base,
+            zip_name: input.zip_name,
+        };
         tokio::task::spawn_blocking(move || runtime.queue.enqueue(intent))
             .await?
             .map(async_graphql::ID)

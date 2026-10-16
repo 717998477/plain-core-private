@@ -67,6 +67,63 @@ pub struct ChatTextEdit {
 pub struct ChatHostMutation;
 #[Object]
 impl ChatHostMutation {
+    async fn send_chat_items(
+        &self,
+        ctx: &Context<'_>,
+        targets: Vec<String>,
+        content: String,
+    ) -> async_graphql::Result<Vec<ChatItem>> {
+        Ok(
+            chat_actions::send_many(ctx.data::<ServerState>()?, targets, content)
+                .await?
+                .iter()
+                .map(item)
+                .collect(),
+        )
+    }
+
+    async fn send_share(
+        &self,
+        ctx: &Context<'_>,
+        targets: Vec<String>,
+        share_id: ID,
+    ) -> async_graphql::Result<Vec<ChatItem>> {
+        Ok(crate::services::chat::share_send::existing(
+            ctx.data::<ServerState>()?,
+            ctx.data::<std::sync::Arc<plain_rs::files::shares::Service>>()?
+                .clone(),
+            targets,
+            share_id.to_string(),
+        )
+        .await?
+        .iter()
+        .map(item)
+        .collect())
+    }
+
+    async fn send_folder_share(
+        &self,
+        ctx: &Context<'_>,
+        targets: Vec<String>,
+        path: String,
+        name: String,
+        expires_at: Option<crate::graphql::types::Instant>,
+    ) -> async_graphql::Result<Vec<ChatItem>> {
+        Ok(crate::services::chat::share_send::folder(
+            ctx.data::<ServerState>()?,
+            ctx.data::<std::sync::Arc<plain_rs::files::shares::Service>>()?
+                .clone(),
+            targets,
+            path,
+            name,
+            expires_at.map(|time| time.0.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        )
+        .await?
+        .iter()
+        .map(item)
+        .collect())
+    }
+
     async fn send_chat_text(
         &self,
         ctx: &Context<'_>,
@@ -84,12 +141,26 @@ impl ChatHostMutation {
         id: ID,
         target: String,
     ) -> async_graphql::Result<ChatItem> {
-        let state = ctx.data::<ServerState>()?;
-        let row = plain_rs::db::chat_store::messages::get(&state.db, id.as_str())?
-            .ok_or_else(|| async_graphql::Error::new("Message unavailable"))?;
-        Ok(item(
-            &chat_actions::send(state, &target, &row.content).await?,
-        ))
+        let rows =
+            chat_actions::forward_many(ctx.data::<ServerState>()?, id.as_str(), vec![target])
+                .await?;
+        Ok(item(rows.first().ok_or_else(|| {
+            async_graphql::Error::new("Message unavailable")
+        })?))
+    }
+    async fn forward_chat_items(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        targets: Vec<String>,
+    ) -> async_graphql::Result<Vec<ChatItem>> {
+        Ok(
+            chat_actions::forward_many(ctx.data::<ServerState>()?, id.as_str(), targets)
+                .await?
+                .iter()
+                .map(item)
+                .collect(),
+        )
     }
     async fn deliver_chat_item(
         &self,

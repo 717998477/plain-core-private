@@ -181,6 +181,15 @@ impl App {
 
 #[ComplexObject]
 impl App {
+    async fn network(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<crate::platform::network::NetworkStatus> {
+        crate::platform::network::device_snapshot(ctx.data::<Arc<Host>>()?)
+            .await
+            .map_err(async_graphql::Error::new)
+    }
+
     async fn app_dir(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
         Ok(ctx
             .data::<crate::assembly::services::Services>()?
@@ -526,26 +535,20 @@ impl DeviceMutation {
     }
 
     async fn start_discovery(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        let state = ctx.data::<crate::assembly::server::ServerState>()?;
-        state
-            .mdns
-            .execute(
-                state,
-                crate::services::discovery::mdns_runtime::Request::Start {},
-            )
-            .await?;
+        crate::services::discovery::mdns_runtime::control(
+            ctx.data::<crate::assembly::server::ServerState>()?,
+            crate::services::discovery::mdns_runtime::Request::Start {},
+        )
+        .await?;
         Ok(true)
     }
 
     async fn stop_discovery(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        let state = ctx.data::<crate::assembly::server::ServerState>()?;
-        state
-            .mdns
-            .execute(
-                state,
-                crate::services::discovery::mdns_runtime::Request::Stop {},
-            )
-            .await?;
+        crate::services::discovery::mdns_runtime::control(
+            ctx.data::<crate::assembly::server::ServerState>()?,
+            crate::services::discovery::mdns_runtime::Request::Stop {},
+        )
+        .await?;
         Ok(true)
     }
 }

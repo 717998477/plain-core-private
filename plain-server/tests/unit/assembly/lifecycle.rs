@@ -12,18 +12,19 @@ fn server(directory: &std::path::Path, token: &str) -> ContentServer {
     .unwrap()
 }
 
-fn assert_port_released(port: u16) {
+fn bind_port(port: u16) -> std::io::Result<socket2::Socket> {
     let socket = socket2::Socket::new(
         socket2::Domain::IPV4,
         socket2::Type::STREAM,
         Some(socket2::Protocol::TCP),
-    )
-    .unwrap();
-    // Allow completed health probes in TIME_WAIT while still rejecting a live listener.
-    socket.set_reuse_address(true).unwrap();
-    socket
-        .bind(&std::net::SocketAddr::from(([0, 0, 0, 0], port)).into())
-        .unwrap();
+    )?;
+    socket.set_reuse_address(true)?;
+    socket.bind(&std::net::SocketAddr::from(([0, 0, 0, 0], port)).into())?;
+    Ok(socket)
+}
+
+fn assert_port_released(port: u16) {
+    bind_port(port).unwrap();
 }
 
 async fn start(server: &ContentServer) -> (u16, u16) {
@@ -86,6 +87,16 @@ async fn listener_failure_cleans_up_and_notifies_host_with_generation() {
     let state = server.runtime_state();
     let generation = server.public_generation().await.unwrap();
     let (host_generation, mut calls) = state.host.connect();
+    let host = state.host.clone();
+    let responder = tokio::spawn(async move {
+        while let Some(request) = calls.recv().await {
+            assert_eq!(request["method"], "systemCapabilities");
+            let _ = host.reply(
+                host_generation,
+                serde_json::json!({"id":request["id"],"result":[]}),
+            );
+        }
+    });
     let mut events = state.events.subscribe();
     let (failure, receiver) = watch::channel(None);
     let stop = state
@@ -115,7 +126,6 @@ async fn listener_failure_cleans_up_and_notifies_host_with_generation() {
     let failure: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
     assert_eq!(failure["generation"], generation);
     assert_eq!(failure["message"], "injected listener failure");
-    assert!(calls.try_recv().is_err());
     assert!(server.public_generation().await.is_none());
     for port in [ports.0, ports.1] {
         assert_port_released(port);
@@ -124,6 +134,7 @@ async fn listener_failure_cleans_up_and_notifies_host_with_generation() {
     assert!(state.http_failure.lock().unwrap().is_none());
     state.host.disconnect(host_generation);
     server.shutdown().await;
+    responder.await.unwrap();
 }
 
 #[tokio::test]
@@ -176,10 +187,21 @@ async fn dropping_core_releases_public_listeners() {
     let server = server(directory.path(), &token);
     let ports = start(&server).await;
     drop(server);
-    tokio::task::yield_now().await;
-    for port in [ports.0, ports.1] {
-        assert_port_released(port);
-    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if [ports.0, ports.1]
+                .into_iter()
+                .map(bind_port)
+                .collect::<std::io::Result<Vec<_>>>()
+                .is_ok()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Dropping the core must release all public listeners");
 }
 
 #[tokio::test]
@@ -211,4 +233,79 @@ async fn health_and_loopback_shutdown_work_without_a_host() {
         200
     );
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn public_discovery_withdrawal_finishes_before_lifetime_returns() {
+    let (_core, core_stop) = watch::channel(false);
+    let (public, public_stop) = watch::channel(false);
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (withdrawn, withdraw_started) = tokio::sync::oneshot::channel();
+    let (release, wait_release) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(public_discovery_lifetime(
+        core_stop,
+        public_stop,
+        async move {
+            started.send(()).unwrap();
+            Ok(())
+        },
+        async move {
+            withdrawn.send(()).unwrap();
+            wait_release.await.unwrap();
+            Ok(())
+        },
+    ));
+    ready.await.unwrap();
+    public.send_replace(true);
+    withdraw_started.await.unwrap();
+    assert!(!task.is_finished());
+    release.send(()).unwrap();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn stopping_public_discovery_cancels_pending_start_and_runs_withdrawal_once() {
+    let (_core, core_stop) = watch::channel(false);
+    let (public, public_stop) = watch::channel(false);
+    let (entered, started) = tokio::sync::oneshot::channel();
+    let (cancelled, cancellation) = tokio::sync::oneshot::channel();
+    struct CancelSignal(Option<tokio::sync::oneshot::Sender<()>>);
+    impl Drop for CancelSignal {
+        fn drop(&mut self) {
+            self.0.take().unwrap().send(()).unwrap();
+        }
+    }
+    let withdrawals = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = withdrawals.clone();
+    let task = tokio::spawn(public_discovery_lifetime(
+        core_stop,
+        public_stop,
+        async move {
+            let _guard = CancelSignal(Some(cancelled));
+            entered.send(()).unwrap();
+            std::future::pending::<anyhow::Result<()>>().await
+        },
+        async move {
+            cancellation.await.unwrap();
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        },
+    ));
+    started.await.unwrap();
+    public.send_replace(true);
+    task.await.unwrap();
+    assert_eq!(withdrawals.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn already_stopped_discovery_never_publishes_or_withdraws() {
+    let (_core, core_stop) = watch::channel(false);
+    let (_public, public_stop) = watch::channel(true);
+    public_discovery_lifetime(
+        core_stop,
+        public_stop,
+        async { panic!("Publication must not start") },
+        async { panic!("Withdrawal must not start") },
+    )
+    .await;
 }

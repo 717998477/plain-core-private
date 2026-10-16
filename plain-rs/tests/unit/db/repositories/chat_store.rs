@@ -177,6 +177,12 @@ fn discovery_refreshes_only_paired_peers_and_preserves_identity_and_unrelated_ro
     assert_eq!(updated.device_type, DeviceType::Tablet);
     assert_eq!(updated.key, paired.key);
     assert_eq!(updated.public_key, paired.public_key);
+    db.with_conn(|connection| connection.execute_batch("CREATE TRIGGER reject_repeat_discovery BEFORE UPDATE ON peers BEGIN SELECT RAISE(ABORT,'unexpected repeated update'); END;")).unwrap();
+    assert!(
+        peers::discovered(&db, "paired", &ips, 8443, "renamed", DeviceType::Tablet)
+            .unwrap()
+            .is_none()
+    );
     assert!(
         peers::discovered(
             &db,

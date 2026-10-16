@@ -19,7 +19,7 @@ pub struct CacheMutation;
 impl CacheMutation {
     async fn clear_app_cache(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         let state = ctx.data::<ServerState>()?;
-        crate::services::cache::clear(&state.cache, &state.host)
+        crate::services::cache::clear_application(state)
             .await
             .map_err(async_graphql::Error::new)?;
         Ok(true)

@@ -28,6 +28,37 @@ pub fn create(db: &Db, to_id: &str, channel_id: &str, content: &str) -> Result<D
     Ok(create_many(db, &[(to_id.to_owned(), channel_id.to_owned())], content)?.remove(0))
 }
 pub fn create_many(db: &Db, targets: &[(String, String)], content: &str) -> Result<Vec<DChat>> {
+    let _files = db.app_files_lock()?;
+    db.with_conn(|connection| {
+        let tx = connection.unchecked_transaction()?;
+        let rows = create_in_transaction(&tx, targets, content)?;
+        tx.commit()?;
+        Ok(rows)
+    })
+}
+pub fn forward_many(db: &Db, id: &str, targets: &[(String, String)]) -> Result<Vec<DChat>> {
+    if targets.is_empty() {
+        return Ok(vec![]);
+    }
+    let _files = db.app_files_lock()?;
+    db.with_conn(|connection| {
+        let tx = connection.unchecked_transaction()?;
+        let content: String = tx
+            .query_row("SELECT content FROM chats WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .ok_or_else(|| anyhow::anyhow!("Message unavailable"))?;
+        let rows = create_in_transaction(&tx, targets, &content)?;
+        tx.commit()?;
+        Ok(rows)
+    })
+}
+fn create_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    targets: &[(String, String)],
+    content: &str,
+) -> Result<Vec<DChat>> {
     messages::validate_content(content)?;
     let mut chats = Vec::with_capacity(targets.len());
     for (to, channel) in targets {
@@ -40,18 +71,13 @@ pub fn create_many(db: &Db, targets: &[(String, String)], content: &str) -> Resu
         }
         chats.push(chat);
     }
-    let _files = db.app_files_lock()?;
     let refs = crate::chat::attachments::app_file_store::content_refs::collect(
         &serde_json::from_str(content)?,
     );
-    db.with_conn(|c| -> Result<()> {
-        let tx=c.unchecked_transaction()?;
-        for chat in &chats {
-            crate::chat::attachments::app_file_store::content_refs::claim(&tx,refs.clone())?;
-            tx.execute("INSERT INTO chats(id,from_id,to_id,channel_id,content,status,status_data,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![chat.id,chat.from_id,chat.to_id,chat.channel_id.as_deref().filter(|value|!value.is_empty()),chat.content,chat.status,chat.status_data.as_deref().filter(|value|!value.is_empty()),chat.created_at,chat.updated_at])?;
-        }
-        tx.commit()?; Ok(())
-    })?;
+    for chat in &chats {
+        crate::chat::attachments::app_file_store::content_refs::claim(tx, refs.clone())?;
+        tx.execute("INSERT INTO chats(id,from_id,to_id,channel_id,content,status,status_data,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![chat.id,chat.from_id,chat.to_id,chat.channel_id.as_deref().filter(|value|!value.is_empty()),chat.content,chat.status,chat.status_data.as_deref().filter(|value|!value.is_empty()),chat.created_at,chat.updated_at])?;
+    }
     Ok(chats)
 }
 pub fn receive(
@@ -165,7 +191,14 @@ fn delivery_impl(
         chat.updated_at = now_iso();
         tx.execute(
             "UPDATE chats SET status=?2,status_data=?3,updated_at=?4 WHERE id=?1",
-            params![chat.id, chat.status, chat.status_data.as_deref().filter(|value|!value.is_empty()), chat.updated_at],
+            params![
+                chat.id,
+                chat.status,
+                chat.status_data
+                    .as_deref()
+                    .filter(|value| !value.is_empty()),
+                chat.updated_at
+            ],
         )?;
         tx.commit()?;
         Ok(Some(chat))

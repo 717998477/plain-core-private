@@ -195,7 +195,12 @@ fn apply(info: &mut VideoInfo, name: &str, value: String) {
     match name {
         "Title" => info.title = value,
         "Author" => info.artist = value,
-        "WM/AlbumArtist" if info.artist.is_empty() => info.artist = value,
+        "WM/AlbumArtist" => {
+            info.album_artist = value.clone();
+            if info.artist.is_empty() {
+                info.artist = value;
+            }
+        }
         "WM/AlbumTitle" => info.album = value,
         "WM/Genre" => info.genre = value,
         "WM/Writer" => info.writer = value,

@@ -82,6 +82,8 @@ pub(super) fn read(reader: &mut (impl Read + Seek)) -> Option<VideoInfo> {
             };
             let creation = child(&movie, b"mvhd").and_then(creation_time);
             result = Some(VideoInfo {
+                album_artist: String::new(),
+
                 width,
                 height,
                 rotation,

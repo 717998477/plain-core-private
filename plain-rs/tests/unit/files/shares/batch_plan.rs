@@ -162,3 +162,33 @@ fn directory_depth_and_file_count_are_bounded() {
             .is_err()
     );
 }
+
+#[test]
+fn selected_directories_accept_native_absolute_paths_without_a_unix_prefix_assumption() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().to_str().unwrap();
+    assert!(directory.path().is_absolute());
+    let mut walker = Walker::new(
+        Kind::File,
+        vec![file("source", "file.txt", false, 3)],
+        path,
+        "",
+    )
+    .unwrap();
+    assert!(walker.next_directory().unwrap().is_none());
+    let plan = walker.finish().unwrap();
+    assert_eq!(
+        std::path::Path::new(&plan.targets[0].write_dir),
+        directory.path()
+    );
+    assert!(!plan.targets[0].store_to_downloads);
+    assert!(
+        Walker::new(
+            Kind::File,
+            vec![file("source", "file.txt", false, 3)],
+            "relative",
+            ""
+        )
+        .is_err()
+    );
+}

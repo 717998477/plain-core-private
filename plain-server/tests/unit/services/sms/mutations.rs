@@ -32,7 +32,7 @@ impl Fixture {
                     "systemCapabilities" => Some(Ok(json!(["SMS"]))),
                     "systemSmsIdsFacts" => Some(Ok(json!(ids))),
                     "systemSmsRowsFacts" => Some(Ok(
-                        json!({"items":ids.iter().map(|id| json!({"id":id,"body":"archived","address":"sender","addressCandidates":[{"value":"sender","isSender":true}],"date":"2026-01-01T00:00:00Z","threadId":"9","isMms":id.starts_with("mms_")})).collect::<Vec<_>>(),"canonicalAddresses":[],"ownNumbers":[]}),
+                        json!({"items":ids.iter().map(|id| json!({"id":id,"body":"archived","address":"sender","addressCandidates":[{"value":"sender","isSender":true}],"parts":[{"path":"text","contentType":"text/plain","name":"","fileName":"","hasData":false,"text":"archived"}],"date":"2026-01-01T00:00:00Z","threadId":"9","isMms":id.starts_with("mms_")})).collect::<Vec<_>>(),"canonicalAddresses":[],"ownNumbers":[]}),
                     )),
                     "systemDeleteSmsRows" => {
                         assert_eq!(request["params"]["ids"], json!(ids));

@@ -52,6 +52,40 @@ pub fn report(db: &Db, path: &str, revision: i64, position_ms: i64) -> DomainRes
     })
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReportResult {
+    pub accepted: bool,
+    pub history_changed: bool,
+}
+
+pub fn report_selection(db: &Db, report: &Playback, started: bool) -> DomainResult<ReportResult> {
+    if report.path.is_empty() || report.revision < 0 || report.position_ms < 0 {
+        return Err(DomainError::Other("invalid audio playback report".into()));
+    }
+    db.restore_audio_current()?;
+    db.audio_transaction(|tx, state| {
+        if state.playback.path != report.path || state.playback.revision != report.revision {
+            return Ok(ReportResult::default());
+        }
+        state.playback.position_ms = report.position_ms;
+        let history_changed = if started && state.started_revision != report.revision {
+            let track = crate::media::audio::queue::track_by_path_conn(tx, &report.path)?
+                .unwrap_or_else(|| {
+                    crate::media::audio::queue::AudioTrack::from_path_stem(&report.path)
+                });
+            record_started(tx, state, &track, report.revision)?;
+            track.media_id.is_some()
+        } else {
+            save_position(tx, &report.path, report.position_ms)?;
+            false
+        };
+        Ok(ReportResult {
+            accepted: true,
+            history_changed,
+        })
+    })
+}
+
 pub fn prepare_track(
     db: &Db,
     track: &crate::media::audio::queue::AudioTrack,
@@ -61,6 +95,8 @@ pub fn prepare_track(
         state.select(&track.path)?;
         state.advance()?;
         state.playback.position_ms = 0;
+        state.load_revision = -1;
+        state.started_revision = -1;
         Ok(state.playback.clone())
     })
 }
@@ -93,17 +129,27 @@ pub fn started(
         {
             return Ok(false);
         }
-        crate::media::audio::queue::record_history_conn(
-            tx,
-            &track.path,
-            &track.title,
-            &track.artist,
-            track.duration_ms,
-        )?;
-        save_position(tx, &track.path, state.playback.position_ms)?;
-        state.started_revision = revision;
+        record_started(tx, state, track, revision)?;
         Ok(true)
     })
+}
+
+fn record_started(
+    tx: &rusqlite::Connection,
+    state: &mut crate::media::audio::state::State,
+    track: &crate::media::audio::queue::AudioTrack,
+    revision: i64,
+) -> DomainResult<()> {
+    crate::media::audio::queue::record_history_conn(
+        tx,
+        &track.path,
+        &track.title,
+        &track.artist,
+        track.duration_ms,
+    )?;
+    save_position(tx, &track.path, state.playback.position_ms)?;
+    state.started_revision = revision;
+    Ok(())
 }
 
 fn save_position(

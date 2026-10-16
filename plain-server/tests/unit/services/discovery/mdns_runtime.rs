@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner() {
+    let _runtime = crate::services::discovery::mdns_runtime::TEST_LOCK
+        .lock()
+        .await;
     use std::sync::atomic::AtomicBool;
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
@@ -35,6 +38,7 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
     let responder = tokio::spawn(async move {
         while let Some(request) = rx.recv().await {
             let result = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => json!(["PEER_DISCOVERY"]),
                 "mdnsMulticast" => {
                     let acquire = request["params"]["acquire"].as_bool().unwrap();
                     let ok = !acquire || permission.load(Ordering::SeqCst);
@@ -194,7 +198,56 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
         true,
         "Debug page disposal must preserve manual discovery"
     );
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    execute(
+        &state,
+        Request::Acquire {
+            token: first,
+            owner: "remote:first".into(),
+        },
+    )
+    .await;
+    execute(
+        &state,
+        Request::Acquire {
+            token: second,
+            owner: "remote:second".into(),
+        },
+    )
+    .await;
     execute(&state, Request::Stop {}).await;
+    assert_eq!(state.mdns.snapshot()["scanning"], true);
+    state
+        .mdns
+        .release_discovery_client(&state, "first")
+        .await
+        .unwrap();
+    assert_eq!(state.mdns.snapshot()["scanning"], true);
+    execute(
+        &state,
+        Request::DebugStart {
+            token: debug_a.to_string(),
+        },
+    )
+    .await;
+    execute(
+        &state,
+        Request::Release {
+            token: second,
+            owner: "remote:second".into(),
+        },
+    )
+    .await;
+    assert_eq!(state.mdns.snapshot()["scanning"], true);
+    execute(
+        &state,
+        Request::DebugStop {
+            token: debug_a.to_string(),
+        },
+    )
+    .await;
+    assert_eq!(state.mdns.snapshot()["scanning"], false);
     state.host.disconnect(generation);
     responder.abort();
     acquired.store(false, Ordering::SeqCst);
@@ -208,6 +261,14 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
     let lease = acquired.clone();
     let responder = tokio::spawn(async move {
         while let Some(request) = rx.recv().await {
+            if request["method"] == "systemCapabilities" {
+                host.reply(
+                    generation,
+                    json!({"id":request["id"],"result":["PEER_DISCOVERY"]}),
+                )
+                .unwrap();
+                continue;
+            }
             assert_eq!(request["method"], "mdnsMulticast");
             lease.store(
                 request["params"]["acquire"].as_bool().unwrap(),
@@ -321,4 +382,66 @@ async fn stopping_a_network_restart_cancels_its_in_progress_work() {
             .is_finished()
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn file_sharing_capability_does_not_authorize_peer_discovery_or_acquire_multicast() {
+    let directory = tempfile::tempdir().unwrap();
+    let token = plain_rs::utils::base64::base64_encode(&[17; 32]);
+    let prefs =
+        Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    let server =
+        crate::assembly::server::ContentServer::start(directory.path(), &token, prefs).unwrap();
+    let state = server.runtime_state();
+    let (generation, mut incoming) = state.host.connect();
+    let worker = tokio::spawn({
+        let state = state.clone();
+        async move { control(&state, Request::Publish {}).await }
+    });
+    let request = incoming.recv().await.unwrap();
+    assert_eq!(request["method"], "systemCapabilities");
+    state
+        .host
+        .reply(
+            generation,
+            json!({"id":request["id"],"result":["LAN_SHARE"]}),
+        )
+        .unwrap();
+    assert!(
+        worker
+            .await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("PEER_DISCOVERY")
+    );
+    assert!(incoming.try_recv().is_err());
+    assert_eq!(state.mdns.snapshot()["receiver"], false);
+    state.host.disconnect(generation);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn inactive_runtime_cleanup_and_updates_do_not_request_platform_capabilities() {
+    use futures_util::FutureExt;
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let (generation, mut requests) = state.host.connect();
+    for request in [
+        Request::Update {},
+        Request::Restart {},
+        Request::Stop {},
+        Request::Unpublish {},
+    ] {
+        state
+            .mdns
+            .execute(&state, request)
+            .now_or_never()
+            .expect("Inactive runtime commands must complete without a host request")
+            .unwrap();
+    }
+    assert!(requests.try_recv().is_err());
+    state.host.disconnect(generation);
+    core.stop_core().await;
 }

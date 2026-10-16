@@ -24,8 +24,13 @@ async fn multipart_upload(
     file_first: bool,
 ) -> reqwest::Response {
     let boundary = "plain-upload-regression-boundary";
-    let encrypted =
-        plain_rs::crypto::xchacha_encrypt_raw(key, &serde_json::to_vec(&info).unwrap()).unwrap();
+    let metadata = format!(
+        "{}|{}|{}",
+        chrono::Utc::now().timestamp_millis(),
+        uuid::Uuid::new_v4(),
+        info
+    );
+    let encrypted = plain_rs::crypto::xchacha_encrypt_raw(key, metadata.as_bytes()).unwrap();
     let mut metadata =
         format!("--{boundary}\r\nContent-Disposition: form-data; name=\"info\"\r\n\r\n")
             .into_bytes();

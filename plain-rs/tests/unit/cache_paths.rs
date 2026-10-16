@@ -10,6 +10,8 @@ fn cache_layout_is_independent_of_the_persistent_root() {
     assert!(std::ptr::eq(cache.root(), cache.clone().root()));
     assert_eq!(cache.image_cache(), cache.root().join("image_cache"));
     assert_eq!(cache.video_cache(), cache.root().join("video_cache"));
+    assert_eq!(cache.app_updates(), cache.root().join("updates"));
+    assert_eq!(cache.web_assets(), cache.root().join("web_assets"));
     assert_eq!(cache.pdf_previews(), cache.root().join("preview_pdf"));
     assert_eq!(
         cache.crash_report_export(),
@@ -46,7 +48,7 @@ fn cache_overlap_and_sdk_links_are_rejected_after_path_resolution() {
             .initialize(&alias)
             .is_err()
     );
-    for child in ["image_cache", "video_cache"] {
+    for child in ["image_cache", "video_cache", "web_assets", "updates"] {
         let cache_root = directory.path().join(child);
         std::fs::create_dir(&cache_root).unwrap();
         std::os::unix::fs::symlink(&data, cache_root.join(child)).unwrap();

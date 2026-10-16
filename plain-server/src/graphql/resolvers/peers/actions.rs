@@ -13,7 +13,10 @@ fn changed(state: &ServerState, id: &str) {
 pub(crate) async fn remove(state: &ServerState, id: &str) -> anyhow::Result<bool> {
     let state = state.clone();
     let id = id.to_owned();
-    tokio::task::spawn_blocking(move || remove_record(&state, &id)).await?
+    let worker = state.clone();
+    let changed = tokio::task::spawn_blocking(move || remove_record(&worker, &id)).await??;
+    state.aware.refresh(&state).await?;
+    Ok(changed)
 }
 fn remove_record(state: &ServerState, id: &str) -> anyhow::Result<bool> {
     let removed = plain_rs::chat::attachments::app_file_store::chat_deletion::delete(
@@ -35,7 +38,10 @@ fn remove_record(state: &ServerState, id: &str) -> anyhow::Result<bool> {
 pub(crate) async fn unpair(state: &ServerState, id: &str) -> anyhow::Result<bool> {
     let state = state.clone();
     let id = id.to_owned();
-    tokio::task::spawn_blocking(move || unpair_record(&state, &id)).await?
+    let worker = state.clone();
+    let changed = tokio::task::spawn_blocking(move || unpair_record(&worker, &id)).await??;
+    state.aware.refresh(&state).await?;
+    Ok(changed)
 }
 fn unpair_record(state: &ServerState, id: &str) -> anyhow::Result<bool> {
     let changed_peer = plain_rs::db::chat_store::peers::unpair(&state.db, id)?;

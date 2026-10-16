@@ -110,14 +110,14 @@ impl FileTaskMutation {
         ctx: &Context<'_>,
         ops: Vec<FileTaskOpInput>,
     ) -> Result<FileHostTask> {
-        create(ctx, FileTaskType::Copy, "COPY".into(), ops).await
+        create(ctx, FileTaskType::Copy, "COPY".into(), ops, false).await
     }
     async fn create_move_task(
         &self,
         ctx: &Context<'_>,
         ops: Vec<FileTaskOpInput>,
     ) -> Result<FileHostTask> {
-        create(ctx, FileTaskType::Move, "MOVE".into(), ops).await
+        create(ctx, FileTaskType::Move, "MOVE".into(), ops, false).await
     }
     async fn remove_file_task(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
         let client_id = caller(ctx)?;
@@ -132,8 +132,9 @@ impl FileTaskMutation {
         r#type: FileTaskType,
         title: String,
         ops: Vec<FileTaskOpInput>,
+        #[graphql(default)] wait_for_completion: bool,
     ) -> Result<FileHostTask> {
-        create(ctx, r#type, title, ops).await
+        create(ctx, r#type, title, ops, wait_for_completion).await
     }
 }
 
@@ -150,6 +151,7 @@ async fn create(
     r#type: FileTaskType,
     title: String,
     ops: Vec<FileTaskOpInput>,
+    wait_for_completion: bool,
 ) -> Result<FileHostTask> {
     crate::http::auth::public_gate::require(
         ctx,
@@ -157,20 +159,21 @@ async fn create(
         &["WRITE_EXTERNAL_STORAGE"],
     )?;
     let client_id = caller(ctx)?;
-    Ok(ctx
-        .data::<Arc<FileTasks>>()?
-        .create(
-            &client_id,
-            r#type,
-            &title,
-            ops.into_iter()
-                .map(|op| FileTaskOp {
-                    src: op.src,
-                    dst: op.dst,
-                    overwrite: op.overwrite,
-                })
-                .collect(),
-        )
-        .await?
-        .into())
+    let tasks = ctx.data::<Arc<FileTasks>>()?;
+    let ops = ops
+        .into_iter()
+        .map(|op| FileTaskOp {
+            src: op.src,
+            dst: op.dst,
+            overwrite: op.overwrite,
+        })
+        .collect();
+    let task = if wait_for_completion {
+        tasks
+            .create_and_wait(&client_id, r#type, &title, ops)
+            .await?
+    } else {
+        tasks.create(&client_id, r#type, &title, ops).await?
+    };
+    Ok(task.into())
 }

@@ -119,6 +119,13 @@ async fn prepared_files_retain_metadata_and_message_owners_after_import_cleanup(
         ),
     )
     .await;
+    let forwarded = execute(
+        &server,
+        format!(r#"mutation {{ forwardChatItems(id:{}, targets:["local","peer:local"]) {{id content}} }}"#, json!(id)),
+    ).await;
+    for row in forwarded["forwardChatItems"].as_array().unwrap() {
+        assert_eq!(row["content"], first["sendChatItem"][0]["content"]);
+    }
     execute(
         &server,
         format!(
@@ -130,7 +137,7 @@ async fn prepared_files_retain_metadata_and_message_owners_after_import_cleanup(
     store.release(file.id.clone()).await.unwrap();
     assert_eq!(
         state.db.app_file_get(&file.id).unwrap().unwrap().ref_count,
-        2
+        4
     );
     let saved: Value =
         serde_json::from_str(first["sendChatItem"][0]["content"].as_str().unwrap()).unwrap();
@@ -245,5 +252,70 @@ async fn retry_returns_pending_before_platform_transport_completes() {
     .await
     .unwrap();
     state.host.disconnect(generation);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn batch_forward_uses_current_content_and_owns_each_creation_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    let state = server.runtime_state();
+    let source = execute(
+        &server,
+        r#"mutation { sendChatText(target:"local", text:"old") {id} }"#.into(),
+    )
+    .await;
+    let id = source["sendChatText"]["id"].as_str().unwrap();
+    execute(
+        &server,
+        format!(
+            r#"mutation {{ editChatText(id:{}, text:"current") {{changed}} }}"#,
+            json!(id)
+        ),
+    )
+    .await;
+    let mut events = state.events.subscribe();
+    let (_generation, mut host_requests) = state.host.connect();
+    let result = execute(&server, format!(r#"mutation {{ forwardChatItems(id:{}, targets:["local","peer:local"]) {{id content status}} }}"#, json!(id))).await;
+    let rows = result["forwardChatItems"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_ne!(rows[0]["id"], rows[1]["id"]);
+    for row in rows {
+        assert_eq!(row["status"], "SENT");
+        assert_eq!(
+            serde_json::from_str::<Value>(row["content"].as_str().unwrap()).unwrap()["value"]["text"],
+            "current"
+        );
+    }
+    let mut created = 0;
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event.event_type, "CONTENT_CHANGED");
+        created += usize::from(event.event_type == plain_rs::chat::events::WS_MESSAGE_CREATED);
+    }
+    assert_eq!(created, 2);
+    assert!(host_requests.try_recv().is_err());
+    for (source, targets) in [
+        (id, vec!["local", "channel:"]),
+        ("missing", vec!["local"]),
+        (id, vec!["local"; 129]),
+    ] {
+        let result = server
+            .graphql_executor()
+            .execute(Request::new(format!(
+                "mutation {{ forwardChatItems(id:{}, targets:{}) {{id}} }}",
+                json!(source),
+                json!(targets)
+            )))
+            .await;
+        assert!(!result.errors.is_empty());
+    }
+    let empty = execute(
+        &server,
+        r#"mutation { forwardChatItems(id:"missing", targets:[]) {id} }"#.into(),
+    )
+    .await;
+    assert_eq!(empty["forwardChatItems"], json!([]));
+    assert_eq!(state.db.get_all_chats().len(), 3);
+    assert!(events.try_recv().is_err());
     server.shutdown().await;
 }

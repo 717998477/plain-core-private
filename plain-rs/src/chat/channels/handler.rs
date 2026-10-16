@@ -41,7 +41,7 @@ pub fn handle<T: PeerTransport + 'static>(
         );
         let _ = service.event_tx.send(ChatEvent {
             event_type: WS_CHANNELS_UPDATED,
-            payload: channels_updated_payload(&service.db),
+            payload: channels_updated_payload(&service.db, &service.identity.client_id),
         });
     }
     if let Some(invite) = result.invite {

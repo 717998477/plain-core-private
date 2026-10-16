@@ -175,6 +175,9 @@ mime_type TEXT NOT NULL,
 file_name TEXT NOT NULL,
 title TEXT NOT NULL,
 artist TEXT NOT NULL,
+album TEXT NOT NULL DEFAULT '',
+album_artist TEXT NOT NULL DEFAULT '',
+album_id TEXT NOT NULL DEFAULT '',
 bucket_id TEXT NOT NULL,
 size_bytes INTEGER NOT NULL CHECK(size_bytes>=0),
 duration_ms INTEGER NOT NULL CHECK(duration_ms>=0),
@@ -191,6 +194,7 @@ original_path TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uidx_media_items_data_type_path ON media_items(data_type,path);
 CREATE INDEX IF NOT EXISTS idx_media_items_data_type_trashed_updated_at ON media_items(data_type,trashed,updated_at);
+CREATE INDEX IF NOT EXISTS idx_media_items_data_type_trashed_id ON media_items(data_type,trashed,id);
 CREATE TABLE IF NOT EXISTS media_play_history (
 media_id TEXT NOT NULL PRIMARY KEY CHECK(length(media_id)>0),
 position_ms INTEGER NOT NULL CHECK(position_ms>=0),

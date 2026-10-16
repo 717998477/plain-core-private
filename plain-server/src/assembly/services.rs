@@ -68,6 +68,8 @@ impl Services {
             db.clone(),
             host.clone(),
             events.clone(),
+            resources.clone(),
+            cache.root().to_owned(),
         ));
         #[cfg(feature = "media")]
         let media_scans = Arc::new(crate::services::files::media_scans::MediaScans::new(

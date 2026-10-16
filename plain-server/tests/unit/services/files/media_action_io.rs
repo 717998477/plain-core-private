@@ -16,6 +16,9 @@ async fn media_delete_returns_actual_os_receipts_and_keeps_failed_selection() {
         .map(|path| {
             std::fs::write(path, b"document").unwrap();
             plain_rs::db::MediaFileMetadata {
+                album: String::new(),
+                album_artist: String::new(),
+
                 data_type: plain_rs::enums::DataType::Doc,
                 path: path.to_str().unwrap().into(),
                 title: "document".into(),
@@ -89,6 +92,9 @@ async fn image_delete_updates_index_before_any_parent_consumes_the_receipt() {
     let catalog = core.native_media_catalog().unwrap();
     let rows = catalog
         .record_files(&[plain_rs::db::MediaFileMetadata {
+            album: String::new(),
+            album_artist: String::new(),
+
             data_type: plain_rs::enums::DataType::Image,
             path: path.to_str().unwrap().into(),
             title: "photo".into(),
@@ -131,6 +137,9 @@ fn seed(db: &Db, path: &Path) -> String {
 
 fn seed_kind(db: &Db, path: &Path, kind: DataType) -> String {
     db.record_media_files(&[plain_rs::db::MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type: kind,
         path: path.to_string_lossy().into_owned(),
         title: "document".into(),

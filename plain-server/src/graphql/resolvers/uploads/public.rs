@@ -79,6 +79,8 @@ async fn session_key(state: &ServerState, headers: &HeaderMap) -> anyhow::Result
 }
 
 async fn read_info<T: for<'de> Deserialize<'de>>(
+    state: &ServerState,
+    client: &str,
     key: &[u8],
     field: axum::extract::multipart::Field<'_>,
 ) -> anyhow::Result<T> {
@@ -88,7 +90,12 @@ async fn read_info<T: for<'de> Deserialize<'de>>(
         .map_err(|error| anyhow::Error::msg(error.to_string()))?;
     let plaintext = plain_rs::crypto::xchacha_decrypt_raw(key, &bytes)
         .ok_or_else(|| anyhow::anyhow!("Unauthorized"))?;
-    Ok(serde_json::from_slice(&plaintext)?)
+    let plaintext = std::str::from_utf8(&plaintext)?;
+    let payload = state
+        .main_replay
+        .admit(client, plaintext, chrono::Utc::now().timestamp_millis())
+        .map_err(|_| anyhow::anyhow!("invalid or replayed upload metadata"))?;
+    Ok(serde_json::from_str(payload)?)
 }
 
 /// Streams one multipart part into `destination`, returning the byte count.
@@ -184,6 +191,12 @@ pub(crate) async fn upload(State(state): State<ServerState>, request: Request) -
         Ok(key) => key,
         Err(_) => return plain(StatusCode::UNAUTHORIZED, "unauthorized"),
     };
+    let client = request
+        .headers()
+        .get("c-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
     let mut multipart = match Multipart::from_request(request, &()).await {
         Ok(multipart) => multipart,
         Err(_) => return plain(StatusCode::BAD_REQUEST, "invalid multipart request"),
@@ -199,7 +212,7 @@ pub(crate) async fn upload(State(state): State<ServerState>, request: Request) -
         let name = field.name().unwrap_or_default().to_owned();
         let mut field = field;
         match name.as_str() {
-            "info" => match read_info(&key, field).await {
+            "info" => match read_info(&state, &client, &key, field).await {
                 Ok(value) => info = Some(value),
                 Err(error) if error.to_string() == "Unauthorized" => {
                     return plain(StatusCode::UNAUTHORIZED, "unauthorized");
@@ -402,6 +415,12 @@ pub(crate) async fn upload_chunk(State(state): State<ServerState>, request: Requ
         Ok(key) => key,
         Err(_) => return plain(StatusCode::UNAUTHORIZED, "unauthorized"),
     };
+    let client = request
+        .headers()
+        .get("c-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
     let mut multipart = match Multipart::from_request(request, &()).await {
         Ok(multipart) => multipart,
         Err(_) => return plain(StatusCode::BAD_REQUEST, "invalid multipart request"),
@@ -421,7 +440,7 @@ pub(crate) async fn upload_chunk(State(state): State<ServerState>, request: Requ
         let name = field.name().unwrap_or_default().to_owned();
         let mut field = field;
         match name.as_str() {
-            "info" => match read_info(&key, field).await {
+            "info" => match read_info(&state, &client, &key, field).await {
                 Ok(value) => info = Some(value),
                 Err(error) if error.to_string() == "Unauthorized" => {
                     failure = Some(plain(StatusCode::UNAUTHORIZED, "unauthorized"));

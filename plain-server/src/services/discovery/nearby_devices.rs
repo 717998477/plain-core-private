@@ -48,14 +48,21 @@ impl Context {
             chat_store::nearby::save(&self.db, &device.cache())?;
             let kind = serde_json::from_value(json!(device.device_type))
                 .unwrap_or(plain_rs::chat::enums::DeviceType::Other);
-            chat_store::peers::discovered(
+            if chat_store::peers::discovered(
                 &self.db,
                 &device.id,
                 &device.ips,
                 device.port,
                 &device.name,
                 kind,
-            )?;
+            )?
+            .is_some()
+            {
+                let _ = self.events.send(WsEvent::broadcast(
+                    plain_rs::chat::events::WS_PEER_UPDATED,
+                    json!({"id":device.id}).to_string(),
+                ));
+            }
         }
         if visible
             || self

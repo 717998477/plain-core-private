@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 #[derive(Default)]
 pub(crate) struct Runtime {
     connections: Mutex<HashMap<String, Connection>>,
+    replay: crate::http::auth::replay::Replay,
 }
 struct Connection {
     client_id: String,
@@ -192,6 +193,10 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                     .or_else(|| crate::services::sessions::key(&state.db, &params.cid).ok().flatten());
                 let plain = key.and_then(|key| plain_rs::crypto::xchacha_decrypt_raw(&key,&frame));
                 let Some(plain) = plain else { let _ = socket.send(close(1013,"invalid_request")).await; break; };
+                let plain = match super::frames::admit(&state.main_ws.replay, &params.cid, &frame, &plain, registered, chrono::Utc::now().timestamp_millis()) {
+                    Ok(payload) => payload,
+                    Err(()) => { let _ = socket.send(close(1013,"invalid_request")).await; break; }
+                };
                 if !registered {
                     registered = true;
                     if let Some(c) = state.main_ws.connections.lock().unwrap().get_mut(&id) { c.registered = true; }
@@ -244,6 +249,21 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
     }
     state.main_ws.connections.lock().unwrap().remove(&id);
     state.main_ws.changed(&state);
+    if registered
+        && !state
+            .main_ws
+            .snapshot()
+            .iter()
+            .any(|client| client == &params.cid)
+    {
+        if let Err(error) = state
+            .mdns
+            .release_discovery_client(&state, &params.cid)
+            .await
+        {
+            log::warn!("Discovery client cleanup: {error}");
+        }
+    }
     if state.main_ws.snapshot().is_empty() {
         let _ = state
             .host

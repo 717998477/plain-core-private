@@ -19,6 +19,7 @@ pub(crate) struct ServerState {
     pub(crate) browser: Arc<crate::services::files::browser::Runtime>,
     pub(crate) file_platform: Arc<crate::services::files::platform::FilePlatform>,
     pub(crate) feeds: Arc<crate::services::feeds::SyncService>,
+    pomodoro_task: Arc<parking_lot::Mutex<Option<JoinHandle<()>>>>,
     pub(crate) update_checks: Arc<crate::services::settings::updates::Runtime>,
     pub(crate) duration_updates: Arc<crate::services::files::duration_updates::Runtime>,
     pub(crate) duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
@@ -31,10 +32,12 @@ pub(crate) struct ServerState {
     pub(crate) http_server: Arc<crate::services::http_server::Runtime>,
     pub(crate) build_debug: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) web_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
+    pub(crate) web_source: Arc<std::sync::RwLock<Option<crate::services::web_assets::Source>>>,
     pub(crate) web_bundle:
         Arc<std::sync::RwLock<Option<crate::http::routes::web_bundle::SharedWebBundle>>>,
     pub(crate) tls_identity: Arc<std::sync::RwLock<crate::services::tls_identity::IdentitySource>>,
     pub(crate) public: crate::graphql::schemas::public::PublicSchema,
+    pub(crate) aware: Arc<crate::services::peers::aware::Runtime>,
     pub(crate) peer_status: Arc<crate::services::peers::peer_status::Runtime>,
     pub(crate) mdns: Arc<crate::services::discovery::mdns_runtime::Runtime>,
     pub(crate) guest_replay: Arc<crate::http::auth::replay::Replay>,
@@ -154,6 +157,18 @@ impl ContentServer {
 
     pub fn peer_status(&self) -> std::sync::Arc<crate::services::peers::peer_status::Runtime> {
         self.state.peer_status.clone()
+    }
+
+    pub async fn close_native_scope(
+        &self,
+        scope: &crate::native::graphql::NativeRequestScope,
+    ) -> Result<(), String> {
+        scope.close();
+        self.state
+            .mdns
+            .release_native_scope(scope)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     pub fn native_graphql(&self) -> Result<crate::native::graphql::NativeGraphqlExecutor, String> {
@@ -399,6 +414,7 @@ impl ContentServer {
             file_platform: services.file_platform.clone(),
             browser: services.browser.clone(),
             feeds: services.feeds.clone(),
+            pomodoro_task: Arc::new(parking_lot::Mutex::new(None)),
             update_checks: Arc::new(crate::services::settings::updates::Runtime::default()),
             duration_cache: services.duration_cache.clone(),
             duration_updates: services.duration_updates.clone(),
@@ -414,6 +430,7 @@ impl ContentServer {
             public,
             lan,
             thumbnails: Arc::new(crate::services::images::thumbnails::Thumbnails::default()),
+            aware: Arc::new(crate::services::peers::aware::Runtime::default()),
             peer_status: Arc::new(crate::services::peers::peer_status::Runtime::default()),
             mdns: Arc::new(crate::services::discovery::mdns_runtime::Runtime::default()),
             peer_schema: crate::graphql::schemas::peer::schema(),
@@ -457,6 +474,7 @@ impl ContentServer {
             http_server: Arc::new(crate::services::http_server::Runtime::default()),
             build_debug: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             web_root: Arc::new(std::sync::RwLock::new(None)),
+            web_source: Arc::new(std::sync::RwLock::new(None)),
             web_bundle: Arc::new(std::sync::RwLock::new(None)),
             tls_identity: Arc::new(std::sync::RwLock::new(
                 crate::services::tls_identity::IdentitySource::Json(
@@ -477,6 +495,7 @@ impl ContentServer {
         crate::services::feeds::sync_service::schedule::start(state.clone());
         crate::services::chat::download_queue::start(state.clone());
         crate::services::peers::shared_batch::start(state.clone());
+        crate::services::peers::aware::start(state.clone());
         crate::services::discovery::pairing_timeout::start(
             state.pairing.clone(),
             state.events.clone(),
@@ -484,6 +503,7 @@ impl ContentServer {
         );
         crate::services::discovery::nearby_devices::start(state.clone());
         crate::services::discovery::ble_scan::start(state.clone());
+        *state.pomodoro_task.lock() = Some(services.pomodoro.follow(receiver.clone()));
         image_models.follow(receiver.clone());
         state.sms_sends.follow(receiver.clone());
         state.mobile.mms.follow(receiver.clone());
@@ -612,7 +632,7 @@ impl ContentServer {
         cert: Vec<u8>,
         key: Vec<u8>,
         debug: bool,
-        web_root: &str,
+        web_assets: crate::services::web_assets::Source,
     ) -> Result<Self, String> {
         let (state, stop, _) =
             Self::build_state_with_properties(directory, token, prefs, properties)?;
@@ -623,7 +643,7 @@ impl ContentServer {
             stop,
         };
         server.set_build_debug(debug);
-        server.set_web_root(web_root);
+        server.set_web_assets(web_assets).await?;
         server.port = server.start_public(http, https, cert, key).await?.0;
         Ok(server)
     }
@@ -691,9 +711,12 @@ impl ContentServer {
             .build_debug
             .store(debug, std::sync::atomic::Ordering::Relaxed);
     }
-    /// The bundle root the host unpacked this run. Empty means the SPA is not
-    /// served, which is the desktop case where the bundle is loaded by the
-    /// webview itself.
+    pub async fn set_web_assets(
+        &self,
+        source: crate::services::web_assets::Source,
+    ) -> Result<(), String> {
+        crate::services::web_assets::configure(&self.state, source).await
+    }
     pub fn set_web_root(&self, root: &str) {
         if let Ok(mut guard) = self.state.web_root.write() {
             *guard = (!root.is_empty()).then(|| PathBuf::from(root));
@@ -719,6 +742,7 @@ impl ContentServer {
             .await;
         self.state.feeds.shutdown().await;
         self.state.download_runtime.shutdown().await;
+        self.state.update_checks.download.shutdown().await;
         self.state.mobile.mms.shutdown().await;
         self.state.image_models.shutdown().await;
         self.state.duration_updates.shutdown().await;
@@ -741,6 +765,12 @@ impl ContentServer {
             }
         }
         let _ = self.stop.send(true);
+        let pomodoro_task = self.state.pomodoro_task.lock().take();
+        if let Some(task) = pomodoro_task {
+            if let Err(error) = task.await {
+                log::warn!("Pomodoro shutdown: {error}");
+            }
+        }
         #[cfg(feature = "media")]
         if let Err(error) = self.state.media_scans.wait_background().await {
             log::error!("Media scan task shutdown failed: {error}");
@@ -774,6 +804,7 @@ mod tests;
 
 #[cfg(feature = "http_transport")]
 pub(crate) struct PublicServer {
+    pub(crate) discovery: crate::assembly::lifecycle::PublicDiscovery,
     pub(crate) listeners: crate::http::listeners::HttpListeners,
     pub(crate) stop: watch::Sender<bool>,
     pub(crate) generation: u64,

@@ -188,6 +188,12 @@ impl ContactsMutation {
             ));
         }
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[WRITE])?;
+        crate::mobile::query::require_narrowing(
+            ctx.data_unchecked::<Arc<plain_rs::db::Db>>(),
+            crate::host::query::Provider::Contact,
+            &query,
+        )
+        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let ids: Vec<Value> = host_json(
             ctx,
             "systemContactIds",

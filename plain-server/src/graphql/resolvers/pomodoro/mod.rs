@@ -2,4 +2,4 @@
 pub mod pomodoro;
 
 #[cfg(feature = "core")]
-pub mod host;
+pub mod state;

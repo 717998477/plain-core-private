@@ -73,6 +73,45 @@ impl FileTasks {
         let _guard = self.deletion_lock.lock().await;
         plain_rs::files::filesystem::deletion::validate(std::path::Path::new(&path))?;
         self.hooks.platform.authorize(&path, true).await?;
+        self.delete_prepared(path).await
+    }
+    pub async fn delete_many(&self, paths: Vec<String>) -> Result<i32> {
+        let _guard = self.deletion_lock.lock().await;
+        let mut seen = std::collections::HashSet::new();
+        let paths = paths
+            .into_iter()
+            .filter(|path| seen.insert(path.clone()))
+            .collect::<Vec<_>>();
+        for path in &paths {
+            plain_rs::files::filesystem::deletion::validate(std::path::Path::new(path))?;
+        }
+        if paths.is_empty() {
+            return Ok(0);
+        }
+        self.hooks.platform.authorize_paths(&paths, true).await?;
+        let mut deleted = 0i32;
+        for path in paths {
+            let outcome = self.delete_prepared(path).await?;
+            if !outcome.failures.is_empty() {
+                bail!(
+                    "File deletion failed: {}",
+                    outcome
+                        .failures
+                        .iter()
+                        .map(|failure| format!("{}: {}", failure.path, failure.error))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                );
+            }
+            if outcome.removed {
+                deleted = deleted
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("Deletion count overflow"))?;
+            }
+        }
+        Ok(deleted)
+    }
+    async fn delete_prepared(&self, path: String) -> Result<Outcome> {
         match tokio::fs::symlink_metadata(&path).await {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Outcome {

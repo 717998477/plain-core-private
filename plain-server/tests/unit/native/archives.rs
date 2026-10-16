@@ -27,21 +27,17 @@ async fn archive_authorization_is_deduplicated_and_bounded_without_changing_zip_
         let (generation, mut requests) = host.connect();
         let responder = host.clone();
         let replies = tokio::spawn(async move {
-            let mut sizes = Vec::new();
-            let mut paths = std::collections::HashSet::new();
+            let mut calls = 0;
             while let Some(request) = requests.recv().await {
-                assert_eq!(request["method"], "fileTaskAuthorize");
-                assert_eq!(request["params"]["operation"], "read");
-                let values = request["params"]["paths"].as_array().unwrap();
-                sizes.push(values.len());
-                for value in values {
-                    assert!(paths.insert(value.as_str().unwrap().to_owned()));
-                }
+                calls += 1;
                 responder
-                    .reply(generation, json!({"id":request["id"],"result":true}))
+                    .reply(
+                        generation,
+                        json!({"id":request["id"],"error":"Unexpected host request"}),
+                    )
                     .unwrap();
             }
-            sizes
+            calls
         });
         let mut reader = core
             .native_archives()
@@ -56,8 +52,7 @@ async fn archive_authorization_is_deduplicated_and_bounded_without_changing_zip_
         assert_eq!(reader.size as usize, bytes.len());
         drop(reader);
         host.disconnect(generation);
-        let sizes = replies.await.unwrap();
-        assert_eq!(sizes, if count == 2 { vec![2] } else { vec![128, 1] });
+        assert_eq!(replies.await.unwrap(), 0);
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         assert_eq!(archive.len(), count + 1);
         for index in 0..count {

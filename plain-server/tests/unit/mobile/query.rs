@@ -156,17 +156,16 @@ async fn call_and_contact_reach_a_mutation_with_nothing_selected() {
     for (provider, query) in [
         (Provider::Call, "trash:false"),
         (Provider::Call, "show_hidden:false"),
+        (Provider::Contact, "trash:false"),
     ] {
         assert!(
             super::require_narrowing(&db, provider, query).is_err(),
             "{provider:?} {query:?} selects nothing and must refuse the mutation"
         );
     }
-    // The contact plan pins its own `mimetype` clause, so every contact query
-    // narrows even when the sent field contributes nothing.
     for (provider, query) in [
         (Provider::Call, "type:1"),
-        (Provider::Contact, "trash:false"),
+        (Provider::Contact, "ids:1,2"),
         (Provider::Contact, "text:abc"),
     ] {
         super::require_narrowing(&db, provider, query)
@@ -188,5 +187,21 @@ fn date_scoped_mutations_need_a_valid_rust_parsed_timestamp() {
             require_narrowing(&db, Provider::Call, query).is_err(),
             "{query}"
         );
+    }
+}
+
+#[test]
+fn ignored_trash_filters_do_not_authorize_contact_or_call_deletion() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(&directory.path().join("db")).unwrap();
+    for provider in [Provider::Contact, Provider::Call] {
+        for query in ["all:false", "trash:false", "trash:true"] {
+            assert!(
+                require_narrowing(&db, provider, query).is_err(),
+                "{provider:?}: {query}"
+            );
+        }
+        assert!(require_narrowing(&db, provider, "ids:1").is_ok());
+        assert!(require_narrowing(&db, provider, "all:true").is_ok());
     }
 }

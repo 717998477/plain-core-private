@@ -337,3 +337,35 @@ async fn group_writes_return_the_group_they_just_wrote() {
         true
     );
 }
+
+#[tokio::test]
+async fn contact_deletion_rejects_non_narrowing_queries_before_any_host_request() {
+    let (_directory, schema) = fixture(json!(["WRITE_CONTACTS"]));
+    let host = schema_host(&schema);
+    let (_generation, mut requests) = host.connect();
+    for query in [
+        "",
+        " \t\n",
+        "all:false",
+        "trash:false",
+        "trash:true",
+        "unsupported_scope:value",
+    ] {
+        let document = format!(
+            "mutation {{ deleteContacts(query: {}) {{ affectedCount }} }}",
+            serde_json::to_string(query).unwrap()
+        );
+        let response = tokio::select! {
+            request = requests.recv() => panic!("{query:?} reached the platform provider: {request:?}"),
+            response = schema.execute(document) => response,
+        };
+        assert!(
+            !response.errors.is_empty(),
+            "{query:?} unexpectedly permits bulk deletion"
+        );
+        assert!(
+            requests.try_recv().is_err(),
+            "{query:?} reached the platform provider"
+        );
+    }
+}

@@ -1,3 +1,6 @@
+mod media_rows;
+mod paths;
+
 use crate::host::bridge::Host;
 use anyhow::{Result, anyhow, bail};
 use plain_rs::db::Db;
@@ -13,6 +16,7 @@ pub(crate) struct FilePlatform {
     db: Arc<Db>,
     directory: PathBuf,
     cache: PathBuf,
+    private_roots: std::result::Result<[PathBuf; 2], String>,
     #[cfg(test)]
     sdk: std::sync::atomic::AtomicBool,
     #[cfg(feature = "media")]
@@ -26,7 +30,11 @@ impl FilePlatform {
         cache: PathBuf,
         #[cfg(feature = "media")] scans: Arc<super::media_scans::MediaScans>,
     ) -> Self {
+        let private_roots =
+            (|| -> std::io::Result<_> { Ok([directory.canonicalize()?, cache.canonicalize()?]) })()
+                .map_err(|error| error.to_string());
         Self {
+            private_roots,
             host,
             db,
             directory,
@@ -61,18 +69,14 @@ impl FilePlatform {
     }
 
     pub(crate) async fn thumbnail_cache(&self, path: &str) -> Result<PathBuf> {
-        if self.uses_sdk() {
-            let value = self
-                .host
-                .call("thumbnailAuthorize", json!({"paths":[path]}))
-                .await
-                .map_err(anyhow::Error::msg)?;
-            if value.as_bool() != Some(true) {
-                bail!("Thumbnail source access denied");
-            }
-        } else {
-            self.authorize(path, false).await?;
+        if !Path::new(path).is_absolute() {
+            bail!("absolute thumbnail path required");
         }
+        let metadata = tokio::fs::metadata(path).await?;
+        if !metadata.is_file() {
+            bail!("regular thumbnail source required");
+        }
+        let _file = tokio::fs::File::open(path).await?;
         Ok(self.cache.clone())
     }
 
@@ -174,7 +178,17 @@ impl FilePlatform {
         ops: &[FileTaskOp],
     ) -> Result<()> {
         if self.uses_sdk() {
-            return self.receipt("fileTaskAuthorize", json!({"type":kind,"paths":ops.iter().flat_map(|op| [&op.src,&op.dst]).collect::<Vec<_>>()})).await;
+            let sources = ops.iter().map(|op| op.src.clone()).collect::<Vec<_>>();
+            let destinations = ops.iter().map(|op| op.dst.clone()).collect::<Vec<_>>();
+            let source_external = self
+                .external_paths(&sources, kind == FileTaskType::Move)
+                .await?;
+            let destination_external = self.external_paths(&destinations, true).await?;
+            return self
+                .require_external_permission(
+                    !source_external.is_empty() || !destination_external.is_empty(),
+                )
+                .await;
         }
         for op in ops {
             self.authorize(&op.src, kind == FileTaskType::Move).await?;
@@ -186,13 +200,12 @@ impl FilePlatform {
         self.authorize_paths(&[path.to_owned()], write).await
     }
     pub(crate) async fn authorize_paths(&self, paths: &[String], write: bool) -> Result<()> {
+        if paths.iter().any(|path| !Path::new(path).is_absolute()) {
+            bail!("absolute file path required");
+        }
         if self.uses_sdk() {
-            let params = if write {
-                json!({"paths":paths})
-            } else {
-                json!({"operation":"read","paths":paths})
-            };
-            return self.receipt("fileTaskAuthorize", params).await;
+            let external = self.external_paths(paths, write).await?;
+            return self.require_external_permission(!external.is_empty()).await;
         }
         let paths = paths.to_vec();
         tokio::task::spawn_blocking(move || {
@@ -208,13 +221,33 @@ impl FilePlatform {
             bail!("absolute file path required");
         }
         if self.uses_sdk() {
-            self.receipt(
-                "fileTaskAuthorize",
-                json!({"operation":"read", "paths":paths}),
-            )
-            .await?;
+            self.authorize_paths(paths, false).await?;
         }
         Ok(())
+    }
+
+    async fn require_external_permission(&self, needed: bool) -> Result<()> {
+        if needed
+            && !crate::http::auth::public_gate::granted(
+                &self.host,
+                &["WRITE_EXTERNAL_STORAGE".to_owned()],
+            )
+            .await?
+        {
+            bail!("File access permission denied");
+        }
+        Ok(())
+    }
+
+    async fn external_paths(&self, paths: &[String], write: bool) -> Result<Vec<String>> {
+        let paths = paths.to_vec();
+        let [directory, cache] = self
+            .private_roots
+            .as_ref()
+            .map_err(|error| anyhow!("{error}"))?
+            .clone();
+        tokio::task::spawn_blocking(move || paths::external(&paths, &directory, &cache, write))
+            .await?
     }
 
     pub(crate) async fn identities(
@@ -222,12 +255,16 @@ impl FilePlatform {
         paths: &[String],
     ) -> Result<Vec<super::file_task_media::Identity>> {
         if self.uses_sdk() {
-            return Ok(serde_json::from_value(
+            let paths = self.external_paths(paths, false).await?;
+            if paths.is_empty() {
+                return Ok(vec![]);
+            }
+            return media_rows::identities(
                 self.host
                     .call("fileTaskMediaSnapshot", json!({"paths": paths}))
                     .await
                     .map_err(anyhow::Error::msg)?,
-            )?);
+            );
         }
         let db = self.db.clone();
         let paths = serde_json::to_string(paths)?;
@@ -239,6 +276,10 @@ impl FilePlatform {
     }
     pub(crate) async fn scan(&self, paths: &[String]) -> Result<()> {
         if self.uses_sdk() {
+            let paths = self.external_paths(paths, false).await?;
+            if paths.is_empty() {
+                return Ok(());
+            }
             return self.receipt("fileTaskScan", json!({"paths":paths})).await;
         }
         #[cfg(feature = "media")]

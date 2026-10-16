@@ -39,15 +39,6 @@ impl Runtime {
             "systemPermissionFacts" => {
                 crate::host::permission_facts::facts(&["WRITE_EXTERNAL_STORAGE".to_owned()], params)
             }
-            "fileTaskAuthorize" => {
-                let allowed = tokio::task::spawn_blocking(move || {
-                    crate::host::file_resource::authorize_read(params)
-                })
-                .await
-                .map_err(|error| error.to_string())??;
-                Ok(Value::Bool(allowed))
-            }
-
             method if crate::native::audio::handles(method) => {
                 self.core.native_audio()?.handle(method, params).await
             }

@@ -160,7 +160,15 @@ async fn deletion_scan_failure_is_visible_after_cleanup_and_a_repeat_does_not_re
         "INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('file',?1,22,'first')", [source.to_str().unwrap()]
     )).unwrap();
     state.media_scans.close().unwrap();
-    let first = state.files.delete(source.to_str().unwrap().into()).await;
+    let later = directory.path().join("later.txt");
+    std::fs::write(&later, b"later").unwrap();
+    let first = state
+        .files
+        .delete_many(vec![
+            source.to_str().unwrap().into(),
+            later.to_str().unwrap().into(),
+        ])
+        .await;
     assert!(
         first
             .err()
@@ -169,6 +177,7 @@ async fn deletion_scan_failure_is_visible_after_cleanup_and_a_repeat_does_not_re
             .contains("Rust core stopped")
     );
     assert!(!source.exists());
+    assert_eq!(std::fs::read(&later).unwrap(), b"later");
     assert!(relation(&core, "file").is_none());
     let repeated = state
         .files
@@ -345,5 +354,49 @@ async fn named_copy_main_creates_parents_overwrites_and_uses_the_request_owner_w
     }
     assert!(!directory.path().join("outside").exists());
     assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn main_batch_delete_validates_all_paths_before_effects_and_counts_actual_roots_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(&temp.path().join("core")).unwrap();
+    let state = core.runtime_state();
+    let (_generation, mut host_requests) = state.host.connect();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    let absent = temp.path().join("absent");
+    std::fs::write(&first, b"first").unwrap();
+    std::fs::write(&second, b"second").unwrap();
+    let native = core.native_graphql().unwrap();
+    let document = "mutation($paths:[String!]!){deleteFiles(paths:$paths){affectedCount}}";
+    for invalid in ["relative", "/"] {
+        let response = native
+            .execute(
+                Request::new(document).variables(async_graphql::Variables::from_json(
+                    json!({"paths":[first,invalid]}),
+                )),
+            )
+            .await;
+        assert!(!response.errors.is_empty());
+        assert_eq!(std::fs::read(&first).unwrap(), b"first");
+        assert_eq!(std::fs::read(&second).unwrap(), b"second");
+    }
+    let response = native
+        .execute(
+            Request::new(document).variables(async_graphql::Variables::from_json(
+                json!({"paths":[first,absent,first,second]}),
+            )),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["deleteFiles"]["affectedCount"],
+        2
+    );
+    assert!(!first.exists());
+    assert!(!second.exists());
+    assert_eq!(state.files.delete_many(vec![]).await.unwrap(), 0);
+    assert!(host_requests.try_recv().is_err());
     core.stop_core().await;
 }

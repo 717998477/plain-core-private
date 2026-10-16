@@ -186,7 +186,10 @@ impl Outgoing {
     }
     async fn attempt(&self, state: &ServerState, peer: &DPeer, epoch: u64) -> Result<()> {
         ensure!(!peer.ip.is_empty(), "No peer address");
-        let port = peer.port.filter(|port| *port > 0).ok_or_else(|| anyhow::anyhow!("No peer address"))?;
+        let port = peer
+            .port
+            .filter(|port| *port > 0)
+            .ok_or_else(|| anyhow::anyhow!("No peer address"))?;
         let permit = self.setup.clone().acquire_owned().await?;
         ensure!(self.current(epoch), "Status runtime stopped");
         let actor = state
@@ -285,18 +288,11 @@ impl Outgoing {
     }
 }
 fn fingerprint(peer: &DPeer) -> String {
-    format!("{}:{}:{}:{:?}", peer.key, peer.public_key, peer.ip, peer.port)
+    format!(
+        "{}:{}:{}:{:?}",
+        peer.key, peer.public_key, peer.ip, peer.port
+    )
 }
 pub(crate) async fn ensure_aware(state: &ServerState) -> Result<()> {
-    for peer in peers::all(&state.db)?.into_iter().filter(|p| p.is_paired()) {
-        state
-            .host
-            .call(
-                "peerStartAware",
-                json!({"peer":crate::services::peers::peer_address::view(&peer)}),
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-    }
-    Ok(())
+    state.aware.ensure(state).await
 }

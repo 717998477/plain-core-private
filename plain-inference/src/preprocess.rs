@@ -6,10 +6,19 @@ use image::{ImageDecoder, ImageReader, imageops::FilterType};
 use std::path::Path;
 
 pub fn tensor(path: &Path, config: &Preprocess) -> Result<Option<Vec<f32>>, String> {
-    let mut reader = ImageReader::open(path)
-        .map_err(|e| e.to_string())?
+    tensor_reader(
+        std::io::BufReader::new(std::fs::File::open(path).map_err(|error| error.to_string())?),
+        config,
+    )
+}
+
+pub fn tensor_reader(
+    source: impl std::io::BufRead + std::io::Seek,
+    config: &Preprocess,
+) -> Result<Option<Vec<f32>>, String> {
+    let mut reader = ImageReader::new(source)
         .with_guessed_format()
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())?;
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(128 * 1024 * 1024);
     limits.max_image_width = Some(32768);
@@ -65,3 +74,7 @@ pub fn tensor(path: &Path, config: &Preprocess) -> Result<Option<Vec<f32>>, Stri
     }
     Ok(Some(tensor))
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/preprocess.rs"]
+mod tests;

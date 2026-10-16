@@ -81,26 +81,11 @@ impl MediaActions {
             .ids(kind, query, from_trash)
             .await
             .map_err(async_graphql::Error::new)?;
-        let mut seen = std::collections::HashSet::new();
-        let ids: Vec<_> = ids
-            .into_iter()
-            .filter(|id| seen.insert(id.clone()))
-            .collect();
-        let mut affected = 0;
-        let mut failed = 0;
-        for batch in ids.chunks(500) {
-            let result = self
-                .apply(
-                    kind,
-                    action,
-                    batch.to_vec(),
-                    from_trash,
-                    dest_dir.to_owned(),
-                )
-                .await?;
-            affected += result.affected_count;
-            failed += result.failed_ids.len();
-        }
+        let result = self
+            .run_batches(kind, action, ids, from_trash, dest_dir.to_owned())
+            .await?;
+        let affected = result.affected_count;
+        let failed = result.failed_ids.len();
         if failed != 0 {
             return Err(format!(
                 "{}: {failed} media actions failed ({affected} completed)",
@@ -126,8 +111,47 @@ impl MediaActions {
             super::media_action_io::action_capability(action),
         )
         .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-        self.apply(r#type, action, requested, from_trash, dest_dir)
+        self.run_batches(r#type, action, requested, from_trash, dest_dir)
             .await
+    }
+
+    async fn run_batches(
+        &self,
+        kind: DataType,
+        action: Action,
+        requested: Vec<String>,
+        from_trash: bool,
+        dest_dir: String,
+    ) -> Result<Completed> {
+        if !matches!(
+            kind,
+            DataType::Audio | DataType::Video | DataType::Image | DataType::Doc
+        ) {
+            return Err("unsupported media kind".into());
+        }
+        if requested.iter().any(String::is_empty) {
+            return Err("invalid media selection".into());
+        }
+        let mut seen = std::collections::HashSet::new();
+        let ids = requested
+            .into_iter()
+            .filter(|id| seen.insert(id.clone()))
+            .collect::<Vec<_>>();
+        let mut completed = Completed {
+            affected_count: 0,
+            failed_ids: vec![],
+        };
+        for batch in ids.chunks(500) {
+            let result = self
+                .apply(kind, action, batch.to_vec(), from_trash, dest_dir.clone())
+                .await?;
+            completed.affected_count = completed
+                .affected_count
+                .checked_add(result.affected_count)
+                .ok_or_else(|| async_graphql::Error::new("Media action count overflow"))?;
+            completed.failed_ids.extend(result.failed_ids);
+        }
+        Ok(completed)
     }
 
     async fn apply(
@@ -228,6 +252,7 @@ impl MediaActions {
                 .remove(r#type.media_type_str().unwrap(), &completed_ids)?;
         }
         if !completed_ids.is_empty() {
+            super::catalog_events::publish(&self.events, [r#type.kind()]);
             let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
                 "CONTENT_CHANGED",
                 "{}".into(),

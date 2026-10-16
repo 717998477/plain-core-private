@@ -157,7 +157,14 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                     Selection::Field(field) => {
                         if !matches!(
                             field.node.name.node.as_str(),
-                            "mediaAction"
+                            "advanceAudioSelection"
+                                | "reportAudioPlayback"
+                                | "sendChatItems"
+                                | "forwardChatItem"
+                                | "forwardChatItems"
+                                | "sendShare"
+                                | "sendFolderShare"
+                                | "mediaAction"
                                 | "renameFile"
                                 | "renameFilePath"
                                 | "copyFile"
@@ -189,6 +196,8 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                                 | "updateMdnsPublication"
                                 | "unpublishMdns"
                                 | "setMdnsCapture"
+                                | "acquireDiscovery"
+                                | "releaseDiscovery"
                                 | "acquireMdnsDebugSession"
                                 | "releaseMdnsDebugSession"
                                 | "prewarmPeerTransport"
@@ -199,8 +208,6 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                                 | "restoreMediaItems"
                                 | "moveMediaItems"
                                 | "broadcastImageEditorUpdate"
-                                | "configurePomodoroDay"
-                                | "tickPomodoro"
                                 | "skipPomodoro"
                                 | "adjustPomodoro"
                                 | "startPomodoro"

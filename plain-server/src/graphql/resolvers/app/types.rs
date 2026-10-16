@@ -2,6 +2,18 @@ use async_graphql::Enum;
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Capability {
+    PeerDiscovery,
+    BleDiscovery,
+    WifiAware,
+    BackgroundService,
+    LauncherShortcuts,
+    FileBrowser,
+    ImageLibrary,
+    AudioLibrary,
+    VideoLibrary,
+    DocumentLibrary,
+    SoundMeter,
+
     BackgroundTimer,
     BackgroundWake,
     FileExport,
@@ -42,6 +54,18 @@ pub enum Capability {
 impl Capability {
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
+            "PEER_DISCOVERY" => Self::PeerDiscovery,
+            "BLE_DISCOVERY" => Self::BleDiscovery,
+            "WIFI_AWARE" => Self::WifiAware,
+            "BACKGROUND_SERVICE" => Self::BackgroundService,
+            "LAUNCHER_SHORTCUTS" => Self::LauncherShortcuts,
+            "FILE_BROWSER" => Self::FileBrowser,
+            "IMAGE_LIBRARY" => Self::ImageLibrary,
+            "AUDIO_LIBRARY" => Self::AudioLibrary,
+            "VIDEO_LIBRARY" => Self::VideoLibrary,
+            "DOCUMENT_LIBRARY" => Self::DocumentLibrary,
+            "SOUND_METER" => Self::SoundMeter,
+
             "BACKGROUND_TIMER" => Self::BackgroundTimer,
             "BACKGROUND_WAKE" => Self::BackgroundWake,
             "FILE_EXPORT" => Self::FileExport,

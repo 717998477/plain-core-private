@@ -94,16 +94,17 @@ pub fn discovered(
             return Ok(None);
         }
         let ip = ips.join(",");
-        if peer.ip != ip
-            || peer.port != Some(port)
-            || peer.name != name
-            || peer.device_type != device_type
+        if peer.ip == ip
+            && peer.port == Some(port)
+            && peer.name == name
+            && peer.device_type == device_type
         {
-            tx.execute(
-                "UPDATE peers SET ip=?2,port=?3,name=?4,device_type=?5,updated_at=?6 WHERE id=?1",
-                params![id, ip, port, name, device_type, crate::db::now_iso()],
-            )?;
+            return Ok(None);
         }
+        tx.execute(
+            "UPDATE peers SET ip=?2,port=?3,name=?4,device_type=?5,updated_at=?6 WHERE id=?1",
+            params![id, ip, port, name, device_type, crate::db::now_iso()],
+        )?;
         let row = tx.query_row(
             &format!("SELECT {PEER_COLS} FROM peers WHERE id=?1"),
             [id],

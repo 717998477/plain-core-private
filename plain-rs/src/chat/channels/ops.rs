@@ -20,7 +20,7 @@ impl<T: PeerTransport + 'static> ChatService<T> {
     fn emit_channels_updated(&self) {
         let _ = self.event_tx.send(ChatEvent {
             event_type: WS_CHANNELS_UPDATED,
-            payload: channels_updated_payload(&self.db),
+            payload: channels_updated_payload(&self.db, &self.identity.client_id),
         });
     }
 
@@ -109,7 +109,11 @@ impl<T: PeerTransport + 'static> ChatService<T> {
                 return false;
             }
         };
-        if let Some(owner_peer) = ch.owner_id.as_deref().and_then(|id| self.db.get_peer_by_id(id)) {
+        if let Some(owner_peer) = ch
+            .owner_id
+            .as_deref()
+            .and_then(|id| self.db.get_peer_by_id(id))
+        {
             let kp_bytes = base64_decode(&self.identity.ed25519_keypair);
             let channel_key = base64_decode(&ch.key);
             let _ = sender::send_leave(
@@ -210,7 +214,11 @@ impl<T: PeerTransport + 'static> ChatService<T> {
             crate::chat::channels::state::Action::Accept,
         )
         .map_err(|e| e.to_string())?;
-        let Some(owner_peer) = ch.owner_id.as_deref().and_then(|id| self.db.get_peer_by_id(id)) else {
+        let Some(owner_peer) = ch
+            .owner_id
+            .as_deref()
+            .and_then(|id| self.db.get_peer_by_id(id))
+        else {
             return Err("Owner peer not found".to_string());
         };
         let kp_bytes = base64_decode(&self.identity.ed25519_keypair);
@@ -235,7 +243,11 @@ impl<T: PeerTransport + 'static> ChatService<T> {
         let Some(ch) = self.db.get_channel_by_id(id) else {
             return true;
         };
-        if let Some(owner_peer) = ch.owner_id.as_deref().and_then(|id| self.db.get_peer_by_id(id)) {
+        if let Some(owner_peer) = ch
+            .owner_id
+            .as_deref()
+            .and_then(|id| self.db.get_peer_by_id(id))
+        {
             let kp_bytes = base64_decode(&self.identity.ed25519_keypair);
             let channel_key = base64_decode(&ch.key);
             let _ = sender::send_invite_decline(

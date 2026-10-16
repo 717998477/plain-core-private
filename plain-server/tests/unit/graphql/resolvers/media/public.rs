@@ -81,6 +81,9 @@ fn media(
     bucket: &str,
 ) -> plain_rs::db::MediaFileMetadata {
     plain_rs::db::MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type,
         path: path.to_owned(),
         title: title.to_owned(),

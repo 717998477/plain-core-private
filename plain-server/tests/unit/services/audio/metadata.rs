@@ -3,6 +3,10 @@ use plain_rs::{db::Db, enums::DataType};
 
 fn row(title: &str) -> MediaFileRow {
     MediaFileRow {
+        album: String::new(),
+        album_artist: String::new(),
+        album_id: "native-album".into(),
+
         id: "audio-id".into(),
         data_type: 1,
         path: "/missing/native-song.mp3".into(),
@@ -30,6 +34,7 @@ fn indexed_audio_preserves_identity_tags_and_duration_and_falls_back_only_for_em
     assert_eq!(metadata.media_id.as_deref(), Some("audio-id"));
     assert_eq!(metadata.track.title, "Indexed Title");
     assert_eq!(metadata.track.artist, "Artist");
+    assert_eq!(metadata.track.album_id, "native-album");
     assert_eq!(metadata.track.duration_ms, 42_000);
     let metadata = from_row(row(""));
     assert_eq!(metadata.track.title, "native-song");

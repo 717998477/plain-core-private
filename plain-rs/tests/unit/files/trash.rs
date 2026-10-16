@@ -122,3 +122,56 @@ async fn a_physical_delete_error_preserves_all_owned_trash_indexes() {
     assert!(trash.load_item(&row.id).unwrap().is_some());
     assert_eq!(std::fs::read(blocked).unwrap(), b"not a directory");
 }
+
+#[test]
+fn inaccessible_volume_trash_uses_the_selected_files_parent_without_changing_filesystems() {
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::ReadOnlyFilesystem,
+        std::io::ErrorKind::NotFound,
+    ] {
+        let mut attempted = Vec::new();
+        let selected = writable_disk(Path::new("/volume/owned/report.txt"), "/volume", |path| {
+            attempted.push(path.to_owned());
+            if path == "/volume" {
+                Err(std::io::Error::from(kind))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        assert_eq!(attempted, ["/volume", "/volume/owned"]);
+        assert_eq!(selected, "/volume/owned");
+        assert_eq!(
+            abs_trash_path(&selected, "data/file"),
+            Path::new("/volume/owned/.plain-trash/data/file")
+        );
+    }
+}
+
+#[test]
+fn volume_trash_failures_other_than_access_do_not_silently_select_another_root() {
+    let mut calls = 0;
+    let result = writable_disk(Path::new("/volume/owned/report.txt"), "/volume", |_| {
+        calls += 1;
+        Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+    });
+    assert!(result.is_err());
+    assert_eq!(calls, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_cannot_replace_an_owned_trash_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let other = directory.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&other, directory.path().join(".plain-trash")).unwrap();
+    assert_eq!(
+        prepare_trash_parent(directory.path().to_str().unwrap(), "data/file")
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert!(!other.join("data").exists());
+}

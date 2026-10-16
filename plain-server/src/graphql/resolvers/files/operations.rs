@@ -107,27 +107,15 @@ impl FileOpsMutation {
             .rename(&super::tasks::caller(ctx)?, path, name)
             .await?)
     }
-    /// Counts what was actually removed. A path that was already gone
-    /// counts as zero, so the number is the delta rather than the request
-    /// size.
     async fn delete_files(
         &self,
         ctx: &Context<'_>,
         paths: Vec<String>,
     ) -> async_graphql::Result<ActionResult> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        if paths.is_empty() {
-            return Ok(ActionResult { affected_count: 0 });
-        }
         let tasks = ctx.data::<Arc<crate::services::files::file_tasks::FileTasks>>()?;
-        let mut deleted = 0;
-        for path in paths {
-            if tasks.delete(path).await?.removed {
-                deleted += 1;
-            }
-        }
         Ok(ActionResult {
-            affected_count: deleted,
+            affected_count: tasks.delete_many(paths).await?,
         })
     }
 
@@ -290,17 +278,38 @@ impl FileOpsMutation {
         replace: bool,
         total_size: crate::graphql::types::Long,
     ) -> async_graphql::Result<MergeTask> {
-        start_merge(
-            ctx,
-            file_id,
-            total_chunks,
-            total_size.0,
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let platform = ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?;
+        let path = platform.resolve_reference(&path)?;
+        let kind = if path.starts_with("content://") {
+            if !replace {
+                return Err("Resource upload requires replacement".into());
+            }
+            let host = ctx.data::<Arc<crate::host::bridge::Host>>()?.clone();
+            let destination = path.clone();
+            plain_rs::files::uploads::Kind::Resource {
+                name: path.rsplit('/').next().unwrap_or_default().to_owned(),
+                write: Arc::new(move |source| {
+                    let host = host.clone();
+                    let destination = destination.clone();
+                    Box::pin(async move {
+                        crate::services::files::resources::write(&host, &source, &destination)
+                            .await
+                            .map_err(anyhow::Error::msg)
+                    })
+                }),
+            }
+        } else {
+            if path.contains("://") {
+                return Err("Unsupported upload destination".into());
+            }
+            platform.authorize(&path, true).await?;
             plain_rs::files::uploads::Kind::File {
-                path: std::path::PathBuf::from(path),
+                path: path.into(),
                 replace,
-            },
-        )
-        .await
+            }
+        };
+        start_merge(ctx, file_id, total_chunks, total_size.0, kind).await
     }
 
     async fn merge_app_file_chunks(

@@ -40,9 +40,6 @@ pub(crate) enum Request {
     ConversationDate {
         id: String,
     },
-    TextIds {
-        filters: Vec<String>,
-    },
 }
 #[derive(Serialize)]
 struct Plans {
@@ -208,6 +205,8 @@ struct ConversationFacts {
     items: Vec<ThreadFacts>,
     #[serde(default)]
     own_numbers: Vec<String>,
+    #[serde(default)]
+    snippet_candidates: std::collections::HashMap<String, Vec<super::parts::Snippet>>,
 }
 fn instant(value: &str) -> anyhow::Result<chrono::DateTime<chrono::FixedOffset>> {
     Ok(chrono::DateTime::parse_from_rfc3339(value)?)
@@ -354,6 +353,14 @@ fn page(
 ) -> anyhow::Result<Vec<Value>> {
     for item in &mut items {
         if item["isMms"].as_bool() == Some(true) {
+            let raw_parts = item
+                .as_object_mut()
+                .and_then(|item| item.remove("parts"))
+                .ok_or_else(|| anyhow::anyhow!("missing MMS parts"))?;
+            let parts = serde_json::from_value::<Vec<super::parts::Part>>(raw_parts)?;
+            let message = super::parts::message(&parts);
+            item["body"] = json!(message.body);
+            item["attachments"] = serde_json::to_value(message.attachments)?;
             let candidates: Vec<super::addresses::MmsAddress> =
                 serde_json::from_value(item["addressCandidates"].clone())?;
             item["address"] = json!(super::addresses::mms(&candidates));
@@ -529,8 +536,9 @@ pub(crate) async fn execute(
                 )
                 .await
                 .map_err(anyhow::Error::msg)?;
-            let rows: ConversationFacts = serde_json::from_value(facts.clone())?;
+            let rows: ConversationFacts = serde_json::from_value(facts)?;
             let own = rows.own_numbers;
+            let snippets = rows.snippet_candidates;
             let by_id = rows
                 .items
                 .into_iter()
@@ -538,7 +546,7 @@ pub(crate) async fn execute(
                 .collect::<std::collections::HashMap<_, _>>();
             let items=records.into_iter().filter_map(|record|by_id.get(&record.conversation_id).map(|row|{
                 let date=instant(&record.archived_at).ok()?;
-                let snippet=if let Some(value)=facts["snippets"][&row.id].as_str(){value.to_owned()}else{row.snippet.clone()};
+                let snippet = snippets.get(&row.id).and_then(|candidates| super::parts::snippet(candidates)).unwrap_or_else(|| row.snippet.clone());
                 let addresses = addresses(row.addresses.clone(),&own);
                 if !archived_matches(&addresses, &snippet, &query) {
                     return None;
@@ -550,9 +558,6 @@ pub(crate) async fn execute(
         Request::ConversationDate { id } => {
             let rows = conversation_facts(host, Some(vec![id]), None).await?;
             json!({"date":rows.items.first().map(|r|&r.date)})
-        }
-        Request::TextIds { filters } => {
-            json!({"ids":text_ids(host.call("systemMmsTextFacts",json!({})).await.map_err(anyhow::Error::msg)?,&filters)?})
         }
     })
 }

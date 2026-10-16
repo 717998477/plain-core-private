@@ -1,6 +1,5 @@
 use crate::assembly::server::ServerState;
 use plain_rs::db::DPeer;
-use plain_rs::db::chat_store::peers;
 use plain_rs::transport::router::Outcome;
 use plain_rs::transport::router::Router;
 use plain_rs::transport::router::Ticket;
@@ -149,13 +148,17 @@ pub(crate) async fn send_checked(
         }
     }
 }
+#[derive(Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct AwareConnectionConfig {
     pub(crate) pmk: Option<String>,
     pub(crate) is_client: bool,
     pub(crate) local_port: u16,
 }
-pub(crate) fn aware_config(state: &ServerState, id: &str) -> anyhow::Result<AwareConnectionConfig> {
-    let peer = peers::get(&state.db, id)?.ok_or_else(|| anyhow::anyhow!("Unknown peer"))?;
+pub(crate) fn aware_config_for_peer(
+    state: &ServerState,
+    peer: &DPeer,
+) -> anyhow::Result<AwareConnectionConfig> {
     let key = if peer.key.is_empty() {
         Vec::new()
     } else {
@@ -176,7 +179,7 @@ pub(crate) fn aware_config(state: &ServerState, id: &str) -> anyhow::Result<Awar
         } else {
             Some(plain_rs::utils::base64::base64_encode(&key))
         },
-        is_client: actor.as_str() < id,
+        is_client: actor < peer.id,
         local_port: state.prefs.get_user::<u16>("https_port")?.unwrap_or(8443),
     })
 }

@@ -128,6 +128,9 @@ async fn media_buckets_are_served_by_the_core_catalog() {
     core.native_media_catalog()
         .unwrap()
         .record_files(&[plain_rs::db::MediaFileMetadata {
+            album: String::new(),
+            album_artist: String::new(),
+
             data_type: plain_rs::enums::DataType::Doc,
             path: path.to_str().unwrap().into(),
             title: "Document title".into(),
@@ -309,6 +312,9 @@ async fn audio_queue_uses_the_registered_host_and_keeps_unindexed_playback_tempo
     let db = core.runtime_state().db.clone();
     let rows = db
         .record_media_files(&[plain_rs::db::MediaFileMetadata {
+            album: String::new(),
+            album_artist: String::new(),
+
             data_type: plain_rs::enums::DataType::Audio,
             path: indexed.to_string_lossy().into_owned(),
             title: "Indexed".into(),

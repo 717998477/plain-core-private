@@ -151,6 +151,37 @@ impl MdnsQuery {
 pub struct MdnsMutation;
 #[Object]
 impl MdnsMutation {
+    async fn acquire_discovery(
+        &self,
+        ctx: &Context<'_>,
+        token: async_graphql::ID,
+    ) -> async_graphql::Result<bool> {
+        mdns_runtime::control(
+            ctx.data::<ServerState>()?,
+            Request::Acquire {
+                token: uuid::Uuid::parse_str(&token)?,
+                owner: discovery_owner(ctx)?,
+            },
+        )
+        .await?;
+        Ok(true)
+    }
+    async fn release_discovery(
+        &self,
+        ctx: &Context<'_>,
+        token: async_graphql::ID,
+    ) -> async_graphql::Result<bool> {
+        mdns_runtime::control(
+            ctx.data::<ServerState>()?,
+            Request::Release {
+                token: uuid::Uuid::parse_str(&token)?,
+                owner: discovery_owner(ctx)?,
+            },
+        )
+        .await?;
+        Ok(true)
+    }
+
     #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
     async fn begin_ble_scan(&self, ctx: &Context<'_>) -> async_graphql::Result<async_graphql::ID> {
         Ok(ctx.data::<ServerState>()?.ble_scans.begin()?.into())
@@ -226,3 +257,19 @@ impl MdnsMutation {
 #[cfg(all(test, feature = "http_transport"))]
 #[path = "../../../../tests/unit/graphql/resolvers/discovery/mdns.rs"]
 mod tests;
+
+fn discovery_owner(ctx: &Context<'_>) -> async_graphql::Result<String> {
+    if crate::http::auth::public_gate::is_local(ctx) {
+        return Ok(ctx
+            .data_opt::<crate::native::graphql::NativeRequestScope>()
+            .map(|scope| format!("native:{}", scope.id()))
+            .unwrap_or_else(|| "native".into()));
+    }
+    let client = ctx
+        .data::<crate::graphql::executor::RequestClient>()?
+        .client_id();
+    if client.is_empty() {
+        return Err("Missing discovery client".into());
+    }
+    Ok(mdns_runtime::remote_discovery_owner(client))
+}

@@ -60,8 +60,9 @@ async fn is_discovering_reports_the_manual_scan_loop() {
         serde_json::json!(false),
         "a core that never started the scan loop reports no discovery"
     );
-    assert!(
-        !core.runtime_state().mdns.manual_scanning(),
+    assert_eq!(
+        core.runtime_state().mdns.snapshot()["manualScanning"],
+        serde_json::json!(false),
         "reading the query must not start the scan loop"
     );
     core.stop_core().await;

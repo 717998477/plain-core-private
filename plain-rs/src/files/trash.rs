@@ -190,13 +190,12 @@ impl Trash {
                 .unwrap_or("")
                 .to_string();
             let rel = compute_bucket_rel_path(kind, &id, &base, now);
+            let disk_mount =
+                writable_disk(&src, &disk_mount, |disk| prepare_trash_parent(disk, &rel))?;
             let dst = abs_trash_path(&disk_mount, &rel);
 
             let lock = lock_for_disk(&disk_mount);
             let _g = lock.lock().await;
-            if let Some(parent) = dst.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
             match std::fs::rename(&src, &dst) {
             Ok(()) => {}
             Err(e) if e.raw_os_error() == Some(18) /* EXDEV */ => {
@@ -388,6 +387,55 @@ fn trash_root(disk_mount: &str) -> PathBuf {
 }
 fn abs_trash_path(disk: &str, rel: &str) -> PathBuf {
     trash_root(disk).join(rel)
+}
+
+fn prepare_trash_parent(disk: &str, relative: &str) -> std::io::Result<()> {
+    let root = trash_root(disk);
+    match std::fs::create_dir(&root) {
+        Ok(()) => {
+            #[cfg(unix)]
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    if !std::fs::symlink_metadata(&root)?.file_type().is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "trash root must be a real directory",
+        ));
+    }
+    std::fs::create_dir_all(abs_trash_path(disk, relative).parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "trash parent required")
+    })?)
+}
+
+fn writable_disk(
+    source: &Path,
+    mount: &str,
+    mut prepare: impl FnMut(&str) -> std::io::Result<()>,
+) -> Result<String> {
+    match prepare(mount) {
+        Ok(()) => Ok(mount.to_owned()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied
+                    | std::io::ErrorKind::ReadOnlyFilesystem
+                    | std::io::ErrorKind::NotFound
+            ) =>
+        {
+            let parent = source
+                .parent()
+                .and_then(Path::to_str)
+                .ok_or_else(|| anyhow!("trash parent required"))?;
+            prepare(parent).with_context(|| {
+                format!("cannot prepare writable trash for {}", source.display())
+            })?;
+            Ok(parent.to_owned())
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn compute_bucket_rel_path(

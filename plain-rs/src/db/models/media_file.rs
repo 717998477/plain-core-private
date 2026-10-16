@@ -4,6 +4,8 @@ pub struct MediaFileMetadata {
     pub path: String,
     pub title: String,
     pub artist: String,
+    pub album: String,
+    pub album_artist: String,
     pub bucket_id: String,
     pub size_bytes: i64,
     pub duration_ms: i64,
@@ -45,11 +47,14 @@ pub struct MediaFileMetadataRead {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct MediaFileRow {
+    pub album_id: String,
     pub id: String,
     pub data_type: i32,
     pub path: String,
     pub title: String,
     pub artist: String,
+    pub album: String,
+    pub album_artist: String,
     pub bucket_id: String,
     pub size_bytes: i64,
     pub duration_ms: i64,

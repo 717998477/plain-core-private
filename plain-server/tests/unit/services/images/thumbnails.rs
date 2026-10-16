@@ -182,7 +182,7 @@ async fn a_non_regular_source_is_refused_before_decoding() {
     let (_generation, mut host_requests) = state.host.connect();
     let refused = render(&state, request_for(std::path::Path::new("/dev/null"))).await;
     assert_eq!(refused.0, 400);
-    assert!(String::from_utf8_lossy(&refused.2).contains("regular file or directory required"));
+    assert!(String::from_utf8_lossy(&refused.2).contains("regular thumbnail source required"));
     assert_eq!(state.thumbnails.native_decodes.load(Ordering::SeqCst), 0);
     assert!(host_requests.try_recv().is_err());
     core.stop_core().await;

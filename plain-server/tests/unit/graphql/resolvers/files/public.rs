@@ -24,13 +24,11 @@ fn stub(host: Arc<Host>, handler: impl Fn(&str, Value) -> Value + Send + 'static
     });
 }
 
-/// Grants storage by default and stubs `fileTaskAuthorize` to succeed, so a
-/// test only has to name the host calls it actually cares about.
 fn fixture(permissions: &str) -> (tempfile::TempDir, PublicSchema) {
     fixture_with(permissions, |method, params| match method {
-        "fileTaskAuthorize" => {
-            assert!(params["paths"].is_array());
-            json!(true)
+        "systemPermissionFacts" => {
+            assert_eq!(params["permissions"], json!(["WRITE_EXTERNAL_STORAGE"]));
+            json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}})
         }
         other => panic!("unexpected host call {other}"),
     })
@@ -152,7 +150,7 @@ async fn the_page_and_the_count_describe_the_same_query() {
 #[tokio::test]
 async fn file_info_combines_rust_gps_with_sdk_decode_bounds() {
     let (dir, schema) = fixture_with(GRANTED, |method, _| match method {
-        "fileTaskAuthorize" => json!(true),
+        "systemPermissionFacts" => json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}}),
         "imageDecodeBounds" => json!({"width": 4032, "height": 3024}),
         other => panic!("unexpected host call {other}"),
     });
@@ -177,7 +175,7 @@ async fn file_info_combines_rust_gps_with_sdk_decode_bounds() {
 #[tokio::test]
 async fn the_display_name_selects_the_media_type_and_rust_sniffs_the_container() {
     let (dir, schema) = fixture_with(GRANTED, |method, _| match method {
-        "fileTaskAuthorize" => json!(true),
+        "systemPermissionFacts" => json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}}),
         other => panic!("unexpected host call {other}"),
     });
     let path = dir.path().join("blob");
@@ -285,7 +283,7 @@ async fn unresolvable_paths_are_false_rather_than_errors() {
 #[tokio::test]
 async fn a_denied_root_reads_as_absent() {
     let (_dir, schema) = fixture_with(GRANTED, |method, _| match method {
-        "fileTaskAuthorize" => json!(false),
+        "systemPermissionFacts" => json!({"granted":{"WRITE_EXTERNAL_STORAGE":false}}),
         other => panic!("unexpected host call {other}"),
     });
     let response = schema
@@ -304,7 +302,7 @@ async fn a_denied_root_reads_as_absent() {
 #[tokio::test]
 async fn a_denied_path_is_never_probed_for_media() {
     let (_dir, schema) = fixture_with(GRANTED, |method, _| match method {
-        "fileTaskAuthorize" => json!(false),
+        "systemPermissionFacts" => json!({"granted":{"WRITE_EXTERNAL_STORAGE":false}}),
         other => panic!("media probe ran for a denied path: {other}"),
     });
     let response = schema
@@ -634,6 +632,27 @@ async fn native_file_actions_resolve_registered_attachments_through_the_main_sch
         state.directory.join("documents/plain.txt")
     );
     assert!(requests.try_recv().is_err());
+    assert!(plain_rs::chat::attachments::app_file_store::release(
+        &state.db,
+        &state.directory,
+        &file.id,
+    ).unwrap());
+    let released = core
+        .native_graphql()
+        .unwrap()
+        .execute(
+            async_graphql::Request::new("query($paths:[String!]!){filePaths(paths:$paths)}")
+                .variables(async_graphql::Variables::from_json(
+                    json!({"paths":[format!("fid:{suffix}")]}),
+                )),
+        )
+        .await;
+    assert!(released.errors.is_empty(), "{:?}", released.errors);
+    assert_eq!(
+        released.data.into_json().unwrap()["filePaths"],
+        json!([null])
+    );
+    assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }
 
@@ -769,7 +788,7 @@ async fn unknown_duration_only_file_info_returns_null_without_platform_metadata(
     let samples = Arc::new(AtomicUsize::new(0));
     let calls = samples.clone();
     let (directory, schema) = fixture_with(GRANTED, move |method, _| match method {
-        "fileTaskAuthorize" => json!(true),
+        "systemPermissionFacts" => json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}}),
         other => {
             calls.fetch_add(1, Ordering::SeqCst);
             panic!("Unexpected host operation: {other}");

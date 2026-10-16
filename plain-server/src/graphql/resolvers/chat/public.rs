@@ -30,8 +30,19 @@ pub struct ChatChannelMember {
     pub status: ChannelMemberStatus,
 }
 
+#[derive(SimpleObject, Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatChannelActions {
+    pub is_owner: bool,
+    pub can_rename: bool,
+    pub can_manage_members: bool,
+    pub can_leave: bool,
+    pub can_delete: bool,
+}
+
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ChatChannel {
+    pub actions: ChatChannelActions,
     pub id: async_graphql::ID,
     #[graphql(name = "ownerId")]
     pub owner_id: async_graphql::ID,
@@ -121,7 +132,7 @@ impl ChatQuery {
     }
 
     async fn chat_channels(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<ChatChannel>> {
-        let facts = plain_rs::chat::events::public_channels(db(ctx)?)?;
+        let facts = plain_rs::chat::events::public_channels(db(ctx)?, &actor(ctx)?)?;
         Ok(rows(&facts, channel))
     }
 }
@@ -309,7 +320,10 @@ async fn action(
     )
     .await?;
     let row: plain_rs::db::DChannel = serde_json::from_value(result["channel"].clone())?;
-    Ok(channel(&plain_rs::chat::events::channel_to_json(&row)))
+    Ok(channel(&plain_rs::chat::events::channel_to_json(
+        &row,
+        &actor(ctx)?,
+    )))
 }
 
 /// The mutations the contract types as `Boolean!` acknowledge the request
@@ -361,6 +375,16 @@ fn from_json(value: &Value) -> ChatItem {
 
 fn channel(value: &Value) -> ChatChannel {
     ChatChannel {
+        actions: ChatChannelActions {
+            is_owner: crate::graphql::types::facts::flag(&value["actions"], "isOwner"),
+            can_rename: crate::graphql::types::facts::flag(&value["actions"], "canRename"),
+            can_manage_members: crate::graphql::types::facts::flag(
+                &value["actions"],
+                "canManageMembers",
+            ),
+            can_leave: crate::graphql::types::facts::flag(&value["actions"], "canLeave"),
+            can_delete: crate::graphql::types::facts::flag(&value["actions"], "canDelete"),
+        },
         id: crate::graphql::types::facts::id(value, "id"),
         owner_id: crate::graphql::types::facts::id(value, "ownerId"),
         name: crate::graphql::types::facts::text(value, "name"),
@@ -407,3 +431,10 @@ fn db<'a>(ctx: &'a Context<'_>) -> async_graphql::Result<&'a Arc<Db>> {
 #[cfg(test)]
 #[path = "../../../../tests/unit/graphql/resolvers/chat/public.rs"]
 mod tests;
+
+fn actor(ctx: &Context<'_>) -> async_graphql::Result<String> {
+    ctx.data::<Arc<plain_rs::prefs::Prefs>>()?
+        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+        .filter(|actor| !actor.is_empty())
+        .ok_or_else(|| async_graphql::Error::new("Missing client identity"))
+}

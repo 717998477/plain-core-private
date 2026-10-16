@@ -79,6 +79,9 @@ fn seed_media(
     std::fs::create_dir_all(&base).unwrap();
     let rows: Vec<_> = (1..=count)
         .map(|i| plain_rs::db::MediaFileMetadata {
+            album: String::new(),
+            album_artist: String::new(),
+
             data_type,
             path: {
                 let path = base.join(format!("x{i}.{extension}"));
@@ -333,7 +336,8 @@ async fn a_blank_media_query_is_refused_before_the_platform() {
 }
 
 fn upload_fixture() -> (tempfile::TempDir, PublicSchema, std::path::PathBuf) {
-    let (dir, schema) = fixture_with("[]", |method, _| match method {
+    let (dir, schema) = fixture_with(GRANTED, |method, _| match method {
+        "systemPermissionFacts" => json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}}),
         other => panic!("Unexpected platform primitive: {other}"),
     });
     let base = dir.path().join("uploads");
@@ -608,5 +612,64 @@ async fn main_upload_resume_query_observes_only_completed_native_byte_streams() 
             .await
             .errors
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn explicit_media_selection_uses_shared_batches_and_rejects_invalid_late_ids_before_effects()
+{
+    let (_directory, schema) = fixture(GRANTED);
+    let rows = seed_media(&schema, plain_rs::enums::DataType::Video, 501, false, "mp4");
+    let ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+    let document = r#"mutation($ids:[ID!]!){mediaAction(type:VIDEO,action:DELETE,ids:$ids,fromTrash:false,destDir:""){affectedCount failedIds}}"#;
+    let mut invalid = ids.clone();
+    invalid.push(String::new());
+    let response = schema
+        .execute(
+            async_graphql::Request::new(document)
+                .variables(async_graphql::Variables::from_json(json!({"ids":invalid}))),
+        )
+        .await;
+    assert_eq!(response.errors.len(), 1);
+    assert!(
+        response.errors[0]
+            .message
+            .contains("invalid media selection")
+    );
+    assert!(
+        rows.iter()
+            .all(|row| std::path::Path::new(&row.path).exists())
+    );
+    for index in [6, 500] {
+        std::fs::remove_file(&rows[index].path).unwrap();
+    }
+    let mut requested = ids.clone();
+    requested.push(ids[0].clone());
+    let response = schema
+        .execute(async_graphql::Request::new(document).variables(
+            async_graphql::Variables::from_json(json!({"ids":requested})),
+        ))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let result = response.data.into_json().unwrap();
+    assert_eq!(result["mediaAction"]["affectedCount"], 499);
+    assert_eq!(
+        result["mediaAction"]["failedIds"],
+        json!([ids[6], ids[500]])
+    );
+    let db = database(&schema);
+    let remaining = db
+        .with_conn(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM media_items WHERE data_type=2",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(remaining, 2);
+    assert!(
+        rows.iter()
+            .all(|row| !std::path::Path::new(&row.path).exists())
     );
 }

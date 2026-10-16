@@ -56,7 +56,13 @@ pub(crate) enum Request {
     },
 }
 fn with_channels(state: &ServerState, mut result: Value) -> Result<Value> {
-    result["channels"] = plain_rs::chat::events::public_channels(&state.db)?;
+    result["channels"] = plain_rs::chat::events::public_channels(
+        &state.db,
+        &state
+            .prefs
+            .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+            .ok_or_else(|| anyhow::anyhow!("Missing client identity"))?,
+    )?;
     Ok(result)
 }
 fn snapshot(state: &ServerState) -> Result<Value> {
@@ -162,14 +168,24 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
         Request::Decline { id } => {
             let channel = get(state, &id)?;
             ensure!(
-                peers::get(&state.db, channel.owner_id.as_deref().ok_or_else(|| anyhow::anyhow!("Channel owner missing"))?)?.is_some(),
+                peers::get(
+                    &state.db,
+                    channel
+                        .owner_id
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("Channel owner missing"))?
+                )?
+                .is_some(),
                 "Owner peer not found"
             );
             send(
                 state,
                 &channel,
                 ChannelSystemMessageType::InviteDecline,
-                channel.owner_id.as_deref().ok_or_else(|| anyhow::anyhow!("Channel owner missing"))?,
+                channel
+                    .owner_id
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Channel owner missing"))?,
                 false,
             )
             .await;
@@ -238,7 +254,10 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
                 notify_changed(state)?;
             }
             let target = if target.is_empty() {
-                channel.owner_id.clone().ok_or_else(|| anyhow::anyhow!("Channel owner missing"))?
+                channel
+                    .owner_id
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("Channel owner missing"))?
             } else {
                 target
             };

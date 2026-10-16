@@ -1,0 +1,272 @@
+use super::*;
+
+fn node(kind: u16, data: Vec<u8>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend(kind.to_le_bytes());
+    bytes.extend(16u16.to_le_bytes());
+    bytes.extend((16u32 + data.len() as u32).to_le_bytes());
+    bytes.extend(1u32.to_le_bytes());
+    bytes.extend(u32::MAX.to_le_bytes());
+    bytes.extend(data);
+    bytes
+}
+fn pair(kind: u16, first: u32, second: u32) -> Vec<u8> {
+    node(kind, [first.to_le_bytes(), second.to_le_bytes()].concat())
+}
+fn start(namespace: u32, tag: u32, attributes: &[(u32, u32, u32, u8, u32)]) -> Vec<u8> {
+    let mut data = [namespace.to_le_bytes(), tag.to_le_bytes()].concat();
+    for value in [20u16, 20, attributes.len() as u16, 0, 0, 0] {
+        data.extend(value.to_le_bytes());
+    }
+    for (ns, name, raw, kind, value) in attributes {
+        for value in [*ns, *name, *raw] {
+            data.extend(value.to_le_bytes());
+        }
+        data.extend(8u16.to_le_bytes());
+        data.extend([0, *kind]);
+        data.extend(value.to_le_bytes());
+    }
+    node(0x102, data)
+}
+fn document(strings: &[&str], nodes: Vec<Vec<u8>>) -> Vec<u8> {
+    let mut content = Vec::new();
+    let mut offsets = Vec::new();
+    for text in strings {
+        offsets.push(content.len() as u32);
+        for count in [text.encode_utf16().count(), text.len()] {
+            if count >= 128 {
+                content.push(0x80 | (count >> 8) as u8);
+            }
+            content.push(count as u8);
+        }
+        content.extend(text.as_bytes());
+        content.push(0);
+    }
+    while content.len() % 4 != 0 {
+        content.push(0);
+    }
+    let mut pool = Vec::new();
+    pool.extend(1u16.to_le_bytes());
+    pool.extend(28u16.to_le_bytes());
+    pool.extend((28u32 + 4 * strings.len() as u32 + content.len() as u32).to_le_bytes());
+    for value in [
+        strings.len() as u32,
+        0,
+        256,
+        28 + 4 * strings.len() as u32,
+        0,
+    ] {
+        pool.extend(value.to_le_bytes());
+    }
+    for offset in offsets {
+        pool.extend(offset.to_le_bytes());
+    }
+    pool.extend(content);
+    let mut body = pool;
+    body.extend(nodes.concat());
+    let mut bytes = Vec::new();
+    bytes.extend(3u16.to_le_bytes());
+    bytes.extend(8u16.to_le_bytes());
+    bytes.extend((8u32 + body.len() as u32).to_le_bytes());
+    bytes.extend(body);
+    bytes
+}
+#[test]
+fn metadata_and_full_xml_share_the_same_utf_string_reader() {
+    for utf8 in [false, true] {
+        let output = render(&super::super::manifest::tests::binary(
+            "com.example.package",
+            None,
+            utf8,
+        ))
+        .unwrap();
+        assert_eq!(
+            output,
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest package=\"com.example.package\">\n</manifest>\n"
+        );
+    }
+}
+#[test]
+fn namespaces_escaping_and_child_structure_survive_rendering() {
+    let bytes = document(
+        &[
+            "manifest",
+            "android",
+            "http://schemas.android.com/apk/res/android",
+            "application",
+            "label",
+            "A&B<\"雪",
+        ],
+        vec![
+            pair(0x100, 1, 2),
+            start(u32::MAX, 0, &[]),
+            start(u32::MAX, 3, &[(2, 4, 5, 3, 5)]),
+            pair(0x103, u32::MAX, 3),
+            pair(0x103, u32::MAX, 0),
+            pair(0x101, 1, 2),
+        ],
+    );
+    let output = render(&bytes).unwrap();
+    assert!(output.contains("xmlns:android=\"http://schemas.android.com/apk/res/android\""));
+    assert!(output.contains("android:label=\"A&amp;B&lt;&quot;雪\""));
+    assert!(output.contains("</application>\n</manifest>"));
+}
+#[test]
+fn typed_values_preserve_ids_booleans_signed_numbers_colors_dimensions_and_fractions() {
+    let pool_bytes = document(&["manifest"], Vec::new());
+    let pool = Pool::new(&pool_bytes[8..], 28).unwrap();
+    for (kind, data, expected) in [
+        (1, 0x7f010001, "@0x7f010001"),
+        (2, 0x01010001, "?0x01010001"),
+        (0x12, 1, "true"),
+        (0x10, u32::MAX, "-1"),
+        (0x11, 15, "0xf"),
+        (0x1e, 0xff112233, "#ff112233"),
+        (5, (24 << 8) | 1, "24dp"),
+        (6, (1 << 8) | 1, "100%p"),
+        (0, 1, "@empty"),
+    ] {
+        assert_eq!(typed(&pool, kind, data).unwrap(), expected);
+    }
+    assert!(typed(&pool, 4, f32::INFINITY.to_bits()).is_err());
+    assert!(typed(&pool, 0xff, 0).is_err());
+}
+#[test]
+fn default_namespace_attributes_receive_an_explicit_prefix() {
+    let bytes = document(
+        &["manifest", "urn:example", "value", "text"],
+        vec![
+            pair(0x100, u32::MAX, 1),
+            start(1, 0, &[(1, 2, 3, 3, 3)]),
+            pair(0x103, 1, 0),
+            pair(0x101, u32::MAX, 1),
+        ],
+    );
+    let output = render(&bytes).unwrap();
+    assert!(output.contains("xmlns=\"urn:example\""));
+    assert!(output.contains("xmlns:ns0=\"urn:example\""));
+    assert!(output.contains("ns0:value=\"text\""));
+}
+#[test]
+fn duplicate_expanded_attributes_and_unbalanced_documents_are_rejected() {
+    let strings = ["manifest", "value", "text", "value"];
+    let invalid = vec![
+        vec![
+            start(
+                u32::MAX,
+                0,
+                &[(u32::MAX, 1, 2, 3, 2), (u32::MAX, 3, 2, 3, 2)],
+            ),
+            pair(0x103, u32::MAX, 0),
+        ],
+        vec![start(u32::MAX, 0, &[])],
+        vec![start(u32::MAX, 0, &[]), pair(0x103, u32::MAX, 1)],
+        vec![
+            start(u32::MAX, 0, &[]),
+            pair(0x103, u32::MAX, 0),
+            start(u32::MAX, 0, &[]),
+            pair(0x103, u32::MAX, 0),
+        ],
+        vec![start(2, 0, &[])],
+    ];
+    for nodes in invalid {
+        assert!(render(&document(&strings, nodes)).is_err());
+    }
+}
+#[test]
+fn namespace_rebinding_generates_an_alias_for_a_shadowed_uri() {
+    let bytes = document(
+        &[
+            "manifest",
+            "p",
+            "urn:outer",
+            "urn:inner",
+            "application",
+            "value",
+            "text",
+        ],
+        vec![
+            pair(0x100, 1, 2),
+            start(u32::MAX, 0, &[]),
+            pair(0x100, 1, 3),
+            start(u32::MAX, 4, &[(2, 5, 6, 3, 6)]),
+            pair(0x103, u32::MAX, 4),
+            pair(0x101, 1, 3),
+            pair(0x103, u32::MAX, 0),
+            pair(0x101, 1, 2),
+        ],
+    );
+    let output = render(&bytes).unwrap();
+    assert!(output.contains("xmlns:ns0=\"urn:outer\""));
+    assert!(output.contains("ns0:value=\"text\""));
+}
+
+#[test]
+fn resource_and_framework_style_values_are_rendered_with_their_names() {
+    let table = super::super::resources::tests::sample_resource_table();
+    let resources = super::super::resources::Resources::parse(&table).unwrap();
+    let bytes = document(
+        &[
+            "manifest",
+            "android",
+            "http://schemas.android.com/apk/res/android",
+            "application",
+            "label",
+            "theme",
+        ],
+        vec![
+            pair(0x100, 1, 2),
+            start(u32::MAX, 0, &[]),
+            start(
+                u32::MAX,
+                3,
+                &[
+                    (2, 4, u32::MAX, 1, 0x7f010000),
+                    (2, 5, u32::MAX, 1, 0x01030000),
+                ],
+            ),
+            pair(0x103, u32::MAX, 3),
+            pair(0x103, u32::MAX, 0),
+            pair(0x101, 1, 2),
+        ],
+    );
+    assert!(needs_resources(&bytes).unwrap());
+    let output = render_with(&bytes, Some(&resources)).unwrap();
+    assert!(output.contains("android:label=\"Localized title\""));
+    assert!(output.contains("android:theme=\"@android:style/Animation\""));
+}
+
+#[test]
+fn resource_map_recovers_empty_framework_attribute_names_without_arsc() {
+    let mut bytes = document(
+        &[
+            "manifest",
+            "android",
+            "http://schemas.android.com/apk/res/android",
+            "application",
+            "",
+            "Title",
+        ],
+        vec![
+            pair(0x100, 1, 2),
+            start(u32::MAX, 0, &[]),
+            start(u32::MAX, 3, &[(2, 4, 5, 3, 5)]),
+            pair(0x103, u32::MAX, 3),
+            pair(0x103, u32::MAX, 0),
+            pair(0x101, 1, 2),
+        ],
+    );
+    let at = 8 + u32_at(&bytes, 12).unwrap() as usize;
+    let mut map = Vec::new();
+    map.extend(0x180u16.to_le_bytes());
+    map.extend(8u16.to_le_bytes());
+    map.extend(32u32.to_le_bytes());
+    for id in [0, 0, 0, 0, 0x01010001u32, 0] {
+        map.extend(id.to_le_bytes());
+    }
+    bytes.splice(at..at, map);
+    let length = bytes.len() as u32;
+    bytes[4..8].copy_from_slice(&length.to_le_bytes());
+    assert!(!needs_resources(&bytes).unwrap());
+    assert!(render(&bytes).unwrap().contains("android:label=\"Title\""));
+}

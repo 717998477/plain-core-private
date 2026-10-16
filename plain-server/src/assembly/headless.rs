@@ -166,6 +166,12 @@ impl HeadlessService {
 
 fn capabilities() -> Vec<String> {
     let mut capabilities = vec![
+        "PEER_DISCOVERY".into(),
+        "FILE_BROWSER".into(),
+        "IMAGE_LIBRARY".into(),
+        "AUDIO_LIBRARY".into(),
+        "VIDEO_LIBRARY".into(),
+        "DOCUMENT_LIBRARY".into(),
         "FILE_EXPORT".into(),
         "MEDIA_SCAN".into(),
         "NOTES".into(),

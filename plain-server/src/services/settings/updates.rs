@@ -30,7 +30,7 @@ fn client() -> Result<&'static reqwest::Client> {
         .map_err(|error| anyhow!(error.clone()))
 }
 
-fn update(state: &ServerState, patch: serde_json::Value) -> Result<()> {
+pub(super) fn update(state: &ServerState, patch: serde_json::Value) -> Result<()> {
     let changed = plain_rs::prefs::system::Command::PatchUpdate {
         patch: serde_json::from_value(patch)?,
     }
@@ -44,13 +44,14 @@ fn update(state: &ServerState, patch: serde_json::Value) -> Result<()> {
 }
 
 #[derive(Default)]
-struct Cache {
+pub(super) struct Cache {
     checked_at: Option<tokio::time::Instant>,
     outcome: Option<Result<AppUpdateStatus, String>>,
 }
 #[derive(Default)]
 pub(crate) struct Runtime {
-    cache: tokio::sync::Mutex<Cache>,
+    pub(super) cache: tokio::sync::Mutex<Cache>,
+    pub(crate) download: std::sync::Arc<super::update_download::Runtime>,
 }
 
 pub(crate) async fn check(state: &ServerState, automatic: bool) -> Result<AppUpdateStatus> {
@@ -192,12 +193,42 @@ async fn fetch(state: &ServerState) -> Result<AppUpdateStatus> {
     if available {
         patch.as_object_mut().unwrap().extend(serde_json::json!({"newVersion":info.new_version,"log":info.log,"publishDate":info.publish_date,"size":info.size,"downloadUrl":info.download_url}).as_object().unwrap().clone());
     }
+    let previous = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
+    if previous.new_version != info.new_version
+        || previous.download_url != info.download_url
+        || previous.size != info.size
+    {
+        state.update_checks.download.invalidate();
+        patch["downloadedApkPath"] = serde_json::json!("");
+    }
     update(state, patch)?;
     if !available {
         return Ok(AppUpdateStatus::UpToDate);
     }
 
     Ok(AppUpdateStatus::Available)
+}
+
+pub(crate) async fn apply_settings(
+    state: &ServerState,
+    command: plain_rs::prefs::system::Command,
+) -> Result<bool> {
+    let _cache = state.update_checks.cache.lock().await;
+    let before = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
+    let mut changed = command.apply(&state.prefs)?;
+    let after = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
+    if before.new_version != after.new_version
+        || before.download_url != after.download_url
+        || before.size != after.size
+        || before.skip_version != after.skip_version
+    {
+        state.update_checks.download.invalidate();
+        changed |= plain_rs::prefs::system::Command::PatchUpdate {
+            patch: serde_json::from_value(serde_json::json!({"downloadedApkPath":""}))?,
+        }
+        .apply(&state.prefs)?;
+    }
+    Ok(changed)
 }
 
 #[cfg(test)]

@@ -195,6 +195,8 @@ fn video_and_audio_metadata_share_utf16_tags_and_coded_dimensions() {
     assert_eq!(audio.duration_ms, 3211);
     assert_eq!(audio.title, "ASF Title");
     assert_eq!(audio.artist, "ASF Artist");
+    assert_eq!(audio.album, "Album");
+    assert_eq!(audio.album_artist, "Fallback Artist");
 }
 #[test]
 fn metadata_skips_binary_descriptors_and_unknown_objects_without_reading_media() {

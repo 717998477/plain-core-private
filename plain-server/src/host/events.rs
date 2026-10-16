@@ -224,6 +224,10 @@ impl HostEvents {
         if kind == "NETWORK_INTERFACES_CHANGED" {
             serde_json::from_str::<()>(&payload).map_err(|error| error.to_string())?;
             self.state.mdns.network_changed(self.state.clone());
+            let _ = self.state.events.send(WsEvent::broadcast(
+                plain_rs::events::NETWORK_CHANGED,
+                "{}".into(),
+            ));
             return Ok(());
         }
         if kind == "IMAGE_CATALOG_CHANGED" {
@@ -231,20 +235,11 @@ impl HostEvents {
             self.state.image_models.catalog_changed();
             return Ok(());
         }
-        if kind == "IMAGE_INDEX_ERROR_REPORTED" {
-            self.state
-                .image_models
-                .report_error(serde_json::from_str(&payload).map_err(|error| error.to_string())?);
-            return Ok(());
+        if kind == "MEDIA_CATALOG_CHANGED" {
+            return crate::services::files::catalog_events::report(&self.state.events, &payload);
         }
-        if crate::services::audio::reports::accept(
-            &self.state.audio,
-            self.state.host.clone(),
-            self.generation,
-            kind,
-            &payload,
-        )
-        .await?
+        if crate::services::audio::reports::accept(&self.state, self.generation, kind, &payload)
+            .await?
         {
             return Ok(());
         }

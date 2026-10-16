@@ -16,3 +16,4 @@ pub mod ble_sessions;
 pub mod ble_client;
 
 pub mod pairing_code;
+pub mod sessions;

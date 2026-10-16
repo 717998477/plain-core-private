@@ -1,5 +1,5 @@
-use plain_rs::{db::Db, prefs::Prefs, utils::search_dsl};
-use serde_json::{Value, json};
+use plain_rs::{db::Db, utils::search_dsl};
+use serde_json::Value;
 
 fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_lowercase()
@@ -42,8 +42,7 @@ pub(crate) fn packages(
         }
         Some(ids)
     };
-    facts.retain(|fact| {
-        let item = &fact["item"];
+    facts.retain(|item| {
         let id = item["id"].as_str().unwrap_or_default();
         (filter_type.is_empty() || item["type"].as_str() == Some(filter_type))
             && (filter_ids.is_empty() || filter_ids.contains(&id))
@@ -58,14 +57,41 @@ pub(crate) fn packages(
                     })
                 }))
     });
-    facts.sort_by(|a, b| match sort_by {
-        "SIZE_ASC" => a["item"]["size"].as_i64().cmp(&b["item"]["size"].as_i64()),
-        "SIZE_DESC" => b["item"]["size"].as_i64().cmp(&a["item"]["size"].as_i64()),
-        "DATE_ASC" => instant(&a["item"], "updatedAt").cmp(&instant(&b["item"], "updatedAt")),
-        "DATE_DESC" => instant(&b["item"], "updatedAt").cmp(&instant(&a["item"], "updatedAt")),
-        _ => a["nameSortKey"].as_str().cmp(&b["nameSortKey"].as_str()),
-    });
-    Ok(facts.into_iter().map(|v| v["item"].clone()).collect())
+    Ok(sort_packages(
+        facts,
+        sort_by,
+        plain_rs::utils::sort_name::sort_name,
+    ))
+}
+
+fn sort_packages(
+    mut items: Vec<Value>,
+    sort_by: &str,
+    mut name_key: impl FnMut(&str) -> String,
+) -> Vec<Value> {
+    match sort_by {
+        "SIZE_ASC" => items.sort_by_key(|item| item["size"].as_i64()),
+        "SIZE_DESC" => items.sort_by_key(|item| std::cmp::Reverse(item["size"].as_i64())),
+        "DATE_ASC" => items.sort_by_cached_key(|item| instant(item, "updatedAt")),
+        "DATE_DESC" => {
+            items.sort_by_cached_key(|item| std::cmp::Reverse(instant(item, "updatedAt")))
+        }
+        _ => {
+            let mut keyed = items
+                .into_iter()
+                .map(|item| (name_key(item["name"].as_str().unwrap_or_default()), item))
+                .collect::<Vec<_>>();
+            keyed.sort_by(|a, b| {
+                if sort_by == "NAME_DESC" {
+                    b.0.cmp(&a.0)
+                } else {
+                    a.0.cmp(&b.0)
+                }
+            });
+            return keyed.into_iter().map(|(_, item)| item).collect();
+        }
+    }
+    items
 }
 
 #[cfg(test)]

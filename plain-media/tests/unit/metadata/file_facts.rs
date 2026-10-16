@@ -472,3 +472,14 @@ fn video_row_keeps_fractional_milliseconds_from_the_single_probe() {
         3211
     );
 }
+
+#[test]
+fn audio_catalog_metadata_keeps_album_tags_from_the_shared_parser() {
+    let facts =
+        read_file_metadata_with_availability(&fixture("audio-album-tagged.mp3"), DataType::Audio)
+            .unwrap();
+    assert!(facts.available.tags);
+    assert_eq!(facts.metadata.album, "Shared Album");
+    assert_eq!(facts.metadata.album_artist, "Album Artist");
+    assert_eq!(facts.metadata.artist, "Track Artist");
+}

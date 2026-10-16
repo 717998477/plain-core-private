@@ -10,9 +10,10 @@ pub(crate) fn completed(
 ) -> Result<(), String> {
     let mut files = Vec::new();
     if !paths.is_empty() {
-        crate::host::file_resource::authorize_read(
-            serde_json::json!({"operation":"read","paths":paths}),
-        )?;
+        for path in &paths {
+            super::platform::authorize_native(Path::new(path), false)
+                .map_err(|error| error.to_string())?;
+        }
         let policy = scans.policy()?;
         let directory = directory
             .canonicalize()
@@ -56,9 +57,10 @@ pub(crate) fn completed(
             files.push(read);
         }
     }
-    scans.record_completion(|| {
+    let rows = scans.record_completion(|| {
         db.record_media_file_reads(&files)
             .map_err(|error| error.to_string())
     })?;
+    scans.publish_catalog_rows(&rows);
     Ok(())
 }

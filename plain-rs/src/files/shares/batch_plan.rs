@@ -81,7 +81,7 @@ impl Walker {
         );
         let base = if target.is_empty() { downloads } else { target };
         ensure!(
-            base.starts_with('/') && !base.contains('\0'),
+            std::path::Path::new(base).is_absolute() && !base.contains('\0'),
             "Invalid downloads directory"
         );
         let pending = entries

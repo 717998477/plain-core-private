@@ -34,12 +34,9 @@ async fn failed_replacement_preserves_active_package_index_and_search() {
     let task = tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
             let result = match request["method"].as_str().unwrap() {
-                "systemImageModelsObserve"
-                | "imageIndexVerify"
-                | "imageIndexEnd"
-                | "imageIndexProgress" => json!(true),
-                "imageIndexBegin" => json!({"revision":"one","total":1}),
-                "imageIndexPage" => {
+                "systemImageModelsObserve" | "imageCatalogVerify" => json!(true),
+                "imageCatalogSnapshot" => json!({"revision":"one","total":1}),
+                "imageCatalogPage" => {
                     json!({"revision":"one","items":[{"id":"one","path":photo}],"nextCursor":"one","done":true})
                 }
                 method => panic!("Unexpected {method}"),
@@ -51,7 +48,14 @@ async fn failed_replacement_preserves_active_package_index_and_search() {
     let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
     let db = Arc::new(Db::open(&directory.path().join("data.db")).unwrap());
     let (events, _) = tokio::sync::broadcast::channel(16);
-    let index = Arc::new(ImageIndex::new(db.clone(), host.clone(), events.clone()));
+    let index = Arc::new(ImageIndex::new(
+        db.clone(),
+        host.clone(),
+        events.clone(),
+        Arc::new(crate::host::resources::NativeResources::new(host.clone())),
+        directory.path().join("cache"),
+    ));
+    index.use_system_catalog_for_test();
     let runtime = Runtime::new(directory.path().into(), host, prefs, index, events);
     runtime.import().await.unwrap();
     settled(&runtime).await;
@@ -122,7 +126,14 @@ async fn catalog_changes_share_one_cancellable_timer_and_do_not_retain_the_runti
     let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
     let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
     let (events, _) = tokio::sync::broadcast::channel(16);
-    let index = Arc::new(ImageIndex::new(db, host.clone(), events.clone()));
+    let index = Arc::new(ImageIndex::new(
+        db,
+        host.clone(),
+        events.clone(),
+        Arc::new(crate::host::resources::NativeResources::new(host.clone())),
+        directory.path().join("cache"),
+    ));
+    index.use_system_catalog_for_test();
     let runtime = Runtime::new(directory.path().into(), host.clone(), prefs, index, events);
     runtime.catalog_changed();
     assert!(runtime.catalog_task.lock().unwrap().is_none());
@@ -157,4 +168,215 @@ async fn catalog_changes_share_one_cancellable_timer_and_do_not_retain_the_runti
     assert!(!runtime.index.status().is_running);
     assert!(requests.try_recv().is_err());
     host.disconnect(generation);
+}
+
+#[tokio::test]
+async fn core_start_restores_enabled_local_model_without_a_client_mutation_or_download() {
+    let directory = tempfile::tempdir().unwrap();
+    plain_inference::models::test_fixture::fixture(&directory.path().join("ai_models/active"));
+    let host = Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    let responder = host.clone();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    let task = tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            observed.fetch_add(1, Ordering::SeqCst);
+            let result = match request["method"].as_str().unwrap() {
+                "systemImageModelsObserve" | "imageCatalogVerify" => json!(true),
+                "imageCatalogSnapshot" => json!({"revision":"empty","total":0}),
+                "imageCatalogPage" => {
+                    json!({"revision":"empty","items":[],"nextCursor":"","done":true})
+                }
+                method => panic!("Unexpected startup request: {method}"),
+            };
+            responder
+                .reply(generation, json!({"id":request["id"],"result":result}))
+                .unwrap();
+        }
+    });
+    let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    prefs.set_user("ai_image_search_enabled", true).unwrap();
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    let (events, mut updates) = tokio::sync::broadcast::channel(32);
+    let index = Arc::new(ImageIndex::new(
+        db,
+        host.clone(),
+        events.clone(),
+        Arc::new(crate::host::resources::NativeResources::new(host.clone())),
+        directory.path().join("cache"),
+    ));
+    index.use_system_catalog_for_test();
+    let runtime = Runtime::new(directory.path().into(), host, prefs, index, events);
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    runtime.follow(stopped);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = updates.recv().await.unwrap();
+            if event.event_type == "IMAGE_MODELS_UPDATED" {
+                let value: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
+                if value["status"] == "READY" {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    settled(&runtime).await;
+    assert!(runtime.engine.lock().unwrap().is_some());
+    assert!(runtime.observing.load(Ordering::Acquire));
+    assert!(calls.load(Ordering::SeqCst) > 0);
+    assert!(!directory.path().join("ai_models/download").exists());
+    stop.send(true).unwrap();
+    runtime.shutdown().await;
+    task.abort();
+}
+
+#[tokio::test]
+async fn native_model_restore_and_shutdown_do_not_request_sdk_observers_or_catalogs() {
+    let directory = tempfile::tempdir().unwrap();
+    plain_inference::models::test_fixture::fixture(&directory.path().join("ai_models/active"));
+    let host = Arc::new(Host::default());
+    let (_generation, mut requests) = host.connect();
+    let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    prefs.set_user("ai_image_search_enabled", true).unwrap();
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    let (events, _) = tokio::sync::broadcast::channel(32);
+    let index = Arc::new(ImageIndex::new(
+        db,
+        host.clone(),
+        events.clone(),
+        Arc::new(crate::host::resources::NativeResources::new(host.clone())),
+        directory.path().join("cache"),
+    ));
+    index.use_native_catalog_for_test();
+    let runtime = Runtime::new(directory.path().into(), host, prefs, index, events);
+    runtime.enable(true).await.unwrap();
+    settled(&runtime).await;
+    assert_eq!(
+        runtime.snapshot().status.status,
+        ImageSearchStatusType::Ready
+    );
+    assert!(runtime.snapshot().status.error_message.is_empty());
+    assert!(requests.try_recv().is_err());
+    runtime.shutdown().await;
+    assert!(requests.try_recv().is_err());
+}
+
+fn projection_runtime() -> (
+    tempfile::TempDir,
+    Arc<Runtime>,
+    tokio::sync::broadcast::Receiver<WsEvent>,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host::default());
+    let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    let (events, updates) = tokio::sync::broadcast::channel(32);
+    let index = Arc::new(ImageIndex::new(
+        db,
+        host.clone(),
+        events.clone(),
+        Arc::new(crate::host::resources::NativeResources::new(host.clone())),
+        directory.path().join("cache"),
+    ));
+    index.use_native_catalog_for_test();
+    let runtime = Runtime::new(directory.path().into(), host, prefs, index, events);
+    (directory, runtime, updates)
+}
+
+#[tokio::test]
+async fn repeated_model_projections_emit_once_per_changed_snapshot() {
+    let (_directory, runtime, mut updates) = projection_runtime();
+    runtime.publish();
+    runtime.publish();
+    let first = updates.try_recv().unwrap();
+    assert_eq!(first.event_type, "IMAGE_MODELS_UPDATED");
+    let first: serde_json::Value = serde_json::from_str(&first.payload).unwrap();
+    assert_eq!(
+        updates.try_recv().unwrap().event_type,
+        "IMAGE_SEARCH_UPDATED"
+    );
+    assert!(updates.try_recv().is_err());
+    runtime.report_error("Index failed".into());
+    runtime.report_error("Index failed".into());
+    let changed = updates.try_recv().unwrap();
+    let changed: serde_json::Value = serde_json::from_str(&changed.payload).unwrap();
+    assert!(changed["version"].as_u64().unwrap() > first["version"].as_u64().unwrap());
+    assert_eq!(changed["errorMessage"], "Index failed");
+    assert_eq!(
+        updates.try_recv().unwrap().event_type,
+        "IMAGE_SEARCH_UPDATED"
+    );
+    assert!(updates.try_recv().is_err());
+    runtime.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_model_runtime_does_not_poll_snapshots_and_index_events_project_without_a_timer() {
+    let (_directory, runtime, mut updates) = projection_runtime();
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    runtime.follow(stopped);
+    assert_eq!(
+        updates.recv().await.unwrap().event_type,
+        "IMAGE_MODELS_UPDATED"
+    );
+    assert_eq!(
+        updates.recv().await.unwrap().event_type,
+        "IMAGE_SEARCH_UPDATED"
+    );
+    tokio::task::yield_now().await;
+    runtime.snapshot_reads.store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(runtime.snapshot_reads.load(Ordering::Relaxed), 0);
+    assert!(updates.try_recv().is_err());
+    tokio::time::resume();
+    runtime.index.use_system_catalog_for_test();
+    let host = runtime.host.clone();
+    let (generation, mut requests) = host.connect();
+    runtime.index.start(false).unwrap();
+    loop {
+        let event = updates.recv().await.unwrap();
+        if event.event_type == "IMAGE_MODELS_UPDATED" {
+            let snapshot: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
+            if snapshot["isIndexing"] == true {
+                break;
+            }
+        }
+    }
+    assert!(runtime.snapshot_reads.load(Ordering::Relaxed) > 0);
+    let pending = requests.recv().await.unwrap();
+    assert_eq!(pending["method"], "imageCatalogSnapshot");
+    runtime.index.cancel().unwrap();
+    host.reply(
+        generation,
+        json!({"id":pending["id"],"result":{"revision":"empty","total":0}}),
+    )
+    .unwrap();
+    runtime.index.wait_until_idle().await;
+    stop.send(true).unwrap();
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn initial_snapshot_is_published_before_the_core_is_returned_to_consumers() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let initial = state.image_models.snapshot();
+    assert_eq!(
+        state.image_models.state.lock().unwrap().published_version,
+        Some(initial.version)
+    );
+    let mut events = state.events.subscribe();
+    tokio::task::yield_now().await;
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(
+            event.event_type,
+            "IMAGE_MODELS_UPDATED" | "IMAGE_SEARCH_UPDATED"
+        ));
+    }
+    core.stop_core().await;
 }

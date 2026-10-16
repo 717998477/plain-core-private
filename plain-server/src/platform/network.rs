@@ -1,7 +1,55 @@
 use crate::host::bridge::Host;
 
-pub(crate) async fn ipv4(host: &Host) -> Result<String, String> {
-    let value = lan_ipv4(host).await?;
+#[cfg(any(target_os = "ios", all(test, target_os = "macos")))]
+mod ios;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InterfaceType {
+    Wireless80211,
+    Ethernet,
+    Tunnel,
+    Ppp,
+    Unknown,
+}
+
+#[derive(Clone)]
+struct Interface {
+    if_type: InterfaceType,
+    ipv4: Vec<std::net::Ipv4Addr>,
+    up: bool,
+    loopback: bool,
+    tunnel: bool,
+    default: bool,
+}
+
+#[cfg(not(target_os = "ios"))]
+fn interfaces() -> Vec<Interface> {
+    use netdev::interface::types::InterfaceType as Kind;
+    netdev::get_interfaces()
+        .into_iter()
+        .map(|row| Interface {
+            if_type: match row.if_type {
+                Kind::Wireless80211 => InterfaceType::Wireless80211,
+                Kind::Ethernet
+                | Kind::Ethernet3Megabit
+                | Kind::FastEthernetT
+                | Kind::FastEthernetFx
+                | Kind::GigabitEthernet => InterfaceType::Ethernet,
+                Kind::Tunnel => InterfaceType::Tunnel,
+                Kind::Ppp => InterfaceType::Ppp,
+                _ => InterfaceType::Unknown,
+            },
+            ipv4: row.ipv4.iter().map(|ip| ip.addr()).collect(),
+            up: row.is_up(),
+            loopback: row.is_loopback(),
+            tunnel: row.is_tun(),
+            default: row.default,
+        })
+        .collect()
+}
+
+pub(crate) async fn ipv4() -> Result<String, String> {
+    let value = lan_ipv4().await?;
     if value.is_empty() {
         return Err("No LAN address available for casting".into());
     }
@@ -12,20 +60,95 @@ pub(crate) async fn ipv4(host: &Host) -> Result<String, String> {
     Ok(address.to_string())
 }
 
-pub(crate) async fn lan_ipv4(host: &Host) -> Result<String, String> {
-    if cfg!(any(target_os = "android", target_os = "ios")) {
-        Ok(host
-            .call("systemIpv4Address", serde_json::json!({}))
-            .await?
-            .as_str()
-            .ok_or("Invalid IPv4 reading")?
-            .to_owned())
-    } else {
-        Ok(plain_rs::protocols::mdns::host_responder::local_ipv4_strs()
-            .into_iter()
-            .next()
-            .unwrap_or_default())
+#[derive(async_graphql::SimpleObject, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NetworkStatus {
+    pub ipv4_addresses: Vec<String>,
+    pub primary_ipv4: String,
+    pub vpn_active: bool,
+}
+
+pub(crate) async fn snapshot() -> Result<NetworkStatus, String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(not(target_os = "ios"))]
+        let interfaces = interfaces();
+        #[cfg(target_os = "ios")]
+        let interfaces = ios::interfaces()?;
+        Ok(sample(&interfaces))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+pub(crate) async fn device_snapshot(host: &Host) -> Result<NetworkStatus, String> {
+    #[allow(unused_mut)]
+    let mut status = snapshot().await?;
+    #[cfg(target_os = "android")]
+    {
+        status.vpn_active =
+            serde_json::from_value(host.call("systemVpnActive", serde_json::json!({})).await?)
+                .map_err(|error| error.to_string())?;
     }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = host;
+    }
+    Ok(status)
+}
+
+fn sample(interfaces: &[Interface]) -> NetworkStatus {
+    let addresses = lan_ipv4_addresses(interfaces);
+    NetworkStatus {
+        primary_ipv4: addresses.first().cloned().unwrap_or_default(),
+        ipv4_addresses: addresses,
+        vpn_active: interfaces.iter().any(|interface| {
+            interface.default
+                && interface.up
+                && (interface.tunnel || interface.if_type == InterfaceType::Tunnel)
+        }),
+    }
+}
+
+pub(crate) async fn lan_ipv4() -> Result<String, String> {
+    Ok(snapshot().await?.primary_ipv4)
+}
+
+fn lan_ipv4_addresses(interfaces: &[Interface]) -> Vec<String> {
+    let mut addresses = interfaces
+        .iter()
+        .filter(|interface| {
+            interface.up
+                && !interface.loopback
+                && !interface.tunnel
+                && !matches!(
+                    interface.if_type,
+                    InterfaceType::Tunnel | InterfaceType::Ppp
+                )
+        })
+        .flat_map(|interface| {
+            let priority = match interface.if_type {
+                InterfaceType::Wireless80211 => 0,
+                InterfaceType::Ethernet => 1,
+                _ => 2,
+            };
+            interface
+                .ipv4
+                .iter()
+                .map(move |network| (priority, *network))
+        })
+        .filter(|(_, address)| {
+            !address.is_unspecified()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_multicast()
+                && !address.is_broadcast()
+        })
+        .collect::<Vec<_>>();
+    addresses.sort_by_key(|(priority, _)| *priority);
+    let mut seen = std::collections::HashSet::new();
+    addresses
+        .into_iter()
+        .filter_map(|(_, address)| seen.insert(address).then(|| address.to_string()))
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
@@ -71,3 +194,7 @@ pub(crate) async fn network_type(host: &Host) -> Result<NetworkType, String> {
         .map_err(|error| error.to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/platform/network.rs"]
+mod tests;

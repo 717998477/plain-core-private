@@ -46,3 +46,23 @@ fn mms_address_projection_prefers_the_sender_then_the_first_available_candidate(
     assert_eq!(mms(&values[..1]), "recipient");
     assert_eq!(mms(&[]), "");
 }
+
+#[test]
+fn mms_ignores_provider_placeholder_addresses_before_sender_selection() {
+    let values = vec![
+        MmsAddress {
+            value: "INSERT-ADDRESS-TOKEN".into(),
+            is_sender: true,
+        },
+        MmsAddress {
+            value: String::new(),
+            is_sender: true,
+        },
+        MmsAddress {
+            value: "recipient".into(),
+            is_sender: false,
+        },
+    ];
+    assert_eq!(mms(&values), "recipient");
+    assert_eq!(mms(&values[..2]), "");
+}

@@ -1,5 +1,5 @@
 use crate::host::bridge::Host;
-use crate::host::image_index::HostProvider;
+mod provider;
 use plain_rs::db::Db;
 use plain_rs::error::DomainError;
 use plain_rs::error::DomainResult;
@@ -8,6 +8,7 @@ use plain_rs::media::images::embeddings::EmbeddingInput;
 use plain_rs::media::images::indexing as image_indexing;
 use plain_rs::media::images::indexing::Control;
 use plain_rs::media::images::indexing::Progress;
+use provider::ImageProvider;
 use serde::Serialize;
 use std::{
     collections::VecDeque,
@@ -37,23 +38,48 @@ struct State {
 }
 pub struct ImageIndex {
     db: Arc<Db>,
+    #[cfg(test)]
+    system_catalog: std::sync::atomic::AtomicBool,
     host: Arc<Host>,
+    resources: Arc<crate::host::resources::NativeResources>,
+    cache: std::path::PathBuf,
     events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
     state: Arc<Mutex<State>>,
     encoder: Mutex<Option<Arc<dyn plain_inference::embedding::ImageEncoder>>>,
+    idle: tokio::sync::Notify,
 }
 impl ImageIndex {
     pub fn new(
         db: Arc<Db>,
         host: Arc<Host>,
         events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
+        resources: Arc<crate::host::resources::NativeResources>,
+        cache: std::path::PathBuf,
     ) -> Self {
         Self {
             db,
+            #[cfg(test)]
+            system_catalog: std::sync::atomic::AtomicBool::new(
+                crate::platform::image_catalog::uses_system_catalog(),
+            ),
             host,
+            resources,
+            cache,
             events,
             state: Arc::new(Mutex::new(State::default())),
             encoder: Mutex::new(None),
+            idle: tokio::sync::Notify::new(),
+        }
+    }
+    pub(crate) async fn wait_until_idle(&self) {
+        loop {
+            let idle = self.idle.notified();
+            tokio::pin!(idle);
+            idle.as_mut().enable();
+            if !self.state.lock().unwrap().worker {
+                return;
+            }
+            idle.await;
         }
     }
     pub(crate) fn search(
@@ -70,6 +96,27 @@ impl ImageIndex {
         minimum_score: f32,
     ) -> DomainResult<Vec<image_embeddings::SearchResult>> {
         image_embeddings::search_with_score(&self.db, embedding, limit, minimum_score)
+    }
+    pub(crate) fn uses_system_catalog(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.system_catalog
+                .load(std::sync::atomic::Ordering::Relaxed)
+        }
+        #[cfg(not(test))]
+        {
+            crate::platform::image_catalog::uses_system_catalog()
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn use_native_catalog_for_test(&self) {
+        self.system_catalog
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn use_system_catalog_for_test(&self) {
+        self.system_catalog
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
     pub fn set_encoder(&self, encoder: Option<Arc<dyn plain_inference::embedding::ImageEncoder>>) {
         *self.encoder.lock().unwrap() = encoder;
@@ -130,6 +177,7 @@ impl ImageIndex {
                 service.work().await;
             });
         }
+        self.publish();
         Ok(self.status())
     }
     pub fn cancel(&self) -> DomainResult<Status> {
@@ -142,7 +190,10 @@ impl ImageIndex {
         s.suspended = true;
         s.status.version = s.generation;
         s.status.error_message.clear();
-        Ok(s.status.clone())
+        let status = s.status.clone();
+        drop(s);
+        publish_status(&self.events, status.clone());
+        Ok(status)
     }
     pub fn remove(&self, ids: &[String]) -> DomainResult<usize> {
         if ids.is_empty() {
@@ -166,11 +217,15 @@ impl ImageIndex {
             s.pending.clear();
             s.pending.push_back(Job::Full(force));
         }
-        let value = result?;
-        s.status.indexed_images = image_embeddings::count(&self.db)?
-            .try_into()
-            .map_err(|_| DomainError::Other("invalid image embedding count".into()))?;
-        Ok(value)
+        let result = result.and_then(|value| {
+            s.status.indexed_images = image_embeddings::count(&self.db)?
+                .try_into()
+                .map_err(|_| DomainError::Other("invalid image embedding count".into()))?;
+            Ok(value)
+        });
+        drop(s);
+        self.publish();
+        result
     }
     pub fn clear(&self) -> DomainResult<usize> {
         let mut s = self.state.lock().unwrap();
@@ -183,6 +238,8 @@ impl ImageIndex {
         s.status.version = s.generation;
         let count = image_embeddings::clear(&self.db)?;
         s.status.indexed_images = 0;
+        drop(s);
+        self.publish();
         Ok(count)
     }
     fn publish(&self) {
@@ -193,21 +250,24 @@ impl ImageIndex {
             let next = {
                 let mut s = self.state.lock().unwrap();
                 match s.pending.pop_front() {
-                    Some(job) => {
-                        let Some(generation) = s.generation.checked_add(1) else {
+                    Some(job) => match s.generation.checked_add(1) {
+                        Some(generation) => {
+                            s.generation = generation;
+                            s.status = Status {
+                                version: generation,
+                                is_running: true,
+                                ..Default::default()
+                            };
+                            Some((generation, job))
+                        }
+                        None => {
                             s.status.error_message = "image index generation overflow".into();
                             s.worker = false;
                             s.status.is_running = false;
-                            return;
-                        };
-                        s.generation = generation;
-                        s.status = Status {
-                            version: generation,
-                            is_running: true,
-                            ..Default::default()
-                        };
-                        Some((generation, job))
-                    }
+                            s.pending.clear();
+                            None
+                        }
+                    },
                     None => {
                         s.worker = false;
                         s.status.is_running = false;
@@ -217,15 +277,24 @@ impl ImageIndex {
             };
             let Some((generation, job)) = next else {
                 self.publish();
+                self.idle.notify_waiters();
                 return;
             };
+            self.publish();
             let control = IndexControl {
                 generation,
                 state: self.state.clone(),
                 events: self.events.clone(),
             };
             let encoder = self.encoder.lock().unwrap().clone();
-            let provider = HostProvider::new(self.host.clone(), generation.to_string(), encoder);
+            let provider = ImageProvider::new(
+                self.host.clone(),
+                self.resources.clone(),
+                self.cache.clone(),
+                encoder,
+                self.db.clone(),
+                self.uses_system_catalog(),
+            );
             let db = self.db.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let mut provider = provider;
@@ -235,14 +304,8 @@ impl ImageIndex {
                         image_indexing::selected(&db, &mut provider, &control, &ids)
                     }
                 };
-                let finished = provider.finish();
-                match result {
-                    Ok(progress) => {
-                        finished?;
-                        Ok(progress)
-                    }
-                    Err(error) => Err(error),
-                }
+                provider.finish();
+                result
             })
             .await;
             {
@@ -260,6 +323,7 @@ impl ImageIndex {
                     }
                 }
             }
+            self.publish();
         }
     }
 }

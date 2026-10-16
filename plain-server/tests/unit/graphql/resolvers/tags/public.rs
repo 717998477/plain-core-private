@@ -50,6 +50,9 @@ fn database(schema: &PublicSchema) -> &Arc<Db> {
 
 fn doc(path: &str) -> plain_rs::db::MediaFileMetadata {
     plain_rs::db::MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type: DataType::Doc,
         path: path.to_owned(),
         title: std::path::Path::new(path)

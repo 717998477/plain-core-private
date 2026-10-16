@@ -203,6 +203,12 @@ impl MediaScans {
             .ok_or_else(|| "Media scan directories not configured".into())
     }
 
+    pub(crate) fn publish_catalog_rows(&self, rows: &[plain_rs::db::MediaFileRow]) {
+        if let Some(events) = &self.events {
+            super::catalog_events::publish(events, rows.iter().map(|row| row.data_type));
+        }
+    }
+
     pub(crate) fn record_completion<T>(
         &self,
         record: impl FnOnce() -> Result<T, String>,

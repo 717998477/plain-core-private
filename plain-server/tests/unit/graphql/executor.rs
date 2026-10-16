@@ -161,6 +161,7 @@ async fn backup_uses_the_main_schema_and_rejects_remote_secret_export() {
 fn runtime_controls_and_viewer_exports_do_not_trigger_generic_content_refreshes() {
     for document in [
         "mutation{controlPeerStatus(action:STOP)}",
+        r#"mutation{acquireDiscovery(token:"token") releaseDiscovery(token:"token")}"#,
         r#"mutation{browseMdns{revision} acquireMdnsDebugSession(token:"token"){debugSessionCount}}"#,
         "mutation{controlDlnaReceiver(input:{action:POSITION,positionMs:1,durationMs:2})}",
         r#"mutation{confirmWebLogin(requestId:"request",allowed:false)}"#,
@@ -172,4 +173,31 @@ fn runtime_controls_and_viewer_exports_do_not_trigger_generic_content_refreshes(
     assert!(content_changes(&Request::new(
         "mutation{controlPeerStatus(action:STOP) createNote}"
     )));
+}
+
+#[test]
+fn versioned_audio_selection_owns_its_content_notification() {
+    assert!(!content_changes(&Request::new(
+        r#"mutation { advanceAudioSelection(action:NEXT,expectedPath:"song",expectedRevision:1) { revision } }"#
+    )));
+}
+
+#[test]
+fn playback_fact_reports_do_not_trigger_generic_content_refresh() {
+    assert!(!content_changes(&Request::new(
+        r#"mutation { reportAudioPlayback(path:"song",revision:1,positionMs:0,started:true) }"#
+    )));
+}
+
+#[test]
+fn shared_batch_chat_and_share_flows_own_their_events() {
+    for query in [
+        r#"mutation { sendChatItems(targets:["local"],content:"{}") { id } }"#,
+        r#"mutation { forwardChatItems(id:"source",targets:["local"]) { id } }"#,
+        r#"mutation { forwardChatItem(id:"source",target:"local") { id } }"#,
+        r#"mutation { sendShare(targets:["local"],shareId:"share") { id } }"#,
+        r#"mutation { sendFolderShare(targets:["local"],path:"/folder",name:"Folder") { id } }"#,
+    ] {
+        assert!(!content_changes(&Request::new(query)));
+    }
 }

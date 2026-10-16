@@ -368,7 +368,7 @@ async fn channel_roots_read_current_store_and_share_runtime_mutations_without_ho
     let event: Value = serde_json::from_str(&events.recv().await.unwrap().payload).unwrap();
     assert_eq!(event["channels"][0]["id"], id);
     assert!(event["channels"][0].get("key").is_none());
-    assert_eq!(event["channels"][0].as_object().unwrap().len(), 8);
+    assert_eq!(event["channels"][0].as_object().unwrap().len(), 9);
     assert_eq!(event["channels"][0]["members"][0]["peerId"], "actor");
     let renamed = channel_query(
         &state,
@@ -498,4 +498,35 @@ async fn channel_snapshot_recovers_current_public_list_without_emitting_another_
     assert!(snapshot["data"]["chatChannels"][0].get("key").is_none());
     assert!(events.try_recv().is_err());
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn channel_action_projection_matches_rust_event_projection_without_host_calls() {
+    let (_directory, schema) = fixture();
+    let actor = "fixture-member";
+    schema
+        .data::<Arc<Prefs>>()
+        .unwrap()
+        .set(plain_rs::prefs::system::keys::CLIENT_ID, actor)
+        .unwrap();
+    let channel = plain_rs::chat::channels::state::create(
+        database(&schema),
+        "fixture-owner",
+        "Fixture channel",
+    )
+    .unwrap();
+    let event = plain_rs::chat::events::channel_to_json(&channel, actor);
+    let result = query(
+        &schema,
+        "{ chatChannels { id actions { isOwner canRename canManageMembers canLeave canDelete } } }",
+    )
+    .await;
+    assert!(result.get("errors").is_none(), "{result}");
+    let row = &result["data"]["chatChannels"][0];
+    assert_eq!(row["id"], channel.id);
+    assert_eq!(row["actions"], event["actions"]);
+    assert_eq!(
+        row["actions"],
+        json!({"isOwner":false,"canRename":false,"canManageMembers":false,"canLeave":true,"canDelete":false})
+    );
 }

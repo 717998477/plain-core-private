@@ -1,8 +1,6 @@
-use crate::host::bridge::Host;
-use crate::services::audio::host::Audio;
+use crate::assembly::server::ServerState;
 use plain_rs::media::audio::{playback, queue::AudioTrack};
 use serde::Deserialize;
-use std::sync::Arc;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -13,17 +11,18 @@ struct Progress {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Started {
+struct Transition {
     path: String,
     revision: i64,
 }
 pub(crate) async fn accept(
-    audio: &Arc<Audio>,
-    host: Arc<Host>,
+    state: &ServerState,
     generation: u64,
     kind: &str,
     payload: &str,
 ) -> Result<bool, String> {
+    let host = state.host.clone();
+    let audio = &state.audio;
     match kind {
         "AUDIO_PROGRESS_REPORTED" => {
             let report: Progress =
@@ -41,9 +40,9 @@ pub(crate) async fn accept(
                 .map_err(|error| error.message)?;
         }
         "AUDIO_STARTED_REPORTED" => {
-            let report: Started =
+            let report: Transition =
                 serde_json::from_str(payload).map_err(|error| error.to_string())?;
-            audio
+            let accepted = audio
                 .run_playback(move |db, _| {
                     if !host.is_current(generation) {
                         return Err(plain_rs::error::DomainError::Other(
@@ -58,12 +57,65 @@ pub(crate) async fn accept(
                             )
                         })?
                         .unwrap_or_else(|| AudioTrack::from_path_stem(&report.path));
-                    playback::started(db, &track, report.revision)
+                    let indexed = track.media_id.is_some();
+                    Ok(playback::started(db, &track, report.revision)? && indexed)
                 })
                 .await
                 .map_err(|error| error.message)?;
+            if accepted {
+                publish_library_updated(&state.events);
+            }
+        }
+        "AUDIO_COMPLETED_REPORTED" => {
+            let report: Transition =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            if report.path.is_empty() || report.revision < 0 {
+                return Err("invalid audio completion".into());
+            }
+            let prefs = state.prefs.clone();
+            let accepted = audio
+                .run_playback(move |db, engine| {
+                    if !host.is_current(generation) {
+                        return Err(plain_rs::error::DomainError::Other(
+                            "host disconnected".into(),
+                        ));
+                    }
+                    let current = playback::snapshot(db)?;
+                    if current.path != report.path || current.revision != report.revision {
+                        return Ok(false);
+                    }
+                    engine.refresh()?;
+                    plain_rs::media::audio::commands::completed(
+                        db,
+                        &prefs,
+                        engine,
+                        &report.path,
+                        report.revision,
+                    )
+                })
+                .await
+                .map_err(|error| error.message)?;
+            if accepted {
+                let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
+                    "CONTENT_CHANGED",
+                    "{}".into(),
+                ));
+            }
         }
         _ => return Ok(false),
     }
     Ok(true)
 }
+
+pub(crate) fn publish_library_updated(
+    events: &tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
+) {
+    let _ = events.send(plain_rs::events::WsEvent::broadcast(
+        plain_rs::events::AUDIO_LIBRARY_UPDATED,
+        "{}".into(),
+    ));
+}
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/audio/reports.rs"]
+mod tests;

@@ -27,9 +27,13 @@ fn track(path: &str, facts: plain_rs::media::probe::ProbedMeta) -> AudioTrack {
         } else {
             facts.title
         },
-        artist: facts.artist,
+        album_id: plain_rs::media::audio::metadata::album_id(
+            &facts.album,
+            &facts.album_artist,
+            &facts.artist,
+        ),
+        artist: plain_rs::media::audio::metadata::normalize_artist(&facts.artist),
         duration_ms: facts.duration_ms,
-        album_id: String::new(),
     }
 }
 
@@ -45,9 +49,9 @@ pub(crate) fn from_row(row: MediaFileRow) -> AudioMedia {
             } else {
                 row.title
             },
-            artist: row.artist,
+            artist: plain_rs::media::audio::metadata::normalize_artist(&row.artist),
             duration_ms: row.duration_ms,
-            album_id: String::new(),
+            album_id: row.album_id,
         },
     }
 }

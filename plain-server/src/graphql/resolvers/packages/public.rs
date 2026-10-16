@@ -26,6 +26,37 @@ pub struct PackagesQuery;
 
 #[Object]
 impl PackagesQuery {
+    async fn package_manifest(
+        &self,
+        ctx: &Context<'_>,
+        id: async_graphql::ID,
+    ) -> async_graphql::Result<String> {
+        public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[PERMISSION])?;
+        crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "PACKAGES")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+        let statuses = ctx
+            .data::<Arc<Host>>()?
+            .call(
+                "systemPackageStatuses",
+                serde_json::json!({"ids":[id.as_str()]}),
+            )
+            .await
+            .map_err(async_graphql::Error::new)?;
+        let path = statuses
+            .get(id.as_str())
+            .and_then(|item| item.get("path"))
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| async_graphql::Error::new("Package not found"))?;
+        crate::services::packages::read_manifest(
+            ctx.data::<crate::assembly::services::Services>()?,
+            path,
+        )
+        .await
+        .map_err(|error| async_graphql::Error::new(error.to_string()))
+    }
+
     async fn packages(
         &self,
         ctx: &Context<'_>,
@@ -98,8 +129,6 @@ impl PackagesMutation {
         Ok(true)
     }
 
-    /// Bundle unpacking is heavy disk I/O, so the platform side keeps it off
-    /// the engine thread; a failure surfaces as `Installation failed: …`.
     async fn install_package(
         &self,
         ctx: &Context<'_>,
@@ -109,11 +138,13 @@ impl PackagesMutation {
         crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "PACKAGES")
             .await
             .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-        let receipt = ctx
-            .data_unchecked::<Arc<Host>>()
-            .call("systemInstallPackage", serde_json::json!({ "path": path }))
-            .await
-            .map_err(|error| async_graphql::Error::new(format!("Installation failed: {error}")))?;
+        let receipt = crate::services::packages::install::execute(
+            ctx.data::<crate::assembly::services::Services>()?,
+            ctx.data::<Arc<Host>>()?.clone(),
+            &path,
+        )
+        .await
+        .map_err(|error| async_graphql::Error::new(format!("Installation failed: {error}")))?;
         Ok(PackageInstallPending {
             id: async_graphql::ID::from(text(&receipt, "packageName")),
             updated_at: optional_instant(&receipt, "lastUpdateTime"),

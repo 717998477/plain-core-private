@@ -223,6 +223,23 @@ async fn the_app_root_exposes_the_identity_and_the_capability_lists() {
 /// drive, and cannot request a permission it has no name for.
 #[test]
 fn unknown_capabilities_and_permissions_are_dropped() {
+    assert_eq!(
+        Capability::parse("PEER_DISCOVERY"),
+        Some(Capability::PeerDiscovery)
+    );
+    assert_eq!(
+        Capability::parse("BACKGROUND_SERVICE"),
+        Some(Capability::BackgroundService)
+    );
+    assert_eq!(
+        Capability::parse("FILE_BROWSER"),
+        Some(Capability::FileBrowser)
+    );
+    assert_eq!(
+        Capability::parse("BLE_DISCOVERY"),
+        Some(Capability::BleDiscovery)
+    );
+    assert_eq!(Capability::parse("WIFI_AWARE"), Some(Capability::WifiAware));
     assert_eq!(Capability::parse("SMS"), Some(Capability::Sms));
     assert_eq!(Capability::parse("POMODORO"), Some(Capability::Pomodoro));
     assert_eq!(Capability::parse("TELEPORT"), None);
@@ -300,6 +317,9 @@ async fn a_temp_value_is_echoed_rather_than_read_back() {
 
 #[tokio::test]
 async fn discovery_commands_use_the_shared_runtime_and_platform_multicast_lease() {
+    let _runtime = crate::services::discovery::mdns_runtime::TEST_LOCK
+        .lock()
+        .await;
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
     prefs.set("client_id", "discovery-test").unwrap();
@@ -311,6 +331,7 @@ async fn discovery_commands_use_the_shared_runtime_and_platform_multicast_lease(
     .unwrap();
     let state = server.runtime_state();
     stub(state.host.clone(), |method, _| match method {
+        "systemCapabilities" => json!(["PEER_DISCOVERY"]),
         "mdnsMulticast" => json!(true),
         other => panic!("unexpected host call {other}"),
     });

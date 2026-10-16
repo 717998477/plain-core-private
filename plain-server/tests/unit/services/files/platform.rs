@@ -155,31 +155,38 @@ async fn sdk_without_a_catalog_or_filesystem_source_uses_the_shared_history() {
 }
 
 #[tokio::test]
-async fn thumbnail_cache_uses_owned_data_root_and_keeps_authorization_live() {
+async fn thumbnail_cache_opens_the_file_without_sdk_requests_and_rechecks_access() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     state.file_platform.use_sdk_for_test();
-    let (generation, mut requests) = state.host.connect();
-    let host = state.host.clone();
-    let worker = tokio::spawn(async move {
-        for allowed in [true, true, false] {
-            let request = requests.recv().await.unwrap();
-            assert_eq!(request["method"], "thumbnailAuthorize");
-            assert_eq!(request["params"], json!({"paths":["content://images/1"]}));
-            host.reply(generation, json!({"id":request["id"],"result":allowed}))
-                .unwrap();
-        }
-        assert!(requests.try_recv().is_err());
-    });
+    let (_, mut requests) = state.host.connect();
+    let path = directory.path().join("image");
+    std::fs::write(&path, []).unwrap();
     for _ in 0..2 {
         let cache = state
             .file_platform
-            .thumbnail_cache("content://images/1")
+            .thumbnail_cache(path.to_str().unwrap())
             .await
             .unwrap();
         assert_eq!(cache, state.cache.root().to_owned());
     }
+    std::fs::remove_file(&path).unwrap();
+    assert!(
+        state
+            .file_platform
+            .thumbnail_cache(path.to_str().unwrap())
+            .await
+            .is_err()
+    );
+    std::fs::create_dir(&path).unwrap();
+    assert!(
+        state
+            .file_platform
+            .thumbnail_cache(path.to_str().unwrap())
+            .await
+            .is_err()
+    );
     assert!(
         state
             .file_platform
@@ -187,14 +194,58 @@ async fn thumbnail_cache_uses_owned_data_root_and_keeps_authorization_live() {
             .await
             .is_err()
     );
-    worker.await.unwrap();
+    assert!(
+        state
+            .file_platform
+            .thumbnail_cache("relative")
+            .await
+            .is_err()
+    );
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn thumbnail_cache_rechecks_current_os_read_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    state.file_platform.use_sdk_for_test();
+    let (_, mut requests) = state.host.connect();
+    let path = directory.path().join("image");
+    std::fs::write(&path, []).unwrap();
+    state
+        .file_platform
+        .thumbnail_cache(path.to_str().unwrap())
+        .await
+        .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+    let can_open = std::fs::File::open(&path).is_ok();
+    assert_eq!(
+        state
+            .file_platform
+            .thumbnail_cache(path.to_str().unwrap())
+            .await
+            .is_ok(),
+        can_open
+    );
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    state
+        .file_platform
+        .thumbnail_cache(path.to_str().unwrap())
+        .await
+        .unwrap();
+    assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }
 
 #[tokio::test]
 async fn metadata_authorization_batches_sdk_paths_without_requiring_existing_files() {
     let directory = tempfile::tempdir().unwrap();
-    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let core =
+        crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
     let state = core.runtime_state();
     state.file_platform.use_sdk_for_test();
     let (generation, mut requests) = state.host.connect();
@@ -218,17 +269,19 @@ async fn metadata_authorization_batches_sdk_paths_without_requiring_existing_fil
             .to_string_lossy()
             .into_owned(),
     ];
-    let expected = paths.clone();
     let host = state.host.clone();
     let worker = tokio::spawn(async move {
         let request = requests.recv().await.unwrap();
-        assert_eq!(request["method"], "fileTaskAuthorize");
+        assert_eq!(request["method"], "systemPermissionFacts");
         assert_eq!(
             request["params"],
-            json!({"operation":"read", "paths":expected})
+            json!({"permissions":["WRITE_EXTERNAL_STORAGE"]})
         );
-        host.reply(generation, json!({"id":request["id"], "result":true}))
-            .unwrap();
+        host.reply(
+            generation,
+            json!({"id":request["id"], "result":{"granted":{"WRITE_EXTERNAL_STORAGE":true}}}),
+        )
+        .unwrap();
         requests
     });
     state
@@ -240,4 +293,119 @@ async fn metadata_authorization_batches_sdk_paths_without_requiring_existing_fil
     assert!(requests.try_recv().is_err());
     state.host.disconnect(generation);
     core.stop_core().await;
+}
+
+#[tokio::test]
+async fn sdk_private_paths_skip_host_and_external_task_batches_sample_one_live_grant() {
+    let temp = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(&temp.path().join("core")).unwrap();
+    let state = core.runtime_state();
+    state.file_platform.use_sdk_for_test();
+    let (generation, mut requests) = state.host.connect();
+    let private = vec![
+        state
+            .directory
+            .join("new/file")
+            .to_string_lossy()
+            .into_owned(),
+        state
+            .cache
+            .root()
+            .join("new/file")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    state
+        .file_platform
+        .authorize_paths(&private, true)
+        .await
+        .unwrap();
+    state.file_platform.scan(&private).await.unwrap();
+    assert!(
+        state
+            .file_platform
+            .identities(&private)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(requests.try_recv().is_err());
+    assert!(
+        state
+            .file_platform
+            .authorize_paths(&["/".into()], true)
+            .await
+            .is_err()
+    );
+    assert!(requests.try_recv().is_err());
+    let host = state.host.clone();
+    let worker = tokio::spawn(async move {
+        let mut calls = 0;
+        for granted in [true, false] {
+            let request = requests.recv().await.unwrap();
+            assert_eq!(request["method"], "systemPermissionFacts");
+            assert_eq!(
+                request["params"],
+                json!({"permissions":["WRITE_EXTERNAL_STORAGE"]})
+            );
+            calls += 1;
+            host.reply(
+                generation,
+                json!({"id":request["id"],"result":{"granted":{"WRITE_EXTERNAL_STORAGE":granted}}}),
+            )
+            .unwrap();
+        }
+        (calls, requests)
+    });
+    let ops = (0..64)
+        .map(|index| FileTaskOp {
+            src: temp
+                .path()
+                .join(format!("source-{index}"))
+                .to_string_lossy()
+                .into_owned(),
+            dst: temp
+                .path()
+                .join(format!("target-{index}"))
+                .to_string_lossy()
+                .into_owned(),
+            overwrite: false,
+        })
+        .collect::<Vec<_>>();
+    state
+        .file_platform
+        .authorize_task(FileTaskType::Move, &ops)
+        .await
+        .unwrap();
+    assert!(
+        state
+            .file_platform
+            .authorize_task(FileTaskType::Copy, &ops)
+            .await
+            .is_err()
+    );
+    let (calls, mut requests) = worker.await.unwrap();
+    assert_eq!(calls, 2);
+    assert!(requests.try_recv().is_err());
+    state.host.disconnect(generation);
+    core.stop_core().await;
+}
+
+#[test]
+fn native_read_access_rechecks_real_targets_and_rejects_missing_or_relative_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("file");
+    std::fs::write(&file, b"bytes").unwrap();
+    assert!(authorize_native(&file, false).is_ok());
+    assert!(authorize_native(temp.path(), false).is_ok());
+    assert!(authorize_native(Path::new("relative"), false).is_err());
+    assert!(authorize_native(&temp.path().join("missing"), false).is_err());
+    #[cfg(unix)]
+    {
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(authorize_native(&link, false).is_ok());
+        std::fs::remove_file(file).unwrap();
+        assert!(authorize_native(&link, false).is_err());
+    }
 }

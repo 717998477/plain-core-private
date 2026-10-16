@@ -15,3 +15,6 @@ pub(crate) mod lyrics;
 
 #[cfg(feature = "core")]
 pub(crate) mod covers;
+
+#[cfg(feature = "core")]
+pub(crate) mod overview;

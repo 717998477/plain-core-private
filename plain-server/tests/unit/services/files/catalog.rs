@@ -2,6 +2,9 @@ use super::*;
 
 fn metadata() -> plain_rs::db::MediaFileMetadata {
     plain_rs::db::MediaFileMetadata {
+        album: String::new(),
+        album_artist: String::new(),
+
         data_type: DataType::Image,
         path: "/catalog/picture.jpg".into(),
         title: "Picture".into(),
@@ -79,6 +82,11 @@ async fn platform_catalog_reads_os_facts_without_a_local_catalogue() {
                     json!(["42"])
                 }
                 "systemMediaBucketItemFacts" => {
+                    assert_eq!(
+                        request["params"]["plan"]["clauses"],
+                        json!(["bucket_display_name != ''"])
+                    );
+                    assert_eq!(request["params"]["plan"]["args"], json!([]));
                     json!([{"id":"camera","path":"content://media/images/42"}])
                 }
                 other => panic!("unexpected host operation {other}"),
@@ -108,4 +116,26 @@ async fn platform_catalog_reads_os_facts_without_a_local_catalogue() {
         "camera"
     );
     assert_eq!(worker.await.unwrap().len(), 4);
+}
+
+#[test]
+fn sampled_media_revisions_are_canonical_and_reject_malformed_volumes() {
+    let page: MediaPage = serde_json::from_value(serde_json::json!({
+        "rows":[],
+        "revisionBefore":[{"volume":"b","version":"v","generation":2},{"volume":"a","version":"v","generation":1}],
+        "revisionAfter":[{"volume":"a","version":"v","generation":1},{"volume":"b","version":"v","generation":2}]
+    })).unwrap();
+    let page = page.validate().unwrap();
+    assert_eq!(page.revision_before, page.revision_after);
+    for revision in [
+        serde_json::json!([{"volume":"a","version":"","generation":1}]),
+        serde_json::json!([{"volume":"a","version":"v","generation":-1}]),
+        serde_json::json!([{"volume":"a","version":"v","generation":1},{"volume":"a","version":"v","generation":1}]),
+    ] {
+        let page: MediaPage = serde_json::from_value(
+            serde_json::json!({"rows":[],"revisionBefore":revision,"revisionAfter":null}),
+        )
+        .unwrap();
+        assert!(page.validate().is_err());
+    }
 }
