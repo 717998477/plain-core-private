@@ -22,7 +22,7 @@ async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_auth
     let token = plain_rs::utils::base64::base64_encode(&[12; 32]);
     let db_path = temp.path().join("tasks.db");
     let server = ContentServer::start(
-        &db_path,
+        db_path.parent().unwrap(),
         &token,
         Arc::new(plain_rs::prefs::Prefs::load(&temp.path().join("prefs.json")).unwrap()),
     )
@@ -137,7 +137,7 @@ async fn media_move_case(missing_destination: bool) {
     let db_path = base.join("db");
     let token = plain_rs::utils::base64::base64_encode(&[16; 32]);
     let server = ContentServer::start(
-        &db_path,
+        db_path.parent().unwrap(),
         &token,
         Arc::new(plain_rs::prefs::Prefs::load(&base.join("prefs")).unwrap()),
     )
@@ -369,4 +369,60 @@ async fn directory_move_rebinds_actual_native_ids_and_stops_stale_playback() {
 #[tokio::test]
 async fn missing_native_destination_keeps_metadata_and_reports_actual_completed_move() {
     media_move_case(true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn synchronous_completion_waits_for_notification_without_periodic_reads() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let notification = Arc::new(tokio::sync::Notify::new());
+    let ready = Arc::new(AtomicBool::new(false));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let (started, pending) = tokio::sync::oneshot::channel();
+    let worker = {
+        let notification = notification.clone();
+        let ready = ready.clone();
+        let reads = reads.clone();
+        tokio::spawn(async move {
+            let mut started = Some(started);
+            wait_for_completion(&notification, || {
+                reads.fetch_add(1, Ordering::SeqCst);
+                if let Some(started) = started.take() {
+                    started.send(()).unwrap();
+                }
+                Ok(ready.load(Ordering::SeqCst).then_some(7))
+            })
+            .await
+        })
+    };
+    pending.await.unwrap();
+    tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    ready.store(true, Ordering::SeqCst);
+    notification.notify_waiters();
+    assert_eq!(worker.await.unwrap().unwrap(), 7);
+    assert_eq!(reads.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn completion_between_state_read_and_wait_is_not_lost() {
+    let notification = tokio::sync::Notify::new();
+    let mut reads = 0;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        wait_for_completion(&notification, || {
+            reads += 1;
+            if reads == 1 {
+                notification.notify_waiters();
+                Ok(None)
+            } else {
+                Ok(Some("done"))
+            }
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(result, "done");
+    assert_eq!(reads, 2);
 }

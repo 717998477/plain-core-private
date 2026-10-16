@@ -25,13 +25,6 @@ impl NativeAudio {
         let method = method.to_owned();
         tokio::task::spawn_blocking(move || match method.as_str() {
             "audioLibraryResolve" => service.resolve(params),
-            "audioMetadata" => service.metadata(params),
-            "systemAudioLyrics" => {
-                let path = params["path"].as_str().ok_or("Audio path required")?;
-                Ok(Value::String(
-                    plain_media::metadata::audio::lyrics::extract_lyrics_from_path(path),
-                ))
-            }
             "systemAudioPlaybackState" => Ok(json!({"isPlaying":false,"positionMs":0})),
             "audioEngineCommand" => command(params),
             _ => Err("Unsupported audio host method".into()),
@@ -64,16 +57,6 @@ impl NativeAudio {
         )
         .map_err(|error| error.to_string())
     }
-
-    fn metadata(&self, params: Value) -> Result<Value, String> {
-        let path = params["path"]
-            .as_str()
-            .filter(|path| !path.is_empty())
-            .ok_or("Audio path required")?;
-        let item = crate::services::audio::metadata::read(&self.state.db, path)
-            .map_err(|error| error.to_string())?;
-        serde_json::to_value(item).map_err(|error| error.to_string())
-    }
 }
 
 fn command(params: Value) -> Result<Value, String> {
@@ -91,10 +74,6 @@ fn command(params: Value) -> Result<Value, String> {
 pub fn handles(method: &str) -> bool {
     matches!(
         method,
-        "audioLibraryResolve"
-            | "audioMetadata"
-            | "systemAudioLyrics"
-            | "systemAudioPlaybackState"
-            | "audioEngineCommand"
+        "audioLibraryResolve" | "systemAudioPlaybackState" | "audioEngineCommand"
     )
 }

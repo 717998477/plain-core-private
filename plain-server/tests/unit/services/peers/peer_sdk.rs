@@ -21,7 +21,7 @@ fn root(id: &str) -> (tempfile::TempDir, ContentServer, Vec<u8>, String) {
         )
         .unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[3; 32]);
-    let server = ContentServer::start(&dir.path().join("plain.db"), &token, prefs).unwrap();
+    let server = ContentServer::start(dir.path(), &token, prefs).unwrap();
     (dir, server, kp.to_vec(), token)
 }
 fn peer(id: &str, port: u16, pk: &[u8], ip: &str) -> DPeer {

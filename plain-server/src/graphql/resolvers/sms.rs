@@ -392,6 +392,7 @@ impl SmsMutation {
         sms_send::execute(
             ctx.data_unchecked::<Arc<Prefs>>(),
             ctx.data_unchecked::<Arc<Host>>(),
+            ctx.data_unchecked::<Arc<crate::services::sms::send_runtime::Runtime>>(),
             sms_send::Request {
                 number,
                 body,

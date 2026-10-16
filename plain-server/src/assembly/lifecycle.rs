@@ -41,11 +41,16 @@ pub(crate) fn monitor(
                 }
             }
         };
-        let mut guard = state.public_server.lock().await;
-        if guard.as_ref().map(|server| server.generation) != Some(generation) {
-            return;
-        }
-        stop_locked(&state, &mut guard).await;
+        let _shutdown = state.shutdown.lock().await;
+        let mut server = {
+            let mut guard = state.public_server.lock().await;
+            if guard.as_ref().map(|server| server.generation) != Some(generation) {
+                return;
+            }
+            guard.take()
+        };
+        stop_locked(&state, &mut server).await;
+        state.http_server.stopped();
         let failure = HttpServerFailure {
             generation,
             message: error,
@@ -55,7 +60,6 @@ pub(crate) fn monitor(
             plain_rs::events::HTTP_SERVER_FAILED,
             serde_json::to_string(&failure).unwrap(),
         ));
-        drop(guard);
     });
 }
 

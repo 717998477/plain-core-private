@@ -14,16 +14,10 @@ fn stub(host: Arc<Host>, db: Arc<Db>, handler: impl Fn(&str, Value) -> Value + S
             let Some(id) = request["id"].as_u64() else {
                 continue;
             };
-            let result = if request["method"] == "audioLibraryResolve"
-                || request["method"] == "audioMetadata"
-            {
+            let result = if request["method"] == "audioLibraryResolve" {
                 let params = &request["params"];
                 let mut rows = db.with_conn(|conn|conn.prepare("SELECT id,path,title,artist,duration_ms,cover_image_id FROM media_items WHERE data_type=1 UNION SELECT media_id,path,title,artist,duration_ms,album_id FROM platform_audio_media UNION SELECT id,path,title,artist,duration_ms,'' FROM media_items WHERE data_type=1").unwrap().query_map([],|row|Ok(json!({"mediaId":row.get::<_,String>(0)?,"path":row.get::<_,String>(1)?,"title":row.get::<_,String>(2)?,"artist":row.get::<_,String>(3)?,"durationMs":row.get::<_,i64>(4)?,"albumId":row.get::<_,String>(5)?,"aliases":[]}))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
-                let mut paths = if request["method"] == "audioMetadata" {
-                    vec![params["path"].clone()]
-                } else {
-                    params["paths"].as_array().unwrap().clone()
-                };
+                let mut paths = params["paths"].as_array().unwrap().clone();
                 if let Some(ids) = params["ids"].as_array() {
                     paths.extend(ids.iter().filter_map(|id| {
                         id.as_str()
@@ -44,18 +38,7 @@ fn stub(host: Arc<Host>, db: Arc<Db>, handler: impl Fn(&str, Value) -> Value + S
                         rows.push(track);
                     }
                 }
-                if request["method"] == "audioMetadata" {
-                    rows.into_iter()
-                        .find(|row| row["path"] == params["path"])
-                        .unwrap()
-                } else {
-                    json!(
-                        rows.into_iter()
-                            .filter(|row| paths.contains(&row["path"])
-                                || params["ids"].as_array().unwrap().contains(&row["mediaId"]))
-                            .collect::<Vec<_>>()
-                    )
-                }
+                json!(rows)
             } else {
                 handler(
                     &request["method"].as_str().unwrap_or_default(),
@@ -92,7 +75,6 @@ fn fixture() -> (tempfile::TempDir, PublicSchema) {
         "audioEngineCommand" => engine_report(&params),
         "systemMediaRows" => json!([]),
         "systemMediaCount" => json!(0),
-        "systemAudioLyrics" => json!(""),
         _other => panic!("unexpected host call {_other}"),
     })
 }
@@ -780,4 +762,173 @@ async fn playlist_query_removal_reports_actual_count_without_changing_other_list
         "{removed}"
     );
     assert_eq!(domain::playlist_item_count(db, &second.id).unwrap(), 2);
+}
+
+struct AlbumArtFixture(Audio);
+
+#[async_graphql::Object]
+impl AlbumArtFixture {
+    async fn audio(&self) -> Audio {
+        self.0.clone()
+    }
+}
+
+#[tokio::test]
+async fn raw_album_art_is_encoded_only_when_selected_with_the_current_url_token() {
+    let directory = tempfile::tempdir().unwrap();
+    let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    let uri = "content://media/external/audio/albumart/17";
+    let schema = async_graphql::Schema::build(
+        AlbumArtFixture(Audio {
+            album_id: "17".into(),
+            id: "track".into(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            path: "/song.mp3".into(),
+            duration_ms: Long(1000),
+            size: Long(42),
+            bucket_id: "music".into(),
+            album_file_id: String::new(),
+            album_art_uri: uri.into(),
+            created_at: Instant::default(),
+            updated_at: Instant::default(),
+            is_favorite: false,
+        }),
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(prefs.clone())
+    .finish();
+    prefs
+        .remove(plain_rs::prefs::system::keys::URL_TOKEN)
+        .unwrap();
+    for document in [
+        "{ audio { title } }",
+        "{ audio { title albumFileId @skip(if: true) } }",
+    ] {
+        let response = schema.execute(document).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.into_json().unwrap()["audio"]["title"], "Song");
+    }
+    let missing = schema.execute("{ audio { albumFileId } }").await;
+    assert!(!missing.errors.is_empty());
+    let document =
+        "query Art { audio { ...Cover } } fragment Cover on Audio { cover: albumFileId }";
+    let mut previous: Option<[u8; 32]> = None;
+    for key in [[3u8; 32], [5u8; 32]] {
+        let token = plain_rs::utils::base64::base64_encode(&key);
+        prefs
+            .set(plain_rs::prefs::system::keys::URL_TOKEN, &token)
+            .unwrap();
+        let response = schema.execute(document).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        let id = data["audio"]["cover"].as_str().unwrap();
+        let bytes = plain_rs::utils::base64::base64_decode(id);
+        assert_eq!(
+            plain_rs::crypto::xchacha_decrypt_raw(&key, &bytes).unwrap(),
+            uri.as_bytes()
+        );
+        if let Some(previous) = previous {
+            assert!(plain_rs::crypto::xchacha_decrypt_raw(&previous, &bytes).is_none());
+        }
+        previous = Some(key);
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn main_audio_metadata_reads_unindexed_tags_without_changing_playback_or_stores() {
+    let (_directory, schema) =
+        fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../plain-rs/testdata/audio-tagged.mp3"
+    );
+    let db = database(&schema);
+    let preferences = schema.data::<Arc<Prefs>>().unwrap();
+    let before = preferences.entries();
+    let current = domain::get_audio_current(db).unwrap();
+    let count = domain::queue_total(db).unwrap();
+    let request = async_graphql::Request::new("query Metadata($path: String!) { audioMetadata(path: $path) { title artist path durationMs } }")
+        .variables(async_graphql::Variables::from_json(json!({"path":path})));
+    let response = schema.execute(request).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let metadata = response.data.into_json().unwrap();
+    assert_eq!(metadata["audioMetadata"]["title"], "Hydrate Title");
+    assert_eq!(metadata["audioMetadata"]["artist"], "Hydrate Artist");
+    assert_eq!(metadata["audioMetadata"]["path"], path);
+    assert!(metadata["audioMetadata"]["durationMs"].as_i64().unwrap() > 0);
+    assert_eq!(preferences.entries(), before);
+    assert_eq!(domain::get_audio_current(db).unwrap(), current);
+    assert_eq!(domain::queue_total(db).unwrap(), count);
+    assert!(
+        db.media_file_by_path(plain_rs::enums::DataType::Audio, path)
+            .unwrap()
+            .is_none()
+    );
+    for path in ["", "/missing/audio.mp3"] {
+        let response = schema
+            .execute(
+                async_graphql::Request::new(
+                    "query($path: String!) { audioMetadata(path: $path) { title } }",
+                )
+                .variables(async_graphql::Variables::from_json(json!({"path":path}))),
+            )
+            .await;
+        assert!(!response.errors.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn main_audio_metadata_requires_storage_authorization_before_reading() {
+    let (_directory, schema) =
+        fixture_with("[]", |method, _| panic!("unexpected host call {method}"));
+    let result = schema
+        .execute("{ audioMetadata(path: \"/not-accessed.mp3\") { title } }")
+        .await;
+    assert!(!result.errors.is_empty());
+}
+
+#[tokio::test]
+async fn main_audio_cover_extracts_original_bytes_and_preserves_nullable_absence_and_permission_errors()
+ {
+    let (_directory, schema) =
+        fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    let request = |path: &str| {
+        async_graphql::Request::new(
+            "mutation Cover($path: String!) { cacheAudioCover(path: $path) }",
+        )
+        .variables(async_graphql::Variables::from_json(json!({"path":path})))
+    };
+    let response = schema
+        .execute(request(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../plain-rs/testdata/audio-cover.mp3"
+        )))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let path = data["cacheAudioCover"].as_str().unwrap();
+    assert_eq!(
+        std::fs::read(path).unwrap(),
+        include_bytes!("../../../../../../plain-rs/testdata/v-prog-gray.jpg")
+    );
+    let response = schema
+        .execute(request(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../plain-rs/testdata/audio-untagged.mp3"
+        )))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert!(response.data.into_json().unwrap()["cacheAudioCover"].is_null());
+    let (_directory, denied) =
+        fixture_with("[]", |method, _| panic!("unexpected host call {method}"));
+    assert!(
+        !denied
+            .execute(request("/not-read.mp3"))
+            .await
+            .errors
+            .is_empty()
+    );
 }

@@ -1,7 +1,5 @@
-mod gateway;
 pub mod print;
 use anyhow::{Result, bail, ensure};
-pub use gateway::GatewayRequest;
 use std::time::{Duration, Instant};
 
 /// GATT service UUID shared by every Plain peer.

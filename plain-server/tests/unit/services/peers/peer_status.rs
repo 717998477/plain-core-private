@@ -24,7 +24,7 @@ async fn public_status_auth_scoped_connections_key_rotation_and_stop_use_rust_wi
     peer.public_key = plain_rs::utils::base64::base64_encode(&pk);
     peers::save(&db, &[peer.clone()], SaveMode::Insert).unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[1; 32]);
-    let server = ContentServer::start(&path, &token, prefs.clone()).unwrap();
+    let server = ContentServer::start(path.parent().unwrap(), &token, prefs.clone()).unwrap();
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let (http, _) = server
         .start_public(
@@ -36,23 +36,9 @@ async fn public_status_auth_scoped_connections_key_rotation_and_stop_use_rust_wi
         .await
         .unwrap();
     let client = reqwest::Client::new();
-    // The command surface is native-only now: there is no HTTP endpoint to
-    // probe for authentication, so the controller is what has to hold.
-    let controller = server.peer_status_controller();
-    assert!(
-        controller
-            .execute_json(r#"{"action":"nope"}"#)
-            .await
-            .is_err(),
-        "an unknown command is refused by name"
-    );
-    assert!(
-        controller
-            .execute_json(r#"{"action":"snapshot"}"#)
-            .await
-            .is_err(),
-        "snapshot is not a controller command"
-    );
+    for action in ["NOPE", "SNAPSHOT"] {
+        assert!(control(&server, action).await.is_err());
+    }
     fn snapshot(server: &ContentServer) -> serde_json::Value {
         let state = server.runtime_state();
         state.peer_status.snapshot(&state.db)
@@ -194,7 +180,7 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
     a_peer.status = PeerStatus::Paired;
     peers::save(&b_db, &[a_peer], SaveMode::Insert).unwrap();
     let b = ContentServer::start(
-        &b_path,
+        b_path.parent().unwrap(),
         &plain_rs::utils::base64::base64_encode(&[12; 32]),
         b_prefs.clone(),
     )
@@ -215,7 +201,7 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
     b_peer.status = PeerStatus::Paired;
     peers::save(&a_db, &[b_peer.clone()], SaveMode::Insert).unwrap();
     let a_token = plain_rs::utils::base64::base64_encode(&[13; 32]);
-    let a = ContentServer::start(&a_path, &a_token, a_prefs).unwrap();
+    let a = ContentServer::start(a_path.parent().unwrap(), &a_token, a_prefs).unwrap();
     a.start_public(
         0,
         0,
@@ -244,11 +230,7 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
     b_peer.status = PeerStatus::Paired;
     peers::save(&a_db, &[b_peer], SaveMode::Update).unwrap();
     wait_online(&a, "b", true).await;
-    let controller = a.peer_status_controller();
-    assert_eq!(
-        controller.execute_json(r#"{"action":"stop"}"#).await,
-        Ok("null".to_string())
-    );
+    assert_eq!(control(&a, "STOP").await, Ok(true));
     wait_online(&a, "b", false).await;
     wait_online(&b, "a", false).await;
     tokio::time::sleep(Duration::from_millis(1100)).await;
@@ -259,22 +241,32 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
             .snapshot(&a.runtime_state().db)["online"],
         json!([])
     );
-    assert!(
-        controller
-            .execute_json(r#"{"action":"start"}"#)
-            .await
-            .is_ok()
-    );
+    assert!(control(&a, "START").await.is_ok());
     wait_online(&a, "b", true).await;
     a.stop_public().await;
     assert!(
-        controller
-            .execute_json(r#"{"action":"start"}"#)
-            .await
-            .is_err(),
+        control(&a, "START").await.is_err(),
         "a start without the public listener has nowhere to announce"
     );
     wait_online(&a, "b", false).await;
     a.shutdown().await;
     b.shutdown().await;
+}
+
+async fn control(server: &ContentServer, action: &str) -> Result<bool, String> {
+    let response = server
+        .native_graphql()?
+        .execute(async_graphql::Request::new(format!(
+            "mutation {{ controlPeerStatus(action: {action}) }}"
+        )))
+        .await;
+    if let Some(error) = response.errors.first() {
+        return Err(error.message.clone());
+    }
+    response
+        .data
+        .into_json()
+        .map_err(|error| error.to_string())?["controlPeerStatus"]
+        .as_bool()
+        .ok_or("Missing peer status result".into())
 }

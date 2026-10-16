@@ -16,7 +16,7 @@ fn root() -> (tempfile::TempDir, ContentServer, String) {
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
     prefs.set("client_id", "local").unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[4; 32]);
-    let server = ContentServer::start(&dir.path().join("plain.db"), &token, prefs).unwrap();
+    let server = ContentServer::start(dir.path(), &token, prefs).unwrap();
     (dir, server, token)
 }
 fn card(port: u16) -> Card {
@@ -68,7 +68,7 @@ async fn tls() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     (port, task, count)
 }
 #[tokio::test]
-async fn authenticated_main_browse_updates_card_and_streams_real_tls_files_without_host() {
+async fn authenticated_main_browse_updates_card_and_caches_real_tls_files_without_host() {
     use crate::test_support::graphql_http_variables;
     let (_dir, server, token) = root();
     let state = server.runtime_state();
@@ -96,24 +96,16 @@ async fn authenticated_main_browse_updates_card_and_streams_real_tls_files_witho
     assert!(result["card"]["expiresAt"].is_null());
     assert_eq!(result["card"]["totalSize"], 8);
     let link: Link = serde_json::from_value(result["link"].clone()).unwrap();
-    let remote = link
-        .file_url(
-            result["info"]["urlToken"].as_str().unwrap(),
-            "folder/ +?#中文%",
-            false,
-        )
-        .unwrap();
-    let download = format!("http://127.0.0.1:{}/shares/client/file", server.port);
-    let response = client
-        .post(download)
-        .bearer_auth(&token)
-        .header("content-type", "application/json")
-        .body(json!({"url":remote}).to_string())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    assert_eq!(response.text().await.unwrap(), "download");
+    let cached = graphql_http_variables(server.port, &token,
+        "mutation($link:SharedLinkInput!,$urlToken:String!,$entry:SharedEntryInput!){cacheSharedFile(link:$link,urlToken:$urlToken,entry:$entry,thumbnail:false)}",
+        json!({"link":link,"urlToken":result["info"]["urlToken"],"entry":{"name":"preview.txt","virtualPath":"folder/ +?#中文%","isDir":false,"size":8,"mimeType":"text/plain","hasThumb":false}})).await;
+    assert!(cached.get("errors").is_none(), "{cached}");
+    assert_eq!(
+        tokio::fs::read(cached["data"]["cacheSharedFile"].as_str().unwrap())
+            .await
+            .unwrap(),
+        b"download"
+    );
     assert_eq!(state.lan.capacity.available_permits(), 4);
     let stale = graphql_http_variables(server.port, &token, query, variables).await;
     assert!(stale.get("errors").is_some(), "{stale}");

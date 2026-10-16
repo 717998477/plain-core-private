@@ -8,6 +8,7 @@
 //! Metadata and playback execution are implemented per platform.
 
 pub mod duration_cache;
+pub mod isobmff;
 
 pub mod actions;
 
@@ -18,3 +19,29 @@ pub mod videos;
 pub mod audio;
 
 pub mod documents;
+
+pub mod probe;
+
+pub mod cover;
+
+mod raw_audio;
+
+mod asf;
+
+mod midi;
+
+pub mod video_info;
+
+mod matroska;
+
+mod avi;
+
+mod flv;
+
+mod h264;
+
+mod bits;
+
+mod transport_stream;
+
+mod hevc;

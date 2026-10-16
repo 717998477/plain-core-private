@@ -46,8 +46,10 @@ pub struct Audio {
     pub size: Long,
     #[graphql(name = "bucketId")]
     pub bucket_id: async_graphql::ID,
-    #[graphql(name = "albumFileId")]
+    #[graphql(skip)]
     pub album_file_id: String,
+    #[graphql(skip)]
+    pub album_art_uri: String,
     #[graphql(name = "createdAt")]
     pub created_at: Instant,
     #[graphql(name = "updatedAt")]
@@ -58,6 +60,21 @@ pub struct Audio {
 
 #[async_graphql::ComplexObject]
 impl Audio {
+    async fn album_file_id(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
+        if self.album_art_uri.is_empty() {
+            return Ok(self.album_file_id.clone());
+        }
+        let token = prefs(ctx)
+            .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?
+            .ok_or_else(|| async_graphql::Error::new("Missing URL token"))?;
+        let id = plain_rs::chat::messages::content::make_file_id(&self.album_art_uri, &token);
+        if id.is_empty() {
+            return Err(async_graphql::Error::new("Invalid URL token"));
+        }
+        Ok(id)
+    }
+
     async fn tags(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Tag>> {
         crate::graphql::resolvers::tags::loader::load(
             ctx,
@@ -110,6 +127,15 @@ pub struct AudioQuery;
 
 #[Object]
 impl AudioQuery {
+    async fn audio_metadata(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+    ) -> async_graphql::Result<AudioItem> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        Ok(item(audio(ctx)?.metadata(path).await?))
+    }
+
     async fn audio_count(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<i32> {
         if !public_gate::require_granted(ctx, &[STORAGE]).await? {
             return Ok(0);
@@ -151,6 +177,7 @@ impl AudioQuery {
                     bucket_id: crate::graphql::types::facts::id(item, "bucketId"),
                     album_id: crate::graphql::types::facts::text(item, "albumId").into(),
                     album_file_id: crate::graphql::types::facts::text(item, "albumFileId"),
+                    album_art_uri: crate::graphql::types::facts::text(item, "albumArtUri"),
                     created_at: crate::graphql::types::facts::instant(item, "createdAt"),
                     updated_at: crate::graphql::types::facts::instant(item, "updatedAt"),
                     is_favorite: crate::graphql::types::facts::flag(item, "isFavorite"),
@@ -159,6 +186,15 @@ impl AudioQuery {
             .collect())
     }
 
+    async fn embedded_audio_lyrics(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+    ) -> async_graphql::Result<Option<String>> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let lyrics = read_lyrics(ctx, path).await?;
+        Ok(Some(lyrics).filter(|value| !value.trim().is_empty()))
+    }
     async fn audio_lyrics(
         &self,
         ctx: &Context<'_>,
@@ -291,6 +327,19 @@ pub struct AudioMutation;
 
 #[Object]
 impl AudioMutation {
+    async fn cache_audio_cover(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+    ) -> async_graphql::Result<Option<String>> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        Ok(audio(ctx)?
+            .cover(&path)
+            .await
+            .map_err(async_graphql::Error::new)?
+            .map(|path| path.to_string_lossy().into_owned()))
+    }
+
     async fn play_audio(
         &self,
         ctx: &Context<'_>,
@@ -557,23 +606,13 @@ pub(crate) async fn search_tracks(
 }
 
 async fn read_lyrics(ctx: &Context<'_>, path: String) -> async_graphql::Result<String> {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let _ = ctx;
-        tokio::task::spawn_blocking(move || {
-            plain_rs::media::audio::lyrics::extract_lyrics_from_path(&path)
-        })
-        .await
-        .map_err(|error| async_graphql::Error::new(error.to_string()))
-    }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        Ok(host_call(ctx, "systemAudioLyrics", json!({"path":path}))
-            .await?
-            .as_str()
-            .unwrap_or_default()
-            .to_owned())
-    }
+    let state = ctx.data_opt::<crate::assembly::server::ServerState>();
+    crate::services::audio::lyrics::read(
+        path,
+        state.map(|state| (state.bridge.as_ref(), state.stop.clone())),
+    )
+    .await
+    .map_err(async_graphql::Error::new)
 }
 
 fn item(track: AudioTrack) -> AudioItem {

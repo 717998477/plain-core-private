@@ -104,8 +104,8 @@ fn pdf_preview_key(path: &str, mod_unix: i64, size: i64) -> String {
     plain_rs::utils::hex::bytes_to_hex(&h.finalize())
 }
 
-fn pdf_preview_cache_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("preview_pdf")
+fn pdf_preview_cache_dir(cache_dir: &Path) -> PathBuf {
+    plain_rs::cache_paths::CachePaths::new(cache_dir).pdf_previews()
 }
 
 /// Check if LibreOffice is available for PDF conversion.
@@ -118,7 +118,7 @@ pub fn libreoffice_available() -> bool {
 /// The result is cached on disk keyed by (path, mtime, size). If the
 /// cached PDF already exists and is non-empty, it is returned immediately.
 pub async fn get_or_create_pdf_preview(
-    data_dir: &Path,
+    cache_root: &Path,
     src_path: &str,
     mod_unix: i64,
     size: i64,
@@ -128,7 +128,7 @@ pub async fn get_or_create_pdf_preview(
     }
 
     let key = pdf_preview_key(src_path, mod_unix, size);
-    let cache_dir = pdf_preview_cache_dir(data_dir);
+    let cache_dir = pdf_preview_cache_dir(cache_root);
     std::fs::create_dir_all(&cache_dir)?;
 
     let out_path = cache_dir.join(format!("{key}.pdf"));

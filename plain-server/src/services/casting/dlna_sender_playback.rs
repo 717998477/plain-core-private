@@ -18,7 +18,7 @@ pub(crate) async fn soap(
     protocol::soap_response(device, action, params, &name).await
 }
 async fn mime_type(state: &ServerState, path: &str) -> String {
-    crate::services::files::resources::read(&state.host, &state.directory, "mime", path, json!({}))
+    crate::services::files::resources::read(&state.host, "mime", path, json!({}))
         .await
         .ok()
         .and_then(|value| {

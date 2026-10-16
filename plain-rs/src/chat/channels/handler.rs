@@ -1,7 +1,6 @@
 use crate::base64_decode;
 #[cfg(test)]
 use crate::chat::channels::incoming::verify as verify_channel_signature;
-use crate::chat::channels::messages::channel_message_payload;
 #[cfg(test)]
 use crate::chat::enums::ChannelSystemMessageAction;
 use crate::chat::enums::ChannelSystemMessageType;

@@ -178,6 +178,41 @@ impl HostEvents {
                 serde_json::from_str(&payload).map_err(|error| error.to_string())?,
             );
         }
+        if kind == "BLE_ADVERTISEMENT_REPORTED" {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Advertisement {
+                scan_id: String,
+                short_id: String,
+            }
+            let value: Advertisement =
+                serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+            crate::services::discovery::ble_scan::seen(
+                &self.state,
+                &value.scan_id,
+                &value.short_id,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        if kind == "SMS_PART_SENT_REPORTED" {
+            self.state
+                .sms_sends
+                .report(serde_json::from_str(&payload).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        if kind == "NETWORK_INTERFACES_CHANGED" {
+            serde_json::from_str::<()>(&payload).map_err(|error| error.to_string())?;
+            self.state.mdns.network_changed(self.state.clone());
+            return Ok(());
+        }
+        if kind == "IMAGE_CATALOG_CHANGED" {
+            serde_json::from_str::<()>(&payload).map_err(|error| error.to_string())?;
+            self.state.image_models.catalog_changed();
+            return Ok(());
+        }
         if kind == "IMAGE_INDEX_ERROR_REPORTED" {
             self.state
                 .image_models
@@ -186,7 +221,6 @@ impl HostEvents {
         }
         if crate::services::audio::reports::accept(
             &self.state.audio,
-            &self.state.duration_cache,
             self.state.host.clone(),
             self.generation,
             kind,

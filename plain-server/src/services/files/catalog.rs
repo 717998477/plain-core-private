@@ -31,7 +31,7 @@ impl MediaCatalog {
             Self::Platform { db, host } => {
                 let facts = host.call(
                     "systemMediaRows",
-                    platform_params(db, host, kind, query, json!({"dataType":kind,"sortBy":sort.as_str(),"limit":limit,"offset":offset})).await?,
+                    platform_params(db, kind, query, json!({"dataType":kind,"sortBy":sort.as_str(),"limit":limit,"offset":offset}))?,
                 ).await?;
                 serde_json::from_value(facts).map_err(|error| error.to_string())
             }
@@ -56,7 +56,7 @@ impl MediaCatalog {
             Self::Platform { db, host } => host
                 .call(
                     "systemMediaCount",
-                    platform_params(db, host, kind, query, json!({"dataType":kind})).await?,
+                    platform_params(db, kind, query, json!({"dataType":kind}))?,
                 )
                 .await?
                 .as_i64()
@@ -82,8 +82,7 @@ impl MediaCatalog {
         match self {
             Self::Platform { db, host } => serde_json::from_value(
                 host.call("systemMediaIdsFacts", {
-                    let mut params =
-                        platform_params(db, host, kind, query, json!({"dataType":kind})).await?;
+                    let mut params = platform_params(db, kind, query, json!({"dataType":kind}))?;
                     if from_trash {
                         params["plan"]["trash"] = json!(true);
                     }
@@ -125,21 +124,13 @@ impl MediaCatalog {
     }
 }
 
-async fn platform_params(
-    db: &Db,
-    host: &Host,
-    kind: DataType,
-    query: &str,
-    params: Value,
-) -> Result<Value, String> {
+fn platform_params(db: &Db, kind: DataType, query: &str, params: Value) -> Result<Value, String> {
     crate::host::query::params(
         db,
-        host,
         crate::host::query::media_provider(kind).map_err(|error| error.to_string())?,
         query,
         params,
     )
-    .await
     .map_err(|error| error.to_string())
 }
 

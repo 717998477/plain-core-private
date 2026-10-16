@@ -9,7 +9,7 @@ async fn bookmark_http_lifecycle_metadata_and_reference_counts() {
     let path = dir.path().join("plain.db");
     let token = plain_rs::utils::base64::base64_encode(&[10; 32]);
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
-    let server = ContentServer::start(&path, &token, prefs.clone()).unwrap();
+    let server = ContentServer::start(path.parent().unwrap(), &token, prefs.clone()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let router = axum::Router::new()
@@ -107,7 +107,7 @@ async fn bookmark_http_lifecycle_metadata_and_reference_counts() {
         0
     );
     server.shutdown().await;
-    let server = ContentServer::start(&path, &token, prefs).unwrap();
+    let server = ContentServer::start(path.parent().unwrap(), &token, prefs).unwrap();
     assert_eq!(
         call(server.port, &token, "{bookmarks {clickCount}}").await["data"]["bookmarks"][0]["clickCount"],
         20

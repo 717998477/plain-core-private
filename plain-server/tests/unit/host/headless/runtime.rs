@@ -17,20 +17,28 @@ impl Drop for Directory {
 }
 
 #[tokio::test]
-async fn app_facts_use_core_directory_and_unregistered_methods_fail() {
+async fn access_primitives_report_capabilities_and_grants_without_an_app_business_row() {
     let directory = Directory::new();
     let core = Arc::new(ContentServer::open(&directory.0).unwrap());
     let runtime = Runtime::new(core.clone(), vec!["MEDIA_SCAN".into()]);
-    let facts = runtime
-        .dispatch(SYSTEM_APP_FACTS, serde_json::json!({}))
+    assert_eq!(
+        runtime
+            .dispatch("systemCapabilities", serde_json::json!({}))
+            .await
+            .unwrap(),
+        serde_json::json!(["MEDIA_SCAN"])
+    );
+    let permissions = runtime
+        .dispatch(
+            "systemPermissionFacts",
+            serde_json::json!({"permissions":["WRITE_EXTERNAL_STORAGE","READ_SMS"]}),
+        )
         .await
         .unwrap();
     assert_eq!(
-        facts["appDir"],
-        directory.0.join("files").to_string_lossy().as_ref()
+        permissions,
+        serde_json::json!({"granted":{"WRITE_EXTERNAL_STORAGE":true,"READ_SMS":false}})
     );
-    assert_eq!(facts["deviceType"], "COMPUTER");
-    assert_eq!(facts["capabilities"], serde_json::json!(["MEDIA_SCAN"]));
     assert!(
         runtime
             .dispatch("unregisteredMethod", serde_json::json!({}))
@@ -41,7 +49,7 @@ async fn app_facts_use_core_directory_and_unregistered_methods_fail() {
 }
 
 #[tokio::test]
-async fn native_app_query_uses_registered_facts_without_public_listener() {
+async fn native_app_query_uses_startup_data_and_live_capabilities_without_public_listener() {
     let directory = Directory::new();
     let core = Arc::new(ContentServer::open(&directory.0).unwrap());
     let runtime = Arc::new(Runtime::new(core.clone(), vec!["MEDIA_SCAN".into()]));
@@ -55,13 +63,12 @@ async fn native_app_query_uses_registered_facts_without_public_listener() {
     let data = response.data.into_json().unwrap();
     assert_eq!(
         data["app"]["appDir"],
-        directory.0.join("files").to_string_lossy().as_ref()
+        directory.0.to_string_lossy().as_ref()
     );
     assert_eq!(data["app"]["deviceType"], "COMPUTER");
-    assert_eq!(
-        data["app"]["capabilities"],
-        serde_json::json!(["MEDIA_SCAN"])
-    );
+    let mut capabilities = vec!["MEDIA_SCAN"];
+    capabilities.extend(crate::services::files::browser::capabilities());
+    assert_eq!(data["app"]["capabilities"], serde_json::json!(capabilities));
     assert_eq!(data["app"]["httpPort"], 0);
     assert_eq!(data["app"]["httpsPort"], 0);
     core.stop_core().await;
@@ -167,7 +174,7 @@ async fn completion_scan_runs_directly_without_another_host_request() {
     let core = Arc::new(ContentServer::open(&directory.0.as_path().join("core")).unwrap());
     core.native_media_catalog()
         .unwrap()
-        .configure_scan_directories(&directory.0.as_path().join("cache"), None)
+        .configure_scan_directories(None)
         .unwrap();
     let path = directory.0.as_path().join("completed.txt");
     std::fs::write(&path, b"completed file").unwrap();
@@ -241,7 +248,7 @@ async fn thumbnails_and_regular_file_probes_use_the_shared_media_engine() {
     let core = Arc::new(ContentServer::open(&directory.0).unwrap());
     core.native_media_catalog()
         .unwrap()
-        .configure_scan_directories(&directory.0.join("cache"), None)
+        .configure_scan_directories(None)
         .unwrap();
     let runtime = Arc::new(Runtime::new(core.clone(), Vec::new()));
     let runner = tokio::spawn(runtime.clone().run());
@@ -271,27 +278,18 @@ async fn thumbnails_and_regular_file_probes_use_the_shared_media_engine() {
 }
 
 #[tokio::test]
-async fn image_info_uses_the_shared_media_metadata_engine() {
+async fn headless_dispatch_rejects_the_retired_image_metadata_operation() {
     let directory = Directory::new();
-    let path = directory.0.join("photo.png");
-    image::RgbImage::new(8, 4).save(&path).unwrap();
     let core = Arc::new(ContentServer::open(&directory.0).unwrap());
     let runtime = Runtime::new(core.clone(), Vec::new());
-    let info = runtime
-        .dispatch("systemImageFileInfo", serde_json::json!({"path":path}))
-        .await
-        .unwrap();
-    assert_eq!(info["width"], 8);
-    assert_eq!(info["height"], 4);
     assert!(
         runtime
             .dispatch(
                 "systemImageFileInfo",
-                serde_json::json!({"path":directory.0.join("missing.png")})
+                serde_json::json!({"path":"photo.png"})
             )
             .await
-            .unwrap()
-            .is_null()
+            .is_err()
     );
     core.stop_core().await;
 }

@@ -224,15 +224,14 @@ fn parse_size_to_bytes(value: &str) -> Option<u64> {
     let bytes = number * multiplier;
     (bytes.is_finite() && bytes >= 0.0 && bytes <= u64::MAX as f64).then_some(bytes as u64)
 }
-pub(crate) async fn prepare(
+pub(crate) fn prepare(
     db: &Db,
-    host: &crate::host::bridge::Host,
     provider: Provider,
     query: &str,
     resolved_parent_id: Option<&str>,
 ) -> anyhow::Result<Plan> {
     let fields = fields(db, query)?;
-    let dates = dates(host, &fields).await?;
+    let dates = dates(&fields);
     if matches!(provider, Provider::Call | Provider::Contact) {
         return crate::mobile::query::plan(provider, &fields, &dates);
     }
@@ -245,14 +244,13 @@ pub(crate) async fn prepare(
     )
 }
 
-pub(crate) async fn params(
+pub(crate) fn params(
     db: &Db,
-    host: &crate::host::bridge::Host,
     provider: Provider,
     query: &str,
     mut params: Value,
 ) -> anyhow::Result<Value> {
-    params["plan"] = serde_json::to_value(prepare(db, host, provider, query, None).await?)?;
+    params["plan"] = serde_json::to_value(prepare(db, provider, query, None)?)?;
     Ok(params)
 }
 
@@ -269,21 +267,23 @@ pub(crate) fn media_provider(kind: plain_rs::enums::DataType) -> anyhow::Result<
     }
 }
 
-pub(crate) async fn dates(
-    host: &crate::host::bridge::Host,
-    fields: &[FilterField],
-) -> anyhow::Result<Value> {
-    let raw = fields
+pub(crate) fn dates(fields: &[FilterField]) -> Value {
+    let values: serde_json::Map<String, Value> = fields
         .iter()
-        .filter(|f| f.name == "start_time")
-        .map(|f| comparison(f).1.to_owned())
-        .collect::<Vec<_>>();
-    if raw.is_empty() {
-        return Ok(Value::Null);
+        .filter(|field| field.name == "start_time")
+        .map(|field| {
+            let value = comparison(field).1;
+            (
+                value.to_owned(),
+                json!(plain_rs::utils::epoch_millis::parse(value)),
+            )
+        })
+        .collect();
+    if values.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(values)
     }
-    host.call("systemEpochMillis", json!({"values":raw}))
-        .await
-        .map_err(anyhow::Error::msg)
 }
 
 /// Refuses a request that acts on a query naming no selection.
@@ -306,10 +306,9 @@ pub(crate) async fn dates(
 /// Providers that always contribute a clause of their own cannot come back
 /// empty and need no case here: Contact pins `mimetype`, Doc its mime types,
 /// File the dotfile exclusion.
-pub(crate) async fn require_narrowing_with(
+pub(crate) fn require_narrowing_with(
     builder: impl FnOnce(Provider, &[FilterField], &Value, Option<&str>, bool) -> anyhow::Result<Plan>,
     db: &Db,
-    host: &crate::host::bridge::Host,
     provider: Provider,
     query: &str,
 ) -> anyhow::Result<()> {
@@ -333,13 +332,7 @@ pub(crate) async fn require_narrowing_with(
     {
         return Ok(());
     }
-    let plan = builder(
-        provider,
-        &parsed,
-        &dates(host, &parsed).await?,
-        None,
-        query.is_empty(),
-    )?;
+    let plan = builder(provider, &parsed, &dates(&parsed), None, query.is_empty())?;
     if plan.clauses.is_empty() {
         return Err(anyhow::anyhow!(
             "query {query:?} selects no {provider:?} row — nothing in it narrows the selection, so \
@@ -353,11 +346,6 @@ pub(crate) async fn require_narrowing_with(
 #[path = "../../tests/unit/host/query.rs"]
 mod tests;
 
-pub(crate) async fn require_narrowing(
-    db: &Db,
-    host: &crate::host::bridge::Host,
-    provider: Provider,
-    query: &str,
-) -> anyhow::Result<()> {
-    require_narrowing_with(plan, db, host, provider, query).await
+pub(crate) fn require_narrowing(db: &Db, provider: Provider, query: &str) -> anyhow::Result<()> {
+    require_narrowing_with(plan, db, provider, query)
 }

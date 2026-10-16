@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 #[derive(Default)]
 pub(crate) struct Status {
     directory: std::path::PathBuf,
+    fixed_info: Option<Arc<Result<crate::graphql::resolvers::device::public::DeviceInfo, String>>>,
     cpu: Arc<Mutex<Option<(Instant, f64)>>>,
 }
 
@@ -54,11 +55,21 @@ impl BatterySample {
 }
 
 impl Status {
-    pub(crate) fn new(directory: std::path::PathBuf) -> Self {
+    pub(crate) fn new(directory: std::path::PathBuf, host: &Host) -> Self {
         Self {
             directory,
+            fixed_info: Some(Arc::new(info::startup(host))),
             ..Default::default()
         }
+    }
+    pub(crate) fn fixed_info(
+        &self,
+    ) -> Result<crate::graphql::resolvers::device::public::DeviceInfo, String> {
+        self.fixed_info
+            .as_ref()
+            .ok_or("Device information is not initialized")?
+            .as_ref()
+            .clone()
     }
     pub(crate) fn directory(&self) -> &std::path::Path {
         &self.directory

@@ -1,29 +1,10 @@
-//! Per-file metadata facts read straight from the OS: canonical path,
-//! bucket, size, timestamps, probe results and image dimensions.
-//!
-//! Read-only by construction — stat, one tag/container probe and one image
-//! header read. No catalog, prefs, KV, index, watch or cache write, and no
-//! id / favorite / trash / original-path field: those belong to the core
-//! catalog that persists these rows.
-//!
-//! Error vs unknown: a path that cannot be resolved, is not a regular file,
-//! is not expressible as UTF-8, or cannot be stat'ed or timestamped is an
-//! `Err` — never a fabricated row. A fact the OS simply does not carry
-//! (EXIF capture time, EXIF orientation outside JPEG, pixel dimensions of a
-//! format the enabled `image` features cannot decode) is not an error: it
-//! follows the existing unknown convention, `0` / `None` / empty string, so
-//! a valid HEIC/AVIF still produces a row instead of leaving the scan.
-
 use anyhow::{Context, Result, bail};
 use plain_rs::db::{MediaFileMetadata, MediaFileMetadataAvailability, MediaFileMetadataRead};
 use plain_rs::enums::DataType;
 use std::fs::{File, Metadata};
-use std::io::Read;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
-
-/// Leading window the JPEG APP1/EXIF segment lives in.
-const EXIF_HEAD_BYTES: u64 = 128 * 1024;
 
 /// Read the metadata of one media file into the row the catalog stores.
 ///
@@ -65,16 +46,14 @@ pub fn read_file_metadata_with_availability(
         .with_context(|| format!("{path_str} has no readable modified time"))?;
 
     let probed = super::probe_media(&path_str, kind);
-    let duration_ms = i64::from(probed.duration_secs)
-        .checked_mul(1000)
-        .context("duration in milliseconds does not fit the row")?;
-    let (width, height, rotation) = image_facts(&canonical, kind);
+    let duration_ms = probed.duration_ms;
+    let (width, height, rotation, taken_at) = image_facts(&canonical, kind);
     let available = MediaFileMetadataAvailability {
         tags: kind != "audio" || probed.parsed,
         duration: !matches!(kind, "audio" | "video") || probed.duration_available,
         dimensions: width > 0 && height > 0,
-        rotation: width > 0 && height > 0 && rotation.is_some(),
-        taken_at: false,
+        rotation: rotation.is_some(),
+        taken_at: taken_at.is_some(),
         cover_image_id: false,
     };
     Ok(MediaFileMetadataRead {
@@ -95,7 +74,7 @@ pub fn read_file_metadata_with_availability(
             width,
             height,
             rotation: rotation.unwrap_or_default(),
-            taken_at: None,
+            taken_at,
             created_at: created_at_of(birth_time(&meta), modified),
             updated_at: row_timestamp(modified),
         },
@@ -142,42 +121,51 @@ fn birth_time(meta: &Metadata) -> Option<SystemTime> {
     birth_unix_secs(meta).map(|secs| SystemTime::UNIX_EPOCH + Duration::from_secs(secs as u64))
 }
 
-/// Pixel and orientation facts. Every kind but image, and every format the
-/// enabled `image` features cannot decode, reads as unknown (0/0/0/none).
-fn image_facts(path: &Path, kind: &str) -> (i32, i32, Option<i32>) {
+fn image_facts(path: &Path, kind: &str) -> (i32, i32, Option<i32>, Option<String>) {
     if kind != "image" {
-        return (0, 0, None);
+        return (0, 0, None, None);
     }
-    let dimensions = image::ImageReader::open(path)
-        .ok()
-        .and_then(|reader| reader.into_dimensions().ok());
-    let (width, height) = match dimensions {
-        Some((w, h)) => (
-            i32::try_from(w).unwrap_or_default(),
-            i32::try_from(h).unwrap_or_default(),
-        ),
-        None => (0, 0),
-    };
-    (width, height, jpeg_rotation(path))
+    File::open(path)
+        .map(image_reader)
+        .unwrap_or((0, 0, None, None))
 }
 
-/// Clockwise rotation the EXIF orientation tag asks for. The mirrored
-/// orientations (2/4/5/7) have no rotation-only equivalent and read as 0.
-fn jpeg_rotation(path: &Path) -> Option<i32> {
+fn image_reader(mut reader: impl Read + Seek) -> (i32, i32, Option<i32>, Option<String>) {
     let mut head = Vec::new();
-    if File::open(path)
-        .and_then(|file| file.take(EXIF_HEAD_BYTES).read_to_end(&mut head))
+    if reader
+        .by_ref()
+        .take(128 * 1024)
+        .read_to_end(&mut head)
         .is_err()
-        || !head.starts_with(&[0xFF, 0xD8])
     {
-        return None;
+        return (0, 0, None, None);
     }
-    Some(match crate::previews::images::exif::orientation(&head)? {
-        3 => 180,
-        6 => 90,
-        8 => 270,
-        _ => 0,
-    })
+    let exif = plain_rs::utils::image_exif::read(&mut reader)
+        .ok()
+        .flatten();
+    let metadata = plain_rs::utils::image_metadata::read(exif.as_deref().unwrap_or(&head));
+    let dimensions = plain_rs::utils::image_dimensions::dimensions(&head)
+        .or_else(|| {
+            exif.as_deref()
+                .and_then(plain_rs::utils::image_dimensions::dimensions)
+        })
+        .filter(|(width, height)| *width > 0 && *height > 0)
+        .or_else(|| {
+            reader.seek(SeekFrom::Start(0)).ok()?;
+            let (width, height) = image::ImageReader::new(BufReader::new(reader))
+                .with_guessed_format()
+                .ok()?
+                .into_dimensions()
+                .ok()?;
+            Some((i32::try_from(width).ok()?, i32::try_from(height).ok()?))
+        });
+    let (width, height) = dimensions.unwrap_or((0, 0));
+    (
+        width,
+        height,
+        metadata.orientation.map(|_| metadata.rotation),
+        metadata.taken_at(),
+    )
 }
 
 #[cfg(test)]

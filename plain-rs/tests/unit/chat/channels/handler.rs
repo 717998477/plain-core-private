@@ -1,5 +1,6 @@
 use super::*;
 use crate::base64_encode;
+use crate::chat::channels::messages::channel_message_payload;
 use crate::ed25519_generate;
 use crate::ed25519_sign;
 

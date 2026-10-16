@@ -215,7 +215,7 @@ fn tiff(b: &[u8]) -> Option<(i32, i32)> {
 }
 
 /// Parse the 8-byte TIFF header: byte order + magic 42 + first IFD offset.
-fn parse_tiff_header(tiff: &[u8]) -> Option<(bool, u32)> {
+pub(super) fn parse_tiff_header(tiff: &[u8]) -> Option<(bool, u32)> {
     if tiff.len() < 8 {
         return None;
     }
@@ -240,7 +240,7 @@ fn parse_tiff_header(tiff: &[u8]) -> Option<(bool, u32)> {
     Some((le, off))
 }
 
-fn tiff_read_u16(tiff: &[u8], off: usize, le: bool) -> Option<u16> {
+pub(super) fn tiff_read_u16(tiff: &[u8], off: usize, le: bool) -> Option<u16> {
     let b = tiff.get(off..off + 2)?;
     Some(if le {
         u16::from_le_bytes([b[0], b[1]])
@@ -249,7 +249,7 @@ fn tiff_read_u16(tiff: &[u8], off: usize, le: bool) -> Option<u16> {
     })
 }
 
-fn tiff_read_u32(tiff: &[u8], off: usize, le: bool) -> Option<u32> {
+pub(super) fn tiff_read_u32(tiff: &[u8], off: usize, le: bool) -> Option<u32> {
     let b = tiff.get(off..off + 4)?;
     Some(if le {
         u32::from_le_bytes([b[0], b[1], b[2], b[3]])
@@ -385,7 +385,7 @@ impl TiffRational {
 
 /// Find the `Exif\0\0` marker in a JPEG's APP1 segment and return the
 /// TIFF payload that follows it. Returns `None` if there is no EXIF.
-fn exif_tiff_from_jpeg(jpeg: &[u8]) -> Option<&[u8]> {
+pub(super) fn exif_tiff_from_jpeg(jpeg: &[u8]) -> Option<&[u8]> {
     if jpeg.len() < 4 || jpeg[0..2] != [0xFF, 0xD8] {
         return None;
     }

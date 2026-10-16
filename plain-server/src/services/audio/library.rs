@@ -11,13 +11,22 @@ pub struct HostLibrary {
     host: Arc<Host>,
     db: Arc<Db>,
     runtime: tokio::runtime::Handle,
+    resources: Arc<crate::host::resources::NativeResources>,
+    cache: std::path::PathBuf,
 }
 impl HostLibrary {
-    pub fn new(host: Arc<Host>, db: Arc<Db>) -> Self {
+    pub fn new(
+        host: Arc<Host>,
+        db: Arc<Db>,
+        resources: Arc<crate::host::resources::NativeResources>,
+        cache: std::path::PathBuf,
+    ) -> Self {
         Self {
             host,
             db,
             runtime: tokio::runtime::Handle::current(),
+            resources,
+            cache,
         }
     }
     pub fn refresh(&mut self) -> DomainResult<()> {
@@ -78,20 +87,43 @@ impl HostLibrary {
         serde_json::from_value(result)
             .map_err(|e| DomainError::Other(format!("invalid audio provider response: {e}")))
     }
+
+    fn read_track(&self, path: &str) -> DomainResult<AudioTrack> {
+        if path.starts_with("content://") || path.starts_with("ph://") {
+            self.runtime.block_on(super::metadata::read_uri(
+                &self.resources,
+                &self.cache,
+                path,
+            ))
+        } else {
+            super::metadata::read_file(path)
+        }
+    }
 }
 impl plain_rs::media::audio::commands::Engine for HostLibrary {
     fn metadata(&mut self, path: &str) -> DomainResult<AudioTrack> {
-        let row: AudioMedia = if cfg!(any(target_os = "android", target_os = "ios")) {
-            self.call("audioMetadata", json!({"path":path}))?
-        } else {
-            super::metadata::read(&self.db, path)?
-        };
-        if cfg!(any(target_os = "android", target_os = "ios")) {
-            self.db
-                .cache_platform_audio(std::slice::from_ref(&row), false)?;
+        if path.trim().is_empty() {
+            return Err(DomainError::Other("Audio path required".into()));
         }
-        let mut track = row.track;
-        track.media_id = row.media_id;
+        self.cache_paths(&[path.to_owned()])?;
+        let indexed = self
+            .db
+            .with_conn(|conn| plain_rs::media::audio::queue::track_by_path_conn(conn, path))?;
+        let mut track = if let Some(mut track) = indexed {
+            if track.title.is_empty() && track.artist.is_empty() && track.duration_ms == 0 {
+                let metadata = self.read_track(path)?;
+                track.title = metadata.title;
+                track.artist = metadata.artist;
+                track.duration_ms = metadata.duration_ms;
+                self.db.update_platform_audio_metadata(&track)?;
+            }
+            track
+        } else {
+            self.read_track(path)?
+        };
+        if track.title.is_empty() {
+            track.title = AudioTrack::from_path_stem(path).title;
+        }
         track.path = path.to_owned();
         Ok(track)
     }

@@ -305,6 +305,39 @@ impl SharedClientQuery {
 pub struct SharedClientMutation;
 #[Object]
 impl SharedClientMutation {
+    async fn cache_shared_file(
+        &self,
+        ctx: &Context<'_>,
+        link: SharedLinkInput,
+        url_token: String,
+        entry: SharedEntryInput,
+        thumbnail: bool,
+    ) -> async_graphql::Result<String> {
+        let link: client::Link = domain(link)?;
+        if entry.is_dir {
+            return Err("Shared preview requires a file".into());
+        }
+        let mut url = link.file_url(&url_token, &entry.virtual_path, false)?;
+        let (name, key) = if thumbnail {
+            url.push_str("&w=200&h=200");
+            ("thumbnail".to_owned(), Some(serde_json::json!({"host":link.host,"port":link.port,"shareId":link.shared_id,"token":link.token,"urlToken":url_token,"path":entry.virtual_path,"size":entry.size.0}).to_string()))
+        } else {
+            (entry.name, None)
+        };
+        let state = ctx.data::<ServerState>()?;
+        ctx.data::<crate::assembly::services::Services>()?
+            .remote_cache
+            .download(
+                &url,
+                &name,
+                key.as_deref(),
+                state.stop.clone(),
+                Some(&state.lan.client),
+            )
+            .await
+            .map_err(async_graphql::Error::new)
+    }
+
     async fn browse_shared_link(
         &self,
         ctx: &Context<'_>,

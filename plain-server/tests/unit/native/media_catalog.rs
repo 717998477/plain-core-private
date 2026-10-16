@@ -246,9 +246,9 @@ async fn directory_scan_uses_core_policy_real_walker_and_existing_catalog() {
     use crate::services::files::media_scans::Status;
     let directory = directory_scan_fixture();
     let root = directory.path().join("library");
-    let cache = root.join("cache");
-    let excluded = root.join("excluded");
     let data = root.join("core");
+    let cache = root.join("system-cache");
+    let excluded = root.join("excluded");
     for folder in [
         &root,
         &cache,
@@ -263,13 +263,13 @@ async fn directory_scan_uses_core_policy_real_walker_and_existing_catalog() {
         "one.txt",
         "nested/two.txt",
         "photo.heic",
-        "cache/cache.txt",
         "excluded/excluded.txt",
         ".hidden/hidden.txt",
         "marked/marked.txt",
     ] {
         std::fs::write(root.join(name), b"media facts").unwrap();
     }
+    std::fs::write(cache.join("cache.txt"), b"cached facts").unwrap();
     std::fs::write(root.join("empty.txt"), b"").unwrap();
     std::fs::write(root.join("marked/.nomedia"), b"").unwrap();
     let config = directory.path().join("config.toml");
@@ -278,19 +278,18 @@ async fn directory_scan_uses_core_policy_real_walker_and_existing_catalog() {
         format!("[media_scan]\nexcluded_dirs = {}\n", excluded.display()),
     )
     .unwrap();
-    let core = crate::assembly::server::ContentServer::open(&data).unwrap();
+    let core = crate::assembly::server::ContentServer::open_with_cache(&data, &cache).unwrap();
     std::fs::write(data.join("internal.txt"), b"internal").unwrap();
     let catalog = core.native_media_catalog().unwrap();
-    assert!(
+    assert_eq!(
         core.runtime_state()
             .media_scans
-            .cache_directory()
+            .policy()
             .unwrap()
-            .is_some()
+            .cache_directory,
+        cache.canonicalize().unwrap()
     );
-    catalog
-        .configure_scan_directories(&cache, Some(&config))
-        .unwrap();
+    catalog.configure_scan_directories(Some(&config)).unwrap();
     let host = core.runtime_state().host.clone();
     let (generation, mut requests) = host.connect();
     let (done, mut finish) = tokio::sync::oneshot::channel::<()>();
@@ -338,9 +337,7 @@ async fn directory_scan_cancels_during_the_first_read_without_catalog_writes() {
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
     let mut catalog = core.native_media_catalog().unwrap();
-    catalog
-        .configure_scan_directories(&directory.path().join("cache"), None)
-        .unwrap();
+    catalog.configure_scan_directories(None).unwrap();
     let root = directory.path().join("files");
     std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("visible.txt"), b"data").unwrap();
@@ -359,11 +356,7 @@ async fn directory_scan_cancels_during_the_first_read_without_catalog_writes() {
         catalog.file_scan_status().unwrap().unwrap().total_files,
         None
     );
-    assert!(
-        catalog
-            .configure_scan_directories(&directory.path().join("other-cache"), None)
-            .is_err()
-    );
+    assert!(catalog.configure_scan_directories(None).is_err());
     catalog.cancel_file_scan().unwrap();
     let result = worker.await.unwrap().unwrap();
     assert_eq!(result.status, Status::Cancelled);
@@ -387,9 +380,7 @@ async fn directory_scan_cancellation_releases_a_bounded_producer_without_committ
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
     let mut catalog = core.native_media_catalog().unwrap();
-    catalog
-        .configure_scan_directories(&directory.path().join("cache"), None)
-        .unwrap();
+    catalog.configure_scan_directories(None).unwrap();
     let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
     catalog.read_gate = Some(gate.clone());
     let (_generation, mut requests) = core.runtime_state().host.connect();
@@ -418,9 +409,7 @@ async fn completion_scan_uses_the_object_protocol_and_os_reads_without_host_reen
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
     let catalog = core.native_media_catalog().unwrap();
-    catalog
-        .configure_scan_directories(&directory.path().join("cache"), None)
-        .unwrap();
+    catalog.configure_scan_directories(None).unwrap();
     let path = directory.path().join("completed.txt");
     std::fs::write(&path, b"completed file").unwrap();
     assert!(!core.runtime_state().host.connected());
@@ -468,9 +457,7 @@ async fn completion_scan_reports_read_failures_instead_of_partial_success() {
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
     let catalog = core.native_media_catalog().unwrap();
-    catalog
-        .configure_scan_directories(&directory.path().join("cache"), None)
-        .unwrap();
+    catalog.configure_scan_directories(None).unwrap();
     let path = directory.path().join("completed.txt");
     std::fs::write(&path, b"completed file").unwrap();
     let missing = directory.path().join("missing.txt");
@@ -522,9 +509,7 @@ async fn source_directory_scan_keeps_one_session_across_roots_and_partial_failur
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
     let mut catalog = core.native_media_catalog().unwrap();
-    catalog
-        .configure_scan_directories(&directory.path().join("cache"), None)
-        .unwrap();
+    catalog.configure_scan_directories(None).unwrap();
     let sources = roots
         .iter()
         .map(|root| root.to_str().unwrap().to_owned())
@@ -593,9 +578,7 @@ async fn background_source_scan_is_busy_before_the_first_read_and_core_stop_join
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
     let mut catalog = core.native_media_catalog().unwrap();
-    catalog
-        .configure_scan_directories(&directory.path().join("cache"), None)
-        .unwrap();
+    catalog.configure_scan_directories(None).unwrap();
     catalog
         .set_source_directories(&[root.to_str().unwrap().to_owned()])
         .unwrap();
@@ -644,9 +627,7 @@ async fn the_watcher_stops_with_the_core_and_rejects_after_it() {
         .set_source_directories(&[source.to_string_lossy().into_owned()])
         .unwrap();
     assert!(catalog.watch_source_directories().unwrap());
-    catalog
-        .configure_scan_directories(&directory.path().join("cache"), None)
-        .unwrap();
+    catalog.configure_scan_directories(None).unwrap();
     assert!(catalog.watch_source_directories().unwrap());
     assert!(
         core.runtime_state().media_watch.lock().unwrap().is_some(),
@@ -679,9 +660,7 @@ async fn filesystem_watch_events_from_an_os_thread_update_the_shared_catalog() {
         .unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let catalog = core.native_media_catalog().unwrap();
-    catalog
-        .configure_scan_directories(&directory.path().join("cache"), None)
-        .unwrap();
+    catalog.configure_scan_directories(None).unwrap();
     catalog
         .set_source_directories(&[source.path().to_string_lossy().into_owned()])
         .unwrap();

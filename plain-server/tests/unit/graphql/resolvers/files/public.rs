@@ -150,53 +150,55 @@ async fn the_page_and_the_count_describe_the_same_query() {
 }
 
 #[tokio::test]
-async fn file_info_carries_the_stat_and_the_platform_media_probe() {
+async fn file_info_combines_rust_gps_with_sdk_decode_bounds() {
     let (dir, schema) = fixture_with(GRANTED, |method, _| match method {
         "fileTaskAuthorize" => json!(true),
-        "systemImageFileInfo" => {
-            json!({"width": 4032, "height": 3024, "location": {"latitude": 1.5, "longitude": -2.5}})
-        }
+        "imageDecodeBounds" => json!({"width": 4032, "height": 3024}),
         other => panic!("unexpected host call {other}"),
     });
     let path = dir.path().join("pic.jpg");
-    fs::write(&path, b"jpeg").unwrap();
+    fs::write(&path, image_gps_metadata()).unwrap();
     let response = schema
-        .execute(&format!(
+        .execute(async_graphql::Request::new(format!(
             r#"query {{ fileInfo(path:{:?}) {{ path size updatedAt
                       data {{ ... on ImageFileInfo {{ width height location {{ latitude longitude }} }} }} }} }}"#,
             path.to_string_lossy()
-        ))
+)).data(crate::services::files::info::Info::sdk(schema_host(&schema))))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["fileInfo"]["size"], 4);
+    assert_eq!(data["fileInfo"]["size"], 200);
     assert_eq!(data["fileInfo"]["data"]["width"], 4032);
     assert_eq!(data["fileInfo"]["data"]["height"], 3024);
     assert_eq!(data["fileInfo"]["data"]["location"]["latitude"], 1.5);
     assert_eq!(data["fileInfo"]["data"]["location"]["longitude"], -2.5);
 }
 
-/// The probe is picked by the name, not by the bytes: a display name that
-/// carries the extension selects the decoder even when the path does not.
 #[tokio::test]
-async fn the_media_probe_is_selected_by_the_supplied_name() {
+async fn the_display_name_selects_the_media_type_and_rust_sniffs_the_container() {
     let (dir, schema) = fixture_with(GRANTED, |method, _| match method {
         "fileTaskAuthorize" => json!(true),
-        "systemAudioFileInfo" => json!({"durationMs": 221000, "location": Value::Null}),
         other => panic!("unexpected host call {other}"),
     });
     let path = dir.path().join("blob");
-    fs::write(&path, b"opus").unwrap();
+    fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../plain-rs/testdata/audio-untagged.mp3"
+        ),
+        &path,
+    )
+    .unwrap();
     let response = schema
-        .execute(&format!(
+        .execute(async_graphql::Request::new(format!(
             r#"query {{ fileInfo(path:{:?}, fileName:"track.m4a")
                       {{ data {{ ... on AudioFileInfo {{ durationMs location {{ latitude longitude }} }} }} }} }}"#,
             path.to_string_lossy()
-        ))
+)).data(crate::services::files::info::Info::sdk(schema_host(&schema))))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["fileInfo"]["data"]["durationMs"], 221000);
+    assert!(data["fileInfo"]["data"]["durationMs"].as_i64().unwrap() > 0);
     assert_eq!(data["fileInfo"]["data"]["location"], Value::Null);
 }
 
@@ -491,4 +493,369 @@ fn sort_by_maps_onto_what_the_directory_walk_can_do() {
         FileSortBy::TakenAtDesc.into(),
         plain_rs::files::filesystem::SortBy::NameAsc
     ));
+}
+
+#[tokio::test]
+async fn video_details_and_stat_only_aliases_use_rust_without_whole_host_metadata() {
+    let (dir, schema) = fixture_with(GRANTED, move |method, _| {
+        panic!("Unexpected platform operation {method}")
+    });
+    let path = dir.path().join("video.mp4");
+    fs::write(&path, b"sample").unwrap();
+    let execute = |query: &str| {
+        async_graphql::Request::new(query)
+            .variables(async_graphql::Variables::from_json(json!({"path":path})))
+            .data(crate::services::files::info::Info::sdk(schema_host(
+                &schema,
+            )))
+    };
+    let response = schema
+        .execute(execute(
+            "query($path:String!){alias:fileInfo(path:$path){size path}}",
+        ))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["alias"]["size"], 6);
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../plain-rs/testdata/video-h264-baseline.mp4"),
+        &path,
+    )
+    .unwrap();
+    let response = schema.execute(execute("query($path:String!){fileInfo(path:$path){metadata:data{... on VideoFileInfo{width height rotation displayWidth displayHeight durationMs bitrate frameRate takenAt title artist location{latitude longitude}}}}}")).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let facts = &data["fileInfo"]["metadata"];
+    assert_eq!(facts["width"], 320);
+    assert_eq!(facts["height"], 240);
+    assert_eq!(facts["displayWidth"], 320);
+    assert_eq!(facts["displayHeight"], 240);
+    assert_eq!(facts["durationMs"], 6000);
+    assert!(facts["frameRate"].as_f64().unwrap() > 0.0);
+}
+
+#[tokio::test]
+async fn native_main_image_info_reads_directly_without_media_host_dispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let core =
+        crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
+    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let path = directory.path().join("photo.png");
+    image::RgbImage::new(3, 2).save(&path).unwrap();
+    let response = core.native_graphql().unwrap().execute(async_graphql::Request::new("query($path:String!){fileInfo(path:$path){data{... on ImageFileInfo{width height}}}}")
+        .variables(async_graphql::Variables::from_json(json!({"path":path})))).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["fileInfo"]["data"],
+        json!({"width":3,"height":2})
+    );
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn batched_file_paths_use_main_schema_data_without_platform_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let (_generation, mut requests) = state.host.connect();
+    let request = || {
+        async_graphql::Request::new("query($paths:[String!]!){filePaths(paths:$paths)}").variables(async_graphql::Variables::from_json(serde_json::json!({"paths":["app://icons/image.png","app://../outside","fid:invalid","file:///tmp/file%20name.png","app://icons/image.png"]})))
+    };
+    let response = core.graphql_executor().execute(request()).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let values = response.data.into_json().unwrap()["filePaths"].clone();
+    assert_eq!(
+        values[0],
+        directory
+            .path()
+            .join("icons/image.png")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert!(values[1].is_null());
+    assert!(values[2].is_null());
+    assert_eq!(values[3], "/tmp/file name.png");
+    assert_eq!(values[0], values[4]);
+    assert!(requests.try_recv().is_err());
+    let remote = crate::graphql::executor::execute_graphql(
+        &state.public,
+        request(),
+        crate::graphql::executor::RequestContext::remote(Some(state.clone())),
+    )
+    .await;
+    assert!(!remote.errors.is_empty());
+    drop(state);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_file_actions_resolve_registered_attachments_through_the_main_schema() {
+    let directory = tempfile::tempdir().unwrap();
+    let core =
+        crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
+    let state = core.runtime_state();
+    let source = directory.path().join("document.txt");
+    std::fs::write(&source, b"attachment").unwrap();
+    let file = plain_rs::chat::attachments::app_file_store::import_file(
+        &state.db,
+        &state.directory,
+        &source,
+        "document.txt",
+        "text/plain",
+    )
+    .unwrap();
+    let suffix = std::path::Path::new(&file.real_path)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let (_generation, mut requests) = state.host.connect();
+    let response = core
+        .native_graphql()
+        .unwrap()
+        .execute(
+            async_graphql::Request::new("query($paths:[String!]!){filePaths(paths:$paths)}")
+                .variables(async_graphql::Variables::from_json(json!({"paths":[
+                    format!("fid:{suffix}"), format!("fid:{}.wrong",file.id), "documents/plain.txt"
+                ]}))),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let paths = response.data.into_json().unwrap()["filePaths"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let resolved = std::path::PathBuf::from(paths[0].as_str().unwrap());
+    assert!(resolved.is_absolute());
+    assert_eq!(std::fs::read(resolved).unwrap(), b"attachment");
+    assert!(paths[1].is_null());
+    assert_eq!(
+        std::path::Path::new(paths[2].as_str().unwrap()),
+        state.directory.join("documents/plain.txt")
+    );
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn native_main_audio_info_uses_shared_rust_parsing_without_the_media_feature_or_a_host() {
+    let directory = tempfile::tempdir().unwrap();
+    let core =
+        crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
+    let path = directory.path().join("audio.mp3");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../plain-rs/testdata/audio-untagged.mp3"),
+        &path,
+    )
+    .unwrap();
+    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let response = core.native_graphql().unwrap().execute(async_graphql::Request::new(
+        "query($path:String!){fileInfo(path:$path){data{... on AudioFileInfo{durationMs location{latitude longitude}}}}}"
+    ).variables(async_graphql::Variables::from_json(json!({"path":path})))).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let info = response.data.into_json().unwrap()["fileInfo"]["data"].clone();
+    assert_eq!(info["durationMs"].as_i64().unwrap() / 1000, 4);
+    assert!(info["location"].is_null());
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+}
+
+fn image_gps_metadata() -> Vec<u8> {
+    let mut bytes = vec![0; 200];
+    bytes[..4].copy_from_slice(b"II\x2a\0");
+    bytes[4..8].copy_from_slice(&8u32.to_le_bytes());
+    bytes[8..10].copy_from_slice(&1u16.to_le_bytes());
+    bytes[10..12].copy_from_slice(&0x8825u16.to_le_bytes());
+    bytes[12..14].copy_from_slice(&4u16.to_le_bytes());
+    bytes[14..18].copy_from_slice(&1u32.to_le_bytes());
+    bytes[18..22].copy_from_slice(&64u32.to_le_bytes());
+    bytes[64..66].copy_from_slice(&4u16.to_le_bytes());
+    for (index, tag, kind, count, value) in [
+        (0, 1u16, 2u16, 2u32, u32::from(b'N')),
+        (1, 2, 5, 3, 128),
+        (2, 3, 2, 2, u32::from(b'W')),
+        (3, 4, 5, 3, 152),
+    ] {
+        let start = 66 + index * 12;
+        bytes[start..start + 2].copy_from_slice(&tag.to_le_bytes());
+        bytes[start + 2..start + 4].copy_from_slice(&kind.to_le_bytes());
+        bytes[start + 4..start + 8].copy_from_slice(&count.to_le_bytes());
+        bytes[start + 8..start + 12].copy_from_slice(&value.to_le_bytes());
+    }
+    for (start, degrees) in [(128, 1u32), (152, 2)] {
+        for (index, value) in [degrees, 30, 0].into_iter().enumerate() {
+            let position = start + index * 8;
+            bytes[position..position + 4].copy_from_slice(&value.to_le_bytes());
+            bytes[position + 4..position + 8].copy_from_slice(&1u32.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+#[tokio::test]
+async fn duration_only_media_info_uses_shared_rust_probing_through_aliases_and_fragments() {
+    let (directory, schema) = fixture(GRANTED);
+    let path = directory.path().join("audio-without-extension");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../plain-rs/testdata/audio-untagged.mp3"),
+        &path,
+    )
+    .unwrap();
+    let document = "query($path:String!){fileInfo(path:$path,fileName:\"audio.mp3\"){metadata:data{__typename ...DurationOnly}}} fragment DurationOnly on AudioFileInfo{time:durationMs}";
+    let request = async_graphql::Request::new(document)
+        .variables(async_graphql::Variables::from_json(json!({"path":path})))
+        .data(crate::services::files::info::Info::sdk(schema_host(
+            &schema,
+        )));
+    let response = schema.execute(request).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let metadata = response.data.into_json().unwrap()["fileInfo"]["metadata"].clone();
+    assert_eq!(metadata["__typename"], "AudioFileInfo");
+    assert_eq!(metadata["time"].as_i64().unwrap() / 1000, 4);
+}
+
+#[tokio::test]
+async fn type_only_media_info_never_requests_sdk_metadata() {
+    let (directory, schema) = fixture(GRANTED);
+    let path = directory.path().join("unknown-container");
+    fs::write(&path, b"not a media container").unwrap();
+    for (name, kind) in [
+        ("video.mp4", "VideoFileInfo"),
+        ("photo.jpg", "ImageFileInfo"),
+        ("audio.mp3", "AudioFileInfo"),
+    ] {
+        let response = schema.execute(async_graphql::Request::new(
+            "query($path:String!,$name:String!){fileInfo(path:$path,fileName:$name){data{__typename}}}"
+        ).variables(async_graphql::Variables::from_json(json!({"path":path,"name":name})))
+            .data(crate::services::files::info::Info::sdk(schema_host(&schema))))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(
+            response.data.into_json().unwrap()["fileInfo"]["data"]["__typename"],
+            kind
+        );
+    }
+}
+
+#[tokio::test]
+async fn duration_only_video_info_does_not_read_stream_or_tag_metadata() {
+    let (directory, schema) = fixture(GRANTED);
+    let path = directory.path().join("video.mp4");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../plain-rs/testdata/video-h264-baseline.mp4"),
+        &path,
+    )
+    .unwrap();
+    let response = schema.execute(async_graphql::Request::new(
+        "query($path:String!){fileInfo(path:$path){metadata:data{... on VideoFileInfo{time:durationMs}}}}"
+    ).variables(async_graphql::Variables::from_json(json!({"path":path})))
+        .data(crate::services::files::info::Info::sdk(schema_host(&schema))))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["fileInfo"]["metadata"]["time"]
+            .as_i64()
+            .unwrap()
+            / 1000,
+        6
+    );
+}
+
+#[tokio::test]
+async fn unknown_duration_only_file_info_returns_null_without_platform_metadata() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let samples = Arc::new(AtomicUsize::new(0));
+    let calls = samples.clone();
+    let (directory, schema) = fixture_with(GRANTED, move |method, _| match method {
+        "fileTaskAuthorize" => json!(true),
+        other => {
+            calls.fetch_add(1, Ordering::SeqCst);
+            panic!("Unexpected host operation: {other}");
+        }
+    });
+    let path = directory.path().join("unrecognized.mp4");
+    fs::write(&path, b"unsupported container").unwrap();
+    let response = schema.execute(async_graphql::Request::new(
+        "query($path:String!){fileInfo(path:$path){data{... on VideoFileInfo{durationMs}}}}"
+    ).variables(async_graphql::Variables::from_json(json!({"path":path})))
+        .data(crate::services::files::info::Info::sdk(schema_host(&schema))))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert!(response.data.into_json().unwrap()["fileInfo"]["data"].is_null());
+    assert_eq!(samples.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn location_projection_preserves_decimal_precision_and_rejects_invalid_points() {
+    let point = location(&json!({"rawLocation":"+12.345678-123.456789+3.25/"})).unwrap();
+    assert_eq!(point.latitude, 12.345678);
+    assert_eq!(point.longitude, -123.456789);
+    assert!(location(&json!({"rawLocation":"junk+12.3456-123.1234/"})).is_none());
+    assert!(location(&json!({"rawLocation":"+91.0000-123.1234/"})).is_none());
+}
+
+#[tokio::test]
+async fn file_queries_resolve_shared_references_and_preserve_the_requested_path() {
+    let (dir, schema) = fixture(GRANTED);
+    let source = dir.path().join("clip.mp4");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../plain-rs/testdata/video-h264-baseline.mp4"),
+        &source,
+    )
+    .unwrap();
+    let store = plain_rs::files::app_files::FileStore::new(
+        schema.data::<Arc<Db>>().unwrap().clone(),
+        dir.path().to_path_buf(),
+    );
+    let stored = store
+        .import_file(&source, "clip.mp4", "video/mp4", false)
+        .unwrap();
+    let suffix = Path::new(&stored.real_path)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let references = [
+        "app://clip.mp4".to_owned(),
+        format!("file://{}", source.display()),
+        format!("fid:{suffix}"),
+    ];
+    for reference in references {
+        let response = schema.execute(async_graphql::Request::new(
+            "query($path:String!){fileInfo(path:$path){path size data{... on VideoFileInfo{width height}}} pathExists(path:$path) pathKind(path:$path) mediaDurationMs(path:$path)}"
+        ).variables(async_graphql::Variables::from_json(json!({"path":reference})))).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        assert_eq!(data["fileInfo"]["path"], reference);
+        assert_eq!(
+            data["fileInfo"]["size"],
+            fs::metadata(&source).unwrap().len()
+        );
+        assert_eq!(data["fileInfo"]["data"]["width"], 320);
+        assert_eq!(data["fileInfo"]["data"]["height"], 240);
+        assert_eq!(data["pathExists"], true);
+        assert_eq!(data["pathKind"], "FILE");
+        assert_eq!(data["mediaDurationMs"], 6000);
+    }
+    for reference in [
+        "",
+        " ",
+        ".",
+        "app://../clip.mp4",
+        "fid:invalid",
+        "file://remote/clip.mp4",
+    ] {
+        let response = schema.execute(async_graphql::Request::new(
+            "query($path:String!){fileInfo(path:$path){path size data{__typename}} pathExists(path:$path) pathKind(path:$path)}"
+        ).variables(async_graphql::Variables::from_json(json!({"path":reference})))).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        assert_eq!(data["fileInfo"]["path"], reference);
+        assert_eq!(data["fileInfo"]["size"], 0);
+        assert_eq!(data["fileInfo"]["data"], Value::Null);
+        assert_eq!(data["pathExists"], false);
+        assert_eq!(data["pathKind"], Value::Null);
+    }
 }

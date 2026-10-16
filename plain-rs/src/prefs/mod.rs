@@ -16,7 +16,7 @@ pub mod dlna;
 pub mod identity;
 pub mod media;
 pub mod samba;
-pub mod server;
+pub mod sms_sends;
 pub mod storage;
 pub mod system;
 pub mod user;
@@ -123,12 +123,15 @@ impl std::fmt::Debug for Prefs {
 
 /// Location of the preferences file inside the app data dir.
 pub fn default_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("system_prefs.json")
+    crate::data_paths::DataPaths::new(data_dir).system_prefs()
 }
 
 impl Prefs {
     pub fn in_memory() -> Self {
-        Self { system: PrefsStore::in_memory(), user: PrefsStore::in_memory() }
+        Self {
+            system: PrefsStore::in_memory(),
+            user: PrefsStore::in_memory(),
+        }
     }
 
     /// Load the preferences at `path`. A missing file starts empty; a
@@ -249,7 +252,10 @@ struct PrefsStore {
 
 impl PrefsStore {
     fn in_memory() -> Self {
-        Self { path: PathBuf::new(), inner: RwLock::new(Map::new()) }
+        Self {
+            path: PathBuf::new(),
+            inner: RwLock::new(Map::new()),
+        }
     }
 
     fn load(path: &Path) -> Result<Self> {
@@ -344,7 +350,9 @@ impl PrefsStore {
     }
 
     fn save(&self, inner: &Map<String, Value>) -> Result<bool> {
-        if self.path.as_os_str().is_empty() { return Ok(true); }
+        if self.path.as_os_str().is_empty() {
+            return Ok(true);
+        }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| PrefsError::Write {
                 path: parent.to_path_buf(),

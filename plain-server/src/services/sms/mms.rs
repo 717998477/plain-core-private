@@ -34,10 +34,15 @@ struct Pending {
 #[serde(rename_all = "camelCase")]
 struct Candidate {
     id: i64,
-    address: String,
+    address_candidates: Vec<super::addresses::MmsAddress>,
     body: String,
     thread_id: String,
     attachment_content_types: Vec<String>,
+}
+impl Candidate {
+    fn address(&self) -> &str {
+        super::addresses::mms(&self.address_candidates)
+    }
 }
 #[derive(Default)]
 struct PendingState {
@@ -204,13 +209,11 @@ impl Runtime {
         tokio::fs::create_dir_all(&temporary.0).await?;
         let mut attachments = vec![];
         for (index, path) in paths.into_iter().enumerate() {
-            let path = crate::host::filesystem::resolve_reference(
-                &self.host,
+            let path = crate::services::files::references::resolve(
                 self.db.clone(),
                 self.directory.clone(),
                 &path,
-            )
-            .await?;
+            )?;
             let name = std::path::Path::new(&path)
                 .file_name()
                 .and_then(|v| v.to_str())
@@ -232,7 +235,7 @@ impl Runtime {
             let types = normalized_types(attachments.iter().map(|a| a.content_type.as_str()));
             anyhow::ensure!(
                 !state.pending.values().any(|pending| {
-                    crate::services::sms::query::addresses_match(
+                    crate::services::sms::addresses::matches(
                         &pending.number,
                         &number,
                         &[pending.number.clone()],
@@ -409,15 +412,15 @@ fn matching(pending: &Pending, candidates: Vec<Candidate>) -> Vec<i64> {
         .collect();
     let context: Vec<_> = candidates
         .iter()
-        .map(|c| c.address.clone())
+        .map(|c| c.address().to_owned())
         .filter(|address| !address.trim().is_empty())
         .collect();
     candidates
         .into_iter()
         .filter(|candidate| {
             pending.number.is_empty()
-                || crate::services::sms::query::addresses_match(
-                    &candidate.address,
+                || crate::services::sms::addresses::matches(
+                    candidate.address(),
                     &pending.number,
                     &context,
                 )

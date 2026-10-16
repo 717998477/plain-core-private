@@ -6,7 +6,6 @@ use plain_rs::chat::enums::DeviceType;
 use plain_rs::db::DChannel;
 use plain_rs::db::chat_store::channels;
 use plain_rs::db::chat_store::peers;
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub(crate) fn rejected(message: impl ToString) -> Value {
@@ -87,8 +86,6 @@ async fn deliver(
             rejected("Peer not found")
         });
     }
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Device {
         name: String,
         device_type: DeviceType,
@@ -99,14 +96,10 @@ async fn deliver(
             | ChannelSystemMessageType::Update
             | ChannelSystemMessageType::InviteAccept
     ) {
-        let facts = state
-            .host
-            .call("discoveryFacts", json!({}))
-            .await
-            .map_err(anyhow::Error::msg)?;
         Device {
             name: plain_rs::prefs::user::snapshot(&state.prefs)?.device_name,
-            device_type: serde_json::from_value(facts["deviceType"].clone())?,
+            device_type: crate::services::discovery::discovery_advertisement::device_type(state)
+                .await?,
         }
     } else {
         Device {

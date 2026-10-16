@@ -11,7 +11,7 @@ fn core_with_host(
         std::sync::Arc::new(plain_rs::prefs::Prefs::load(&directory.join("system.json")).unwrap());
     prefs.set("client_id", "fixture-root").unwrap();
     let core = crate::assembly::server::ContentServer::start_core(
-        &directory.join("plain.db"),
+        &directory,
         &plain_rs::utils::base64::base64_encode(&[9; 32]),
         prefs,
     )
@@ -21,105 +21,31 @@ fn core_with_host(
 }
 
 #[tokio::test]
-async fn facts_follow_the_current_root_preferences_over_delayed_os_facts() {
-    let directory = tempfile::tempdir().unwrap();
-    let prefs = std::sync::Arc::new(
-        plain_rs::prefs::Prefs::load(&directory.path().join("system.json")).unwrap(),
-    );
-    prefs.set("client_id", "fixture-root").unwrap();
-    let core = crate::assembly::server::ContentServer::start_core(
-        &directory.path().join("plain.db"),
-        &plain_rs::utils::base64::base64_encode(&[9; 32]),
-        prefs.clone(),
-    )
-    .unwrap();
-    let state = core.runtime_state();
-    let host = state.host.clone();
-    let (generation, mut rx) = host.connect();
-    let changed = prefs.clone();
-    let replies = host.clone();
-    let responder = tokio::spawn(async move {
-        for index in 0..2 {
-            let request = rx.recv().await.unwrap();
-            assert_eq!(request["method"], "discoveryFacts");
-            assert_eq!(request["params"], json!({}));
-            // The preferences change while the first OS read is still in
-            // flight, so the next read has to pick the new values up rather
-            // than serve the ones it was started with.
-            if index == 1 {
-                changed.set_user("device_name", "Current 中文").unwrap();
-                changed.set_user("https_port", 3443).unwrap();
-                changed.set("mdns_hostname", "current.local").unwrap();
-            }
-            replies.reply(
-                generation,
-                json!({"id":request["id"],"result":{"name":"Actual tablet","deviceType":"TABLET","version":"3.3.24","platform":"IOS","ips":["203.0.113.9"],"awareSupported":true,"awareRunning":true}}),
-            )
-            .unwrap();
-        }
-    });
-
-    let first = execute(&state, Request::Reply {})
-        .await
-        .expect("the first read");
-    assert_eq!(first["id"], "fixture-root");
-    assert_eq!(first["deviceType"], "TABLET");
-
-    let second = execute(&state, Request::Reply {})
-        .await
-        .expect("the second read");
-    assert_eq!(
-        second["name"], "Current 中文",
-        "a preference change must not be hidden by a cached fact row"
-    );
-    // The advertised port is the live listener's, not the preference: a core
-    // with no public listener advertises none.
-    assert_eq!(second["port"], 0);
-    assert_eq!(second["deviceType"], "TABLET");
-    responder.await.unwrap();
-    host.disconnect(generation);
-    core.stop_core().await;
-}
-
-#[tokio::test]
-async fn ble_decoding_is_hostless_and_bounded() {
+async fn native_advertisements_use_current_preferences_without_host_calls() {
     let directory = tempfile::tempdir().unwrap();
     let (core, state) = core_with_host(directory.path());
-    assert!(
-        !state.host.connected(),
-        "decoding must not need a connected host"
+    let (generation, mut requests) = state.host.connect();
+    let first = execute(&state, Request::Reply {}).await.unwrap();
+    assert_eq!(first["id"], "fixture-root");
+    assert_eq!(first["deviceType"], "COMPUTER");
+    assert_eq!(first["platform"], std::env::consts::OS.to_uppercase());
+    state
+        .prefs
+        .set_user("device_name", "Current device")
+        .unwrap();
+    state.prefs.set_user("https_port", 3443).unwrap();
+    let second = execute(&state, Request::Reply {}).await.unwrap();
+    assert_eq!(second["name"], "Current device");
+    assert_eq!(second["port"], 0);
+    let ble = execute(&state, Request::Ble {}).await.unwrap();
+    assert_eq!(
+        plain_rs::utils::base64::base64_decode(ble.as_str().unwrap()),
+        advertisement::ble("fixture-root", false, false).unwrap()
     );
-    assert!(
-        execute(&state, Request::BleDecode { payload: None })
-            .await
-            .unwrap()
-            .is_null()
-    );
-    let oversized = vec![0u8; 1651];
-    assert!(
-        execute(
-            &state,
-            Request::BleDecode {
-                payload: Some(oversized)
-            }
-        )
-        .await
-        .is_err(),
-        "an oversized advertising payload is refused by contract"
-    );
-    assert!(
-        execute(&state, Request::BleShortId { id: String::new() })
-            .await
-            .is_err()
-    );
-    let short = execute(
-        &state,
-        Request::BleShortId {
-            id: "peer-1234".to_string(),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(short.is_string(), "a short id is a plain string");
+    for ip in second["ips"].as_array().unwrap() {
+        assert!(ip.as_str().unwrap().parse::<std::net::Ipv4Addr>().is_ok());
+    }
+    assert!(requests.try_recv().is_err());
+    state.host.disconnect(generation);
     core.stop_core().await;
 }

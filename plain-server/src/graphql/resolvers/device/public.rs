@@ -134,20 +134,44 @@ pub struct App {
     pub device_name: String,
     pub developer_mode: bool,
     #[graphql(skip)]
-    facts: Arc<tokio::sync::OnceCell<Result<crate::host::platform::AppFacts, String>>>,
+    capabilities_sample: Arc<tokio::sync::OnceCell<Result<Vec<String>, String>>>,
+    #[graphql(skip)]
+    permissions_sample: Arc<tokio::sync::OnceCell<Result<Vec<String>, String>>>,
+}
+
+fn startup_text(ctx: &Context<'_>, name: &str) -> async_graphql::Result<String> {
+    ctx.data::<Arc<Host>>()?
+        .startup_property(name)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            async_graphql::Error::new(format!("Missing startup system property: {name}"))
+        })
 }
 
 impl App {
-    async fn facts(
-        &self,
-        ctx: &Context<'_>,
-    ) -> async_graphql::Result<&crate::host::platform::AppFacts> {
-        self.facts
+    async fn granted_permissions(&self, ctx: &Context<'_>) -> async_graphql::Result<&Vec<String>> {
+        self.permissions_sample
             .get_or_init(|| async {
-                let value = host_call(ctx, crate::host::platform::SYSTEM_APP_FACTS, json!({}))
+                let names: Vec<&str> = <Permission as async_graphql::EnumType>::items()
+                    .iter()
+                    .map(|item| item.name)
+                    .collect();
+                let sample = host_call(ctx, "systemPermissionFacts", json!({"permissions":names}))
                     .await
                     .map_err(|error| error.message)?;
-                serde_json::from_value(value).map_err(|error| format!("invalid app facts: {error}"))
+                let grants = sample["granted"]
+                    .as_object()
+                    .ok_or("Invalid permission sample")?;
+                let mut granted = Vec::new();
+                for name in names {
+                    match grants.get(name).and_then(Value::as_bool) {
+                        Some(true) => granted.push(name.to_owned()),
+                        Some(false) => {}
+                        None => return Err(format!("Missing permission sample: {name}")),
+                    }
+                }
+                Ok(granted)
             })
             .await
             .as_ref()
@@ -157,32 +181,53 @@ impl App {
 
 #[ComplexObject]
 impl App {
-    async fn app_dir(&self, ctx: &Context<'_>) -> async_graphql::Result<&str> {
-        Ok(&self.facts(ctx).await?.app_dir)
+    async fn app_dir(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
+        Ok(ctx
+            .data::<crate::assembly::services::Services>()?
+            .device
+            .directory()
+            .to_string_lossy()
+            .into_owned())
     }
     async fn device_type(&self, ctx: &Context<'_>) -> async_graphql::Result<DeviceType> {
-        Ok(device_type(&self.facts(ctx).await?.device_type))
+        Ok(device_type(&startup_text(ctx, "deviceType")?))
     }
     async fn capabilities(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Capability>> {
-        Ok(self
-            .facts(ctx)
-            .await?
-            .capabilities
-            .iter()
-            .filter_map(|value| Capability::parse(value))
+        let mut names = self
+            .capabilities_sample
+            .get_or_init(|| async {
+                crate::services::capabilities::snapshot(
+                    ctx.data::<Arc<Host>>().map_err(|error| error.message)?,
+                )
+                .await
+                .map_err(|error| error.to_string())
+            })
+            .await
+            .as_ref()
+            .map_err(|error| async_graphql::Error::new(error.clone()))?
+            .clone();
+        names.extend(
+            crate::services::files::browser::capabilities()
+                .into_iter()
+                .map(str::to_owned),
+        );
+        let mut seen = std::collections::HashSet::new();
+        Ok(names
+            .into_iter()
+            .filter(|name| seen.insert(name.clone()))
+            .filter_map(|name| Capability::parse(&name))
             .collect())
     }
     async fn build_channel(&self, ctx: &Context<'_>) -> async_graphql::Result<AppChannelType> {
-        Ok(app_channel(&self.facts(ctx).await?.build_channel))
+        Ok(app_channel(&startup_text(ctx, "buildChannel")?))
     }
     async fn permissions(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Permission>> {
-        let facts = self.facts(ctx).await?;
+        let grants = self.granted_permissions(ctx).await?;
         let configured: Vec<String> = ctx
             .data::<Arc<plain_rs::prefs::Prefs>>()?
             .get_or(plain_rs::prefs::system::keys::API_PERMISSIONS, Vec::new());
         let local = crate::http::auth::public_gate::is_local(ctx);
-        let mut permissions: Vec<_> = facts
-            .permissions
+        let mut permissions: Vec<_> = grants
             .iter()
             .filter(|name| local || configured.contains(name))
             .filter_map(|name| Permission::parse(name))
@@ -191,19 +236,20 @@ impl App {
             ("RECORD_AUDIO", Permission::RecordAudio),
             ("ADB", Permission::Adb),
         ] {
-            if facts.permissions.iter().any(|grant| grant == name)
-                && !permissions.contains(&permission)
-            {
+            if grants.iter().any(|grant| grant == name) && !permissions.contains(&permission) {
                 permissions.push(permission);
             }
         }
         Ok(permissions)
     }
-    async fn downloads_dir(&self, ctx: &Context<'_>) -> async_graphql::Result<&str> {
-        Ok(&self.facts(ctx).await?.downloads_dir)
+    async fn downloads_dir(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
+        startup_text(ctx, "downloadsDir")
     }
     async fn debug(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        Ok(self.facts(ctx).await?.debug)
+        ctx.data::<Arc<Host>>()?
+            .startup_property("debug")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| async_graphql::Error::new("Missing startup system property: debug"))
     }
 }
 
@@ -272,6 +318,10 @@ impl DeviceQuery {
                 .directory()
                 .to_path_buf(),
             fields,
+            ctx.data::<crate::assembly::services::Services>()?
+                .device
+                .fixed_info()
+                .map_err(async_graphql::Error::new)?,
         )
         .await
         .map_err(async_graphql::Error::new)
@@ -298,7 +348,8 @@ impl DeviceQuery {
             https_port,
             device_name: user.device_name,
             developer_mode: user.developer_mode,
-            facts: Arc::new(tokio::sync::OnceCell::new()),
+            capabilities_sample: Arc::new(tokio::sync::OnceCell::new()),
+            permissions_sample: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
 
@@ -317,6 +368,16 @@ impl DeviceQuery {
             .read(text_of(&query), offset, limit)
             .await
             .map_err(async_graphql::Error::new)
+    }
+
+    async fn app_log_files_size(&self, ctx: &Context<'_>) -> async_graphql::Result<Long> {
+        let size = ctx
+            .data::<crate::assembly::services::Services>()?
+            .logs
+            .size()
+            .await
+            .map_err(async_graphql::Error::new)?;
+        Ok(Long(i64::try_from(size)?))
     }
 
     async fn app_log_path(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
@@ -347,6 +408,21 @@ pub struct DeviceMutation;
 
 #[Object]
 impl DeviceMutation {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn create_crash_report(
+        &self,
+        ctx: &Context<'_>,
+        report: String,
+    ) -> async_graphql::Result<String> {
+        crate::services::crash_reports::write(
+            ctx.data::<crate::assembly::services::Services>()?,
+            ctx.data::<Arc<Host>>()?,
+            report,
+        )
+        .await
+        .map_err(async_graphql::Error::new)
+    }
+
     async fn clear_app_logs(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         ctx.data::<crate::assembly::services::Services>()?
             .logs
@@ -354,6 +430,60 @@ impl DeviceMutation {
             .await
             .map_err(async_graphql::Error::new)?;
         Ok(true)
+    }
+
+    async fn clear_app_log_files(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        ctx.data::<crate::assembly::services::Services>()?
+            .logs
+            .clear_files()
+            .await
+            .map_err(async_graphql::Error::new)?;
+        Ok(true)
+    }
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn stage_app_restore(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+    ) -> async_graphql::Result<bool> {
+        let state = ctx.data::<crate::assembly::server::ServerState>()?;
+        let services = ctx.data::<crate::assembly::services::Services>()?;
+        let path = services.file_platform.resolve_reference(&path)?;
+        crate::services::backups::restore::stage(
+            path,
+            state.directory.clone(),
+            state.cache.root().to_owned(),
+            services.resources.clone(),
+            state.stop.clone(),
+        )
+        .await
+        .map_err(async_graphql::Error::new)?;
+        Ok(true)
+    }
+
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn export_app_backup(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
+        let state = ctx.data::<crate::assembly::server::ServerState>()?;
+        let services = ctx.data::<crate::assembly::services::Services>()?;
+        crate::services::backups::export(
+            state.db.clone(),
+            state.prefs.clone(),
+            services.store.clone(),
+            state.directory.clone(),
+            state.cache.root().to_owned(),
+            state.stop.clone(),
+        )
+        .await
+        .map_err(async_graphql::Error::new)
+    }
+
+    async fn export_app_logs(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<String>> {
+        let state = ctx.data::<crate::assembly::server::ServerState>()?;
+        ctx.data::<crate::assembly::services::Services>()?
+            .logs
+            .export(&state.directory, &state.cache, state.stop.clone())
+            .await
+            .map_err(async_graphql::Error::new)
     }
 
     async fn set_temp_value(
@@ -370,6 +500,9 @@ impl DeviceMutation {
     /// The app restarts itself; the response only acknowledges that the
     /// request was accepted, since the connection dies with the process.
     async fn relaunch_app(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        crate::services::capabilities::require(ctx.data::<Arc<Host>>()?, "APP_RELAUNCH")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         host_call(ctx, "systemRelaunchApp", json!({})).await?;
         Ok(true)
     }

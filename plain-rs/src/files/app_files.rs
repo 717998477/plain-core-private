@@ -21,40 +21,46 @@ impl FileStore {
         delete_source: bool,
     ) -> Result<DAppFile, String> {
         let store = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let result = crate::chat::attachments::app_file_store::import_file(
-                &store.db,
-                &store.directory,
-                &source,
-                &name,
-                &mime,
-            )
-            .map_err(|error| error.to_string())?;
-            let outcome = (|| {
-                if delete_source
-                    && std::fs::canonicalize(&source).map_err(|e| e.to_string())?
-                        != std::fs::canonicalize(&result.real_path).map_err(|e| e.to_string())?
-                {
-                    std::fs::remove_file(&source).map_err(|e| e.to_string())?;
-                }
-                store
-                    .db
-                    .app_file_get(&result.id)
-                    .map_err(|e| e.to_string())?
-                    .ok_or_else(|| "imported file missing".to_string())
-            })();
-            if outcome.is_err() {
-                crate::chat::attachments::app_file_store::release(
-                    &store.db,
-                    &store.directory,
-                    &result.id,
-                )
-                .map_err(|e| e.to_string())?;
+        tokio::task::spawn_blocking(move || store.import_file(&source, &name, &mime, delete_source))
+            .await
+            .map_err(|error| error.to_string())?
+    }
+    pub fn import_file(
+        &self,
+        source: &Path,
+        name: &str,
+        mime: &str,
+        delete_source: bool,
+    ) -> Result<DAppFile, String> {
+        let result = crate::chat::attachments::app_file_store::import_file(
+            &self.db,
+            &self.directory,
+            source,
+            name,
+            mime,
+        )
+        .map_err(|error| error.to_string())?;
+        let outcome = (|| {
+            if delete_source
+                && std::fs::canonicalize(source).map_err(|e| e.to_string())?
+                    != std::fs::canonicalize(&result.real_path).map_err(|e| e.to_string())?
+            {
+                std::fs::remove_file(source).map_err(|e| e.to_string())?;
             }
-            outcome
-        })
-        .await
-        .map_err(|error| error.to_string())?
+            self.db
+                .app_file_get(&result.id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "imported file missing".to_string())
+        })();
+        if outcome.is_err() {
+            crate::chat::attachments::app_file_store::release(
+                &self.db,
+                &self.directory,
+                &result.id,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        outcome
     }
     pub async fn release(self: &Arc<Self>, id: String) -> Result<bool, String> {
         let store = self.clone();
@@ -75,6 +81,20 @@ impl FileStore {
         .await
         .map_err(|e| e.to_string())?
     }
+    pub fn stored_path(&self, stored: &str) -> Result<PathBuf, String> {
+        if stored.contains(['\\', '\0'])
+            || Path::new(stored)
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err("Invalid stored file path".into());
+        }
+        let path = self.directory.join(stored);
+        if !path.starts_with(self.directory.join("files")) {
+            return Err("File outside store".into());
+        }
+        Ok(path)
+    }
     pub fn resolve(&self, suffix: &str) -> Result<PathBuf, String> {
         let id = suffix.split('.').next().unwrap_or_default();
         if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -92,7 +112,7 @@ impl FileStore {
         {
             return Err("file suffix does not match stored file".into());
         }
-        let path = self.directory.join(&record.real_path);
+        let path = self.stored_path(&record.real_path)?;
         let root = std::fs::canonicalize(&self.directory).map_err(|e| e.to_string())?;
         let actual = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
         if !actual.starts_with(root.join("files")) {

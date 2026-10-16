@@ -90,9 +90,7 @@ async fn startup_scan_indexes_configured_directories_through_the_headless_host()
     catalog
         .set_source_directories(&[source.to_string_lossy().into_owned()])
         .unwrap();
-    catalog
-        .configure_scan_directories(&directory.path().join("cache"), None)
-        .unwrap();
+    catalog.configure_scan_directories(None).unwrap();
     let runtime = Arc::new(crate::host::headless::runtime::Runtime::new(
         core.clone(),
         vec![],

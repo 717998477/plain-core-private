@@ -467,7 +467,7 @@ async fn no_root_field_fails_for_unregistered_schema_data() {
     // layer registers per request; without it the probe reports the root as
     // unregistered. A real server instance provides the genuine type.
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("probe.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[7; 32]),
         probe_prefs,
     )

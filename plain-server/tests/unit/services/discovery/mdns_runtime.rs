@@ -11,12 +11,8 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
         .unwrap();
     prefs.set_user("https_port", 2443).unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[5; 32]);
-    let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("plain.db"),
-        &token,
-        prefs.clone(),
-    )
-    .unwrap();
+    let server =
+        crate::assembly::server::ContentServer::start(dir.path(), &token, prefs.clone()).unwrap();
     let state = server.runtime_state();
     // The advertised port is the live public listener's, so the test has to
     // start one — announcing port 0 is refused by contract.
@@ -47,16 +43,12 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
                     }
                     json!(ok)
                 }
-                "discoveryFacts" => {
-                    json!({"name":"Actual","deviceType":"PHONE","version":"1","platform":"ANDROID","ips":["192.0.2.7"],"awareSupported":false,"awareRunning":false})
-                }
                 method => panic!("Unexpected host method: {method}"),
             };
             host.reply(generation, json!({"id":request["id"],"result":result}))
                 .unwrap();
         }
     });
-    let discovery = crate::native::discovery::NativeDiscovery::new(state.clone());
     allowed.store(true, Ordering::SeqCst);
     state
         .nearby_devices
@@ -245,4 +237,88 @@ async fn execute(state: &ServerState, request: Request) -> Value {
     control(state, request)
         .await
         .unwrap_or_else(|error| panic!("mDNS request failed: {error}"))
+}
+
+#[tokio::test(start_paused = true)]
+async fn network_change_burst_restarts_once_and_accepts_the_next_burst() {
+    use std::sync::atomic::AtomicUsize;
+    let runtime = Runtime::default();
+    let (_stop, stopped) = tokio::sync::watch::channel(false);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let restart = || {
+        let calls = calls.clone();
+        async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+        }
+    };
+    assert!(runtime.schedule_network_restart(stopped.clone(), restart()));
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_millis(799)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(!runtime.schedule_network_restart(stopped.clone(), restart()));
+    tokio::time::advance(std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(runtime.schedule_network_restart(stopped, restart()));
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_millis(800)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn network_restart_cancels_on_runtime_stop_and_explicit_close() {
+    use std::sync::atomic::AtomicUsize;
+    for close in [false, true] {
+        let runtime = Runtime::default();
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        assert!(
+            runtime.schedule_network_restart(stopped.clone(), async move {
+                count.fetch_add(1, Ordering::SeqCst);
+            })
+        );
+        tokio::task::yield_now().await;
+        if close {
+            runtime.cancel_network_restart();
+        } else {
+            stop.send_replace(true);
+        }
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        stop.send_replace(true);
+        assert!(!runtime.schedule_network_restart(stopped, async { panic!("stopped runtime") }));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn stopping_a_network_restart_cancels_its_in_progress_work() {
+    use std::sync::atomic::AtomicUsize;
+    let runtime = Runtime::default();
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let (started, running) = tokio::sync::oneshot::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    assert!(runtime.schedule_network_restart(stopped, async move {
+        started.send(()).unwrap();
+        std::future::pending::<()>().await;
+        count.fetch_add(1, Ordering::SeqCst);
+    }));
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_millis(800)).await;
+    running.await.unwrap();
+    stop.send_replace(true);
+    tokio::task::yield_now().await;
+    assert!(
+        runtime
+            .network_restart
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .is_finished()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }

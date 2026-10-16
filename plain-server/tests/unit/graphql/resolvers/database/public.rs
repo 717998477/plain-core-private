@@ -4,20 +4,12 @@ use serde_json::Value;
 use serde_json::json;
 fn fixture() -> (tempfile::TempDir, PublicSchema) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("room.db");
-    let conn = plain_rs::sqlite_browse::rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("CREATE TABLE test_rows (key TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'untitled', size INTEGER, ratio REAL, bytes BLOB); CREATE TABLE room_master_table(id INTEGER); INSERT INTO test_rows VALUES('a','First',42,1.5,NULL),('b','Second',43,2.5,NULL);").unwrap();
-    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
-    let db = Arc::new(plain_rs::db::Db::open(&dir.path().join("plain.db")).unwrap());
-    let host = Arc::new(Host::default());
-    let (generation, mut requests) = host.connect();
-    let adapter = host.clone();
-    tokio::spawn(async move {
-        while let Some(request) = requests.recv().await {
-            assert_eq!(request["method"], "systemDbPath");
-            let _ = adapter.reply(generation, json!({"id":request["id"],"result":path}));
-        }
-    });
+    let path = plain_rs::data_paths::DataPaths::new(dir.path()).database();
+    let prefs =
+        Arc::new(plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(dir.path())).unwrap());
+    let db = Arc::new(plain_rs::db::Db::open_with_prefs(&path, prefs.clone()).unwrap());
+    db.with_conn(|conn| conn.execute_batch("CREATE TABLE test_rows (key TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'untitled', size INTEGER, ratio REAL, bytes BLOB); INSERT INTO test_rows VALUES('a','First',42,1.5,NULL),('b','Second',43,2.5,NULL);").unwrap());
+    let host = Arc::new(crate::host::bridge::Host::default());
     let (events, _) = tokio::sync::broadcast::channel(16);
     let schema =
         crate::graphql::schemas::public::build(host, events, prefs, db, dir.path().to_path_buf());
@@ -25,16 +17,26 @@ fn fixture() -> (tempfile::TempDir, PublicSchema) {
 }
 
 #[tokio::test]
-async fn room_browser_executes_queries_and_mutations_in_rust() {
+async fn owned_database_browser_works_without_a_connected_host() {
     let (dir, schema) = fixture();
     let response=schema.execute(r#"{dbPath dbTables dbTableInfo(table:"test_rows"){idKey} dbTableRowCount(table:"test_rows") dbTableColumns(table:"test_rows"){name dataType notNull defaultValue primaryKey} dbTableRows(table:"test_rows",offset:1,limit:1)}"#).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
     assert_eq!(
         data["dbPath"],
-        dir.path().join("room.db").to_string_lossy().as_ref()
+        dir.path()
+            .join("plain.db")
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
-    assert_eq!(data["dbTables"], json!(["test_rows"]));
+    assert!(
+        data["dbTables"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("test_rows"))
+    );
     assert_eq!(data["dbTableInfo"]["idKey"], "key");
     assert_eq!(data["dbTableRowCount"], 2);
     let columns = data["dbTableColumns"].as_array().unwrap();

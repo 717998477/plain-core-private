@@ -432,3 +432,66 @@ async fn native_media_support_is_declared_by_its_adapter_without_a_host_exchange
             .is_err()
     );
 }
+
+#[cfg(feature = "media")]
+#[tokio::test]
+async fn partial_main_media_actions_invalidate_only_completed_duration_entries() {
+    use plain_rs::media::duration_cache::Duration;
+    for (kind, name, media_type) in [
+        (DataType::Audio, "AUDIO", "audio"),
+        (DataType::Video, "VIDEO", "video"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let core =
+            crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
+        let state = core.runtime_state();
+        let (_generation, mut requests) = state.host.connect();
+        let good_path = directory.path().join("good.mp4");
+        let blocked = directory.path().join("blocked");
+        std::fs::write(&good_path, b"document").unwrap();
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        let bad_path = blocked.join("bad.mp4");
+        let good = seed_kind(&state.db, &good_path, kind);
+        let bad = seed_kind(&state.db, &bad_path, kind);
+        let duration = |id: &str, path: &Path| Duration {
+            media_type: media_type.into(),
+            media_id: id.into(),
+            path: path.to_string_lossy().into_owned(),
+            size_bytes: 8,
+            modified_at: "2026-01-01T00:00:00Z".into(),
+            duration_ms: 5_000_000_001,
+            updated_at: String::new(),
+        };
+        state
+            .duration_cache
+            .save(duration(&good, &good_path))
+            .unwrap();
+        state
+            .duration_cache
+            .save(duration(&bad, &bad_path))
+            .unwrap();
+        let revision = state.duration_cache.revision();
+        let response = core.native_graphql().unwrap().execute(async_graphql::Request::new(format!(
+            "mutation Delete($ids: [ID!]!) {{ mediaAction(type: {name}, action: DELETE, ids: $ids, fromTrash: false, destDir: \"\") {{ affectedCount failedIds }} }}"
+        )).variables(async_graphql::Variables::from_json(serde_json::json!({"ids":[good,bad]})))).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        assert_eq!(data["mediaAction"]["affectedCount"], 1);
+        assert_eq!(data["mediaAction"]["failedIds"], serde_json::json!([bad]));
+        assert!(!good_path.exists());
+        assert!(blocked.is_file());
+        let remaining = state.duration_cache.all().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].media_id, bad);
+        assert_eq!(remaining[0].duration_ms, 5_000_000_001);
+        assert!(
+            !state
+                .duration_cache
+                .save_at_revision(duration(&good, &good_path), revision)
+                .unwrap()
+        );
+        assert_eq!(state.duration_cache.all().unwrap().len(), 1);
+        assert!(requests.try_recv().is_err());
+        core.stop_core().await;
+    }
+}

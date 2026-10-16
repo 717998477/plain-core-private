@@ -1,7 +1,37 @@
-use plain_rs::db::{Db, MediaFileRow, audio_catalog::AudioMedia};
-use plain_rs::enums::DataType;
+use plain_rs::db::{MediaFileRow, audio_catalog::AudioMedia};
 use plain_rs::error::{DomainError, DomainResult};
 use plain_rs::media::audio::queue::AudioTrack;
+
+pub(crate) async fn read_uri(
+    resources: &crate::host::resources::NativeResources,
+    cache: &std::path::Path,
+    path: &str,
+) -> DomainResult<AudioTrack> {
+    let source = path.to_owned();
+    crate::services::files::input::read_source(resources, cache, path, move |reader| {
+        Ok(track(
+            &source,
+            plain_rs::media::probe::probe_audio_reader(reader),
+        ))
+    })
+    .await
+    .map_err(DomainError::Other)
+}
+
+fn track(path: &str, facts: plain_rs::media::probe::ProbedMeta) -> AudioTrack {
+    AudioTrack {
+        media_id: None,
+        path: path.to_owned(),
+        title: if facts.title.is_empty() {
+            AudioTrack::from_path_stem(path).title
+        } else {
+            facts.title
+        },
+        artist: facts.artist,
+        duration_ms: facts.duration_ms,
+        album_id: String::new(),
+    }
+}
 
 pub(crate) fn from_row(row: MediaFileRow) -> AudioMedia {
     AudioMedia {
@@ -22,37 +52,21 @@ pub(crate) fn from_row(row: MediaFileRow) -> AudioMedia {
     }
 }
 
-pub(crate) fn read(db: &Db, path: &str) -> DomainResult<AudioMedia> {
-    if path.trim().is_empty() {
-        return Err(DomainError::Other("Audio path required".into()));
-    }
-    if let Some(row) = db.media_file_by_path(DataType::Audio, path)? {
-        return Ok(from_row(row));
-    }
-    #[cfg(feature = "media")]
+pub(crate) fn read_file(path: &str) -> DomainResult<AudioTrack> {
+    let local = plain_rs::utils::file_uri::local_path(path).map_err(DomainError::Other)?;
+    if !std::fs::metadata(&local)
+        .map_err(|error| DomainError::Other(error.to_string()))?
+        .is_file()
     {
-        let facts = plain_media::metadata::file_facts::read_file_metadata_with_availability(
-            std::path::Path::new(path),
-            DataType::Audio,
-        )
-        .map_err(|error| DomainError::Other(error.to_string()))?;
-        Ok(AudioMedia {
-            media_id: None,
-            aliases: Vec::new(),
-            track: AudioTrack {
-                media_id: None,
-                path: facts.metadata.path,
-                title: facts.metadata.title,
-                artist: facts.metadata.artist,
-                duration_ms: facts.metadata.duration_ms,
-                album_id: String::new(),
-            },
-        })
+        return Err(DomainError::Other(
+            "Audio source is not a regular file".into(),
+        ));
     }
-    #[cfg(not(feature = "media"))]
-    Err(DomainError::Other(
-        "Audio metadata reader unavailable".into(),
-    ))
+    let mut facts = plain_rs::media::probe::probe_media(&local, "audio");
+    if facts.title.is_empty() {
+        facts.title = AudioTrack::from_path_stem(&local).title;
+    }
+    Ok(track(path, facts))
 }
 
 #[cfg(test)]

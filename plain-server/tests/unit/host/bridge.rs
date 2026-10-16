@@ -70,3 +70,166 @@ async fn capacity_is_bounded_and_errors_are_not_empty_successes() {
     }
     assert!(host.state.lock().unwrap().pending.is_empty());
 }
+
+#[tokio::test]
+async fn startup_properties_need_no_host_and_keep_dynamic_samples_fresh() {
+    let properties = serde_json::json!({"appVersion":"1.2.3","model":"device"})
+        .as_object()
+        .unwrap()
+        .clone();
+    let host = Arc::new(Host::with_startup_properties(properties).unwrap());
+    let fixed = host
+        .call("systemProperties", json!({"names":["appVersion","model"]}))
+        .await
+        .unwrap();
+    assert_eq!(fixed, json!({"appVersion":"1.2.3","model":"device"}));
+    let (generation, mut incoming) = host.connect();
+    for address in ["first", "second"] {
+        let caller = host.clone();
+        let request = tokio::spawn(async move {
+            caller
+                .call(
+                    "systemProperties",
+                    json!({"names":["model","ipv4Addresses"]}),
+                )
+                .await
+                .unwrap()
+        });
+        let sample = incoming.recv().await.unwrap();
+        assert_eq!(sample["params"]["names"], json!(["ipv4Addresses"]));
+        host.reply(
+            generation,
+            json!({"id":sample["id"],"result":{"ipv4Addresses":[address]}}),
+        )
+        .unwrap();
+        assert_eq!(
+            request.await.unwrap(),
+            json!({"model":"device","ipv4Addresses":[address]})
+        );
+    }
+    assert!(incoming.try_recv().is_err());
+}
+#[test]
+fn dynamic_properties_cannot_be_frozen_as_startup_information() {
+    for key in [
+        "ipv4Addresses",
+        "wifiAwareRunning",
+        "display.width",
+        "batteryLevel",
+        "android.battery",
+        "permissions",
+    ] {
+        let mut properties = serde_json::Map::new();
+        properties.insert(key.into(), Value::Null);
+        assert!(Host::with_startup_properties(properties).is_err(), "{key}");
+    }
+}
+
+#[test]
+fn startup_values_are_validated_before_the_host_is_created() {
+    for (key, value) in [
+        ("debug", json!(null)),
+        ("model", json!(123)),
+        ("wifiAwareSupported", json!("true")),
+        ("files.recentCatalog", json!(1)),
+        ("files.recentRoot", json!([])),
+        ("socModel", json!(false)),
+        ("deviceType", json!("UNKNOWN")),
+        ("buildChannel", json!("unknown")),
+        ("android.sdkVersion", json!(-1)),
+        ("android.sdkVersion", json!(2147483648_i64)),
+        ("android.buildTime", json!("today")),
+    ] {
+        let properties = [(key.into(), value)].into_iter().collect();
+        let error = Host::with_startup_properties(properties).err().unwrap();
+        assert_eq!(error, format!("Invalid startup system property: {key}"));
+    }
+    let properties = json!({"socModel":null,"files.recentRoot":null})
+        .as_object()
+        .unwrap()
+        .clone();
+    assert!(Host::with_startup_properties(properties).is_ok());
+}
+
+#[tokio::test]
+async fn absent_fixed_values_fail_without_a_host_request() {
+    let host = Host::default();
+    let (_generation, mut incoming) = host.connect();
+    let error = host
+        .call(
+            "systemProperties",
+            json!({"names":["model","ipv4Addresses"]}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error, "Missing startup system property: model");
+    assert!(incoming.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn unknown_properties_never_fall_back_to_dynamic_host_requests() {
+    let host = Host::default();
+    let (_generation, mut incoming) = host.connect();
+    for name in ["dataDir", "systemDbPath", "unknown"] {
+        let error = host
+            .call("systemProperties", json!({"names":["language", name]}))
+            .await
+            .unwrap_err();
+        assert_eq!(error, format!("Unsupported system property: {name}"));
+    }
+    assert!(incoming.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn repeated_dynamic_names_are_sampled_once_per_request() {
+    let host = Arc::new(Host::default());
+    let (generation, mut incoming) = host.connect();
+    let caller = host.clone();
+    let call = tokio::spawn(async move {
+        caller
+            .call(
+                "systemProperties",
+                json!({"names":["language", "display.width", "language", "display.width"]}),
+            )
+            .await
+    });
+    let request = incoming.recv().await.unwrap();
+    assert_eq!(
+        request["params"]["names"],
+        json!(["language", "display.width"])
+    );
+    host.reply(
+        generation,
+        json!({"id":request["id"],"result":{"language":"en","display.width":1080}}),
+    )
+    .unwrap();
+    assert_eq!(
+        call.await.unwrap().unwrap(),
+        json!({"language":"en","display.width":1080})
+    );
+    assert!(incoming.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn cache_root_is_reused_from_startup_without_a_host_request() {
+    let root = std::env::temp_dir().join("plain-cache-startup");
+    let host =
+        Host::with_startup_properties(serde_json::from_value(json!({"cacheDir":root})).unwrap())
+            .unwrap();
+    let (_generation, mut incoming) = host.connect();
+    for _ in 0..3 {
+        assert_eq!(
+            host.call("systemProperties", json!({"names":["cacheDir"]}))
+                .await
+                .unwrap(),
+            json!({"cacheDir":root})
+        );
+    }
+    assert!(incoming.try_recv().is_err());
+    assert!(
+        Host::with_startup_properties(
+            serde_json::from_value(json!({"cacheDir":"relative"})).unwrap()
+        )
+        .is_err()
+    );
+}

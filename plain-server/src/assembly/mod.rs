@@ -22,3 +22,9 @@ pub mod services;
 
 #[cfg(feature = "core")]
 pub(crate) mod core_dependencies;
+
+#[cfg(feature = "core")]
+pub mod data_directory;
+
+#[cfg(all(feature = "core", feature = "http_transport"))]
+mod public_server;

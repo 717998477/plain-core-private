@@ -135,15 +135,6 @@ async fn connected(
     }
     let _ = tokio::time::timeout(Duration::from_secs(1), socket.close()).await;
 }
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Request {
-    Snapshot {},
-    Start {},
-    Stop {},
-    Reconnect {},
-    EnsureAware {},
-}
 #[cfg(all(test, feature = "http_transport"))]
 #[path = "../../../tests/unit/services/peers/peer_status.rs"]
 mod tests;

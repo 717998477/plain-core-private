@@ -48,6 +48,9 @@ use std::sync::Arc;
 
 #[derive(MergedObject, Default)]
 pub struct Query(
+    crate::graphql::resolvers::app::cache::CacheQuery,
+    crate::graphql::resolvers::settings::http_server::HttpServerQuery,
+    crate::graphql::resolvers::casting::receiver::DlnaReceiverQuery,
     crate::graphql::resolvers::settings::tls::TlsQuery,
     crate::graphql::resolvers::peers::records::PeerRecordQuery,
     crate::graphql::resolvers::chat::records::ChatChannelRecordQuery,
@@ -103,6 +106,9 @@ pub struct Query(
 
 #[derive(MergedObject, Default)]
 pub struct Mutation(
+    crate::graphql::resolvers::app::cache::CacheMutation,
+    crate::graphql::resolvers::settings::http_server::HttpServerMutation,
+    crate::graphql::resolvers::casting::receiver::DlnaReceiverMutation,
     crate::graphql::resolvers::settings::tls::TlsMutation,
     crate::graphql::resolvers::peers::records::PeerRecordMutation,
     crate::graphql::resolvers::shares::queue::SharedDownloadMutation,
@@ -117,7 +123,7 @@ pub struct Mutation(
     crate::graphql::resolvers::files::tasks::FileTaskMutation,
     crate::graphql::resolvers::videos::progress::VideoProgressMutation,
     crate::graphql::resolvers::shares::host::ShareHostMutation,
-    crate::graphql::resolvers::files::app_files_host::AppFileHostMutation,
+    crate::graphql::resolvers::files::app_files::AppFilesMutation,
     crate::graphql::resolvers::tags::access::TagHostMutation,
     crate::graphql::resolvers::media::aux::MediaAuxMutation,
     crate::graphql::resolvers::media::actions::MediaActionMutation,
@@ -126,6 +132,7 @@ pub struct Mutation(
     crate::graphql::resolvers::bookmarks::metadata::BookmarkMetadataMutation,
     crate::graphql::resolvers::pomodoro::host::PomodoroHostMutation,
     crate::graphql::resolvers::device::sessions::SessionsMutation,
+    crate::graphql::resolvers::peers::runtime::PeerRuntimeMutation,
     crate::graphql::resolvers::app::platform::PlatformMutation,
     crate::graphql::resolvers::media::scan::MediaScanMutation,
     crate::graphql::resolvers::settings::state::PreferencesMutation,
@@ -155,6 +162,7 @@ pub struct Mutation(
 
 pub type PublicSchema = Schema<Query, Mutation, EmptySubscription>;
 
+#[cfg(test)]
 pub fn build(
     host: Arc<Host>,
     events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
@@ -168,6 +176,7 @@ pub fn build(
         events.clone(),
         prefs.clone(),
         directory.clone(),
+        plain_rs::cache_paths::CachePaths::new(&directory.join("cache")),
     );
     let models = crate::services::images::models::Runtime::new(
         directory.clone(),

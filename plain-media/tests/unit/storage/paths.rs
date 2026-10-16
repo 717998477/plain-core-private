@@ -8,7 +8,11 @@ fn detect_reads_env_fallback() {
     // usable pair (pin installs PLAIN_RS_DATA_DIR under target/).
     let p = paths::detect();
     assert!(p.data_dir.components().count() > 0);
-    assert!(p.cache_dir.components().count() > 0);
+    assert!(p.cache_dir.is_absolute());
+    assert!(!p.cache_dir.starts_with(&p.data_dir));
+    let again = paths::detect();
+    assert_eq!(again.data_dir, p.data_dir);
+    assert_eq!(again.cache_dir, p.cache_dir);
 }
 
 #[test]

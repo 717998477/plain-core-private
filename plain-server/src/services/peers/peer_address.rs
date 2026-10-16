@@ -25,7 +25,10 @@ pub(crate) fn address(peer: &DPeer) -> Address {
             peer.name.clone()
         },
         api_url: peer.peer_graphql_url().unwrap_or_default(),
-        status_ws_url: peer.base_url().map(|url| url.replacen("https", "wss", 1) + "/status").unwrap_or_default(),
+        status_ws_url: peer
+            .base_url()
+            .map(|url| url.replacen("https", "wss", 1) + "/status")
+            .unwrap_or_default(),
         best_ip: ip,
         base_url,
     }
@@ -57,10 +60,25 @@ pub(crate) fn current(db: &plain_rs::db::Db, id: &str, expected: &DPeer) -> anyh
     Ok(peer)
 }
 pub(crate) fn file_url(peer: &DPeer, file_id: &str) -> anyhow::Result<String> {
-    let mut url = reqwest::Url::parse(&format!("{}/fs", peer.base_url().ok_or_else(|| anyhow::anyhow!("No peer address"))?))?;
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/fs",
+        peer.base_url()
+            .ok_or_else(|| anyhow::anyhow!("No peer address"))?
+    ))?;
     url.query_pairs_mut().append_pair("id", file_id);
     Ok(url.to_string())
 }
 #[cfg(test)]
 #[path = "../../../tests/unit/services/peers/peer_address.rs"]
 mod tests;
+
+pub(crate) fn proxy_address(db: &plain_rs::db::Db, id: &str) -> anyhow::Result<Option<String>> {
+    let peer = plain_rs::db::chat_store::peers::get(db, id)?
+        .filter(|peer| peer.is_paired() || !peer.token.is_empty());
+    Ok(peer.and_then(|peer| {
+        if peer.ip.is_empty() {
+            return None;
+        }
+        Some(format!("{}:{}", peer.best_ip(), peer.port?))
+    }))
+}

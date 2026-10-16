@@ -194,20 +194,6 @@ impl MediaScans {
         Ok(())
     }
 
-    pub(crate) fn cache_directory(&self) -> Result<Option<std::path::PathBuf>, String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "Media scan state unavailable")?;
-        if state.closed {
-            return Err("Rust core stopped".into());
-        }
-        Ok(state
-            .policy
-            .as_ref()
-            .map(|policy| policy.cache_directory.clone()))
-    }
-
     pub(crate) fn policy(&self) -> Result<Arc<super::media_scan_policy::Policy>, String> {
         self.state
             .lock()

@@ -143,7 +143,7 @@ pub(crate) fn bucket_item_facts(db: &Db, data_type: DataType) -> Result<Vec<serd
                     .and_then(|name| name.to_str())
                     .unwrap_or(&id);
                 Ok(serde_json::json!({
-                    "id":id,"name":name,"size":size,"path":path,"sortName":name
+                    "id":id,"name":name,"size":size,"path":path
                 }))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()

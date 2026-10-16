@@ -3,6 +3,9 @@
 // would resolve to the *mounting* crate.
 extern crate self as plain_rs;
 
+pub mod cache_paths;
+pub mod data_paths;
+
 #[cfg(feature = "chat")]
 pub mod chat;
 #[cfg(feature = "crypto")]
@@ -31,7 +34,8 @@ pub mod kv;
     feature = "linux-platform",
     feature = "linux-system",
     feature = "unix-platform",
-    feature = "storage-platform"
+    feature = "storage-platform",
+    all(target_os = "android", feature = "library")
 ))]
 pub mod platform;
 pub mod utils;

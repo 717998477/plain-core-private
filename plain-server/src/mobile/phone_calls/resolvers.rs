@@ -221,11 +221,9 @@ impl CallsMutation {
         // fields it does not act on resolves to the entire call log.
         crate::mobile::query::require_narrowing(
             ctx.data_unchecked::<Arc<Db>>(),
-            ctx.data_unchecked::<Arc<Host>>(),
             Provider::Call,
             &query,
         )
-        .await
         .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let ids: Vec<Value> = host_json(
             ctx,

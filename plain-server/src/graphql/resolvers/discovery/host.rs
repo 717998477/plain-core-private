@@ -8,6 +8,10 @@ pub struct DiscoveryHostQuery;
 
 #[Object]
 impl DiscoveryHostQuery {
+    async fn parse_pairing_code(&self, code: String) -> Option<NearbyDevice> {
+        plain_rs::discovery::pairing_code::parse(&code)
+            .map(|payload| NearbyDevice::from_snapshot_device(payload.into_device()))
+    }
     async fn nearby_devices(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<NearbyDevice>> {
         let state = ctx.data::<ServerState>()?;
         nearby_snapshot(state)

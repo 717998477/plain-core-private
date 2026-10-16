@@ -12,18 +12,6 @@ fn filter_codec_tag_strips_non_alphanumeric() {
     assert_eq!(filter_codec_tag(""), "");
 }
 
-#[test]
-fn transcode_cache_path_deterministic_and_mtime_sensitive() {
-    let dir = std::path::Path::new("/tmp/cache");
-    let a = transcode_cache_path(dir, "/a/v.mp4", 1000, 5000);
-    let b = transcode_cache_path(dir, "/a/v.mp4", 1000, 5000);
-    assert_eq!(a, b);
-    assert!(a.to_str().unwrap().contains("videos/"));
-    assert!(a.to_str().unwrap().ends_with(".mp4"));
-    let c = transcode_cache_path(dir, "/a/v.mp4", 1001, 5000);
-    assert_ne!(a, c);
-}
-
 // ---- in-process ISO-BMFF probe: synthetic box builders ----
 
 fn box_of(kind: &str, payload: &[u8]) -> Vec<u8> {
@@ -45,11 +33,11 @@ fn mdat_largesize(payload: &[u8]) -> Vec<u8> {
 }
 
 fn trak_with(handler: &[u8; 4], entry_fourcc: &str) -> Vec<u8> {
-    let mut stsd_payload = Vec::new();
-    stsd_payload.extend_from_slice(&[0u8; 8]); // version/flags + entry_count
-    stsd_payload.extend_from_slice(&78u32.to_be_bytes()); // entry size
-    stsd_payload.extend_from_slice(entry_fourcc.as_bytes());
-    stsd_payload.extend_from_slice(&[0u8; 8]); // sample entry body stub
+    let mut entry = vec![0; if handler == b"vide" { 78 } else { 28 }];
+    entry[6..8].copy_from_slice(&1u16.to_be_bytes());
+    let mut stsd_payload = vec![0; 4];
+    stsd_payload.extend_from_slice(&1u32.to_be_bytes());
+    stsd_payload.extend(box_of(entry_fourcc, &entry));
     let stbl = box_of("stbl", &box_of("stsd", &stsd_payload));
     let mut hdlr = vec![0u8; 24]; // version/flags + pre_defined + handler + reserved[3]
     hdlr[8..12].copy_from_slice(handler);
@@ -212,4 +200,13 @@ async fn probe_video_codec_end_to_end_avoids_ffprobe_latency() {
     // keeps a regression to the ffprobe spawn visible as a latency cliff.
     let codec = probe_video_codec(&testdata("video-h265-hvc1.mp4")).await;
     assert_eq!(codec, "hvc1");
+}
+
+#[test]
+fn codec_probe_rejects_a_sample_entry_with_a_truncated_declared_length() {
+    let mut track = trak_with(b"vide", "hvc1");
+    let offset = track.windows(4).position(|bytes| bytes == b"hvc1").unwrap();
+    track[offset - 4..offset].copy_from_slice(&u32::MAX.to_be_bytes());
+    let (_directory, file) = write_temp(&box_of("moov", &track));
+    assert_eq!(probe_iso_bmff_video_fourcc(&file), None);
 }

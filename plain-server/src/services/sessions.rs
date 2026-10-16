@@ -10,9 +10,6 @@ pub(crate) fn key(db: &Db, client_id: &str) -> anyhow::Result<Option<Vec<u8>>> {
     }))
 }
 
-/// The key the core's own shell uses. It has no session — it never logged
-/// in — so it encrypts with the local URL token, the same one
-/// `local_server_token` hands the webview.
 pub(crate) fn local_key(state: &ServerState, client_id: &str) -> Option<Vec<u8>> {
     if state.native_client_id().ok().as_deref() != Some(client_id) {
         return None;

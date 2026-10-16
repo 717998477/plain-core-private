@@ -25,7 +25,7 @@ fn fixture() -> (tempfile::TempDir, ContentServer) {
         )
         .unwrap();
     let server = ContentServer::start(
-        &dir.path().join("data.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
@@ -82,7 +82,9 @@ async fn native_management_public_auth_and_revoke_share_one_database_without_hos
             .is_some()
     );
     assert!(rename(&state, id, "Renamed").unwrap());
-    let reopened = plain_rs::db::Db::open(&dir.path().join("data.db")).unwrap();
+    let reopened =
+        plain_rs::db::Db::open(&plain_rs::data_paths::DataPaths::new(dir.path()).database())
+            .unwrap();
     assert_eq!(reopened.session_get(id).unwrap().unwrap().name, "Renamed");
     let mut wrong = headers.clone();
     wrong.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -126,7 +128,7 @@ async fn web_login_ecdh_encrypted_response_signature_and_token_auth_survive_rest
     let row = state.db.session_get("browser").unwrap().unwrap();
     assert_eq!(row.r#type, "WEB");
     assert_eq!(
-        plain_rs::db::Db::open(&dir.path().join("data.db"))
+        plain_rs::db::Db::open(&plain_rs::data_paths::DataPaths::new(dir.path()).database())
             .unwrap()
             .session_get("browser")
             .unwrap()

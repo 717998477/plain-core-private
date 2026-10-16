@@ -61,7 +61,7 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
     peer.key = plain_rs::utils::base64::base64_encode(&key);
     peer.public_key = plain_rs::utils::base64::base64_encode(&public_key);
     peers::save(&db, &[peer], SaveMode::Insert).unwrap();
-    let server = ContentServer::start(&dir.path().join("plain.db"), &token, prefs.clone()).unwrap();
+    let server = ContentServer::start(dir.path(), &token, prefs.clone()).unwrap();
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let (_, https) = server
         .start_public(
@@ -89,7 +89,6 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
                     count += 1;
                     result
                 }
-                "discoveryFacts" => json!({"name":"fixture tablet","deviceType":"TABLET"}),
                 "peerTransportCapabilities" => json!(["BLE"]),
                 "peerTransportBleExchange" => {
                     let wire = crate::services::discovery::ble_http::test_peer_wire(
@@ -115,7 +114,7 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
                         .find(|p| p["id"] == "local")
                         .unwrap();
                     assert_eq!(local["name"], "fixture tablet");
-                    assert_eq!(local["deviceType"], "TABLET");
+                    assert_eq!(local["deviceType"], "COMPUTER");
                     if let Some(done) = broadcast_done.take() {
                         let _ = done.send(());
                     }

@@ -128,14 +128,17 @@ impl DlnaEngine {
         if self.running.swap(true, Ordering::Relaxed) {
             return;
         }
-        let Some(socket) = bind_ssdp_socket().await else {
-            self.running.store(false, Ordering::Relaxed);
-            let mut state = self.state.write().await;
-            state.is_running = false;
-            state.start_error = "Unable to bind DLNA SSDP socket".into();
-            drop(state);
-            let _ = self.changes.send(());
-            return;
+        let socket = match bind_ssdp_socket().await {
+            Ok(socket) => socket,
+            Err(error) => {
+                self.running.store(false, Ordering::Relaxed);
+                let mut state = self.state.write().await;
+                state.is_running = false;
+                state.start_error = format!("Unable to bind DLNA SSDP socket: {error}");
+                drop(state);
+                let _ = self.changes.send(());
+                return;
+            }
         };
         self.stop.send_replace(false);
         {
@@ -370,19 +373,20 @@ async fn respond_to_search(
     }
 }
 
-async fn bind_ssdp_socket() -> Option<UdpSocket> {
+async fn bind_ssdp_socket() -> std::io::Result<UdpSocket> {
     use socket2::{Domain, Protocol, Socket, Type};
 
-    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).ok()?;
-    socket.set_reuse_address(true).ok()?;
-    socket.set_nonblocking(true).ok()?;
-    let addr: std::net::SocketAddr = format!("0.0.0.0:{SSDP_PORT}").parse().ok()?;
-    socket.bind(&addr.into()).ok()?;
-    let multi: std::net::Ipv4Addr = SSDP_ADDR.parse().ok()?;
-    let any: std::net::Ipv4Addr = "0.0.0.0".parse().ok()?;
-    socket.join_multicast_v4(&multi, &any).ok()?;
+    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    socket.set_nonblocking(true)?;
+    let addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, SSDP_PORT);
+    socket.bind(&addr.into())?;
+    let multi = std::net::Ipv4Addr::new(239, 255, 255, 250);
+    socket.join_multicast_v4(&multi, &std::net::Ipv4Addr::UNSPECIFIED)?;
     let std_socket: std::net::UdpSocket = socket.into();
-    UdpSocket::from_std(std_socket).ok()
+    UdpSocket::from_std(std_socket)
 }
 
 fn local_ip() -> String {

@@ -1,11 +1,3 @@
-//! Process-global media paths (data dir + cache dir) for the media
-//! stack. Hosts install once at startup via [`set`] (the server with its
-//! `AppPaths::detect()` values, plain-desktop with its app-data dir).
-//! Before that, [`detect`] falls back to the `PLAIN_RS_DATA_DIR` /
-//! `PLAIN_RS_CACHE_DIR` env vars, then `~/.plainrs` defaults — the same
-//! shape the previous Go implementation's `consts::AppPaths` had, so ported tests keep a
-//! seam.
-
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -17,9 +9,6 @@ pub struct MediaPaths {
 
 static OVERRIDE: OnceLock<MediaPaths> = OnceLock::new();
 
-/// Install the process-wide media paths. First call wins — later calls
-/// are ignored, so tests in a host binary cannot fight the host's
-/// startup value.
 pub fn set(data_dir: PathBuf, cache_dir: PathBuf) {
     let _ = OVERRIDE.set(MediaPaths {
         data_dir,
@@ -28,19 +17,19 @@ pub fn set(data_dir: PathBuf, cache_dir: PathBuf) {
 }
 
 pub fn detect() -> MediaPaths {
-    if let Some(p) = OVERRIDE.get() {
-        return p.clone();
-    }
-    let data_dir = std::env::var("PLAIN_RS_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| default_data_dir());
-    let cache_dir = std::env::var("PLAIN_RS_CACHE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| default_cache_dir());
-    MediaPaths {
-        data_dir,
-        cache_dir,
-    }
+    OVERRIDE
+        .get_or_init(|| {
+            let data_dir = std::env::var("PLAIN_RS_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| default_data_dir());
+            let cache_dir = plain_rs::cache_paths::system::resolve(&data_dir)
+                .expect("initialize system cache directory at startup");
+            MediaPaths {
+                data_dir,
+                cache_dir,
+            }
+        })
+        .clone()
 }
 
 fn home() -> PathBuf {
@@ -51,10 +40,6 @@ fn home() -> PathBuf {
 
 fn default_data_dir() -> PathBuf {
     home().join(".plainrs").join("data")
-}
-
-fn default_cache_dir() -> PathBuf {
-    home().join(".plainrs").join("cache")
 }
 
 /// Test seam: pin `PLAIN_RS_DATA_DIR` for the whole test binary to a

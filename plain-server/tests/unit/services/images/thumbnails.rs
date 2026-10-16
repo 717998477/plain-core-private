@@ -60,7 +60,7 @@ fn server_with_cache() -> (tempfile::TempDir, ContentServer, std::path::PathBuf)
     prefs.set("client_id", "thumb-fixture").unwrap();
     let cache = dir.path().join("cache");
     let core = ContentServer::start(
-        &dir.path().join("plain.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[4; 32]),
         prefs,
     )

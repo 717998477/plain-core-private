@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::peers::pairing::utils::device_type_signature_value;
 
-// ── Wire-format structs (must match plain-app DNearbyPair.kt) ──────────────────
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingRequest {
@@ -18,15 +16,9 @@ pub struct PairingRequest {
     pub ips: Vec<String>,
     #[serde(default)]
     pub signature: String,
-    /// Whether the requester's device supports Wi-Fi Aware (mirrors
-    /// plain-app `DPairingRequest.awareSupported`). Non-Aware builds
-    /// always send `false`.
     #[serde(default)]
     pub aware_supported: bool,
-    /// Stamped on the receiver side (mirrors plain-app
-    /// `DPairingRequest.fromIp`). Carries the requester's IP so the
-    /// responder knows where to send the PAIR_RESPONSE. Excluded
-    /// from `signature_data` to match the Kotlin wire format.
+    // The receiver supplies this return address; it is not signed by the sender.
     #[serde(default)]
     pub from_ip: String,
 }
@@ -62,9 +54,6 @@ pub struct PairingResponse {
     pub ips: Vec<String>,
     #[serde(default)]
     pub signature: String,
-    /// Whether the responder's device supports Wi-Fi Aware (mirrors
-    /// plain-app `DPairingResponse.awareSupported`). Non-Aware builds
-    /// always send `false`.
     #[serde(default)]
     pub aware_supported: bool,
 }

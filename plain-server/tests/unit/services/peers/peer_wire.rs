@@ -43,17 +43,15 @@ fn signing_current_peer_and_channel_keys_and_authenticated_crypto_roundtrip() {
     let gql: serde_json::Value = serde_json::from_str(split[2]).unwrap();
     assert_eq!(gql["variables"]["content"], content);
     assert_eq!(first.key, peer.key);
-    let encrypted = encrypt(&first.key, &first.body).unwrap();
+    let decoded_key = plain_rs::utils::base64::base64_decode(&first.key);
+    let encrypted =
+        plain_rs::crypto::xchacha_encrypt_raw(&decoded_key, first.body.as_bytes()).unwrap();
     assert_eq!(
-        decrypt(&first.key, &encrypted).unwrap().unwrap(),
-        first.body
+        plain_rs::crypto::xchacha_decrypt_raw(&decoded_key, &encrypted).unwrap(),
+        first.body.as_bytes()
     );
-    assert!(
-        decrypt(&base64_encode(&[8; 32]), &encrypted)
-            .unwrap()
-            .is_none()
-    );
-    assert!(decrypt(&first.key, "plaintext").unwrap().is_none());
+    assert!(plain_rs::crypto::xchacha_decrypt_raw(&[8; 32], &encrypted).is_none());
+    assert!(plain_rs::crypto::xchacha_decrypt_raw(&decoded_key, b"plaintext").is_none());
     let mut channel = DChannel::new("group", "owner");
     channel.key = base64_encode(&[9; 32]);
     channels::save(&db, &[channel.clone()], SaveMode::Insert).unwrap();
@@ -87,7 +85,7 @@ fn signing_current_peer_and_channel_keys_and_authenticated_crypto_roundtrip() {
         )
         .is_err()
     );
-    assert!(encrypt("bad", "text").is_err());
-    assert!(decrypt("bad", &encrypted).is_err());
+    assert!(plain_rs::crypto::xchacha_encrypt_raw(b"bad", b"text").is_none());
+    assert!(plain_rs::crypto::xchacha_decrypt_raw(b"bad", &encrypted).is_none());
     std::fs::remove_dir_all(dir).unwrap();
 }

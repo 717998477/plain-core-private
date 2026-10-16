@@ -4,3 +4,6 @@ pub mod linux;
 pub mod mountinfo;
 #[cfg(all(feature = "unix-platform", unix))]
 pub mod unix;
+
+#[cfg(all(target_os = "android", feature = "library"))]
+pub mod android;

@@ -81,7 +81,7 @@ fn fixture() -> (
         Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
     prefs.set("client_id", "fixture").unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &directory.path().join("plain.db"),
+        directory.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )

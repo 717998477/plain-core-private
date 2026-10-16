@@ -35,74 +35,71 @@ fn c_buffer_reports_error_and_is_released() {
 }
 
 #[test]
-fn gateway_client_and_server_share_binary_crypto_contract() {
-    let key = [7u8; 32];
-    let token = crate::utils::base64::base64_encode(&key);
-    let args = serde_json::json!({"clientId":"peer", "token":token, "body":"{\"query\":\"{ __typename }\"}"});
-    let bytes = call(6, 0, 0, 0, 0, false, &serde_json::to_vec(&args).unwrap())
-        .unwrap()
-        .unwrap();
-    let ble_wire::GatewayRequest::Graphql { client_id, body } =
-        ble_wire::GatewayRequest::decode(&bytes).unwrap()
-    else {
-        panic!("wrong operation")
-    };
-    assert_eq!(client_id, "peer");
-    assert_eq!(
-        crate::crypto::xchacha_decrypt_raw(&key, &body).unwrap(),
-        b"{\"query\":\"{ __typename }\"}"
-    );
-    let encrypted = crate::crypto::xchacha_encrypt_raw(&key, b"{\"data\":{}}").unwrap();
-    let mut response = key.to_vec();
-    response.extend(ble_wire::response(200, &encrypted).unwrap());
-    assert_eq!(
-        call(8, 0, 0, 0, 0, false, &response).unwrap().unwrap(),
-        b"{\"data\":{}}"
-    );
-    response[0] ^= 1;
-    assert!(call(8, 0, 0, 0, 0, false, &response).is_err());
+fn removed_gateway_actions_cannot_be_called_through_native_codecs() {
+    for action in 5..=8 {
+        for data in [
+            &[][..],
+            br#"{"clientId":"peer","token":"key","body":"{}"}"#.as_slice(),
+        ] {
+            assert_eq!(
+                call(action, 0, 0, 0, 0, false, data).unwrap_err(),
+                "Invalid BLE codec action",
+            );
+            let buffer =
+                unsafe { plain_ble_call(action, 0, 0, 0, 0, false, data.as_ptr(), data.len()) };
+            assert_eq!(buffer.status, -1);
+            unsafe { plain_ble_buffer_free(buffer) };
+        }
+    }
 }
 
 #[test]
-fn gateway_auth_hashes_password_in_shared_core() {
-    let args = br#"{"clientId":"peer","clientName":"phone","password":"abc"}"#;
-    let bytes = call(5, 0, 0, 0, 0, false, args).unwrap().unwrap();
-    let ble_wire::GatewayRequest::Auth {
-        client_id,
-        client_name,
-        password,
-    } = ble_wire::GatewayRequest::decode(&bytes).unwrap()
-    else {
-        panic!("wrong operation")
-    };
-    assert_eq!(client_id, "peer");
-    assert_eq!(client_name, "phone");
+fn discovery_codec_uses_shared_bytes_and_rejects_invalid_inputs() {
+    let payload = crate::discovery::advertisement::ble("fixture", true, false).unwrap();
+    let decoded = call(9, 0, 0, 0, 0, false, &payload).unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
     assert_eq!(
-        password,
-        "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+        value,
+        serde_json::json!({"shortId":"f16d05ec6b29248d", "awareSupported":true, "awareRunning":false})
     );
-    assert!(
-        call(
-            5,
-            0,
-            0,
-            0,
-            0,
-            false,
-            br#"{"clientId":"peer","clientName":"phone","password":"abc","unused":true}"#
-        )
-        .is_err()
+    for length in 0..9 {
+        assert_eq!(
+            call(9, 0, 0, 0, 0, false, &payload[..length])
+                .unwrap()
+                .unwrap(),
+            b"null"
+        );
+    }
+    assert!(call(9, 0, 0, 0, 0, false, &[0; 1651]).is_err());
+    assert_eq!(
+        call(10, 0, 0, 0, 0, false, b"fixture").unwrap().unwrap(),
+        b"f16d05ec6b29248d"
     );
-    assert!(
-        call(
-            7,
-            0,
-            0,
-            0,
-            0,
-            false,
-            &ble_wire::response(401, b"denied").unwrap()
-        )
-        .is_err()
+    for value in [vec![], vec![b'a'; 1025], vec![255]] {
+        assert!(call(10, 0, 0, 0, 0, false, &value).is_err());
+    }
+}
+
+#[test]
+fn nearby_codec_roundtrips_shared_wire_without_a_runtime() {
+    let discover = br#"{"kind":"DISCOVER"}"#;
+    assert_eq!(
+        call(11, 0, 0, 0, 0, false, discover).unwrap().unwrap(),
+        b"DISCOVER:"
     );
+    let input = br#"{"kind":"PAIR_CANCEL","payload":{"fromId":"sender","toId":"receiver"}}"#;
+    let wire = call(11, 0, 0, 0, 0, false, input).unwrap().unwrap();
+    let output = call(12, 0, 0, 0, 0, false, &wire).unwrap().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(input).unwrap()
+    );
+    assert!(call(11, 0, 0, 0, 0, false, br#"{"kind":"INVALID"}"#).is_err());
+    for bytes in [
+        b"missing-prefix".to_vec(),
+        b"UNKNOWN:{}".to_vec(),
+        vec![255],
+    ] {
+        assert!(call(12, 0, 0, 0, 0, false, &bytes).is_err());
+    }
 }

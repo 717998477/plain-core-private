@@ -1,4 +1,3 @@
-
 #[cfg(feature = "core")]
 pub mod local;
 
@@ -21,8 +20,6 @@ pub mod mdns_runtime;
 pub mod nearby_devices;
 
 #[cfg(feature = "core")]
-pub mod nearby_http;
-
 #[cfg(feature = "core")]
 pub mod pairing;
 

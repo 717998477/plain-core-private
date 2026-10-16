@@ -168,3 +168,73 @@ fn an_unreadable_archive_leaves_no_staged_files_behind() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn shared_directory_download_preserves_empty_directories_and_excludes_outside_links() {
+    for with_file in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let core =
+            crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
+        let state = core.runtime_state();
+        let (_generation, mut requests) = state.host.connect();
+        state.prefs.set_user("service", true).unwrap();
+        let folder = directory.path().join("photos");
+        std::fs::create_dir_all(folder.join("empty")).unwrap();
+        if with_file {
+            std::fs::write(folder.join("a.txt"), "synthetic 中文").unwrap();
+        }
+        let outside = directory.path().join("outside.txt");
+        std::fs::write(&outside, b"outside").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, folder.join("escape.txt")).unwrap();
+        let shares = plain_rs::files::shares::Service::new(state.db.clone(), state.prefs.clone());
+        let share = shares
+            .create(
+                "shared folder".into(),
+                vec![folder.to_string_lossy().into_owned()],
+                true,
+                None,
+            )
+            .unwrap();
+        let payload = serde_json::json!({"sharedId":share.id,"virtualPath":"photos"}).to_string();
+        let key = plain_rs::utils::base64::base64_decode(&share.url_token);
+        let id = plain_rs::utils::base64::base64_encode_url_safe(
+            &plain_rs::crypto::xchacha_encrypt_raw(&key, payload.as_bytes()).unwrap(),
+        );
+        let response = dir(
+            State(state.clone()),
+            Query(Params {
+                id,
+                sid: Some(share.id),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut names = archive.file_names().map(str::to_owned).collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(
+            names,
+            if with_file {
+                vec!["a.txt", "empty/"]
+            } else {
+                vec!["empty/"]
+            }
+        );
+        assert!(archive.by_name("empty/").unwrap().is_dir());
+        if with_file {
+            let mut text = String::new();
+            archive
+                .by_name("a.txt")
+                .unwrap()
+                .read_to_string(&mut text)
+                .unwrap();
+            assert_eq!(text, "synthetic 中文");
+        }
+        assert!(requests.try_recv().is_err());
+        core.stop_core().await;
+    }
+}

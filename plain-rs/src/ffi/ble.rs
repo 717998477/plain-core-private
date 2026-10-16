@@ -110,61 +110,36 @@ fn call(
             }
             return Ok(frame);
         }
-        5 => {
-            let args: AuthArgs = serde_json::from_slice(data).map_err(|e| e.to_string())?;
-            ble_wire::GatewayRequest::Auth {
-                client_id: args.client_id,
-                client_name: args.client_name,
-                password: crate::crypto::sha512_hex(&args.password),
+        9 => {
+            if data.len() > 1650 {
+                return Err("BLE payload exceeds advertising limit".into());
             }
-            .encode()
-            .map(Some)
-        }
-        6 => {
-            let args: GraphqlArgs = serde_json::from_slice(data).map_err(|e| e.to_string())?;
-            let body = crate::crypto::xchacha_encrypt(&args.token, args.body.as_bytes())
-                .ok_or("Invalid BLE encryption key")?;
-            ble_wire::GatewayRequest::Graphql {
-                client_id: args.client_id,
-                body,
-            }
-            .encode()
-            .map(Some)
-        }
-        7 => ble_wire::decode_response(data).and_then(|(status, body)| {
-            anyhow::ensure!(status == 200, "BLE HTTP status {status}");
-            Ok(Some(body.to_vec()))
-        }),
-        8 => {
-            if data.len() < 32 {
-                return Err("Invalid BLE encryption key".into());
-            }
-            let (status, body) =
-                ble_wire::decode_response(&data[32..]).map_err(|e| e.to_string())?;
-            if status != 200 {
-                return Err(format!("BLE HTTP status {status}"));
-            }
-            return crate::crypto::xchacha_decrypt_raw(&data[..32], body)
+            serde_json::to_vec(&crate::discovery::advertisement::decode_ble(data))
                 .map(Some)
-                .ok_or("Invalid BLE encrypted response".into());
+                .map_err(Into::into)
+        }
+        10 => {
+            let id = std::str::from_utf8(data).map_err(|e| e.to_string())?;
+            if id.is_empty() || id.len() > 1024 {
+                return Err("Invalid peer identity".into());
+            }
+            return Ok(Some(
+                crate::discovery::nearby_wire::short_id(id).into_bytes(),
+            ));
+        }
+        11 => {
+            let message: crate::discovery::nearby_wire::Message =
+                serde_json::from_slice(data).map_err(|e| e.to_string())?;
+            message.wire().map(|body| Some(body.into_bytes()))
+        }
+        12 => {
+            let body = std::str::from_utf8(data).map_err(|e| e.to_string())?;
+            crate::discovery::nearby_wire::Message::parse(body)
+                .and_then(|message| Ok(Some(serde_json::to_vec(&message)?)))
         }
         _ => return Err("Invalid BLE codec action".into()),
     };
     result.map_err(|e| e.to_string())
-}
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AuthArgs {
-    client_id: String,
-    client_name: String,
-    password: String,
-}
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GraphqlArgs {
-    client_id: String,
-    token: String,
-    body: String,
 }
 #[repr(C)]
 pub struct Buffer {
@@ -185,14 +160,7 @@ pub unsafe extern "C" fn plain_ble_call(
     data: *const u8,
     len: usize,
 ) -> Buffer {
-    let result = if len
-        > if matches!(action, 5 | 6) {
-            ble_wire::MAX_MESSAGE * 6 + 1024
-        } else {
-            ble_wire::MAX_MESSAGE + 32
-        }
-        || (data.is_null() && len != 0)
-    {
+    let result = if len > ble_wire::MAX_MESSAGE + 32 || (data.is_null() && len != 0) {
         Err("Invalid BLE input".into())
     } else {
         call(

@@ -22,24 +22,36 @@ impl AppPaths {
             .clone()
     }
 
-    pub fn detect() -> Self {
+    pub fn detect() -> Result<Self, String> {
         Self::detect_with_data_directory(None)
     }
 
-    pub fn detect_with_data_directory(directory: Option<PathBuf>) -> Self {
+    pub fn detect_with_data_directory(directory: Option<PathBuf>) -> Result<Self, String> {
+        Self::detect_with_directories(directory, None)
+    }
+    pub fn detect_with_directories(
+        directory: Option<PathBuf>,
+        cache: Option<PathBuf>,
+    ) -> Result<Self, String> {
         let base = home_directory()
             .unwrap_or_else(std::env::temp_dir)
             .join(".plainapp");
         let data_dir = directory
             .or_else(|| configured_path("PLAINAPP_DATA_DIR"))
             .unwrap_or_else(|| base.join("data"));
-        Self {
-            cache_dir: configured_path("PLAINAPP_CACHE_DIR")
-                .unwrap_or_else(|| base.join("cache")),
-            tls_cert: configured_path("PLAINAPP_TLS_CERT").unwrap_or_else(|| data_dir.join("tls.pem")),
-            tls_key: configured_path("PLAINAPP_TLS_KEY").unwrap_or_else(|| data_dir.join("tls.key")),
+        let data_dir = std::path::absolute(data_dir).map_err(|error| error.to_string())?;
+        let cache_dir = match cache.or_else(|| configured_path("PLAINAPP_CACHE_DIR")) {
+            Some(cache) => std::path::absolute(cache).map_err(|error| error.to_string())?,
+            None => plain_rs::cache_paths::system::resolve(&data_dir)?,
+        };
+        Ok(Self {
+            cache_dir,
+            tls_cert: configured_path("PLAINAPP_TLS_CERT")
+                .unwrap_or_else(|| data_dir.join("tls.pem")),
+            tls_key: configured_path("PLAINAPP_TLS_KEY")
+                .unwrap_or_else(|| data_dir.join("tls.key")),
             data_dir,
-        }
+        })
     }
 }
 

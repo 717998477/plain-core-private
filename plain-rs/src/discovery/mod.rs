@@ -14,3 +14,5 @@ pub mod ble_sessions;
 
 #[cfg(feature = "ble")]
 pub mod ble_client;
+
+pub mod pairing_code;

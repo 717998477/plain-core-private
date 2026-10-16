@@ -8,7 +8,7 @@ async fn local_and_remote_execute_the_same_envelope_and_preserve_errors() {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
     let token = plain_rs::utils::base64::base64_encode(&[8; 32]);
-    let server = ContentServer::start(&dir.path().join("db"), &token, prefs).unwrap();
+    let server = ContentServer::start(dir.path(), &token, prefs).unwrap();
     let state = server.runtime_state();
     let document = json!({"query":"query Count($q: String!) { noteCount(query: $q) } query Other { __typename }", "operationName":"Count", "variables":{"q":""}}).to_string();
     let local = server
@@ -91,4 +91,85 @@ fn service_owned_media_notifications_are_not_repeated_by_aliases_or_fragments() 
         )
         .operation_name("Media")
     ));
+}
+
+#[test]
+fn cache_only_and_task_owned_mutations_skip_the_generic_content_broadcast() {
+    for query in [
+        "mutation { preview: cacheSharedFile }",
+        "mutation { cacheRemoteFile cacheZipEntry cacheAudioCover exportAppLogs exportAppBackup stageAppRestore }",
+        "mutation { ...Cache } fragment Cache on Mutation { cacheRemoteFile }",
+        "mutation { ... on Mutation { copyFileToDirectory copyFile moveFile renameFile renameFilePath } }",
+        "mutation { createCopyTask createMoveTask createFileTask }",
+    ] {
+        assert!(!content_changes(&Request::new(query)), "{query}");
+    }
+    assert!(content_changes(&Request::new(
+        "mutation { cacheRemoteFile createNote }"
+    )));
+    assert!(content_changes(&Request::new("mutation { clearAppLogs }")));
+    assert!(content_changes(&Request::new(
+        "mutation { clearAppLogFiles }"
+    )));
+}
+
+#[tokio::test]
+async fn backup_uses_the_main_schema_and_rejects_remote_secret_export() {
+    let directory = tempfile::tempdir().unwrap();
+    let prefs = Arc::new(
+        plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(directory.path())).unwrap(),
+    );
+    let token = plain_rs::utils::base64::base64_encode(&[8; 32]);
+    let server = ContentServer::start(directory.path(), &token, prefs).unwrap();
+    let state = server.runtime_state();
+    let remote = execute_graphql(
+        &state.public,
+        Request::new("mutation { exportAppBackup }"),
+        RequestContext::remote(Some(state.clone())),
+    )
+    .await;
+    assert!(!remote.errors.is_empty());
+    let restore = execute_graphql(
+        &state.public,
+        Request::new("mutation { stageAppRestore(path:\"/not-accessible/backup.zip\") }"),
+        RequestContext::remote(Some(state.clone())),
+    )
+    .await;
+    assert!(!restore.errors.is_empty());
+    assert!(
+        !plain_rs::data_paths::DataPaths::new(directory.path())
+            .pending_restore()
+            .exists()
+    );
+    assert!(
+        std::fs::read_dir(state.cache.root())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    let local = server
+        .graphql_executor()
+        .execute(Request::new("mutation { exportAppBackup }"))
+        .await;
+    assert!(local.errors.is_empty(), "{:?}", local.errors);
+    let json = local.data.into_json().unwrap();
+    assert!(std::path::Path::new(json["exportAppBackup"].as_str().unwrap()).exists());
+    server.shutdown().await;
+}
+
+#[test]
+fn runtime_controls_and_viewer_exports_do_not_trigger_generic_content_refreshes() {
+    for document in [
+        "mutation{controlPeerStatus(action:STOP)}",
+        r#"mutation{browseMdns{revision} acquireMdnsDebugSession(token:"token"){debugSessionCount}}"#,
+        "mutation{controlDlnaReceiver(input:{action:POSITION,positionMs:1,durationMs:2})}",
+        r#"mutation{confirmWebLogin(requestId:"request",allowed:false)}"#,
+        r#"mutation{createCrashReport(report:"report") importPomodoroSound(source:"source")}"#,
+        "mutation{...Control} fragment Control on Mutation{alias:controlPeerStatus(action:RECONNECT)}",
+    ] {
+        assert!(!content_changes(&Request::new(document)), "{document}");
+    }
+    assert!(content_changes(&Request::new(
+        "mutation{controlPeerStatus(action:STOP) createNote}"
+    )));
 }

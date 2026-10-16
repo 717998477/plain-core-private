@@ -92,7 +92,7 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
         )
         .unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
@@ -158,11 +158,7 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
                 .is_internal()
         );
         let id = payload["requestId"].as_str().unwrap();
-        server
-            .web_login_confirmation()
-            .decide(id, allowed)
-            .await
-            .unwrap();
+        confirm_login(&server, id, allowed).await.unwrap();
         let response = tokio::time::timeout(Duration::from_secs(3), socket.next())
             .await
             .unwrap()
@@ -199,13 +195,7 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
                     .is_none()
             );
         }
-        assert!(
-            server
-                .web_login_confirmation()
-                .decide(id, true)
-                .await
-                .is_err()
-        );
+        assert!(confirm_login(&server, id, true).await.is_err());
     }
     server.shutdown().await;
     consumer.await.unwrap();
@@ -218,7 +208,7 @@ fn public_fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServe
     );
     prefs.set_user("desktop_access", true).unwrap();
     let core = crate::assembly::server::ContentServer::start(
-        &directory.path().join("plain.db"),
+        directory.path(),
         &plain_rs::utils::base64::base64_encode(&[4; 32]),
         prefs,
     )
@@ -352,4 +342,19 @@ async fn native_event_socket_registers_without_a_session_and_encrypts_events_wit
     assert!(!state.host.connected());
     socket.close(None).await.unwrap();
     core.shutdown().await;
+}
+
+async fn confirm_login(
+    server: &crate::assembly::server::ContentServer,
+    id: &str,
+    allowed: bool,
+) -> Result<(), String> {
+    let response = server.native_graphql()?.execute(
+        async_graphql::Request::new("mutation($id:String!,$allowed:Boolean!){confirmWebLogin(requestId:$id,allowed:$allowed)}")
+            .variables(async_graphql::Variables::from_json(serde_json::json!({"id":id,"allowed":allowed}))),
+    ).await;
+    if let Some(error) = response.errors.first() {
+        return Err(error.message.clone());
+    }
+    Ok(())
 }

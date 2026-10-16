@@ -113,6 +113,25 @@ pub struct PeersQuery;
 
 #[Object]
 impl PeersQuery {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn pairing_code(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
+        let reply = crate::services::discovery::discovery_advertisement::execute(
+            ctx.data::<crate::assembly::server::ServerState>()?,
+            crate::services::discovery::discovery_advertisement::Request::Reply {},
+        )
+        .await?;
+        let mut payload: plain_rs::discovery::pairing_code::Payload =
+            serde_json::from_value(reply)?;
+        payload.ips.retain(|address| {
+            address
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| !address.is_loopback() && !address.is_unspecified())
+        });
+        plain_rs::discovery::pairing_code::format(&payload).ok_or_else(|| {
+            async_graphql::Error::new("Reachable pairing address and active listener required")
+        })
+    }
+
     async fn pairing_tickets(
         &self,
         ctx: &Context<'_>,

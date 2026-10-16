@@ -49,10 +49,55 @@ fn record(peer: plain_rs::db::DPeer) -> async_graphql::Result<PeerRecord> {
         crate::services::peers::peer_address::view(&peer),
     )?)?)
 }
+#[derive(SimpleObject)]
+struct LoggedInPeer {
+    peer: PeerRecord,
+    online: bool,
+}
+#[derive(async_graphql::InputObject)]
+struct PeerLoginInput {
+    id: async_graphql::ID,
+    name: String,
+    host: String,
+    device_type: crate::graphql::resolvers::device::public::DeviceType,
+    token: String,
+    signature_public_key: String,
+    chat_key: Option<String>,
+}
 #[derive(Default)]
 pub struct PeerRecordQuery;
 #[async_graphql::Object]
 impl PeerRecordQuery {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn logged_in_peers(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<LoggedInPeer>> {
+        let state = ctx.data::<crate::assembly::server::ServerState>()?;
+        let db = state.db.clone();
+        let mut rows =
+            tokio::task::spawn_blocking(move || plain_rs::db::chat_store::peers::all(&db))
+                .await??;
+        rows.retain(|row| !row.token.is_empty());
+        rows.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
+        let connections = state.peer_status.connections.snapshot(&state.db);
+        let online = connections["online"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        rows.into_iter()
+            .map(|row| {
+                let is_online = online.contains(row.id.as_str());
+                Ok(LoggedInPeer {
+                    peer: record(row)?,
+                    online: is_online,
+                })
+            })
+            .collect()
+    }
+
     async fn peer_records(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -113,6 +158,69 @@ impl PeerRecordQuery {
 pub struct PeerRecordMutation;
 #[async_graphql::Object]
 impl PeerRecordMutation {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn login_peer(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        input: PeerLoginInput,
+    ) -> async_graphql::Result<bool> {
+        let db = ctx
+            .data::<crate::assembly::server::ServerState>()?
+            .db
+            .clone();
+        let (ip, port) = plain_rs::utils::http_url::split_peer_host(&input.host);
+        let device_type = input
+            .device_type
+            .as_str()
+            .parse::<plain_rs::chat::enums::DeviceType>()?;
+        tokio::task::spawn_blocking(move || {
+            db.login_peer(
+                &input.id,
+                &input.name,
+                &ip,
+                port,
+                device_type,
+                &input.token,
+                &input.signature_public_key,
+                &input.chat_key.unwrap_or_default(),
+            )
+        })
+        .await?
+        .map_err(async_graphql::Error::new)?;
+        Ok(true)
+    }
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn logout_peer(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        id: async_graphql::ID,
+    ) -> async_graphql::Result<bool> {
+        let db = ctx
+            .data::<crate::assembly::server::ServerState>()?
+            .db
+            .clone();
+        tokio::task::spawn_blocking(move || db.logout_peer(&id))
+            .await?
+            .map_err(async_graphql::Error::new)?;
+        Ok(true)
+    }
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn update_peer_name(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        id: async_graphql::ID,
+        name: String,
+    ) -> async_graphql::Result<bool> {
+        let db = ctx
+            .data::<crate::assembly::server::ServerState>()?
+            .db
+            .clone();
+        tokio::task::spawn_blocking(move || db.update_peer_name(&id, &name))
+            .await?
+            .map_err(async_graphql::Error::new)?;
+        Ok(true)
+    }
+
     async fn remove_peer_record(
         &self,
         ctx: &async_graphql::Context<'_>,

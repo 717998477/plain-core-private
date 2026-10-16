@@ -98,7 +98,7 @@ async fn sender_controls_use_soap_and_release_the_original_subscription() {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("plain.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )

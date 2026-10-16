@@ -1,7 +1,6 @@
 use crate::host::bridge::Host;
 use crate::services::audio::host::Audio;
 use plain_rs::media::audio::{playback, queue::AudioTrack};
-use plain_rs::media::duration_cache::{Duration, DurationCache};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -18,20 +17,8 @@ struct Started {
     path: String,
     revision: i64,
 }
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DurationReport {
-    media_type: String,
-    media_id: String,
-    duration_ms: i64,
-    path: String,
-    size_bytes: i64,
-    modified_at: String,
-}
-
 pub(crate) async fn accept(
     audio: &Arc<Audio>,
-    durations: &DurationCache,
     host: Arc<Host>,
     generation: u64,
     kind: &str,
@@ -75,21 +62,6 @@ pub(crate) async fn accept(
                 })
                 .await
                 .map_err(|error| error.message)?;
-        }
-        "MEDIA_DURATION_REPORTED" => {
-            let report: DurationReport =
-                serde_json::from_str(payload).map_err(|error| error.to_string())?;
-            durations
-                .save(Duration {
-                    media_type: report.media_type,
-                    media_id: report.media_id,
-                    duration_ms: report.duration_ms,
-                    path: report.path,
-                    size_bytes: report.size_bytes,
-                    modified_at: report.modified_at,
-                    updated_at: String::new(),
-                })
-                .map_err(|error| error.to_string())?;
         }
         _ => return Ok(false),
     }

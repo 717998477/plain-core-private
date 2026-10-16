@@ -1,3 +1,4 @@
+use super::addresses::select as addresses;
 use crate::host::query as provider_plan;
 use crate::host::query::Plan;
 use plain_rs::db::Db;
@@ -201,71 +202,15 @@ struct ThreadFacts {
     #[serde(default)]
     addresses: Vec<String>,
 }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationFacts {
+    items: Vec<ThreadFacts>,
+    #[serde(default)]
+    own_numbers: Vec<String>,
+}
 fn instant(value: &str) -> anyhow::Result<chrono::DateTime<chrono::FixedOffset>> {
     Ok(chrono::DateTime::parse_from_rfc3339(value)?)
-}
-pub(crate) fn addresses_match(first: &str, second: &str, candidates: &[String]) -> bool {
-    let normalize = |value: &str| {
-        let trimmed = value.trim();
-        let phone = !trimmed.is_empty()
-            && trimmed.chars().any(char::is_numeric)
-            && trimmed
-                .chars()
-                .all(|c| c.is_numeric() || c.is_whitespace() || "+-()./".contains(c));
-        if phone {
-            (
-                trimmed
-                    .chars()
-                    .filter(|c| c.is_numeric())
-                    .collect::<String>(),
-                true,
-            )
-        } else {
-            (trimmed.to_lowercase(), false)
-        }
-    };
-    let (a, ap) = normalize(first);
-    let (b, bp) = normalize(second);
-    if a == b {
-        return true;
-    }
-    if !ap || !bp || a.len().min(b.len()) < 7 || a.len() == b.len() {
-        return false;
-    }
-    let suffix = |longer: &str, shorter: &str| longer.ends_with(shorter);
-    let matches = candidates
-        .iter()
-        .map(|candidate| normalize(candidate))
-        .filter(|(v, is_phone)| {
-            *is_phone
-                && ((v.len() > b.len() && suffix(v, &b)) || (v.len() > a.len() && suffix(v, &a)))
-        })
-        .collect::<std::collections::HashSet<_>>();
-    matches.len() == 1 && matches.contains(&(a, true))
-}
-fn addresses(mut candidates: Vec<String>, own: &[String]) -> Vec<String> {
-    candidates.retain(|v| !v.trim().is_empty());
-    let mut distinct: Vec<String> = Vec::new();
-    for candidate in candidates.clone() {
-        if !distinct
-            .iter()
-            .any(|v| addresses_match(v, &candidate, &candidates))
-        {
-            distinct.push(candidate)
-        }
-    }
-    let mut non_self = distinct
-        .iter()
-        .filter(|address| {
-            !own.iter()
-                .any(|own| addresses_match(address, own, &distinct))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if non_self.is_empty() {
-        non_self = distinct;
-    }
-    non_self
 }
 fn archived_matches(addresses: &[String], snippet: &str, query: &str) -> bool {
     let query = query.trim().to_lowercase();
@@ -278,6 +223,7 @@ fn archived_matches(addresses: &[String], snippet: &str, query: &str) -> bool {
 fn conversation_models(
     db: &Db,
     rows: Vec<ThreadFacts>,
+    own: &[String],
     query: &str,
     offset: i32,
     limit: i32,
@@ -313,7 +259,7 @@ fn conversation_models(
     }
     rows.sort_by(|a, b| instant(&b.date).ok().cmp(&instant(&a.date).ok()));
     Ok(rows.into_iter().skip(offset.max(0) as usize).take(limit.max(0) as usize).map(|row|{
-        let selected=addresses(row.addresses,&[]);
+        let selected=addresses(row.addresses,own);
         json!({"id":row.id,"address":selected.first().cloned().unwrap_or_default(),"addresses":selected,"snippet":row.snippet,"date":row.date,"messageCount":row.message_count,"read":row.read})
     }).collect())
 }
@@ -407,6 +353,11 @@ fn page(
     canonical: &str,
 ) -> anyhow::Result<Vec<Value>> {
     for item in &mut items {
+        if item["isMms"].as_bool() == Some(true) {
+            let candidates: Vec<super::addresses::MmsAddress> =
+                serde_json::from_value(item["addressCandidates"].clone())?;
+            item["address"] = json!(super::addresses::mms(&candidates));
+        }
         anyhow::ensure!(
             item["date"]
                 .as_str()
@@ -432,7 +383,7 @@ async fn matched_conversation_facts(
     db: &plain_rs::db::Db,
     host: &crate::host::bridge::Host,
     query: &str,
-) -> anyhow::Result<Vec<ThreadFacts>> {
+) -> anyhow::Result<ConversationFacts> {
     let mut plans = prepare(db, host, query, true, false).await?;
     plans.sms.clauses.retain(|c| !c.starts_with("date "));
     plans
@@ -466,7 +417,7 @@ async fn conversation_facts(
     host: &crate::host::bridge::Host,
     ids: Option<Vec<String>>,
     limit: Option<i64>,
-) -> anyhow::Result<Vec<ThreadFacts>> {
+) -> anyhow::Result<ConversationFacts> {
     let facts = host
         .call(
             "systemSmsConversationFacts",
@@ -474,7 +425,7 @@ async fn conversation_facts(
         )
         .await
         .map_err(anyhow::Error::msg)?;
-    Ok(serde_json::from_value(facts["items"].clone())?)
+    Ok(serde_json::from_value(facts)?)
 }
 pub(crate) async fn execute(
     db: &plain_rs::db::Db,
@@ -499,8 +450,13 @@ pub(crate) async fn execute(
                 )
                 .await
                 .map_err(anyhow::Error::msg)?;
-            let canonical = receipt["canonicalAddress"].as_str().unwrap_or_default();
-            json!({"items":page(serde_json::from_value(receipt["items"].clone())?,offset,limit,canonical)?})
+            let candidates = serde_json::from_value(receipt["canonicalAddresses"].clone())?;
+            let own = serde_json::from_value::<Vec<String>>(receipt["ownNumbers"].clone())?;
+            let canonical = addresses(candidates, &own)
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            json!({"items":page(serde_json::from_value(receipt["items"].clone())?,offset,limit,&canonical)?})
         }
         Request::Count { query } => json!({"count":count(db,host,&query,false).await?}),
         Request::Ids {
@@ -537,7 +493,7 @@ pub(crate) async fn execute(
             } else {
                 matched_conversation_facts(db, host, &query).await?
             };
-            json!({"items":conversation_models(&db,rows,&query,offset,limit)?})
+            json!({"items":conversation_models(&db,rows.items,&rows.own_numbers,&query,offset,limit)?})
         }
         Request::ConversationCount { query } => {
             let rows = if query.is_empty() {
@@ -545,7 +501,7 @@ pub(crate) async fn execute(
             } else {
                 matched_conversation_facts(db, host, &query).await?
             };
-            json!({"count":conversation_models(&db,rows,&query,0,i32::MAX)?.len()})
+            json!({"count":conversation_models(&db,rows.items,&rows.own_numbers,&query,0,i32::MAX)?.len()})
         }
         Request::ArchivedConversations {
             query,
@@ -573,15 +529,17 @@ pub(crate) async fn execute(
                 )
                 .await
                 .map_err(anyhow::Error::msg)?;
-            let rows: Vec<ThreadFacts> = serde_json::from_value(facts["items"].clone())?;
+            let rows: ConversationFacts = serde_json::from_value(facts.clone())?;
+            let own = rows.own_numbers;
             let by_id = rows
+                .items
                 .into_iter()
                 .map(|r| (r.id.clone(), r))
                 .collect::<std::collections::HashMap<_, _>>();
             let items=records.into_iter().filter_map(|record|by_id.get(&record.conversation_id).map(|row|{
                 let date=instant(&record.archived_at).ok()?;
                 let snippet=if let Some(value)=facts["snippets"][&row.id].as_str(){value.to_owned()}else{row.snippet.clone()};
-                let addresses = addresses(row.addresses.clone(),&[]);
+                let addresses = addresses(row.addresses.clone(),&own);
                 if !archived_matches(&addresses, &snippet, &query) {
                     return None;
                 }
@@ -591,7 +549,7 @@ pub(crate) async fn execute(
         }
         Request::ConversationDate { id } => {
             let rows = conversation_facts(host, Some(vec![id]), None).await?;
-            json!({"date":rows.first().map(|r|&r.date)})
+            json!({"date":rows.items.first().map(|r|&r.date)})
         }
         Request::TextIds { filters } => {
             json!({"ids":text_ids(host.call("systemMmsTextFacts",json!({})).await.map_err(anyhow::Error::msg)?,&filters)?})

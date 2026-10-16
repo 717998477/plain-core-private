@@ -27,20 +27,6 @@ pub struct AppUpdateFacts {
 pub const SYSTEM_DISKS_FACTS: &str = "systemDisksFacts";
 pub const SYSTEM_APP_UPDATE_FACTS: &str = "systemAppUpdateFacts";
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppFacts {
-    pub app_dir: String,
-    pub device_type: String,
-    pub capabilities: Vec<String>,
-    pub build_channel: String,
-    pub permissions: Vec<String>,
-    pub downloads_dir: String,
-    pub debug: bool,
-}
-
-pub const SYSTEM_APP_FACTS: &str = "systemAppFacts";
-
 pub const SYSTEM_SAMBA_SERVICE_FACTS: &str = "systemSambaServiceFacts";
 pub const SYSTEM_SAMBA_APPLY: &str = "systemSambaApply";
 pub const SYSTEM_SAMBA_PASSWORD: &str = "systemSambaPassword";

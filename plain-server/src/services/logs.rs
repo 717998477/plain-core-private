@@ -67,6 +67,90 @@ impl Logs {
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
     }
+    pub(crate) async fn size(&self) -> Result<u64, String> {
+        let path = self.path().await?;
+        tokio::task::spawn_blocking(move || {
+            log_files(&path)?.into_iter().try_fold(0u64, |size, file| {
+                size.checked_add(std::fs::metadata(file)?.len())
+                    .ok_or_else(|| io::Error::other("Log size overflow"))
+            })
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+    }
+    pub(crate) async fn clear_files(&self) -> Result<(), String> {
+        let path = self.path().await?;
+        tokio::task::spawn_blocking(move || {
+            for file in log_files(&path)? {
+                let result = if file == path {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&file)
+                        .and_then(|file| file.set_len(0))
+                } else {
+                    std::fs::remove_file(&file)
+                };
+                if let Err(error) = result {
+                    if error.kind() != io::ErrorKind::NotFound {
+                        return Err(error);
+                    }
+                }
+            }
+            Ok::<_, io::Error>(())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+    }
+    pub(crate) async fn export(
+        &self,
+        directory: &Path,
+        cache: &plain_rs::cache_paths::CachePaths,
+        stop: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Option<String>, String> {
+        let path = self.path().await?;
+        let paths = plain_rs::data_paths::DataPaths::new(directory);
+        let reports = vec![paths.crash_report(), paths.crash_log()];
+        let target = cache.root().join("logs.zip");
+        let files = tokio::task::spawn_blocking(move || {
+            let mut files = log_files(&path)?
+                .into_iter()
+                .map(|path| {
+                    let name = format!(
+                        "logs/{}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                    (path, name)
+                })
+                .collect::<Vec<_>>();
+            for path in reports {
+                match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.is_file() => {
+                        let name = path
+                            .file_name()
+                            .ok_or_else(|| io::Error::other("Missing crash log filename"))?
+                            .to_string_lossy()
+                            .into_owned();
+                        files.push((path, name));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok::<_, io::Error>(files)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        if files.is_empty() {
+            return Ok(None);
+        }
+        super::files::archive_operations::pack_named_files(files, target, stop)
+            .await
+            .map(Some)
+    }
     pub(crate) async fn clear(&self) -> Result<(), String> {
         let path = self.path().await?;
         tokio::task::spawn_blocking(move || {
@@ -80,6 +164,33 @@ impl Logs {
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
     }
+}
+
+fn log_files(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("Missing log directory"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("Missing log filename"))?
+        .to_string_lossy();
+    let prefix = format!("{name}.");
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let entry_name = entry.file_name();
+        let entry_name = entry_name.to_string_lossy();
+        if (entry_name == name || entry_name.starts_with(&prefix)) && entry.file_type()?.is_file() {
+            files.push(entry.path());
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 pub fn read_lines_newest_first(

@@ -122,13 +122,13 @@ fn bucket_items_use_shared_visibility_and_original_folder_names() {
     assert_eq!(items[0]["path"], "/first/Albums/recent.jpg");
     assert_eq!(items[0]["id"], "/first/Albums");
     assert_eq!(items[0]["name"], "Albums");
-    assert_eq!(items[0]["sortName"], "Albums");
+    assert!(items[0].get("sortName").is_none());
     assert_eq!(items[0]["size"], 9_000_000_000i64);
     assert_eq!(items[1]["id"], "/second/Albums");
     assert!(
         items
             .iter()
-            .all(|item| item.as_object().unwrap().len() == 5)
+            .all(|item| item.as_object().unwrap().len() == 4)
     );
     assert!(bucket_item_facts(&db, DataType::Contact).is_err());
 }

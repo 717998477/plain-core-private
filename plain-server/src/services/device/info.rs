@@ -67,37 +67,72 @@ pub(crate) fn sdk_properties(fields: &[String]) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn startup(host: &Host) -> Result<DeviceInfo, String> {
+    let fields: Vec<String> = FIELDS
+        .iter()
+        .filter(|field| !matches!(**field, "totalStorage" | "language"))
+        .map(|field| (*field).to_owned())
+        .collect();
+    let mut names = sdk_properties(&fields);
+    if cfg!(target_os = "android") {
+        names.extend(
+            ANDROID_FIELDS
+                .iter()
+                .map(|field| format!("android.{field}")),
+        );
+    }
+    let properties = names
+        .into_iter()
+        .map(|name| {
+            host.startup_property(&name)
+                .cloned()
+                .map(|value| (name.clone(), value))
+                .ok_or_else(|| format!("Missing startup system property: {name}"))
+        })
+        .collect::<Result<Map<String, Value>, String>>()?;
+    apply_sdk(
+        direct(&fields, std::path::Path::new(""))?,
+        properties,
+        false,
+        false,
+    )
+}
+
 pub(crate) async fn collect(
     host: &Host,
     directory: std::path::PathBuf,
     fields: Vec<String>,
+    mut fixed: DeviceInfo,
 ) -> Result<DeviceInfo, String> {
-    let names = sdk_properties(&fields);
+    let names = sdk_properties(&fields)
+        .into_iter()
+        .filter(|name| name == "language" || name.starts_with("display."))
+        .collect();
     let display = cfg!(any(target_os = "android", target_os = "ios"))
         && fields.iter().any(|name| name == "display");
-    let android = cfg!(target_os = "android") && fields.iter().any(|name| name == "android");
     let sdk = read_properties(host, names);
-    let direct = tokio::task::spawn_blocking(move || direct(&fields, &directory));
+    let direct = async move {
+        if fields.iter().any(|field| field == "totalStorage") {
+            tokio::task::spawn_blocking(move || {
+                fixed.total_storage = Long(super::storage_bytes(&directory, true)?);
+                Ok::<_, String>(fixed)
+            })
+            .await
+            .map_err(|error| error.to_string())?
+        } else {
+            Ok(fixed)
+        }
+    };
     let (sdk, direct) = tokio::join!(sdk, direct);
-    apply_sdk(
-        direct.map_err(|error| error.to_string())??,
-        sdk?,
-        display,
-        android,
-    )
+    apply_sdk(direct?, sdk?, display, false)
 }
 
 pub(crate) async fn default_device_name(host: &Host) -> Result<String, String> {
-    if cfg!(any(target_os = "android", target_os = "ios")) {
-        let values = read_properties(host, vec!["name".into()]).await?;
-        return values
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .ok_or("Missing device name".into());
-    }
-    Ok(plain_rs::prefs::identity::default_device_name())
+    host.startup_property("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or("Missing startup device name".into())
 }
 
 async fn read_properties(host: &Host, names: Vec<String>) -> Result<Map<String, Value>, String> {

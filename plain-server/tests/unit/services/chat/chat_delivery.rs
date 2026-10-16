@@ -8,7 +8,7 @@ async fn host_transport_preserves_signed_wire_and_requires_an_actual_receipt() {
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
     prefs.set("client_id", "self").unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("plain.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[1; 32]),
         prefs,
     )

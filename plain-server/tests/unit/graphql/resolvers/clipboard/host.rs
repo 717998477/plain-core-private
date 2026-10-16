@@ -22,7 +22,7 @@ async fn native_record_http_search_delete_and_restart_share_one_clipboard() {
     let token = plain_rs::utils::base64::base64_encode(&[9; 32]);
     let prefs =
         Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system_prefs.json")).unwrap());
-    let server = ContentServer::start(&path, &token, prefs.clone()).unwrap();
+    let server = ContentServer::start(path.parent().unwrap(), &token, prefs.clone()).unwrap();
     let mut socket = server.runtime_state().events.subscribe();
     async fn event(
         socket: &mut tokio::sync::broadcast::Receiver<plain_rs::events::WsEvent>,
@@ -85,7 +85,7 @@ async fn native_record_http_search_delete_and_restart_share_one_clipboard() {
         0
     );
     server.shutdown().await;
-    let server = ContentServer::start(&path, &token, prefs).unwrap();
+    let server = ContentServer::start(path.parent().unwrap(), &token, prefs).unwrap();
     assert_eq!(
         call(server.port, &token, r#"{clipboardItemCount(query:"")}"#).await["data"]["clipboardItemCount"],
         1

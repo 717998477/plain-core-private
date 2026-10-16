@@ -67,6 +67,9 @@ pub(crate) struct Runtime {
     session: Mutex<Option<Session>>,
     operation: tokio::sync::Mutex<()>,
     revision: AtomicU64,
+    network_restart: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    #[cfg(test)]
+    pub(crate) full_snapshot_count: AtomicU64,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -75,6 +78,9 @@ impl Default for Runtime {
             session: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
             revision: AtomicU64::new(0),
+            network_restart: Mutex::new(None),
+            #[cfg(test)]
+            full_snapshot_count: AtomicU64::new(0),
         }
     }
 }
@@ -129,25 +135,16 @@ impl Runtime {
             session.browser.send_ptr_query();
         }
     }
-    /// Typed browser snapshot for the shell's mDNS debug surface. The JSON
-    /// snapshot carries the same rows, but a shell rendering a service table
-    /// should not have to re-project them out of a dynamic value.
-    /// The union the shell's mDNS debug page renders: the sandboxed browser
-    /// plus, on macOS, the system one. A device either browser saw has to
-    /// appear here or the page under-reports what discovery is doing.
     pub(crate) fn browser_snapshot(
         &self,
     ) -> Vec<plain_rs::protocols::mdns::service_browser::MdnsServiceSnapshot> {
-        let guard = self.session.lock().unwrap();
-        let Some(session) = guard.as_ref() else {
-            return Vec::new();
-        };
-        let mut values = session.browser.snapshot();
-        #[cfg(target_os = "macos")]
-        values.extend(session.system_browser.snapshot());
-        values
+        self.session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(browser_services)
+            .unwrap_or_default()
     }
-
     pub(crate) fn browser_activity(&self) -> Vec<crate::services::discovery::local::MdnsActivity> {
         let guard = self.session.lock().unwrap();
         let Some(session) = guard.as_ref() else {
@@ -175,6 +172,8 @@ impl Runtime {
     }
 
     pub(crate) fn snapshot(&self) -> Value {
+        #[cfg(test)]
+        self.full_snapshot_count.fetch_add(1, Ordering::Relaxed);
         let guard = self.session.lock().unwrap();
         let session = guard.as_ref();
         let (packets_in, packets_out) = if session.is_some() {
@@ -182,7 +181,8 @@ impl Runtime {
         } else {
             (vec![], vec![])
         };
-        json!({"runtimeId":self.id,"packetsIn":packets_in,"packetsOut":packets_out,"revision":self.revision.load(Ordering::SeqCst),"receiver":session.is_some(),"running":session.is_some() && host_responder::is_running(),"scanning":session.is_some_and(|s|s.scanning.load(Ordering::SeqCst)),"published":session.is_some_and(|s|s.published),"manualScanning":session.is_some_and(|s|s.manual_scanning),"debugSessionCount":session.map(|s|s.debug_sessions.len()).unwrap_or(0),"capturing":session.is_some_and(|s|s.manual_capture || !s.debug_sessions.is_empty()),"services":session.map(|s|s.browser.snapshot()).unwrap_or_default()})
+        let services = session.map(browser_services).unwrap_or_default();
+        json!({"runtimeId":self.id,"packetsIn":packets_in,"packetsOut":packets_out,"revision":self.revision.load(Ordering::SeqCst),"receiver":session.is_some(),"running":session.is_some() && host_responder::is_running(),"scanning":session.is_some_and(|s|s.scanning.load(Ordering::SeqCst)),"published":session.is_some_and(|s|s.published),"manualScanning":session.is_some_and(|s|s.manual_scanning),"debugSessionCount":session.map(|s|s.debug_sessions.len()).unwrap_or(0),"capturing":session.is_some_and(|s|s.manual_capture || !s.debug_sessions.is_empty()),"services":services})
     }
     async fn initialize(self: &Arc<Self>, state: &ServerState) -> Result<()> {
         let mut owner = OWNER.lock().await;
@@ -512,7 +512,55 @@ impl Runtime {
             }
         }
     }
+    pub(crate) fn network_changed(self: &Arc<Self>, state: ServerState) {
+        if self.session.lock().unwrap().is_none() {
+            return;
+        }
+        let runtime = self.clone();
+        let stop = state.stop.clone();
+        self.schedule_network_restart(stop, async move {
+            if let Err(error) = runtime.execute(&state, Request::Restart {}).await {
+                log::debug!("mDNS network refresh failed: {error}");
+            }
+        });
+    }
+    fn schedule_network_restart<F>(
+        &self,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+        restart: F,
+    ) -> bool
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        if *stop.borrow() {
+            return false;
+        }
+        let mut pending = self.network_restart.lock().unwrap();
+        if pending.as_ref().is_some_and(|task| !task.is_finished()) {
+            return false;
+        }
+        *pending = Some(tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                _ = stop.changed() => {},
+                _ = tokio::time::sleep(std::time::Duration::from_millis(800)) => {
+                    tokio::select! {
+                        biased;
+                        _ = stop.changed() => {},
+                        _ = restart => {},
+                    }
+                }
+            }
+        }));
+        true
+    }
+    fn cancel_network_restart(&self) {
+        if let Some(task) = self.network_restart.lock().unwrap().take() {
+            task.abort();
+        }
+    }
     pub(crate) async fn close(&self, host: &crate::host::bridge::Host) {
+        self.cancel_network_restart();
         let _operation = self.operation.lock().await;
         let mut owner = OWNER.lock().await;
         if let Some(session) = self.session.lock().unwrap().take() {
@@ -545,3 +593,13 @@ pub(crate) async fn control(state: &ServerState, request: Request) -> Result<Val
 #[cfg(all(test, feature = "http_transport"))]
 #[path = "../../../tests/unit/services/discovery/mdns_runtime.rs"]
 mod tests;
+
+fn browser_services(
+    session: &Session,
+) -> Vec<plain_rs::protocols::mdns::service_browser::MdnsServiceSnapshot> {
+    #[allow(unused_mut)]
+    let mut services = session.browser.snapshot();
+    #[cfg(target_os = "macos")]
+    services.extend(session.system_browser.snapshot());
+    services
+}

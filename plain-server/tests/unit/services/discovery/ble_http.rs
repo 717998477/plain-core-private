@@ -11,7 +11,7 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
     prefs.set("client_id", "actor").unwrap();
     prefs.set_user("service", true).unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("plain.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )

@@ -9,3 +9,9 @@ pub(crate) mod reports;
 
 #[cfg(feature = "core")]
 pub(crate) mod metadata;
+
+#[cfg(feature = "core")]
+pub(crate) mod lyrics;
+
+#[cfg(feature = "core")]
+pub(crate) mod covers;

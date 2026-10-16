@@ -5,7 +5,7 @@ use std::time::Duration;
 
 fn server(directory: &std::path::Path, token: &str) -> ContentServer {
     ContentServer::start(
-        &directory.join("plain.db"),
+        &directory,
         token,
         Arc::new(plain_rs::prefs::Prefs::load(&directory.join("prefs.json")).unwrap()),
     )

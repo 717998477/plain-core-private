@@ -52,17 +52,6 @@ impl Driver for Native<'_> {
         .map_err(anyhow::Error::msg)?;
         started(&response)
     }
-    async fn observe(&self, peer_id: &str, value: &Advertisement) -> Result<()> {
-        self.0
-            .host
-            .call(
-                "peerTransportPrewarmObservation",
-                json!({"id":peer_id,"advertisement":value}),
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-        Ok(())
-    }
 }
 fn started(response: &Value) -> Result<bool> {
     if response

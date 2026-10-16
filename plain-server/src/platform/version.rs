@@ -9,8 +9,12 @@ use std::sync::OnceLock;
 static VERSION: OnceLock<String> = OnceLock::new();
 static FULL_VERSION: OnceLock<String> = OnceLock::new();
 
+pub fn set_version(version: &str) {
+    let _ = VERSION.set(version.to_owned());
+}
+
 pub fn set(version: &str, commit: &str, build_time: &str) {
-    let _ = VERSION.set(version.to_string());
+    set_version(version);
     let _ = FULL_VERSION.set(format!("{version} (commit {commit}, built {build_time})"));
 }
 
@@ -25,5 +29,5 @@ pub fn full_version() -> String {
     FULL_VERSION
         .get()
         .cloned()
-        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+        .unwrap_or_else(|| version().to_owned())
 }

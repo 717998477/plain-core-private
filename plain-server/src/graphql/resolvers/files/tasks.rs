@@ -137,7 +137,7 @@ impl FileTaskMutation {
     }
 }
 
-fn caller(ctx: &Context<'_>) -> Result<String> {
+pub(super) fn caller(ctx: &Context<'_>) -> Result<String> {
     let client_id = ctx.data::<String>()?;
     if client_id.is_empty() {
         return Err("unauthorized".into());

@@ -4,15 +4,35 @@ use std::path::Path;
 
 pub(crate) async fn read(
     host: &Host,
-    directory: &Path,
     operation: &str,
     path: &str,
     params: Value,
 ) -> Result<Value, String> {
+    if !matches!(
+        operation,
+        "mime" | "probe" | "animated" | "decodePng" | "packageIcon"
+    ) {
+        return Err(format!("Unsupported resource primitive: {operation}"));
+    }
     if operation == "mime" && !path.starts_with("content://") {
         return Ok(Value::String(
             plain_rs::utils::mime::mime_from_ext(path).into(),
         ));
+    }
+    if operation == "probe" {
+        let input = path.to_owned();
+        let tracks = tokio::task::spawn_blocking(move || {
+            plain_rs::media::isobmff::tracks(Path::new(&input))
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        if let Some(tracks) = tracks {
+            return Ok(Value::String(tracks.first_video_codec.unwrap_or_default()));
+        }
+        if cfg!(any(target_os = "android", target_os = "ios")) {
+            return Ok(Value::String(String::new()));
+        }
+        return native(operation, path, params).await;
     }
     if operation == "animated" {
         let path = path.to_owned();
@@ -31,28 +51,14 @@ pub(crate) async fn read(
             )
             .await;
     }
-    native(directory, operation, path, params).await
+    native(operation, path, params).await
 }
 
-async fn native(
-    directory: &Path,
-    operation: &str,
-    path: &str,
-    params: Value,
-) -> Result<Value, String> {
+async fn native(operation: &str, path: &str, params: Value) -> Result<Value, String> {
     match operation {
-        "appDir" => {
-            if !directory.is_absolute() {
-                return Err("Absolute core directory required".into());
-            }
-            Ok(Value::String(
-                directory.join("files").to_string_lossy().into_owned(),
-            ))
-        }
         "mime" => Ok(Value::String(
             plain_rs::utils::mime::mime_from_ext(path).into(),
         )),
-        "remux" => Ok(Value::String(path.into())),
         "decodePng" => {
             let mime = plain_rs::utils::mime::mime_from_ext(path);
             if !mime.starts_with("image/")
@@ -94,35 +100,10 @@ async fn native(
                 Ok(Value::String(String::new()))
             }
         }
-        "transcode" => {
-            #[cfg(feature = "media")]
-            {
-                plain_media::previews::videos::transcode_mp4_for_browser(path)
-                    .await
-                    .map(|path| Value::String(path.to_string_lossy().into_owned()))
-                    .map_err(|error| error.to_string())
-            }
-            #[cfg(not(feature = "media"))]
-            {
-                Ok(Value::Null)
-            }
-        }
         _ => Err(format!(
             "Unsupported native resource primitive: {operation}"
         )),
     }
-}
-
-pub(crate) async fn app_directory(
-    host: &Host,
-    directory: &Path,
-) -> Result<std::path::PathBuf, String> {
-    let value = read(host, directory, "appDir", "", json!({})).await?;
-    let path = std::path::PathBuf::from(value.as_str().ok_or("Missing app directory")?);
-    if !path.is_absolute() {
-        return Err("Absolute app directory required".into());
-    }
-    Ok(path)
 }
 
 #[cfg(test)]

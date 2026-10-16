@@ -74,12 +74,12 @@ impl PreferencesMutation {
         if let plain_rs::prefs::system::Command::SetMdnsHostname { hostname } = &command {
             if let Some(state) = ctx.data_opt::<crate::assembly::server::ServerState>() {
                 let changed = apply_mdns_hostname(state, hostname).await?;
-                return updated(ctx, changed);
+                return Ok(updated(changed));
             }
         }
         let changed = command.apply(prefs)?;
         notify(ctx, changed);
-        updated(ctx, changed)
+        Ok(updated(changed))
     }
     async fn update_user_settings(
         &self,
@@ -89,7 +89,7 @@ impl PreferencesMutation {
         let patch: plain_rs::prefs::user::UserSettingsPatch =
             serde_json::from_value(serde_json::to_value(input)?)?;
         let changed = update_user(ctx, patch).await?;
-        updated(ctx, changed)
+        Ok(updated(changed))
     }
     async fn record_recent_search(&self, ctx: &Context<'_>, query: String) -> Result<ActionResult> {
         let before = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
@@ -228,7 +228,7 @@ fn validate_dynamic_key(key: &str) -> Result<()> {
         || key.len() > 128
         || !key
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
     {
         return Err(async_graphql::Error::new("invalid_pref_key"));
     }
@@ -256,14 +256,12 @@ fn validate_dynamic_key(key: &str) -> Result<()> {
     Ok(())
 }
 
-fn updated(ctx: &Context<'_>, changed: bool) -> Result<SettingsUpdate> {
-    Ok(SettingsUpdate {
+fn updated(changed: bool) -> SettingsUpdate {
+    SettingsUpdate {
         result: ActionResult {
             affected_count: i32::from(changed),
         },
-        system_settings: plain_rs::prefs::system::snapshot(prefs(ctx)?)?.try_into()?,
-        user_settings: plain_rs::prefs::user::snapshot(prefs(ctx)?)?.into(),
-    })
+    }
 }
 
 #[cfg(all(test, feature = "core", feature = "http_transport"))]
@@ -277,15 +275,9 @@ pub(crate) async fn update_user(
     apply_user_patch(UserPatchEnv::from_ctx(ctx)?, patch).await
 }
 
-/// The handles a user-settings write needs, independent of how the caller
-/// reached the store. GraphQL resolvers build one from the request context;
-/// the App's native (JNI/C ABI) entry point builds one from the server state.
-/// Every path then runs the same [`apply_user_patch`], so validation, the
-/// persisted snapshot and the derived events/host effects cannot drift apart.
 pub(crate) struct UserPatchEnv<'a> {
     prefs: &'a Arc<Prefs>,
     events: Option<&'a broadcast::Sender<WsEvent>>,
-    /// Host (mobile/JNI) side: mDNS advertisement and desktop-access teardown.
     #[cfg(feature = "core")]
     server: Option<&'a crate::assembly::server::ServerState>,
 }
@@ -300,9 +292,6 @@ impl<'a> UserPatchEnv<'a> {
         })
     }
 
-    /// `graphql/executor` puts this same `ServerState` into every local
-    /// request context, so a local resolver and the native caller observe
-    /// identical handles.
     #[cfg(feature = "core")]
     pub(crate) fn from_server(state: &'a crate::assembly::server::ServerState) -> Self {
         Self {
@@ -339,24 +328,6 @@ pub(crate) async fn apply_user_patch(
             state.mdns.update_hostname(state).await?;
         }
     }
-    emit_user_events(env.events, &before, &after)?;
-    Ok(changed)
-}
-
-/// Runs one user-settings action and publishes the same events a patch does.
-/// Split from [`apply_user_patch`] so both entry points stay in step.
-pub(crate) async fn apply_user_action(
-    env: UserPatchEnv<'_>,
-    action: plain_rs::prefs::user::Action,
-) -> Result<bool> {
-    let before = plain_rs::prefs::user::snapshot(env.prefs)?;
-    let changed = action.apply(env.prefs)?;
-    if changed {
-        if let Some(events) = env.events {
-            let _ = events.send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
-        }
-    }
-    let after = plain_rs::prefs::user::snapshot(env.prefs)?;
     emit_user_events(env.events, &before, &after)?;
     Ok(changed)
 }

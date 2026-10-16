@@ -28,7 +28,7 @@ fn fixture(id: &str) -> (tempfile::TempDir, crate::assembly::server::ContentServ
         )
         .unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("plain.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
@@ -327,4 +327,34 @@ async fn native_main_pairing_queries_are_read_only_and_reject_stale_request_iden
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(response.data.into_json().unwrap()["cancelPairing"], true);
     server.shutdown().await;
+}
+
+#[cfg(feature = "http_transport")]
+#[tokio::test]
+async fn raw_ble_reports_are_validated_in_rust_before_platform_calls() {
+    let (_directory, server) = fixture("local");
+    let state = server.runtime_state();
+    let (generation, mut calls) = state.host.connect();
+    for (kind, payload) in [
+        ("PAIRING_REQUEST_REPORTED", "{}"),
+        (
+            "PAIRING_REQUEST_REPORTED",
+            r#"{"request":{},"address":"adapter"}"#,
+        ),
+        (
+            "PAIRING_RESPONSE_REPORTED",
+            r#"{"fromId":"peer","accepted":true}"#,
+        ),
+        ("PAIRING_CANCEL_REPORTED", r#"{"fromId":"peer"}"#),
+        ("PAIRING_RESPONSE_REPORTED", "not-json"),
+        ("PAIRING_CANCEL_REPORTED", "null"),
+    ] {
+        assert!(
+            accept_report(&state, kind, payload).await.is_err(),
+            "{kind}: {payload}"
+        );
+    }
+    assert!(calls.try_recv().is_err());
+    state.host.disconnect(generation);
+    server.stop_core().await;
 }

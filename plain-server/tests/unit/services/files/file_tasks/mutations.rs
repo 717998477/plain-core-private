@@ -250,3 +250,100 @@ async fn native_rename_and_delete_follow_actual_catalog_identities() {
     assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }
+
+#[tokio::test]
+async fn named_copy_main_creates_parents_overwrites_and_uses_the_request_owner_without_host() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(&directory.path().join("core")).unwrap();
+    let state = core.runtime_state();
+    let (_generation, mut requests) = state.host.connect();
+    let mut events = state.events.subscribe();
+    let source = directory.path().join("source +.txt");
+    let target = directory.path().join("new/nested");
+    let destination = target.join("saved.txt");
+    std::fs::write(&source, b"copied bytes").unwrap();
+    let native = core.native_graphql().unwrap();
+    let response = native.execute(Request::new("mutation($src:String!,$directory:String!){copyFileToDirectory(src:$src,directory:$directory,name:\"saved.txt\")}")
+        .variables(async_graphql::Variables::from_json(json!({"src":format!("file://{}",source.to_str().unwrap()),"directory":target})))).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["copyFileToDirectory"],
+        destination.to_string_lossy().as_ref()
+    );
+    assert_eq!(std::fs::read(&destination).unwrap(), b"copied bytes");
+    std::fs::write(&source, b"replacement").unwrap();
+    let response = native
+        .execute(
+            Request::new(
+                "mutation($src:String!,$dst:String!){copyFile(src:$src,dst:$dst,overwrite:true)}",
+            )
+            .variables(async_graphql::Variables::from_json(
+                json!({"src":source,"dst":destination}),
+            )),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["copyFile"], true);
+    assert_eq!(std::fs::read(&destination).unwrap(), b"replacement");
+    assert!(!target.join("saved (1).txt").exists());
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut content_changes = 0;
+        while content_changes < 2 {
+            if events.recv().await.unwrap().event_type == "CONTENT_CHANGED" {
+                content_changes += 1;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(
+            event.event_type, "CONTENT_CHANGED",
+            "no duplicate executor broadcast"
+        );
+    }
+    let owner = state
+        .prefs
+        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)
+        .unwrap()
+        .unwrap();
+    let rows = state.files.list(owner.clone()).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|task| task.client_id == owner));
+    state
+        .prefs
+        .set("api_permissions", json!(["WRITE_EXTERNAL_STORAGE"]))
+        .unwrap();
+    let foreign_destination = target.join("foreign.txt");
+    let response = state
+        .public
+        .execute(
+            Request::new(
+                "mutation($src:String!,$dst:String!){copyFile(src:$src,dst:$dst,overwrite:true)}",
+            )
+            .data("copy-request-owner".to_owned())
+            .variables(async_graphql::Variables::from_json(
+                json!({"src":source,"dst":foreign_destination}),
+            )),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["copyFile"], true);
+    let foreign = state
+        .files
+        .list("copy-request-owner".to_owned())
+        .await
+        .unwrap();
+    assert_eq!(foreign.len(), 1);
+    assert_eq!(foreign[0].client_id, "copy-request-owner");
+    assert_eq!(state.files.list(owner).await.unwrap().len(), 2);
+    assert_eq!(std::fs::read(foreign_destination).unwrap(), b"replacement");
+    for name in ["", "..", "../outside", "a/b", "a\\b"] {
+        let response = native.execute(Request::new("mutation($src:String!,$directory:String!,$name:String!){copyFileToDirectory(src:$src,directory:$directory,name:$name)}")
+            .variables(async_graphql::Variables::from_json(json!({"src":source,"directory":target,"name":name})))).await;
+        assert!(!response.errors.is_empty(), "{name}");
+    }
+    assert!(!directory.path().join("outside").exists());
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+}

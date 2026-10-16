@@ -3,29 +3,6 @@ use crate::assembly::server::ServerState;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub struct Controller {
-    state: ServerState,
-}
-
-impl Controller {
-    pub(crate) fn new(state: ServerState) -> Self {
-        Self { state }
-    }
-
-    pub async fn execute_json(&self, command: &str) -> Result<String, String> {
-        let request = serde_json::from_str(command).map_err(|error| error.to_string())?;
-        let mut stop = self.state.stop.clone();
-        if *stop.borrow() {
-            return Err("Core stopped".into());
-        }
-        let result = tokio::select! {
-            _ = stop.changed() => Err("Core stopped".to_string()),
-            result = execute(&self.state, request) => result,
-        }?;
-        serde_json::to_string(&result).map_err(|error| error.to_string())
-    }
-}
-
 pub(crate) const EVENT_UPDATED: &str = "DLNA_RENDERER_UPDATED";
 
 pub(crate) fn snapshot(state: &DlnaRendererState) -> Value {
@@ -59,6 +36,9 @@ pub(crate) fn emit(state: &ServerState, renderer: &DlnaRendererState) {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Request {
+    SetEnabled {
+        enabled: bool,
+    },
     Start {
         port: u16,
     },
@@ -92,9 +72,31 @@ pub(crate) enum Request {
 }
 
 pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Value, String> {
+    let mut stopped = state.stop.clone();
+    if *stopped.borrow_and_update() {
+        return Err("Core stopped".into());
+    }
+    let request = if let Request::SetEnabled { enabled } = request {
+        plain_rs::prefs::dlna::set_enabled(&state.prefs, enabled)
+            .map_err(|error| error.to_string())?;
+        if enabled {
+            Request::Start {
+                port: state
+                    .public_ports()
+                    .await
+                    .ok_or("Public HTTP server is not running")?
+                    .0,
+            }
+        } else {
+            Request::Stop {}
+        }
+    } else {
+        request
+    };
     let _guard = state.cast.receiver_operations.lock().await;
     let engine = &state.dlna;
     match request {
+        Request::SetEnabled { .. } => unreachable!(),
         Request::Rules {} => Ok(rules(state)),
         Request::RemoveRule { ip, allowed } => {
             plain_rs::prefs::dlna::remove_sender(

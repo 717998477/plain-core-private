@@ -29,14 +29,16 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 impl Db {
-    pub fn audio_restore_needed(&self) -> bool { self.audio().restore_needed() }
+    pub fn audio_restore_needed(&self) -> bool {
+        self.audio().restore_needed()
+    }
 
     pub fn use_platform_audio_catalog(&self) -> rusqlite::Result<()> {
         self.with_conn(|conn| conn.execute("INSERT INTO platform_audio_catalog(enabled) SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM platform_audio_catalog)", []).map(|_| ()))
     }
 
     pub fn audio_current_media_id(&self) -> Option<String> {
-        self.audio().read(|state|state.current_media_id.clone())
+        self.audio().read(|state| state.current_media_id.clone())
     }
 
     pub fn audio_reference_ids(&self) -> rusqlite::Result<Vec<String>> {
@@ -44,7 +46,9 @@ impl Db {
             conn.prepare("SELECT media_id FROM audio_queue_items UNION SELECT media_id FROM audio_playlist_items UNION SELECT media_id FROM media_play_history")?
                 .query_map([], |row| row.get(0))?.collect::<rusqlite::Result<Vec<String>>>()
         })?;
-        if let Some(id) = self.audio_current_media_id().filter(|id|!ids.contains(id)) { ids.push(id); }
+        if let Some(id) = self.audio_current_media_id().filter(|id| !ids.contains(id)) {
+            ids.push(id);
+        }
         Ok(ids)
     }
 
@@ -72,6 +76,15 @@ impl Db {
         })
     }
 
+    pub fn update_platform_audio_metadata(&self, track: &AudioTrack) -> rusqlite::Result<usize> {
+        self.with_conn(|conn| {
+            conn.execute(
+            "UPDATE platform_audio_media SET title=?1,artist=?2,duration_ms=?3 WHERE media_id=?4",
+            params![track.title, track.artist, track.duration_ms, track.media_id],
+        )
+        })
+    }
+
     pub fn restore_audio_current(&self) -> crate::error::DomainResult<()> {
         if !self.audio().restore_needed() {
             return Ok(());
@@ -79,8 +92,21 @@ impl Db {
         let Some(id) = self.audio_current_media_id() else {
             return self.audio().restore(String::new());
         };
-        let path = self.with_conn(|conn|conn.query_row("SELECT path FROM audio_media WHERE media_id=?1", [&id], |row|row.get::<_,String>(0)).optional())?;
-        if let Some(path) = path { self.audio().restore(path)?; }
+        let path = self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT path FROM audio_media WHERE media_id=?1",
+                [&id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+        })?;
+        if let Some(path) = path {
+            self.audio().restore(path)?;
+        }
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/db/repositories/audio_catalog.rs"]
+mod tests;

@@ -62,51 +62,8 @@ pub(crate) fn prepare(db: &Db, prefs: &Prefs, id: &str, operation: Operation) ->
         channel_id,
     })
 }
-pub(crate) fn encrypt(key: &str, body: &str) -> Result<String> {
-    plain_rs::crypto::xchacha_encrypt_raw(
-        &plain_rs::utils::base64::base64_decode(key),
-        body.as_bytes(),
-    )
-    .map(|bytes| plain_rs::utils::base64::base64_encode(&bytes))
-    .ok_or_else(|| anyhow::anyhow!("Invalid peer encryption key"))
-}
-pub(crate) fn decrypt(key: &str, body: &str) -> Result<Option<String>> {
-    let key = plain_rs::utils::base64::base64_decode(key);
-    if key.len() != 32 {
-        bail!("Invalid peer decryption key");
-    }
-    plain_rs::crypto::xchacha_decrypt_raw(&key, &plain_rs::utils::base64::base64_decode(body))
-        .map(String::from_utf8)
-        .transpose()
-        .map_err(Into::into)
-}
 pub(crate) fn signing_keypair(prefs: &Prefs) -> Result<Vec<u8>> {
     plain_rs::prefs::system::signing_keypair(prefs)
-}
-pub(crate) fn authenticate(db: &Db, id: &str, channel_id: &str, body: &str) -> serde_json::Value {
-    match plain_rs::transport::auth::authenticate(
-        db,
-        id,
-        channel_id,
-        &plain_rs::utils::base64::base64_decode(body),
-    ) {
-        Ok(value) => {
-            json!({"status":200,"key":plain_rs::utils::base64::base64_encode(&value.key),"content":value.graphql_json,"signature":value.signature_b64,"timestamp":value.timestamp})
-        }
-        Err(error) => json!({"status":error.http_status(),"reason":error.reason()}),
-    }
-}
-pub(crate) fn envelope(key: &str, public_key: &str, body: &str) -> serde_json::Value {
-    match plain_rs::transport::auth::decrypt(
-        &plain_rs::utils::base64::base64_decode(key),
-        public_key,
-        &plain_rs::utils::base64::base64_decode(body),
-    ) {
-        Ok(value) => {
-            json!({"status":200,"content":value.content,"signature":value.signature_b64,"timestamp":value.timestamp})
-        }
-        Err(error) => json!({"status":error.http_status(),"reason":error.reason()}),
-    }
 }
 #[cfg(test)]
 #[path = "../../../tests/unit/services/peers/peer_wire.rs"]

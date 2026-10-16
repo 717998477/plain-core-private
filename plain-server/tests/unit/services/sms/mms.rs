@@ -18,7 +18,10 @@ fn pending() -> Pending {
 fn candidate(id: i64, address: &str, body: &str, thread: &str, types: &[&str]) -> Candidate {
     Candidate {
         id,
-        address: address.into(),
+        address_candidates: vec![crate::services::sms::addresses::MmsAddress {
+            value: address.into(),
+            is_sender: false,
+        }],
         body: body.into(),
         thread_id: thread.into(),
         attachment_content_types: types.iter().map(|s| s.to_string()).collect(),

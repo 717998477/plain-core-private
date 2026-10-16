@@ -13,11 +13,6 @@ impl NativeUploads {
         Self { chunks, stop }
     }
 
-    pub async fn uploaded_chunks(&self, id: &str) -> Result<Vec<String>, String> {
-        ensure_running(&self.stop)?;
-        self.chunks.list(id).await
-    }
-
     pub async fn open_chunk(&self, id: &str, index: i64, size: u64) -> Result<UploadChunk, String> {
         ensure_running(&self.stop)?;
         self.chunks

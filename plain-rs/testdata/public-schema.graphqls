@@ -50,8 +50,8 @@ type AppFile {
 	id: String!
 	size: Long!
 	mimeType: String!
-	realPath: String!
 	fileName: String!
+	realPath: String!
 	createdAt: Instant!
 	updatedAt: Instant!
 }
@@ -72,10 +72,10 @@ type Audio implements MediaItem {
 	durationMs: Long!
 	size: Long!
 	bucketId: ID!
-	albumFileId: String!
 	createdAt: Instant!
 	updatedAt: Instant!
 	isFavorite: Boolean!
+	albumFileId: String!
 	tags: [Tag!]!
 }
 
@@ -221,16 +221,18 @@ enum CallType {
 	UNKNOWN
 }
 
-"""
-Optional device features. A client hides a whole section when its
-capability is absent, which is why this is a list rather than a set of
-booleans on the app root.
-"""
 enum Capability {
+	FILE_EXPORT
+	FILE_REVEAL
+	FILE_CLIPBOARD
+	APP_RELAUNCH
 	MEDIA_TRASH
 	MEDIA_DELETE
 	MEDIA_MOVE
 	MEDIA_FAVORITE
+	VIDEO_REMUX
+	VIDEO_TRANSCODE
+	VIDEO_3GP_CONVERT
 	APP_UPDATES
 	DONATION
 	MIRROR_AUDIO
@@ -644,6 +646,18 @@ enum DiscoveryMethod {
 	QR
 }
 
+type DiscoveryReply {
+	id: ID!
+	name: String!
+	port: Int!
+	deviceType: String!
+	version: String!
+	platform: String!
+	ips: [String!]!
+	awareSupported: Boolean!
+	awareRunning: Boolean!
+}
+
 type Disk {
 	id: ID!
 	name: String!
@@ -666,6 +680,40 @@ input DlnaMediaInput {
 	artist: String! = ""
 	durationMs: Long! = 0
 	audio: Boolean! = false
+}
+
+enum DlnaPlaybackState {
+	NO_MEDIA_PRESENT
+	STOPPED
+	PLAYING
+	PAUSED_PLAYBACK
+	TRANSITIONING
+}
+
+enum DlnaReceiverAction {
+	START
+	STOP
+	RETRY
+	REMOVE_RULE
+	ACCEPT
+	REJECT
+	POSITION
+	SEEK_CONSUMED
+	PLAYBACK
+	STOPPED
+	SET_ENABLED
+}
+
+input DlnaReceiverInput {
+	action: DlnaReceiverAction!
+	port: Int
+	ip: String
+	allowed: Boolean
+	remember: Boolean
+	positionMs: Long
+	durationMs: Long
+	state: DlnaPlaybackState
+	enabled: Boolean
 }
 
 type DlnaRenderer {
@@ -889,6 +937,14 @@ enum FileTaskType {
 	MOVE
 }
 
+type HttpServerState {
+	revision: Long!
+	restarting: Boolean!
+	httpPort: Int!
+	httpsPort: Int!
+	error: String!
+}
+
 enum ImProtocol {
 	CUSTOM
 	AIM
@@ -948,6 +1004,24 @@ type ImageEditorProjectSummary {
 }
 
 type ImageFileInfo {
+	make: String!
+	model: String!
+	rotation: Int!
+	colorSpace: String!
+	apertureValue: Float!
+	exposureTime: String!
+	focalLength: String!
+	isoSpeed: Int!
+	takenAt: Instant
+	flash: Int!
+	fNumber: Float!
+	exposureProgram: Int!
+	meteringMode: Int!
+	whiteBalance: Int!
+	creator: String!
+	resolutionX: Int!
+	resolutionY: Int!
+	description: String!
 	width: Int!
 	height: Int!
 	location: Location
@@ -1025,7 +1099,23 @@ type Location {
 	longitude: Float!
 }
 
+type LoggedInPeer {
+	peer: PeerRecord!
+	online: Boolean!
+}
+
 scalar Long
+
+type MdnsActivity {
+	time: Long!
+	event: String!
+	detail: String!
+}
+
+type MdnsDebug {
+	services: [MdnsService!]!
+	activity: [MdnsActivity!]!
+}
 
 type MdnsPacket {
 	time: Long!
@@ -1161,9 +1251,15 @@ type Mount {
 }
 
 type Mutation {
+	clearAppCache: Boolean!
+	restartHttpServer(httpPort: Int, httpsPort: Int): HttpServerState!
+	controlDlnaReceiver(input: DlnaReceiverInput!): JSON!
 	regenerateTlsCertificate: [Int!]!
 	importTlsCertificatePem(certificatePem: String!, privateKeyPem: String!): [Int!]!
 	importTlsCertificatePkcs12(data: String!, password: String!): [Int!]!
+	loginPeer(input: PeerLoginInput!): Boolean!
+	logoutPeer(id: ID!): Boolean!
+	updatePeerName(id: ID!, name: String!): Boolean!
 	removePeerRecord(id: ID!): Boolean!
 	unpairPeerRecord(id: ID!): Boolean!
 	enqueueSharedDownload(input: SharedDownloadInput!): ID!
@@ -1177,6 +1273,8 @@ type Mutation {
 	resumeChatDownload(id: ID!): Boolean!
 	retryChatDownload(id: ID!): Boolean!
 	removeChatDownload(id: ID!): Boolean!
+	beginBleScan: ID!
+	endBleScan(scanId: ID!): Boolean!
 	startMdnsReceiver: MdnsState!
 	startMdnsDiscovery: MdnsState!
 	stopMdnsDiscovery: MdnsState!
@@ -1189,6 +1287,7 @@ type Mutation {
 	acquireMdnsDebugSession(token: String!): MdnsState!
 	releaseMdnsDebugSession(token: String!): MdnsState!
 	prewarmPeerTransport(id: ID!): PeerPrewarmAdvertisement
+	cacheSharedFile(link: SharedLinkInput!, urlToken: String!, entry: SharedEntryInput!, thumbnail: Boolean!): String!
 	browseSharedLink(messageId: ID!, expected: SharedMessageCardInput!, virtualPath: String): SharedBrowseResult
 	planSharedDownload(kind: SharedDownloadKind!, link: SharedLinkInput!, entries: [SharedEntryInput!]!, targetDir: String!, downloadsBase: String!): SharedDownloadPlan!
 	trashFiles(paths: [String!]!): ActionResult!
@@ -1236,6 +1335,7 @@ type Mutation {
 	createShare(name: String!, realPaths: [String!]!, readOnly: Boolean!, expiresAt: Instant): ShareRecord!
 	updateShare(id: ID!, name: String!, expiresAt: Instant, realPaths: [String!]): ShareRecord!
 	deleteShare(id: ID!): Boolean!
+	importNoteImage(source: String!, fileName: String!): String!
 	importAppFile(source: String!, fileName: String!, mimeType: String!, deleteSource: Boolean!): AppFile!
 	releaseAppFile(fileId: String!): Boolean!
 	addTagRelationRecords(items: [TagHostRelationInput!]!): Boolean!
@@ -1259,11 +1359,13 @@ type Mutation {
 	tickPomodoro: PomodoroTickResult!
 	skipPomodoro: PomodoroTickResult!
 	adjustPomodoro(durationSec: Int!): PomodoroToday!
+	confirmWebLogin(requestId: String!, allowed: Boolean!): Boolean!
 	createSession(name: String!): Session!
 	renameSession(clientId: String!, name: String!): Boolean!
 	closeAllWebSocketSessions: Boolean!
 	logout: Boolean!
 	revokeSession(clientId: String!): Boolean!
+	controlPeerStatus(action: PeerStatusAction!): Boolean!
 	formatDisk(path: String!): Boolean!
 	setHostname(name: String!): Boolean!
 	setMountAlias(id: ID!, alias: String!): Boolean!
@@ -1327,6 +1429,7 @@ type Mutation {
 	createBookmarkGroup(name: String!): BookmarkGroup!
 	updateBookmarkGroup(id: ID!, name: String!, collapsed: Boolean!, sortOrder: Int!): BookmarkGroup!
 	deleteBookmarkGroup(id: ID!): Boolean!
+	importPomodoroSound(source: String!): String!
 	startPomodoro(durationSec: Int!): Boolean!
 	pausePomodoro: Boolean!
 	stopPomodoro: Boolean!
@@ -1350,6 +1453,7 @@ type Mutation {
 	deleteFeed(id: ID!): Boolean!
 	syncFeedEntryContent(id: ID!): FeedEntry!
 	deleteFeedEntries(query: String!): ActionResult!
+	cacheAudioCover(path: String!): String
 	playAudio(mediaId: ID!): AudioItem!
 	playAudioByPath(path: String!): AudioItem!
 	updateAudioPlayMode(mode: MediaPlayMode!): Boolean!
@@ -1490,6 +1594,7 @@ type Mutation {
 	"""
 	renameFile(path: String!, name: String!): Boolean!
 	writeTextFile(path: String!, content: String!, overwrite: Boolean!): File!
+	copyFileToDirectory(src: String!, directory: String!, name: String!): String
 	copyFile(src: String!, dst: String!, overwrite: Boolean!): Boolean!
 	moveFile(src: String!, dst: String!, overwrite: Boolean!): Boolean!
 	deleteChunks(fileId: String!): Boolean!
@@ -1513,7 +1618,12 @@ type Mutation {
 	and the trash.
 	"""
 	moveMediaItems(type: MediaDataType!, query: String!, destDir: String!): ActionResult!
+	createCrashReport(report: String!): String!
 	clearAppLogs: Boolean!
+	clearAppLogFiles: Boolean!
+	stageAppRestore(path: String!): Boolean!
+	exportAppBackup: String!
+	exportAppLogs: String
 	setTempValue(key: String!, value: String!): KeyValuePair!
 	"""
 	The app restarts itself; the response only acknowledges that the
@@ -1527,6 +1637,7 @@ type Mutation {
 	updateDeviceName(name: String!): Boolean!
 	startDiscovery: Boolean!
 	stopDiscovery: Boolean!
+	cacheRemoteFile(url: String!, name: String!): String!
 	pauseDownload(messageId: ID!): Boolean!
 	downloadPeerFile(messageId: ID!, peerId: ID!): Boolean!
 	resumeDownload(messageId: ID!, peerId: ID!): Boolean!
@@ -1690,6 +1801,16 @@ type PeerAwareConfig {
 	localPort: Int!
 }
 
+input PeerLoginInput {
+	id: ID!
+	name: String!
+	host: String!
+	deviceType: DeviceType!
+	token: String!
+	signaturePublicKey: String!
+	chatKey: String
+}
+
 type PeerPrewarmAdvertisement {
 	shortId: String!
 	awareSupported: Boolean!
@@ -1737,6 +1858,13 @@ enum PeerStatus {
 	PAIRED
 	UNPAIRED
 	CHANNEL
+}
+
+enum PeerStatusAction {
+	START
+	STOP
+	RECONNECT
+	ENSURE_AWARE
 }
 
 enum Permission {
@@ -1850,7 +1978,12 @@ enum PostalType {
 }
 
 type Query {
+	appCacheSize: Long!
+	httpServer: HttpServerState!
+	dlnaReceiver: JSON!
+	dlnaReceiverRules: JSON!
 	tlsCertificateSignature: [Int!]!
+	loggedInPeers: [LoggedInPeer!]!
 	peerRecords(ids: [ID!]): [PeerRecord!]!
 	peerRecord(id: ID!): PeerRecord
 	peerFileUrl(id: ID!, expected: PeerRecordInput!, fileId: String!): String!
@@ -1859,6 +1992,9 @@ type Query {
 	chatDownloadQueue: ChatDownloadQueue!
 	activePeerTransfers: [ActivePeerTransfer!]!
 	peerAwareConfig(id: ID!): PeerAwareConfig!
+	mdnsDebug: MdnsDebug!
+	discoveryReply: DiscoveryReply!
+	discoveryBleAdvertisement: String!
 	mdnsState: MdnsState!
 	shareLink(id: ID!, host: String): SharedLink!
 	initialSharedLink(messageId: ID!, expected: SharedMessageCardInput!): SharedLink!
@@ -1870,6 +2006,7 @@ type Query {
 	dlnaRenderers: [DlnaRenderer!]!
 	imageModelsState: ImageModelsState!
 	semanticImageSearch(text: String!, maxResults: Int!): [SemanticImageMatch!]!
+	parsePairingCode(code: String!): NearbyDevice
 	nearbyDevices: [NearbyDevice!]!
 	chatConversations: [ChatConversation!]!
 	chatRecords(query: String!, offset: Int!, limit: Int!): [ChatItem!]!
@@ -1960,8 +2097,10 @@ type Query {
 	feedEntryCount(query: String!): Int!
 	feedEntry(id: ID!): FeedEntry
 	feedEntries(query: String!, offset: Int!, limit: Int!): [FeedEntry!]!
+	audioMetadata(path: String!): AudioItem!
 	audioCount(query: String!): Int!
 	audios(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Audio!]!
+	embeddedAudioLyrics(path: String!): String
 	audioLyrics(mediaId: ID!): String
 	audioQueueItems(query: String!, offset: Int!, limit: Int!): [AudioItem!]!
 	audioQueueItemCount: Int!
@@ -1985,6 +2124,7 @@ type Query {
 	latestChatItems: [ChatItem!]!
 	chatItem(id: ID!): ChatItem
 	chatChannels: [ChatChannel!]!
+	pairingCode: String!
 	pairingTickets: [PairingTicket!]!
 	pairingStates: [PairingState!]!
 	isPairingRequestCurrent(id: ID!, signature: String!): Boolean!
@@ -2009,6 +2149,8 @@ type Query {
 	screenMirrorVideoCodec: ScreenMirrorVideoCodec
 	screenMirrorQuality: ScreenMirrorQuality!
 	imageSearchStatus: ImageSearchStatus!
+	filePaths(paths: [String!]!): [String]!
+	mediaDurationMs(path: String!): Long!
 	indexedFiles(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [File!]!
 	indexedFileCount(query: String!): Long!
 	browseFiles(root: String!, query: String!, text: String, showHidden: Boolean, sortBy: FileSortBy!, offset: Int!, limit: Int!, countOnly: Boolean! = false): FilePage!
@@ -2032,15 +2174,6 @@ type Query {
 	Total matches for the same query, ignoring paging.
 	"""
 	fileCount(root: String!, query: String!): Int!
-	"""
-	Stat plus, for media names, the platform's decoder output. A path
-	that cannot be resolved is not an error: plain-app reports zeros so
-	the info panel renders rather than blowing up on a stale link.
-
-	The probe only runs once the stat succeeded — that stat is what the
-	file-access authorization rides on, so probing a denied path would
-	hand a client metadata for bytes it may not read.
-	"""
 	fileInfo(path: String!, fileName: String): FileInfo!
 	"""
 	A total predicate, never an error: a blank path, `"."`, a missing
@@ -2113,6 +2246,7 @@ type Query {
 	search cannot be cut short by the page size.
 	"""
 	appLogs(query: String!, offset: Int!, limit: Int!): [String!]!
+	appLogFilesSize: Long!
 	appLogPath: String!
 	"""
 	Whether the mDNS advertiser is currently scanning. Starting and
@@ -2744,6 +2878,18 @@ type VideoFileInfo {
 	width: Int!
 	height: Int!
 	durationMs: Long!
+	rotation: Int!
+	displayWidth: Int!
+	displayHeight: Int!
+	bitrate: Long!
+	frameRate: Float!
+	title: String!
+	artist: String!
+	album: String!
+	genre: String!
+	takenAt: Instant
+	writer: String!
+	composer: String!
 	location: Location
 }
 

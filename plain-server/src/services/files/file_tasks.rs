@@ -19,6 +19,7 @@ use std::{
 use tokio::sync::broadcast;
 pub struct FileTasks {
     store: Arc<plain_rs::kv::LazyDb>,
+    completion: Arc<tokio::sync::Notify>,
     deletion_lock: tokio::sync::Mutex<()>,
     events: broadcast::Sender<WsEvent>,
     service: Mutex<Option<Arc<Service>>>,
@@ -36,6 +37,7 @@ impl FileTasks {
     ) -> Self {
         Self {
             store,
+            completion: Arc::new(tokio::sync::Notify::new()),
             hooks: Arc::new(NativeHooks {
                 platform,
                 audio,
@@ -58,7 +60,10 @@ impl FileTasks {
         }
         tokio::runtime::Handle::try_current()?;
         let next = Arc::new(Service::with_hooks(
-            Arc::new(Changes(self.events.clone())),
+            Arc::new(Changes {
+                events: self.events.clone(),
+                completion: self.completion.clone(),
+            }),
             self.hooks.clone(),
         ));
         *service = Some(next.clone());
@@ -84,33 +89,63 @@ impl FileTasks {
         self.hooks.authorize(kind, &ops).await?;
         self.service()?.create(client_id, kind, title, ops)
     }
-    pub async fn execute(&self, kind: FileTaskType, ops: Vec<FileTaskOp>) -> Result<bool> {
-        let client_id = self
-            .hooks
-            .prefs
-            .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("file task identity unavailable"))?;
+    pub async fn execute(
+        &self,
+        client_id: &str,
+        kind: FileTaskType,
+        ops: Vec<FileTaskOp>,
+    ) -> Result<FileTask> {
         let task = self
-            .create(&client_id, kind, &format!("{kind:?}").to_uppercase(), ops)
+            .create(client_id, kind, &format!("{kind:?}").to_uppercase(), ops)
             .await?;
         let service = self.service()?;
-        loop {
-            let current = match service.get(&task.id)? {
-                Some(current) => current,
-                None => self
-                    .list(client_id.clone())
-                    .await?
-                    .into_iter()
-                    .find(|row| row.id == task.id)
-                    .ok_or_else(|| anyhow!("file task unavailable"))?,
-            };
-            match current.status {
-                FileTaskStatus::Done => return Ok(true),
-                FileTaskStatus::Error => return Ok(false),
-                _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
-            }
+        wait_for_completion(&self.completion, || {
+            let current = service
+                .get(&task.id)?
+                .ok_or_else(|| anyhow!("file task unavailable"))?;
+            Ok(
+                matches!(current.status, FileTaskStatus::Done | FileTaskStatus::Error)
+                    .then_some(current),
+            )
+        })
+        .await
+    }
+    pub async fn copy_to_directory(
+        &self,
+        client_id: &str,
+        src: String,
+        directory: String,
+        name: String,
+    ) -> Result<Option<String>> {
+        if name.is_empty()
+            || matches!(name.as_str(), "." | "..")
+            || name.contains(['/', '\\', '\0'])
+        {
+            bail!("invalid file name");
         }
+        let directory = PathBuf::from(directory);
+        if !directory.is_absolute() {
+            bail!("absolute destination directory required");
+        }
+        let src = plain_rs::utils::file_uri::local_path(&src).map_err(anyhow::Error::msg)?;
+        let task = self
+            .execute(
+                client_id,
+                FileTaskType::Copy,
+                vec![FileTaskOp {
+                    src,
+                    dst: directory.join(name).to_string_lossy().into_owned(),
+                    overwrite: true,
+                }],
+            )
+            .await?;
+        Ok(if task.status == FileTaskStatus::Done {
+            task.completed_ops
+                .first()
+                .map(|operation| operation.dst.clone())
+        } else {
+            None
+        })
     }
     pub async fn remove(&self, client_id: String, id: String) -> Result<bool> {
         let service = self.service()?;
@@ -121,13 +156,31 @@ impl FileTasks {
         tokio::task::spawn_blocking(move || service.list(&client_id)).await?
     }
 }
-struct Changes(broadcast::Sender<WsEvent>);
+async fn wait_for_completion<T>(
+    completion: &tokio::sync::Notify,
+    mut read: impl FnMut() -> Result<Option<T>>,
+) -> Result<T> {
+    loop {
+        let notification = completion.notified();
+        tokio::pin!(notification);
+        notification.as_mut().enable();
+        if let Some(value) = read()? {
+            return Ok(value);
+        }
+        notification.await;
+    }
+}
+struct Changes {
+    events: broadcast::Sender<WsEvent>,
+    completion: Arc<tokio::sync::Notify>,
+}
 impl Events for Changes {
     fn changed(&self, task: &FileTask) {
         if matches!(task.status, FileTaskStatus::Done | FileTaskStatus::Error) {
             let _ = self
-                .0
+                .events
                 .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()));
+            self.completion.notify_waiters();
         }
     }
 }

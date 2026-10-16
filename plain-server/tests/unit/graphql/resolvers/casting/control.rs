@@ -16,7 +16,7 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
         )
         .unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("plain.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
@@ -43,8 +43,6 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
     (dir, server)
 }
 
-/// The receiver endpoints live on the public web listener, not the private
-/// content port, so the public surface has to be started explicitly.
 #[cfg(feature = "http_transport")]
 async fn public_fixture() -> (
     tempfile::TempDir,
@@ -212,7 +210,7 @@ async fn a_forged_c_ip_header_cannot_impersonate_an_allowed_sender() {
 async fn native_control_surfaces_lifecycle_and_cast_prompt_without_public_http() {
     let (dir, server, _) = public_fixture().await;
     server.stop_public().await;
-    let controller = server.dlna_receiver();
+    let controller = MainDlnaClient(server.native_graphql().unwrap());
     let state = server.runtime_state();
     let post = |body: Value| {
         let controller = &controller;
@@ -239,7 +237,7 @@ async fn native_control_surfaces_lifecycle_and_cast_prompt_without_public_http()
     let (status, body) = post(json!({"action": "start", "port": 7878})).await;
     assert_eq!(status, 200);
     let row: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(row["result"]["isRunning"], json!(true));
+    assert_eq!(row["result"]["isRunning"], json!(true), "{row}");
     assert_eq!(row["result"]["port"], json!(7878));
 
     // Seed a pending request, then let the host accept it and remember the
@@ -343,7 +341,7 @@ async fn public_dlna_reads_the_native_players_reported_position() {
     let state = server.runtime_state();
     state.prefs.set_user("service", true).unwrap();
     state.prefs.set_user("dlna", true).unwrap();
-    let controller = server.dlna_receiver();
+    let controller = MainDlnaClient(server.native_graphql().unwrap());
     controller
         .execute_json(r#"{"action":"position","positionMs":15000,"durationMs":120000}"#)
         .await
@@ -461,4 +459,43 @@ async fn receiver_name_uses_the_native_default_and_current_core_setting_without_
     assert_eq!(device_name(&state).await.unwrap(), "Shared Renderer");
     assert!(requests.try_recv().is_err());
     server.shutdown().await;
+}
+
+struct MainDlnaClient(crate::native::graphql::NativeGraphqlExecutor);
+impl MainDlnaClient {
+    async fn execute_json(&self, command: &str) -> Result<String, String> {
+        let mut input: Value = serde_json::from_str(command).map_err(|error| error.to_string())?;
+        let action = input["action"].as_str().ok_or("Missing action")?.to_owned();
+        let field = match action.as_str() {
+            "snapshot" if input.as_object().unwrap().len() == 1 => "dlnaReceiver",
+            "rules" if input.as_object().unwrap().len() == 1 => "dlnaReceiverRules",
+            _ => "controlDlnaReceiver",
+        };
+        let request = if field == "controlDlnaReceiver" {
+            for name in ["action", "state"] {
+                if let Some(value) = input[name].as_str() {
+                    let mut converted = String::new();
+                    for (index, letter) in value.chars().enumerate() {
+                        if index > 0 && letter.is_uppercase() {
+                            converted.push('_');
+                        }
+                        converted.extend(letter.to_uppercase());
+                    }
+                    input[name] = json!(converted);
+                }
+            }
+            async_graphql::Request::new(
+                "mutation($input:DlnaReceiverInput!){controlDlnaReceiver(input:$input)}",
+            )
+            .variables(async_graphql::Variables::from_json(json!({"input":input})))
+        } else {
+            async_graphql::Request::new(format!("{{{field}}}"))
+        };
+        let result = self.0.execute(request).await;
+        if let Some(error) = result.errors.first() {
+            return Err(error.message.clone());
+        }
+        serde_json::to_string(&result.data.into_json().map_err(|error| error.to_string())?[field])
+            .map_err(|error| error.to_string())
+    }
 }

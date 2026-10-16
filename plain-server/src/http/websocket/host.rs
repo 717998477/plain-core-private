@@ -197,6 +197,7 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                     if let Some(c) = state.main_ws.connections.lock().unwrap().get_mut(&id) { c.registered = true; }
                     state.main_ws.changed(&state);
                                         let _ = state.mobile.mms.replay();
+                    if let Err(error) = state.sms_sends.replay() { log::error!("SMS send replay: {error}"); }
                     let _ = state.events.send(WsEvent::broadcast("WEB_SOCKET_REGISTERED", "{}".into()));
                 } else {
                     let controls = controls(&plain);

@@ -50,7 +50,9 @@ fn sms_fact(id: &str) -> Value {
 fn sms_facts(schema: &PublicSchema, items: Value, count: i64) {
     stub(schema_host(schema), move |method, _| match method {
         "systemPermissionFacts" => json!({"granted":{"READ_SMS": true}}),
-        "systemSmsRowsFacts" => json!({"items": items.clone(), "canonicalAddress": "+1555"}),
+        "systemSmsRowsFacts" => {
+            json!({"items": items.clone(), "canonicalAddresses": ["+1555"], "ownNumbers": []})
+        }
         "systemSmsCountFacts" => json!({"sms": count, "mms": 0}),
         other => panic!("unexpected host call {other}"),
     });
@@ -149,7 +151,7 @@ async fn bulk_sms_mutations_select_ids_in_rust_and_delete_only_provider_rows() {
             json!(["1", "2"])
         }
         "systemSmsRowsFacts" => {
-            json!({"items":[sms_fact("1"), sms_fact("2")],"canonicalAddress":""})
+            json!({"items":[sms_fact("1"), sms_fact("2")],"canonicalAddresses":[],"ownNumbers":[]})
         }
         "systemDeleteSmsRows" => {
             assert_eq!(params, json!({"ids":["1", "2"]}));
@@ -233,11 +235,14 @@ async fn send_sms_needs_the_send_permission_and_passes_the_sim_choice() {
     let (_dir, schema) = fixture(json!(["SEND_SMS"]));
     stub(schema_host(&schema), |method, params| match method {
         "systemPermissionFacts" => json!({"granted":{"SEND_SMS": true}}),
-        "systemSendSms" => {
+        "systemCapabilities" => json!(["SMS"]),
+        "systemDivideSmsText" => json!(["hi"]),
+        "systemSendSmsParts" => {
             assert_eq!(params["number"], "+1555");
-            assert_eq!(params["body"], "hi");
+            assert_eq!(params["parts"], json!(["hi"]));
             assert_eq!(params["subscriptionId"], 2);
-            assert_eq!(params["clientRequestId"], "r1");
+            assert!(!params["requestId"].as_str().unwrap().is_empty());
+            assert!(params.get("clientRequestId").is_none());
             json!(true)
         }
         other => panic!("unexpected host call {other}"),
@@ -256,7 +261,9 @@ async fn send_sms_needs_the_send_permission_and_passes_the_sim_choice() {
 async fn send_sms_maps_the_default_sim_to_no_subscription() {
     let (_dir, schema) = fixture(json!(["SEND_SMS"]));
     stub(schema_host(&schema), |method, params| match method {
-        "systemSendSms" => {
+        "systemCapabilities" => json!(["SMS"]),
+        "systemDivideSmsText" => json!(["hi"]),
+        "systemSendSmsParts" => {
             assert_eq!(params["subscriptionId"], Value::Null);
             json!(true)
         }
@@ -302,7 +309,7 @@ async fn send_mms_allocates_one_rust_pending_id_and_launches_only_a_native_inten
         .await;
     assert_eq!(duplicate.errors.len(), 1);
     assert!(duplicate.errors[0].message.contains("already pending"));
-    runtime.cancel_all();
+    runtime.cancel_all().await;
 }
 
 #[test]

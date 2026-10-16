@@ -27,11 +27,6 @@ pub trait Driver: Send + Sync {
     fn capabilities(&self) -> impl Future<Output = Result<Capabilities>> + Send;
     fn scan(&self, short_id: &str) -> impl Future<Output = Result<Option<Advertisement>>> + Send;
     fn start_aware(&self, peer_id: &str) -> impl Future<Output = Result<bool>> + Send;
-    fn observe(
-        &self,
-        peer_id: &str,
-        value: &Advertisement,
-    ) -> impl Future<Output = Result<()>> + Send;
 }
 struct Entry {
     generation: u64,
@@ -152,7 +147,6 @@ pub async fn run<D: Driver>(
     if !unchanged(db, &claim, &peer)? {
         return Ok(None);
     }
-    driver.observe(id, &value).await?;
     if caps.aware_supported && value.aware_supported && !value.aware_running {
         if !unchanged(db, &claim, &peer)? {
             return Ok(None);
@@ -165,7 +159,6 @@ pub async fn run<D: Driver>(
         }
         if started {
             value.aware_running = true;
-            driver.observe(id, &value).await?;
         }
     }
     Ok(Some(value))

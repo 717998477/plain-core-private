@@ -149,20 +149,16 @@ fn call_rejects_an_injected_comparison_operator() {
 
 #[tokio::test]
 async fn call_and_contact_reach_a_mutation_with_nothing_selected() {
-    use crate::host::bridge::Host;
     use std::sync::Arc;
 
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Db::open(&dir.path().join("db")).unwrap());
-    let host = Arc::new(Host::default());
     for (provider, query) in [
         (Provider::Call, "trash:false"),
         (Provider::Call, "show_hidden:false"),
     ] {
         assert!(
-            super::require_narrowing(&db, &host, provider, query)
-                .await
-                .is_err(),
+            super::require_narrowing(&db, provider, query).is_err(),
             "{provider:?} {query:?} selects nothing and must refuse the mutation"
         );
     }
@@ -173,8 +169,24 @@ async fn call_and_contact_reach_a_mutation_with_nothing_selected() {
         (Provider::Contact, "trash:false"),
         (Provider::Contact, "text:abc"),
     ] {
-        super::require_narrowing(&db, &host, provider, query)
-            .await
+        super::require_narrowing(&db, provider, query)
             .unwrap_or_else(|error| panic!("{provider:?} {query:?} always narrows: {error}"));
+    }
+}
+
+#[test]
+fn date_scoped_mutations_need_a_valid_rust_parsed_timestamp() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(&directory.path().join("plain.db")).unwrap();
+    assert!(require_narrowing(&db, Provider::Call, "start_time:>=1700000000").is_ok());
+    for query in [
+        "start_time:bad",
+        "start_time:9223372036854775808",
+        "start_time:2026-02-29",
+    ] {
+        assert!(
+            require_narrowing(&db, Provider::Call, query).is_err(),
+            "{query}"
+        );
     }
 }

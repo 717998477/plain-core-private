@@ -114,16 +114,15 @@ pub(crate) fn text_field(query: &str) -> String {
 pub(crate) async fn media_rows(ctx: &Context<'_>, params: Value) -> async_graphql::Result<Value> {
     let request: RowsRequest = serde_json::from_value(params)?;
     Ok(Value::Array(
-        catalog(ctx)
-            .rows(
-                request.data_type,
-                &request.query,
-                request.sort_by,
-                request.limit,
-                request.offset,
-            )
-            .await
-            .map_err(async_graphql::Error::new)?,
+        library_rows(
+            ctx,
+            request.data_type,
+            request.query,
+            request.sort_by,
+            request.offset,
+            request.limit,
+        )
+        .await?,
     ))
 }
 
@@ -178,10 +177,15 @@ pub(crate) async fn library_rows(
     offset: u32,
     limit: u32,
 ) -> async_graphql::Result<Vec<Value>> {
-    catalog(ctx)
+    let mut rows = catalog(ctx)
         .rows(data_type, &query, sort_by, limit, offset)
         .await
-        .map_err(async_graphql::Error::new)
+        .map_err(async_graphql::Error::new)?;
+    ctx.data::<Arc<crate::services::files::duration_updates::Runtime>>()?
+        .enrich(data_type, &mut rows)
+        .await
+        .map_err(async_graphql::Error::new)?;
+    Ok(rows)
 }
 
 pub(crate) async fn library_keys(

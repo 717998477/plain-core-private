@@ -284,3 +284,44 @@ fn a_literal_backslash_filename_round_trips_on_filesystems_that_support_it() {
         b"literal filename"
     );
 }
+
+#[tokio::test]
+async fn named_internal_archives_reject_invalid_aliases_and_stop_before_creating_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("log");
+    std::fs::write(&source, b"log bytes").unwrap();
+    let output = directory.path().join("output/logs.zip");
+    let (_stop, stopped) = watch::channel(false);
+    for name in ["", "../escape", "/absolute", "a/../escape", "a\\escape"] {
+        assert!(
+            pack_named_files(
+                vec![(source.clone(), name.into())],
+                output.clone(),
+                stopped.clone()
+            )
+            .await
+            .is_err()
+        );
+        assert!(!output.parent().unwrap().exists());
+    }
+    assert!(
+        pack_named_files(
+            vec![
+                (source.clone(), "log".into()),
+                (source.clone(), "log".into())
+            ],
+            output.clone(),
+            stopped
+        )
+        .await
+        .is_err()
+    );
+    let (stop, stopped) = watch::channel(false);
+    stop.send_replace(true);
+    assert!(
+        pack_named_files(vec![(source, "log".into())], output.clone(), stopped)
+            .await
+            .is_err()
+    );
+    assert!(!output.parent().unwrap().exists());
+}

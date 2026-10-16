@@ -8,11 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../plain-rs/testdata"
-    ))
-    .join(name)
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../plain-rs/testdata")).join(name)
 }
 
 /// The row format is the fixed-width `...Z` text the catalog sorts on, so a
@@ -111,7 +107,7 @@ fn audio_row_carries_probe_tags_and_real_stat_facts() {
     assert_eq!(m.title, "Hydrate Title");
     assert_eq!(m.cover_image_id, None);
     let probed = crate::metadata::probe_media(m.path.as_str(), "audio");
-    assert_eq!(m.duration_ms, i64::from(probed.duration_secs) * 1000);
+    assert_eq!(m.duration_ms, probed.duration_ms);
     assert!(m.duration_ms > 0);
     assert_eq!((m.width, m.height, m.rotation), (0, 0, 0));
     assert_eq!(m.taken_at, None);
@@ -139,7 +135,10 @@ fn created_at_falls_back_to_modified_when_the_os_records_no_birth_time() {
     let born = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
 
     assert_eq!(created_at_of(None, modified), "2023-11-14T22:13:20.000Z");
-    assert_eq!(created_at_of(Some(born), modified), "2020-09-13T12:26:40.000Z");
+    assert_eq!(
+        created_at_of(Some(born), modified),
+        "2020-09-13T12:26:40.000Z"
+    );
     assert_eq!(
         row_timestamp(SystemTime::UNIX_EPOCH),
         "1970-01-01T00:00:00.000Z"
@@ -210,10 +209,7 @@ fn image_row_reads_pixel_dimensions_from_the_image_crate() {
 }
 
 #[test]
-fn formats_the_image_features_cannot_decode_still_produce_a_row() {
-    // HEIC/AVIF/BMP are valid files the enabled `image` features cannot
-    // read: they must reach the catalog with unknown dimensions rather than
-    // fail, or a scan would hide them.
+fn image_dimensions_follow_file_contents_instead_of_a_misleading_extension() {
     let dir = tempfile::tempdir().unwrap();
     for name in ["photo.heic", "photo.avif", "photo.bmp", "photo.tiff"] {
         let path = dir.path().join(name);
@@ -221,7 +217,7 @@ fn formats_the_image_features_cannot_decode_still_produce_a_row() {
 
         let m = read_file_metadata(&path, DataType::Image).unwrap();
 
-        assert_eq!((m.width, m.height, m.rotation), (0, 0, 0), "{name}");
+        assert_eq!((m.width, m.height, m.rotation), (1200, 800, 0), "{name}");
         assert_eq!(m.taken_at, None, "{name}");
         assert_eq!(m.title, "photo", "{name}");
         assert!(m.size_bytes > 0, "{name}");
@@ -353,4 +349,126 @@ fn unsupported_image_metadata_stays_visible_without_reporting_unknown_fields_as_
     assert!(!facts.available.dimensions);
     assert!(!facts.available.rotation);
     assert!(!facts.available.taken_at);
+}
+
+fn distant_image_metadata(orientation: u16) -> Vec<u8> {
+    let first = 1024 * 1024;
+    let payload = 2 * 1024 * 1024;
+    let mut bytes = vec![0; 3 * 1024 * 1024];
+    bytes[..4].copy_from_slice(b"II\x2a\0");
+    bytes[4..8].copy_from_slice(&(first as u32).to_le_bytes());
+    bytes[first..first + 2].copy_from_slice(&5u16.to_le_bytes());
+    for (index, tag, kind, count, value) in [
+        (0, 0x0100u16, 4u16, 1u32, 1920u32),
+        (1, 0x0101, 4, 1, 1080),
+        (2, 0x0112, 3, 1, u32::from(orientation)),
+        (3, 0x010f, 2, 7, payload as u32),
+        (4, 0x8769, 4, 1, (first + 256) as u32),
+    ] {
+        let start = first + 2 + index * 12;
+        bytes[start..start + 2].copy_from_slice(&tag.to_le_bytes());
+        bytes[start + 2..start + 4].copy_from_slice(&kind.to_le_bytes());
+        bytes[start + 4..start + 8].copy_from_slice(&count.to_le_bytes());
+        bytes[start + 8..start + 12].copy_from_slice(&value.to_le_bytes());
+    }
+    let exif = first + 256;
+    bytes[exif..exif + 2].copy_from_slice(&2u16.to_le_bytes());
+    for (index, tag, count, value) in [
+        (0, 0x9003u16, 20u32, (payload + 64) as u32),
+        (1, 0x9011, 7, (payload + 96) as u32),
+    ] {
+        let start = exif + 2 + index * 12;
+        bytes[start..start + 2].copy_from_slice(&tag.to_le_bytes());
+        bytes[start + 2..start + 4].copy_from_slice(&2u16.to_le_bytes());
+        bytes[start + 4..start + 8].copy_from_slice(&count.to_le_bytes());
+        bytes[start + 8..start + 12].copy_from_slice(&value.to_le_bytes());
+    }
+    bytes[payload..payload + 7].copy_from_slice(b"Camera\0");
+    bytes[payload + 64..payload + 84].copy_from_slice(b"2026:10:16 12:34:56\0");
+    bytes[payload + 96..payload + 103].copy_from_slice(b"+08:00\0");
+    bytes
+}
+
+#[test]
+fn indexed_images_use_shared_seekable_exif_dates_and_rotation_without_swapping_raw_dimensions() {
+    let directory = tempfile::tempdir().unwrap();
+    for (orientation, rotation, available) in
+        [(0, 0, false), (1, 0, true), (5, 0, true), (6, 90, true)]
+    {
+        let path = directory.path().join(format!("photo-{orientation}.tiff"));
+        std::fs::write(&path, distant_image_metadata(orientation)).unwrap();
+        let facts = read_file_metadata_with_availability(&path, DataType::Image).unwrap();
+        assert_eq!(
+            (
+                facts.metadata.width,
+                facts.metadata.height,
+                facts.metadata.rotation
+            ),
+            (1920, 1080, rotation)
+        );
+        assert_eq!(facts.available.rotation, available);
+        assert!(facts.available.dimensions);
+        assert!(facts.available.taken_at);
+        assert_eq!(
+            facts.metadata.taken_at.as_deref(),
+            Some("2026-10-16T04:34:56.000Z")
+        );
+    }
+}
+
+struct CountedImage {
+    source: std::io::Cursor<Vec<u8>>,
+    bytes_read: usize,
+}
+impl Read for CountedImage {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.source.read(bytes)?;
+        self.bytes_read += count;
+        Ok(count)
+    }
+}
+impl Seek for CountedImage {
+    fn seek(&mut self, from: SeekFrom) -> std::io::Result<u64> {
+        self.source.seek(from)
+    }
+}
+
+#[test]
+fn indexed_image_metadata_seeks_to_distant_fields_without_reading_the_pixel_payload() {
+    let mut reader = CountedImage {
+        source: std::io::Cursor::new(distant_image_metadata(6)),
+        bytes_read: 0,
+    };
+    let (width, height, rotation, taken_at) = image_reader(&mut reader);
+    assert_eq!((width, height, rotation), (1920, 1080, Some(90)));
+    assert_eq!(taken_at.as_deref(), Some("2026-10-16T04:34:56.000Z"));
+    assert!(
+        reader.bytes_read < 140 * 1024,
+        "{} bytes read",
+        reader.bytes_read
+    );
+}
+
+#[test]
+fn video_row_keeps_fractional_milliseconds_from_the_single_probe() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sample.mp4");
+    let mut time = vec![0; 12];
+    time.extend(1000u32.to_be_bytes());
+    time.extend(3211u32.to_be_bytes());
+    let mvhd = [28u32.to_be_bytes().to_vec(), b"mvhd".to_vec(), time].concat();
+    std::fs::write(
+        &path,
+        [36u32.to_be_bytes().to_vec(), b"moov".to_vec(), mvhd].concat(),
+    )
+    .unwrap();
+    let probe = crate::metadata::probe_media(path.to_str().unwrap(), "video");
+    assert_eq!(probe.duration_ms, 3211);
+    assert_eq!(probe.duration_secs, 3);
+    assert_eq!(
+        read_file_metadata(&path, DataType::Video)
+            .unwrap()
+            .duration_ms,
+        3211
+    );
 }

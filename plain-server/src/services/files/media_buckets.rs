@@ -8,7 +8,6 @@ pub(crate) struct ItemFact {
     pub(crate) name: String,
     pub(crate) size: i64,
     path: String,
-    sort_name: String,
 }
 
 #[derive(Serialize)]
@@ -23,6 +22,14 @@ pub(crate) struct Bucket {
 }
 
 pub(crate) fn aggregate(data_type: &str, items: Vec<ItemFact>) -> anyhow::Result<Vec<Bucket>> {
+    aggregate_with_sort_key(data_type, items, plain_rs::utils::sort_name::sort_name)
+}
+
+fn aggregate_with_sort_key(
+    data_type: &str,
+    items: Vec<ItemFact>,
+    mut sort_key: impl FnMut(&str) -> String,
+) -> anyhow::Result<Vec<Bucket>> {
     anyhow::ensure!(
         matches!(data_type, "IMAGE" | "VIDEO" | "AUDIO" | "DOC"),
         "unsupported media bucket type"
@@ -47,13 +54,14 @@ pub(crate) fn aggregate(data_type: &str, items: Vec<ItemFact>) -> anyhow::Result
             }
         } else {
             positions.insert(item.id.clone(), buckets.len());
+            let sort_name = sort_key(&item.name);
             buckets.push(Bucket {
                 id: item.id,
                 name: item.name,
                 item_count: 1,
                 size: item.size,
                 top_items: vec![item.path],
-                sort_name: item.sort_name.to_lowercase(),
+                sort_name,
             });
         }
     }

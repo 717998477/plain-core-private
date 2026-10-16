@@ -21,8 +21,9 @@ pub fn initialize_tls() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-pub fn set_password(directory: &Path, password: &str) -> Result<()> {
-    std::fs::create_dir_all(directory)?;
+pub fn set_password(directory: &Path, cache: &Path, password: &str) -> Result<()> {
+    let _data_directory = crate::assembly::data_directory::DataDirectory::open(directory, cache)
+        .map_err(anyhow::Error::msg)?;
     let prefs = plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(directory))?;
     plain_rs::prefs::system::Command::SetPassword {
         password: password.to_owned(),
@@ -42,8 +43,10 @@ impl HeadlessService {
     pub async fn start(paths: &AppPaths, options: Options) -> Result<Self> {
         storage::validate_automount(options.automount)?;
         initialize_tls();
-        plain_media::storage::paths::set(paths.data_dir.clone(), paths.cache_dir.clone());
-        let core = Arc::new(ContentServer::open(&paths.data_dir).map_err(anyhow::Error::msg)?);
+        let core = Arc::new(
+            ContentServer::open_with_cache(&paths.data_dir, &paths.cache_dir)
+                .map_err(anyhow::Error::msg)?,
+        );
         let log_file = crate::platform::system::log::default_log_file(&paths.data_dir);
         crate::platform::system::log::set_file(&log_file);
         core.set_log_file(&log_file).map_err(anyhow::Error::msg)?;
@@ -90,7 +93,7 @@ impl HeadlessService {
             .set_source_directories(&roots)
             .map_err(anyhow::Error::msg)?;
         catalog
-            .configure_scan_directories(&paths.cache_dir, None)
+            .configure_scan_directories(None)
             .map_err(anyhow::Error::msg)?;
         catalog
             .watch_source_directories()
@@ -163,6 +166,7 @@ impl HeadlessService {
 
 fn capabilities() -> Vec<String> {
     let mut capabilities = vec![
+        "FILE_EXPORT".into(),
         "MEDIA_SCAN".into(),
         "NOTES".into(),
         "FEEDS".into(),
@@ -176,6 +180,7 @@ fn capabilities() -> Vec<String> {
     );
     #[cfg(target_os = "linux")]
     {
+        capabilities.push("APP_RELAUNCH".into());
         if !plain_rs::platform::linux::samba::detect_systemd_service_name().is_empty() {
             capabilities.push("LAN_SHARE".into());
         }

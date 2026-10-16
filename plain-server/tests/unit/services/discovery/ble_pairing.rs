@@ -12,7 +12,7 @@ fn fixture(id: &str) -> (tempfile::TempDir, crate::assembly::server::ContentServ
         )
         .unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("data.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )

@@ -48,6 +48,7 @@ pub(crate) struct Runtime {
     operations: tokio::sync::Mutex<()>,
     cancelled: AtomicBool,
     observing: AtomicBool,
+    catalog_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     events: tokio::sync::broadcast::Sender<WsEvent>,
 }
 impl Runtime {
@@ -76,6 +77,7 @@ impl Runtime {
             operations: tokio::sync::Mutex::new(()),
             cancelled: AtomicBool::new(false),
             observing: AtomicBool::new(false),
+            catalog_task: Mutex::new(None),
         })
     }
     pub fn snapshot(&self) -> Snapshot {
@@ -114,6 +116,33 @@ impl Runtime {
         }
         snapshot.version = state.version;
         snapshot
+    }
+    pub(crate) fn catalog_changed(self: &Arc<Self>) {
+        if !self.observing.load(Ordering::Acquire) {
+            return;
+        }
+        let mut task = self.catalog_task.lock().unwrap();
+        if let Some(previous) = task.take() {
+            previous.abort();
+        }
+        let owner = Arc::downgrade(self);
+        *task = Some(tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            let Some(owner) = owner.upgrade() else {
+                return;
+            };
+            let _guard = owner.operations.lock().await;
+            if owner.observing.load(Ordering::Acquire) {
+                if let Err(error) = owner.index.start(false) {
+                    owner.report_error(error.to_string());
+                }
+            }
+        }));
+    }
+    fn cancel_catalog_changes(&self) {
+        if let Some(task) = self.catalog_task.lock().unwrap().take() {
+            task.abort();
+        }
     }
     pub(crate) fn report_error(&self, message: String) {
         self.state.lock().unwrap().error = message;
@@ -404,6 +433,7 @@ impl Runtime {
         Ok(())
     }
     async fn close_models(&self) -> Result<(), String> {
+        self.cancel_catalog_changes();
         self.pause_index().await?;
         self.index.set_encoder(None);
         *self.engine.lock().unwrap() = None;

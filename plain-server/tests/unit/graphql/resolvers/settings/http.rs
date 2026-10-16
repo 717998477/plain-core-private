@@ -12,12 +12,8 @@ fn device() -> (tempfile::TempDir, ContentServer, HeaderMap) {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(Prefs::load(&dir.path().join("system_prefs.json")).unwrap());
     plain_rs::prefs::system::bootstrap(&prefs).unwrap();
-    let server = ContentServer::start(
-        &dir.path().join("data.db"),
-        &plain_rs::base64_encode(&[3; 32]),
-        prefs,
-    )
-    .unwrap();
+    let server =
+        ContentServer::start(dir.path(), &plain_rs::base64_encode(&[3; 32]), prefs).unwrap();
     let session = serde_json::to_value(
         crate::services::sessions::create(&server.runtime_state(), "Controller".into()).unwrap(),
     )

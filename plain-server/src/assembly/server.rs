@@ -1,9 +1,4 @@
-use axum::{
-    Router,
-    extract::DefaultBodyLimit,
-    http::HeaderMap,
-    routing::{get, post},
-};
+use axum::{Router, extract::DefaultBodyLimit, http::HeaderMap, routing::get};
 use plain_rs::db::Db;
 use plain_rs::events::WsEvent;
 use std::{
@@ -18,8 +13,12 @@ use tokio::{
 };
 #[derive(Clone)]
 pub(crate) struct ServerState {
+    _data_directory: Arc<crate::assembly::data_directory::DataDirectory>,
+    pub(crate) cache: plain_rs::cache_paths::CachePaths,
     pub(crate) logs: Arc<crate::services::logs::Logs>,
+    pub(crate) browser: Arc<crate::services::files::browser::Runtime>,
     pub(crate) file_platform: Arc<crate::services::files::platform::FilePlatform>,
+    pub(crate) duration_updates: Arc<crate::services::files::duration_updates::Runtime>,
     pub(crate) duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     pub(crate) store: Arc<plain_rs::kv::LazyDb>,
     #[cfg(feature = "http_transport")]
@@ -27,6 +26,7 @@ pub(crate) struct ServerState {
     #[cfg(feature = "http_transport")]
     pub(crate) http_failure:
         Arc<std::sync::Mutex<Option<crate::assembly::lifecycle::HttpServerFailure>>>,
+    pub(crate) http_server: Arc<crate::services::http_server::Runtime>,
     pub(crate) build_debug: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) web_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
     pub(crate) web_bundle:
@@ -70,6 +70,7 @@ pub(crate) struct ServerState {
     pub(crate) pairing: Arc<plain_rs::peers::pairing::sessions::Sessions>,
     pub(crate) prefs: Arc<plain_rs::prefs::Prefs>,
     pub(crate) dlna: Arc<crate::services::casting::receiver::receiver_engine::DlnaEngine>,
+    pub(crate) sms_sends: Arc<crate::services::sms::send_runtime::Runtime>,
     pub(crate) image_models: Arc<crate::services::images::models::Runtime>,
     pub(crate) image_index: Arc<crate::services::images::index::ImageIndex>,
     pub(crate) mobile: Arc<crate::mobile::Runtime>,
@@ -133,14 +134,6 @@ impl ContentServer {
         &self.state
     }
 
-    pub fn web_login_confirmation(&self) -> crate::http::auth::ws_login::Confirmation {
-        crate::http::auth::ws_login::Confirmation::new(self.state.clone())
-    }
-
-    pub fn dlna_receiver(&self) -> crate::services::casting::receiver::control::Controller {
-        crate::services::casting::receiver::control::Controller::new(self.state.clone())
-    }
-
     pub fn shared_preferences(&self) -> Result<Arc<plain_rs::prefs::Prefs>, String> {
         self.state.native_client_id()?;
         Ok(self.state.prefs.clone())
@@ -161,27 +154,12 @@ impl ContentServer {
         self.state.peer_status.clone()
     }
 
-    pub fn peer_status_controller(
-        &self,
-    ) -> crate::services::peers::peer_status_controller::Controller {
-        crate::services::peers::peer_status_controller::Controller::new(self.state.clone())
-    }
-
     pub fn native_graphql(&self) -> Result<crate::native::graphql::NativeGraphqlExecutor, String> {
         let client_id = self.state.native_client_id()?;
         Ok(crate::native::graphql::NativeGraphqlExecutor::new(
             self.graphql_executor(),
             self.state.events.clone(),
             client_id,
-            self.state.stop.clone(),
-        ))
-    }
-
-    pub fn native_file_tasks(&self) -> Result<crate::native::file_tasks::NativeFileTasks, String> {
-        Ok(crate::native::file_tasks::NativeFileTasks::new(
-            self.state.files.clone(),
-            self.state.file_platform.clone(),
-            self.state.native_client_id()?,
             self.state.stop.clone(),
         ))
     }
@@ -223,30 +201,20 @@ impl ContentServer {
             .await
     }
 
-    pub fn native_dlna(&self) -> Result<crate::native::dlna::NativeDlnaReceiver, String> {
-        self.state.native_client_id()?;
-        Ok(crate::native::dlna::NativeDlnaReceiver::new(
-            self.state.clone(),
-        ))
-    }
-
-    pub fn native_peers(&self) -> Result<crate::native::peers::NativePeers, String> {
-        self.state.native_client_id()?;
-        Ok(crate::native::peers::NativePeers::new(self.state.clone()))
-    }
-
-    pub fn native_pairing(&self) -> Result<crate::native::pairing::NativePairing, String> {
-        self.state.native_client_id()?;
-        Ok(crate::native::pairing::NativePairing::new(
-            self.state.clone(),
-        ))
-    }
-
-    pub fn native_discovery(&self) -> Result<crate::native::discovery::NativeDiscovery, String> {
-        self.state.native_client_id()?;
-        Ok(crate::native::discovery::NativeDiscovery::new(
-            self.state.clone(),
-        ))
+    pub fn peer_proxy_resolver(&self) -> crate::http::proxy::local::PeerResolver {
+        let state = self.state.clone();
+        Arc::new(move |id| {
+            if state.native_client_id().is_err() {
+                return None;
+            }
+            match crate::services::peers::peer_address::proxy_address(&state.db, id) {
+                Ok(address) => address,
+                Err(error) => {
+                    log::warn!("Peer proxy address lookup failed: {error}");
+                    None
+                }
+            }
+        })
     }
 
     #[cfg(feature = "media")]
@@ -276,58 +244,57 @@ impl ContentServer {
         crate::host::events::HostEvents::new(self.state.clone())
     }
 
-    /// The user-settings store as JSON, defaults merged — the shape the App's
-    /// native bridge reads to seed its flows.
-    pub fn user_settings_json(&self) -> Result<String, String> {
-        let snapshot =
-            plain_rs::prefs::user::snapshot(&self.state.prefs).map_err(|e| e.to_string())?;
-        serde_json::to_string(&snapshot).map_err(|e| e.to_string())
-    }
-
-    /// Applies one user-settings patch on behalf of the App's native (JNI/C
-    /// ABI) caller. Runs the same [`apply_user_patch`] the GraphQL resolvers
-    /// use, so a preference written from Kotlin and one written by a remote
-    /// client validate, persist and broadcast identically.
-    pub async fn update_user_prefs(&self, patch_json: &str) -> Result<bool, String> {
-        use crate::graphql::resolvers::settings::state::{UserPatchEnv, apply_user_patch};
-        let patch: plain_rs::prefs::user::UserSettingsPatch =
-            serde_json::from_str(patch_json).map_err(|e| e.to_string())?;
-        apply_user_patch(UserPatchEnv::from_server(&self.state), patch)
-            .await
-            .map_err(|error| error.message)
-    }
-
-    /// Runs one user-settings action on behalf of the App's native (JNI/C
-    /// ABI) caller, through the same write path as [Self::update_user_prefs].
-    pub async fn run_user_action(&self, action_json: &str) -> Result<bool, String> {
-        use crate::graphql::resolvers::settings::state::{UserPatchEnv, apply_user_action};
-        let action: plain_rs::prefs::user::Action =
-            serde_json::from_str(action_json).map_err(|e| e.to_string())?;
-        apply_user_action(UserPatchEnv::from_server(&self.state), action)
-            .await
-            .map_err(|error| error.message)
-    }
-
     fn build_state(
-        path: &Path,
+        directory: &Path,
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
     ) -> Result<(ServerState, watch::Sender<bool>, watch::Receiver<bool>), String> {
+        Self::build_state_with_properties(directory, token, prefs, serde_json::Map::new())
+    }
+    fn build_state_with_properties(
+        directory: &Path,
+        token: &str,
+        prefs: Arc<plain_rs::prefs::Prefs>,
+        properties: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(ServerState, watch::Sender<bool>, watch::Receiver<bool>), String> {
         crate::assembly::core_dependencies::CoreDependencies::validate_token(token)?;
-        let db = Arc::new(Db::open_with_prefs(path, prefs.clone()).map_err(|e| e.to_string())?);
+        if !directory.is_absolute() {
+            return Err("Absolute core data directory required".into());
+        }
+        let host = Arc::new(crate::host::bridge::Host::with_startup_properties(
+            properties,
+        )?);
+        std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+        let cache_directory = match host
+            .startup_property("cacheDir")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(path) => PathBuf::from(path),
+            None => plain_rs::cache_paths::system::resolve(directory)?,
+        };
+        let data_directory =
+            crate::assembly::data_directory::DataDirectory::open(directory, &cache_directory)?;
+        let paths = plain_rs::data_paths::DataPaths::new(directory);
+        let db = Arc::new(
+            Db::open_with_prefs(&paths.database(), prefs.clone()).map_err(|e| e.to_string())?,
+        );
         let (events, _) = broadcast::channel(256);
-        Self::build_state_with(crate::assembly::core_dependencies::CoreDependencies::new(
-            db,
-            prefs,
-            path.parent().unwrap_or(Path::new(".")).to_path_buf(),
-            token.to_owned(),
-            events,
-            Arc::new(crate::host::bridge::Host::default()),
-        ))
+        Self::build_state_with(
+            crate::assembly::core_dependencies::CoreDependencies::new(
+                db,
+                prefs,
+                directory.to_path_buf(),
+                token.to_owned(),
+                events,
+                host,
+            ),
+            data_directory,
+        )
     }
 
     fn build_state_with(
         dependencies: crate::assembly::core_dependencies::CoreDependencies,
+        data_directory: Arc<crate::assembly::data_directory::DataDirectory>,
     ) -> Result<(ServerState, watch::Sender<bool>, watch::Receiver<bool>), String> {
         let crate::assembly::core_dependencies::CoreDependencies {
             db,
@@ -338,10 +305,33 @@ impl ContentServer {
             host,
         } = dependencies;
         crate::assembly::core_dependencies::CoreDependencies::validate_token(&token)?;
+        #[cfg(feature = "media")]
+        plain_media::storage::paths::set(
+            directory.clone(),
+            data_directory.cache_paths().root().to_owned(),
+        );
         plain_rs::prefs::system::bootstrap_runtime(&prefs).map_err(|error| error.to_string())?;
         log::set_max_level(
             plain_rs::prefs::system::log_level(&prefs).map_err(|error| error.to_string())?,
         );
+        if prefs
+            .get_user::<String>(plain_rs::prefs::user::keys::DEVICE_NAME)
+            .map_err(|error| error.to_string())?
+            .is_none_or(|name| name.trim().is_empty())
+            && let Some(name) = host
+                .startup_property("name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+        {
+            plain_rs::prefs::user::patch(
+                &prefs,
+                plain_rs::prefs::user::UserSettingsPatch {
+                    device_name: Some(name.to_owned()),
+                    ..Default::default()
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        }
         plain_rs::prefs::identity::ensure_identity(&prefs);
         plain_rs::prefs::ensure_mdns_hostname(&prefs);
         let (stop, receiver) = watch::channel(false);
@@ -353,7 +343,9 @@ impl ContentServer {
             events.clone(),
             prefs.clone(),
             directory.clone(),
+            data_directory.cache_paths().clone(),
         );
+        services.device.fixed_info()?;
         let mobile = crate::mobile::Runtime::new(
             host.clone(),
             prefs.clone(),
@@ -378,7 +370,7 @@ impl ContentServer {
             image_models.clone(),
             mobile.clone(),
         );
-        let bridge = Arc::new(crate::host::resources::NativeResources::new(host.clone()));
+        let bridge = services.resources.clone();
         let attachments =
             Arc::new(plain_rs::chat::attachments::attachment_imports::Imports::default());
         let downloads = Arc::new(plain_rs::chat::attachments::download_queue::Queue::new(
@@ -400,9 +392,13 @@ impl ContentServer {
         ));
         let dlna = Arc::new(crate::services::casting::receiver::receiver_engine::DlnaEngine::new());
         let state = ServerState {
+            cache: data_directory.cache_paths().clone(),
+            _data_directory: data_directory,
             logs: services.logs.clone(),
             file_platform: services.file_platform.clone(),
+            browser: services.browser.clone(),
             duration_cache: services.duration_cache.clone(),
+            duration_updates: services.duration_updates.clone(),
             store,
             #[cfg(feature = "media")]
             media_scans: services.media_scans.clone(),
@@ -446,6 +442,7 @@ impl ContentServer {
             host,
             db,
             prefs,
+            sms_sends: services.sms_sends.clone(),
             image_models: image_models.clone(),
             mobile,
             cast: Arc::new(crate::services::casting::dlna_sender_runtime::Runtime::default()),
@@ -454,12 +451,13 @@ impl ContentServer {
                 crate::http::auth::ws_login::LoginAttempts::default(),
             )),
             directory: directory.clone(),
+            http_server: Arc::new(crate::services::http_server::Runtime::default()),
             build_debug: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             web_root: Arc::new(std::sync::RwLock::new(None)),
             web_bundle: Arc::new(std::sync::RwLock::new(None)),
             tls_identity: Arc::new(std::sync::RwLock::new(
                 crate::services::tls_identity::IdentitySource::Json(
-                    directory.join("tls-identity.json"),
+                    plain_rs::data_paths::DataPaths::new(&directory).tls_identity(),
                 ),
             )),
             token: Arc::from(token.as_str()),
@@ -483,6 +481,7 @@ impl ContentServer {
         crate::services::discovery::nearby_devices::start(state.clone());
         crate::services::discovery::ble_scan::start(state.clone());
         image_models.follow(receiver.clone());
+        state.sms_sends.follow(receiver.clone());
         state.mobile.mms.follow(receiver.clone());
         crate::services::casting::receiver::control::follow_changes(&state);
         let mdns = state.mdns.clone();
@@ -498,7 +497,7 @@ impl ContentServer {
     }
 
     fn build(
-        path: &Path,
+        directory: &Path,
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
     ) -> Result<
@@ -510,16 +509,26 @@ impl ContentServer {
         ),
         String,
     > {
-        let (state, stop, receiver) = Self::build_state(path, token, prefs)?;
+        let (state, stop, receiver) = Self::build_state(directory, token, prefs)?;
         let router = crate::http::routes::public::build_router(state.clone(), receiver.clone());
         Ok((state, router, stop, receiver))
     }
+    pub fn cache_paths(&self) -> &plain_rs::cache_paths::CachePaths {
+        &self.state.cache
+    }
+
     pub fn open(directory: &Path) -> Result<Self, String> {
+        let cache = plain_rs::cache_paths::system::resolve(directory)?;
+        Self::open_with_cache(directory, &cache)
+    }
+    pub fn open_with_cache(directory: &Path, cache_directory: &Path) -> Result<Self, String> {
         tokio::runtime::Handle::try_current().map_err(|error| error.to_string())?;
         if !directory.is_absolute() {
             return Err("absolute core data directory required".into());
         }
         std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+        let _data_directory =
+            crate::assembly::data_directory::DataDirectory::open(directory, cache_directory)?;
         let prefs = Arc::new(
             plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(directory))
                 .map_err(|error| error.to_string())?,
@@ -535,15 +544,24 @@ impl ContentServer {
             return Err("URL token persistence failed".into());
         }
         let token = plain_rs::crypto::gen_token();
-        Self::start_core(&directory.join("plain.db"), &token, prefs)
+        let mut properties = serde_json::Map::new();
+        properties.insert("cacheDir".into(), serde_json::json!(cache_directory));
+        let (state, stop, _) =
+            Self::build_state_with_properties(directory, &token, prefs, properties)?;
+        Ok(Self {
+            port: 0,
+            state,
+            task: None,
+            stop,
+        })
     }
 
     pub fn start_core(
-        path: &Path,
+        directory: &Path,
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
     ) -> Result<Self, String> {
-        let (state, stop, _) = Self::build_state(path, token, prefs)?;
+        let (state, stop, _) = Self::build_state(directory, token, prefs)?;
         Ok(Self {
             port: 0,
             state,
@@ -553,11 +571,11 @@ impl ContentServer {
     }
 
     pub fn start(
-        path: &Path,
+        directory: &Path,
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
     ) -> Result<Self, String> {
-        let (state, router, stop, mut receiver) = Self::build(path, token, prefs)?;
+        let (state, router, stop, mut receiver) = Self::build(directory, token, prefs)?;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -581,9 +599,10 @@ impl ContentServer {
     }
     #[cfg(feature = "http_transport")]
     pub async fn start_http(
-        path: &Path,
+        directory: &Path,
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
+        properties: serde_json::Map<String, serde_json::Value>,
         http: u16,
         https: u16,
         cert: Vec<u8>,
@@ -591,7 +610,8 @@ impl ContentServer {
         debug: bool,
         web_root: &str,
     ) -> Result<Self, String> {
-        let (state, stop, _) = Self::build_state(path, token, prefs)?;
+        let (state, stop, _) =
+            Self::build_state_with_properties(directory, token, prefs, properties)?;
         let mut server = Self {
             port: 0,
             state,
@@ -616,47 +636,9 @@ impl ContentServer {
         key: Vec<u8>,
     ) -> Result<(u16, u16), String> {
         let _core = self.state.shutdown.lock().await;
-        self.start_public_locked(http, https, cert, key).await
+        self.state.start_public_locked(http, https, cert, key).await
     }
 
-    #[cfg(feature = "http_transport")]
-    async fn start_public_locked(
-        &self,
-        http: u16,
-        https: u16,
-        cert: Vec<u8>,
-        key: Vec<u8>,
-    ) -> Result<(u16, u16), String> {
-        self.state.native_client_id()?;
-        let mut guard = self.state.public_server.lock().await;
-        if guard.is_some() {
-            return Err("Public HTTP server is already running".into());
-        }
-        let (stop, receiver) = watch::channel(false);
-        let router =
-            crate::http::routes::public::build_router(self.state.clone(), receiver.clone());
-        let listeners =
-            crate::http::listeners::HttpListeners::start(router, http, https, cert, key).await?;
-        let ports = (listeners.http_port, listeners.https_port);
-        {
-            let _control = self.state.peer_status.control.lock().await;
-            self.state
-                .peer_status
-                .public_active
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            self.state.peer_status.outgoing.start(self.state.clone());
-        }
-        *self.state.http_failure.lock().unwrap() = None;
-        let generation = crate::assembly::lifecycle::next_generation();
-        let failure = listeners.failures();
-        *guard = Some(PublicServer {
-            listeners,
-            stop,
-            generation,
-        });
-        crate::assembly::lifecycle::monitor(self.state.clone(), failure, receiver, generation);
-        Ok(ports)
-    }
     pub fn native_url_token(&self) -> Result<String, String> {
         self.state.native_client_id()?;
         self.state
@@ -667,74 +649,12 @@ impl ContentServer {
             .ok_or_else(|| "native URL token unavailable".into())
     }
 
-    pub async fn set_public_ports(
-        &self,
-        http: Option<u16>,
-        https: Option<u16>,
-    ) -> Result<bool, String> {
-        self.state.native_client_id()?;
-        crate::graphql::resolvers::settings::state::apply_user_patch(
-            crate::graphql::resolvers::settings::state::UserPatchEnv::from_server(&self.state),
-            plain_rs::prefs::user::UserSettingsPatch {
-                http_port: http.map(i32::from),
-                https_port: https.map(i32::from),
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|error| error.message)
-    }
-
-    #[cfg(feature = "http_transport")]
-    async fn configured_public_identity(&self) -> Result<(u16, u16, Vec<u8>, Vec<u8>), String> {
-        let settings = plain_rs::prefs::user::snapshot(&self.state.prefs)
-            .map_err(|error| error.to_string())?;
-        let http = u16::try_from(settings.http_port).map_err(|error| error.to_string())?;
-        let https = u16::try_from(settings.https_port).map_err(|error| error.to_string())?;
-        let identity = self
-            .state
-            .tls_identity
-            .read()
-            .map_err(|_| "TLS identity configuration unavailable")?
-            .clone();
-        let (cert, key) = tokio::task::spawn_blocking(move || identity.identity())
-            .await
-            .map_err(|error| error.to_string())??;
-        Ok((http, https, cert, key))
-    }
-
     #[cfg(feature = "http_transport")]
     pub async fn start_configured_public(&self) -> Result<(u16, u16), String> {
         let _core = self.state.shutdown.lock().await;
         self.state.native_client_id()?;
-        let (http, https, cert, key) = self.configured_public_identity().await?;
-        self.start_public_locked(http, https, cert, key).await
-    }
-
-    #[cfg(feature = "http_transport")]
-    pub async fn restart_public(&self) -> Result<(u16, u16), String> {
-        let _core = self.state.shutdown.lock().await;
-        self.state.native_client_id()?;
-        let (http, https, cert, key) = self.configured_public_identity().await?;
-        let receiver_running = self.state.dlna.is_running();
-        {
-            let mut guard = self.state.public_server.lock().await;
-            crate::assembly::lifecycle::stop_locked(&self.state, &mut guard).await;
-        }
-        let ports = self.start_public_locked(http, https, cert, key).await?;
-        if receiver_running {
-            crate::services::casting::receiver::control::execute(
-                &self.state,
-                crate::services::casting::receiver::control::Request::Start { port: ports.0 },
-            )
-            .await?;
-        }
-        self.state
-            .mdns
-            .update_hostname(&self.state)
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok(ports)
+        let (http, https, cert, key) = self.state.configured_public_identity().await?;
+        self.state.start_public_locked(http, https, cert, key).await
     }
 
     #[cfg(feature = "http_transport")]
@@ -745,8 +665,9 @@ impl ContentServer {
 
     #[cfg(feature = "http_transport")]
     async fn stop_public_locked(&self) {
-        let mut guard = self.state.public_server.lock().await;
-        crate::assembly::lifecycle::stop_locked(&self.state, &mut guard).await;
+        let mut server = self.state.public_server.lock().await.take();
+        crate::assembly::lifecycle::stop_locked(&self.state, &mut server).await;
+        self.state.http_server.stopped();
     }
     #[cfg(feature = "http_transport")]
     pub async fn http_ports(&self) -> Option<(u16, u16)> {
@@ -795,6 +716,7 @@ impl ContentServer {
         self.state.download_runtime.shutdown().await;
         self.state.mobile.mms.shutdown().await;
         self.state.image_models.shutdown().await;
+        self.state.duration_updates.shutdown().await;
         if self.state.host.connected() && self.state.host.needs_socket_cleanup() {
             let _ = self
                 .state
@@ -852,15 +774,10 @@ pub(crate) struct PublicServer {
     pub(crate) generation: u64,
 }
 pub(crate) fn adapter_router(state: ServerState) -> Router {
-    let router = Router::new()
-        .route(
-            "/shares/client/file",
-            post(crate::services::peers::shared_download::file),
-        )
-        .route(
-            "/chat/ble-incoming",
-            get(crate::services::discovery::ble_http::incoming),
-        );
+    let router = Router::new().route(
+        "/chat/ble-incoming",
+        get(crate::services::discovery::ble_http::incoming),
+    );
     let router = router
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state.clone());

@@ -31,21 +31,21 @@ async fn authorize(platform: &super::platform::FilePlatform, path: &str) -> Resu
         .map_err(|error| error.to_string())
 }
 
-/// A single path stat behind the same authorization receipt. `None` covers
-/// every "cannot tell" case — missing, unreadable, outside the granted
-/// roots — so callers can treat it as a total predicate.
 pub(crate) async fn stat_record(
     platform: &super::platform::FilePlatform,
     path: &str,
 ) -> Option<FileRecord> {
-    if !std::path::Path::new(path).is_absolute() {
+    if path.trim().is_empty() || path == "." {
         return None;
     }
-    if authorize(platform, path).await.is_err() {
+    let path = platform.resolve_reference(path).ok()?;
+    if !std::path::Path::new(&path).is_absolute() {
         return None;
     }
-    let owned = path.to_string();
-    tokio::task::spawn_blocking(move || FileRecord::stat(std::path::Path::new(&owned)).ok())
+    if authorize(platform, &path).await.is_err() {
+        return None;
+    }
+    tokio::task::spawn_blocking(move || FileRecord::stat(std::path::Path::new(&path)).ok())
         .await
         .ok()
         .flatten()

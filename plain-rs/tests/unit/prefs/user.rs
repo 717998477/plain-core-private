@@ -198,3 +198,25 @@ fn recent_searches_keep_simple_unicode_case_matching() {
         2
     );
 }
+
+#[test]
+fn listener_ports_are_owned_by_user_settings_and_ignore_system_entries() {
+    let (_directory, prefs) = fixture();
+    prefs.set("http_port", 9090).unwrap();
+    prefs.set("https_port", 9443).unwrap();
+    let initial = snapshot(&prefs).unwrap();
+    assert_eq!((initial.http_port, initial.https_port), (8080, 8443));
+    patch(
+        &prefs,
+        UserSettingsPatch {
+            http_port: Some(8180),
+            https_port: Some(8543),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let configured = snapshot(&prefs).unwrap();
+    assert_eq!((configured.http_port, configured.https_port), (8180, 8543));
+    assert_eq!(prefs.get::<i32>("http_port").unwrap(), Some(9090));
+    assert_eq!(prefs.get::<i32>("https_port").unwrap(), Some(9443));
+}

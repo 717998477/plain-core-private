@@ -14,7 +14,7 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
         )
         .unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("plain.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
@@ -23,8 +23,13 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
 }
 #[cfg(feature = "http_transport")]
 fn add_peer(state: &ServerState, id: &str, paired: bool) {
-    let mut peer =
-        plain_rs::db::DPeer::new(id, id, "", Some(2443), plain_rs::chat::enums::DeviceType::Tablet);
+    let mut peer = plain_rs::db::DPeer::new(
+        id,
+        id,
+        "",
+        Some(2443),
+        plain_rs::chat::enums::DeviceType::Tablet,
+    );
     if paired {
         peer.key = plain_rs::utils::base64::base64_encode(&[8; 32]);
     }
@@ -115,7 +120,6 @@ async fn signed_invites_ack_keys_and_deleted_broadcast_use_rust_snapshot() {
         while attempts.len() < 5 {
             let req = rx.recv().await.unwrap();
             let result = match req["method"].as_str().unwrap() {
-                "discoveryFacts" => json!({"name":"Actual tablet","deviceType":"TABLET"}),
                 "peerTransportCapabilities" => json!(["BLE"]),
                 "peerTransportBleExchange" => {
                     let p = &req["params"];
@@ -139,7 +143,7 @@ async fn signed_invites_ack_keys_and_deleted_broadcast_use_rust_snapshot() {
                         serde_json::from_str(wire["variables"]["payload"].as_str().unwrap())
                             .unwrap();
                     if wire["variables"]["type"] == "INVITE" {
-                        assert_eq!(payload["memberPeers"][0]["deviceType"], "TABLET");
+                        assert_eq!(payload["memberPeers"][0]["deviceType"], "COMPUTER");
                     }
                     if p["peer"]["id"] == "paired" {
                         assert!(
@@ -213,7 +217,7 @@ async fn signed_invites_ack_keys_and_deleted_broadcast_use_rust_snapshot() {
 }
 #[cfg(feature = "http_transport")]
 #[tokio::test]
-async fn stale_device_facts_and_decline_ack_cannot_act_on_replacement() {
+async fn queued_send_and_decline_ack_cannot_act_on_replacement() {
     let (_dir, server) = fixture();
     let state = server.runtime_state();
     add_peer(&state, "owner", true);
@@ -235,8 +239,8 @@ async fn stale_device_facts_and_decline_ack_cannot_act_on_replacement() {
         let id = channel.id.clone();
         tokio::spawn(async move { execute(&state, Request::Accept { id }).await })
     };
-    let facts = rx.recv().await.unwrap();
-    assert_eq!(facts["method"], "discoveryFacts");
+    let capability = rx.recv().await.unwrap();
+    assert_eq!(capability["method"], "peerTransportCapabilities");
     let newer = state::apply(
         &state.db,
         "owner",
@@ -248,10 +252,7 @@ async fn stale_device_facts_and_decline_ack_cannot_act_on_replacement() {
     .unwrap();
     state
         .host
-        .reply(
-            generation,
-            json!({"id":facts["id"],"result":{"name":"Tablet","deviceType":"TABLET"}}),
-        )
+        .reply(generation, json!({"id":capability["id"],"result":["BLE"]}))
         .unwrap();
     let response = call.await.unwrap().unwrap();
     assert_eq!(
@@ -320,14 +321,6 @@ async fn peer_key_changes_before_physical_send_are_rejected_and_accept_leave_dec
         let id = channel.id.clone();
         tokio::spawn(async move { execute(&state, Request::Accept { id }).await })
     };
-    let facts = rx.recv().await.unwrap();
-    state
-        .host
-        .reply(
-            generation,
-            json!({"id":facts["id"],"result":{"name":"Actual tablet","deviceType":"TABLET"}}),
-        )
-        .unwrap();
     let cap = rx.recv().await.unwrap();
     let mut peer = peers::get(&state.db, "owner").unwrap().unwrap();
     peer.key = plain_rs::utils::base64::base64_encode(&[9; 32]);
@@ -352,7 +345,6 @@ async fn peer_key_changes_before_physical_send_are_rejected_and_accept_leave_dec
         while kinds.len() < 3 {
             let req = rx.recv().await.unwrap();
             let result = match req["method"].as_str().unwrap() {
-                "discoveryFacts" => json!({"name":"Actual tablet","deviceType":"TABLET"}),
                 "peerTransportCapabilities" => json!(["BLE"]),
                 "peerTransportBleExchange" => {
                     let body = crate::services::discovery::ble_http::test_peer_wire(
@@ -367,7 +359,7 @@ async fn peer_key_changes_before_physical_send_are_rejected_and_accept_leave_dec
                         let payload: Value =
                             serde_json::from_str(wire["variables"]["payload"].as_str().unwrap())
                                 .unwrap();
-                        assert_eq!(payload["deviceType"], "TABLET");
+                        assert_eq!(payload["deviceType"], "COMPUTER");
                         assert_eq!(payload["name"], "Actual tablet");
                     }
                     kinds.push(kind);

@@ -118,3 +118,63 @@ fn fresh_sqlite_schema_has_no_duration_cache_table() {
         .unwrap();
     assert_eq!(exists, 0);
 }
+
+#[test]
+fn matching_requires_the_same_kind_path_size_and_provider_second() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = DurationCache::new(directory.path());
+    cache
+        .save(value("video", "same", "/video", 5_000_000_001))
+        .unwrap();
+    let item = Identity {
+        media_type: "video".into(),
+        media_id: "same".into(),
+        path: "/video".into(),
+        size_bytes: 42,
+        modified_at: "2026-01-01T00:00:00.999Z".into(),
+    };
+    let mut wrong_kind = item.clone();
+    wrong_kind.media_type = "audio".into();
+    let mut wrong_path = item.clone();
+    wrong_path.path = "/replaced".into();
+    let mut wrong_size = item.clone();
+    wrong_size.size_bytes = 43;
+    let mut wrong_time = item.clone();
+    wrong_time.modified_at = "2026-01-01T00:00:01Z".into();
+    assert_eq!(
+        cache
+            .matching(&[item, wrong_kind, wrong_path, wrong_size, wrong_time])
+            .unwrap(),
+        [Some(5_000_000_001), None, None, None, None]
+    );
+}
+
+#[test]
+fn removal_and_path_invalidation_prevent_inflight_probes_from_resurrecting_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = DurationCache::new(directory.path());
+    let first = cache.revision();
+    cache.remove("audio", &["deleted".into()]).unwrap();
+    assert!(
+        !cache
+            .save_at_revision(value("audio", "deleted", "/gone", 5000), first)
+            .unwrap()
+    );
+    let second = cache.revision();
+    cache.invalidate_paths(&["/changed".into()], &[]).unwrap();
+    assert!(
+        !cache
+            .save_at_revision(value("audio", "moved", "/changed", 6000), second)
+            .unwrap()
+    );
+    assert!(cache.all().unwrap().is_empty());
+    assert!(
+        cache
+            .save_at_revision(
+                value("audio", "current", "/present", 7000),
+                cache.revision()
+            )
+            .unwrap()
+    );
+    assert_eq!(cache.all().unwrap()[0].duration_ms, 7000);
+}

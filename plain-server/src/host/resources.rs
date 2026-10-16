@@ -1,5 +1,5 @@
 use crate::host::bridge::Host;
-use crate::native::resource_stream::{NativeResourceStream, ResourceFrame};
+use crate::native::resource_stream::{NativeResourceFile, NativeResourceStream, ResourceFrame};
 use axum::{body::Body, http::StatusCode};
 use serde_json::{Value, json};
 use std::{
@@ -88,6 +88,24 @@ impl NativeResources {
             .map_err(|error| error.to_string())
     }
 
+    pub async fn read_file(
+        &self,
+        path: &str,
+        stop: watch::Receiver<bool>,
+    ) -> Result<NativeResourceFile, String> {
+        let mut reader = self
+            .open(json!({"path":path,"file":true}), stop)
+            .await
+            .map_err(|error| error.to_string())?;
+        let file = tokio::time::timeout(Duration::from_secs(30), reader.receive())
+            .await
+            .map_err(|_| "resource file timed out")?;
+        match file {
+            Some(ResourceFrame::File(file)) => Ok(file),
+            _ => Err("resource file unavailable".into()),
+        }
+    }
+
     pub(crate) async fn resource(
         &self,
         path: &str,
@@ -172,19 +190,21 @@ impl NativeResources {
 }
 
 impl NativeResourceReader {
+    async fn receive(&mut self) -> Option<ResourceFrame> {
+        if *self.stop.borrow() || !self.host.is_current(self.generation) {
+            return None;
+        }
+        tokio::select! {
+            _ = self.stop.changed() => None,
+            _ = self.connection.changed() => None,
+            message = self.incoming.recv() => message,
+        }
+    }
     pub async fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
         if self.finished {
             return Ok(None);
         }
-        if *self.stop.borrow() || !self.host.is_current(self.generation) {
-            self.finished = true;
-            return Err("resource stream closed".into());
-        }
-        let message = tokio::select! {
-            _ = self.stop.changed() => None,
-            _ = self.connection.changed() => None,
-            message = self.incoming.recv() => message,
-        };
+        let message = self.receive().await;
         match message {
             Some(ResourceFrame::Bytes(bytes)) => Ok(Some(bytes)),
             Some(ResourceFrame::End) => {

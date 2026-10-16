@@ -6,7 +6,7 @@ async fn rust_sweep_honors_radio_pause_and_real_tls_verdicts() {
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
     prefs.set("client_id", "local").unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("data.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
@@ -34,30 +34,19 @@ async fn rust_sweep_honors_radio_pause_and_real_tls_verdicts() {
         discovery_methods: vec!["LAN".into()],
     };
     for d in [fixture("alive", listeners.https_port), fixture("dead", 1)] {
-        execute(
-            &state,
-            Request::Seen {
-                device: d,
-                resident: true,
-                visible: false,
-            },
-        )
-        .await
-        .unwrap();
+        Context::from(&state).seen(d, false, true).unwrap();
     }
-    execute(
-        &state,
-        Request::Seen {
-            device: fixture("local", 2443),
-            resident: true,
-            visible: true,
-        },
-    )
-    .await
-    .unwrap();
+    Context::from(&state)
+        .seen(fixture("local", 2443), true, true)
+        .unwrap();
     assert_eq!(chat_store::nearby::all(&state.db).unwrap().len(), 2);
-    execute(&state, Request::BleScanning { ble: true })
-        .await
+    state
+        .nearby_devices
+        .scanning_modes(
+            None,
+            Some(true),
+            chat_store::nearby::all(&state.db).unwrap(),
+        )
         .unwrap();
     let (generation, mut requests) = state.host.connect();
     let host = state.host.clone();
@@ -91,17 +80,10 @@ async fn rust_sweep_honors_radio_pause_and_real_tls_verdicts() {
     peer.key = "preserved-key".into();
     chat_store::peers::save(&state.db, &[peer], chat_store::SaveMode::Insert).unwrap();
     let mut events = state.events.subscribe();
-    execute(
-        &state,
-        Request::Seen {
-            device: fixture("live", 2443),
-            resident: true,
-            visible: true,
-        },
-    )
-    .await
-    .unwrap();
-    let snapshot = execute(&state, Request::Snapshot).await.unwrap();
+    Context::from(&state)
+        .seen(fixture("live", 2443), true, true)
+        .unwrap();
+    let snapshot = snapshot(&state.db, &state.nearby_devices).unwrap();
     assert_eq!(
         snapshot["devices"]
             .as_array()
@@ -125,16 +107,9 @@ async fn rust_sweep_honors_radio_pause_and_real_tls_verdicts() {
     assert_eq!(public["id"], "live");
     assert_eq!(public["status"], "PAIRED");
     assert!(public.get("key").is_none());
-    execute(
-        &state,
-        Request::Seen {
-            device: fixture("live", 2443),
-            resident: false,
-            visible: true,
-        },
-    )
-    .await
-    .unwrap();
+    Context::from(&state)
+        .seen(fixture("live", 2443), true, false)
+        .unwrap();
     let next = events.recv().await.unwrap();
     assert_eq!(next.event_type, EVENT_UPDATED);
     assert!(events.try_recv().is_err());
@@ -149,7 +124,7 @@ async fn nearby_invalidation_and_public_device_payloads_have_distinct_contracts(
         std::sync::Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
     prefs.set("client_id", "local").unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("data.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
@@ -167,16 +142,9 @@ async fn nearby_invalidation_and_public_device_payloads_have_distinct_contracts(
         last_seen_at: "2026-10-10T00:00:00.000Z".into(),
         discovery_methods: vec!["BLE".into()],
     };
-    execute(
-        &state,
-        Request::Seen {
-            device: device.clone(),
-            visible: true,
-            resident: false,
-        },
-    )
-    .await
-    .unwrap();
+    Context::from(&state)
+        .seen(device.clone(), true, false)
+        .unwrap();
     let invalidation = events.recv().await.unwrap();
     assert_eq!(invalidation.event_type, EVENT_UPDATED);
     let notice: serde_json::Value = serde_json::from_str(&invalidation.payload).unwrap();
@@ -194,18 +162,9 @@ async fn nearby_invalidation_and_public_device_payloads_have_distinct_contracts(
     assert_eq!(row["bestIp"], "");
     assert_eq!(row["discoveryMethods"], json!(["BLE"]));
     assert!(row.get("eventId").is_none());
-    execute(&state, Request::Snapshot).await.unwrap();
+    snapshot(&state.db, &state.nearby_devices).unwrap();
     assert!(events.try_recv().is_err());
-    execute(
-        &state,
-        Request::Seen {
-            device,
-            visible: true,
-            resident: false,
-        },
-    )
-    .await
-    .unwrap();
+    Context::from(&state).seen(device, true, false).unwrap();
     assert_eq!(events.recv().await.unwrap().event_type, EVENT_UPDATED);
     assert!(events.try_recv().is_err());
     server.shutdown().await;

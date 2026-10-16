@@ -34,7 +34,7 @@ fn fixture_with(
     let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
     prefs.set("client_id", "actor").unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("data.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
@@ -86,9 +86,6 @@ fn fixture() -> (tempfile::TempDir, PublicSchema) {
         "systemSimFacts" => json!([
             { "id": "sim-0", "label": "SIM 1", "number": "+15550100", "subscriptionId": 1 },
         ]),
-        "discoveryFacts" => {
-            json!({"name":"local","deviceType":"PHONE","version":"1","platform":"android","ips":[],"awareSupported":false,"awareRunning":false})
-        }
         _other => panic!("unexpected host call {_other}"),
     })
 }
@@ -232,4 +229,74 @@ async fn pairing_rejects_an_invalid_last_seen_instant() {
         "{result}"
     );
     assert!(result["errors"].to_string().contains("Instant"), "{result}");
+}
+
+#[tokio::test]
+async fn main_identity_rename_and_pairing_code_use_shared_preferences_and_refuse_stopped_core() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let executor = core.native_graphql().unwrap();
+    let identity = "{app{clientId deviceName} systemSettings{signaturePublicKey mdnsHostname}}";
+    let response = executor
+        .execute(async_graphql::Request::new(identity))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let value = response.data.into_json().unwrap();
+    assert_eq!(value["app"]["clientId"], executor.client_id());
+    assert_eq!(
+        plain_rs::utils::base64::base64_decode(
+            value["systemSettings"]["signaturePublicKey"]
+                .as_str()
+                .unwrap()
+        )
+        .len(),
+        32
+    );
+    assert!(
+        !value["systemSettings"]["mdnsHostname"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
+    let public_key = value["systemSettings"]["signaturePublicKey"].clone();
+    let changed = executor
+        .execute(async_graphql::Request::new(
+            r#"mutation{updateDeviceName(name:"Shared device")}"#,
+        ))
+        .await;
+    assert!(changed.errors.is_empty(), "{:?}", changed.errors);
+    let response = executor
+        .execute(async_graphql::Request::new(identity))
+        .await;
+    let value = response.data.into_json().unwrap();
+    assert_eq!(value["app"]["deviceName"], "Shared device");
+    assert_eq!(value["systemSettings"]["signaturePublicKey"], public_key);
+    let code = executor
+        .execute(async_graphql::Request::new("{pairingCode}"))
+        .await;
+    assert!(
+        !code.errors.is_empty(),
+        "an inactive public listener must not generate an unusable QR code"
+    );
+    let remote = crate::graphql::executor::execute_graphql(
+        &state.public,
+        async_graphql::Request::new("{pairingCode}"),
+        crate::graphql::executor::RequestContext::remote(Some(state.clone())),
+    )
+    .await;
+    assert_eq!(remote.errors[0].message, "no_permission");
+    core.stop_core().await;
+    for document in [
+        identity,
+        r#"mutation{updateDeviceName(name:"Stopped device")}"#,
+    ] {
+        assert!(
+            !executor
+                .execute(async_graphql::Request::new(document))
+                .await
+                .errors
+                .is_empty()
+        );
+    }
 }

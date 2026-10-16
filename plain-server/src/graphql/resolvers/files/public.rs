@@ -33,6 +33,47 @@ pub struct FilesQuery;
 
 #[Object]
 impl FilesQuery {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn file_paths(
+        &self,
+        ctx: &Context<'_>,
+        paths: Vec<String>,
+    ) -> async_graphql::Result<Vec<Option<String>>> {
+        let db = ctx.data::<std::sync::Arc<plain_rs::db::Db>>()?;
+        let directory = ctx
+            .data::<crate::assembly::services::Services>()?
+            .device
+            .directory();
+        Ok(crate::services::files::references::resolve_many(
+            paths,
+            |path| {
+                crate::services::files::references::resolve(
+                    db.clone(),
+                    directory.to_path_buf(),
+                    path,
+                )
+                .ok()
+            },
+        ))
+    }
+
+    async fn media_duration_ms(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+    ) -> async_graphql::Result<Long> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        let platform = ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?;
+        let path = platform.resolve_reference(&path)?;
+        platform.authorize(&path, false).await?;
+        let duration = ctx
+            .data::<Arc<crate::services::files::duration_updates::Runtime>>()?
+            .milliseconds(&path)
+            .await
+            .map_err(async_graphql::Error::new)?;
+        Ok(Long(duration))
+    }
+
     async fn indexed_files(
         &self,
         ctx: &Context<'_>,
@@ -175,13 +216,6 @@ impl FilesQuery {
         Ok(page["count"].as_u64().unwrap_or_default() as i32)
     }
 
-    /// Stat plus, for media names, the platform's decoder output. A path
-    /// that cannot be resolved is not an error: plain-app reports zeros so
-    /// the info panel renders rather than blowing up on a stale link.
-    ///
-    /// The probe only runs once the stat succeeded — that stat is what the
-    /// file-access authorization rides on, so probing a denied path would
-    /// hand a client metadata for bytes it may not read.
     async fn file_info(
         &self,
         ctx: &Context<'_>,
@@ -195,14 +229,16 @@ impl FilesQuery {
         )
         .await;
         let name = file_name.unwrap_or_else(|| {
-            Path::new(&path)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
+            record
+                .as_ref()
+                .map(|record| record.name.clone())
                 .unwrap_or_default()
         });
         let data = match &record {
-            Some(_) => media_info(ctx, &path, &name).await?,
-            None => None,
+            Some(record) if ctx.look_ahead().field("data").exists() => {
+                media_info(ctx, &record.path, &name).await?
+            }
+            _ => None,
         };
         Ok(FileInfo {
             path,
@@ -280,29 +316,95 @@ async fn media_info(
         .extension()
         .map(|extension| extension.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    let method = if is_image(&extension) {
-        "systemImageFileInfo"
+    let kind = if is_image(&extension) {
+        plain_rs::enums::DataType::Image
     } else if is_video(&extension) {
-        "systemVideoFileInfo"
+        plain_rs::enums::DataType::Video
     } else if is_audio(&extension) {
-        "systemAudioFileInfo"
+        plain_rs::enums::DataType::Audio
     } else {
         return Ok(None);
     };
-    let facts = host_call(ctx, method, json!({ "path": path })).await?;
+    let selected = ctx.look_ahead().field("data");
+    let selections = selected.selection_fields();
+    let needs_details = selections
+        .iter()
+        .flat_map(|field| field.selection_set())
+        .any(|field| !matches!(field.name(), "durationMs" | "__typename"));
+    let facts = if !needs_details {
+        if kind != plain_rs::enums::DataType::Image && selected.field("durationMs").exists() {
+            match ctx
+                .data::<Arc<crate::services::files::duration_updates::Runtime>>()?
+                .probe_milliseconds(path)
+                .await
+                .map_err(async_graphql::Error::new)?
+            {
+                Some(duration) => json!({"durationMs":duration}),
+                None => ctx
+                    .data::<Arc<crate::services::files::info::Info>>()?
+                    .read(path, kind)
+                    .await
+                    .map_err(async_graphql::Error::new)?,
+            }
+        } else {
+            json!({})
+        }
+    } else {
+        ctx.data::<Arc<crate::services::files::info::Info>>()?
+            .read(path, kind)
+            .await
+            .map_err(async_graphql::Error::new)?
+    };
     if facts.is_null() {
         return Ok(None);
     }
-    Ok(Some(match method {
-        "systemImageFileInfo" => MediaFileInfo::Image(ImageFileInfo {
+    Ok(Some(match kind {
+        plain_rs::enums::DataType::Image => MediaFileInfo::Image(ImageFileInfo {
+            make: text(&facts, "make"),
+            model: text(&facts, "model"),
+            rotation: integer(&facts, "rotation") as i32,
+            color_space: text(&facts, "colorSpace"),
+            aperture_value: facts["apertureValue"].as_f64().unwrap_or(0.0),
+            exposure_time: text(&facts, "exposureTime"),
+            focal_length: text(&facts, "focalLength"),
+            iso_speed: integer(&facts, "isoSpeed") as i32,
+            taken_at: facts["takenAt"]
+                .as_str()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| crate::graphql::types::Instant(value.with_timezone(&chrono::Utc))),
+            flash: integer(&facts, "flash") as i32,
+            f_number: facts["fNumber"].as_f64().unwrap_or(0.0),
+            exposure_program: integer(&facts, "exposureProgram") as i32,
+            metering_mode: integer(&facts, "meteringMode") as i32,
+            white_balance: integer(&facts, "whiteBalance") as i32,
+            creator: text(&facts, "creator"),
+            resolution_x: integer(&facts, "resolutionX") as i32,
+            resolution_y: integer(&facts, "resolutionY") as i32,
+            description: text(&facts, "description"),
+
             width: integer(&facts, "width") as i32,
             height: integer(&facts, "height") as i32,
             location: location(&facts),
         }),
-        "systemVideoFileInfo" => MediaFileInfo::Video(VideoFileInfo {
+        plain_rs::enums::DataType::Video => MediaFileInfo::Video(VideoFileInfo {
             width: integer(&facts, "width") as i32,
             height: integer(&facts, "height") as i32,
             duration_ms: Long(integer(&facts, "durationMs")),
+            rotation: integer(&facts, "rotation") as i32,
+            display_width: integer(&facts, "displayWidth") as i32,
+            display_height: integer(&facts, "displayHeight") as i32,
+            bitrate: Long(integer(&facts, "bitrate")),
+            frame_rate: facts["frameRate"].as_f64().unwrap_or(0.0),
+            title: text(&facts, "title"),
+            artist: text(&facts, "artist"),
+            album: text(&facts, "album"),
+            genre: text(&facts, "genre"),
+            writer: text(&facts, "writer"),
+            composer: text(&facts, "composer"),
+            taken_at: facts["takenAt"]
+                .as_str()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| crate::graphql::types::Instant(value.with_timezone(&chrono::Utc))),
             location: location(&facts),
         }),
         _ => MediaFileInfo::Audio(AudioFileInfo {
@@ -322,13 +424,10 @@ fn location(value: &Value) -> Option<Location> {
         });
     }
     let raw = value["rawLocation"].as_str()?;
-    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let matched = PATTERN
-        .get_or_init(|| regex::Regex::new(r"([+\-]\d{1,3}\.\d{4})([+\-]\d{1,3}\.\d{4})").unwrap())
-        .captures(raw)?;
+    let (latitude, longitude) = plain_rs::utils::iso6709::coordinates(raw)?;
     Some(Location {
-        latitude: matched[1].parse().ok()?,
-        longitude: matched[2].parse().ok()?,
+        latitude,
+        longitude,
     })
 }
 

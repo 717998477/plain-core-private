@@ -138,8 +138,8 @@ async fn native_battery_selection_requires_no_host_and_no_cpu_sample() {
 async fn storage_uses_the_owned_data_volume_and_never_falls_back_to_other_disks() {
     let directory = tempfile::tempdir().unwrap();
     let missing = directory.path().join("missing-volume");
-    let status = Status::new(missing.clone());
     let host = Host::default();
+    let status = Status::new(missing.clone(), &host);
     assert!(
         status
             .collect(
@@ -154,9 +154,14 @@ async fn storage_uses_the_owned_data_volume_and_never_falls_back_to_other_disks(
     );
     assert!(status.collect(&host, Selection::default()).await.is_ok());
     assert!(
-        super::info::collect(&host, missing, vec!["totalStorage".into()])
-            .await
-            .is_err()
+        super::info::collect(
+            &host,
+            missing,
+            vec!["totalStorage".into()],
+            status.fixed_info().unwrap()
+        )
+        .await
+        .is_err()
     );
     assert!(storage_bytes(directory.path(), true).unwrap() > 0);
 }

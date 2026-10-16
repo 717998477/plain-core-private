@@ -31,8 +31,8 @@ fn orientation_big_endian_tiff() {
     tiff.extend_from_slice(&8u16.to_be_bytes());
     tiff.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
     let mut jpg = vec![0xFF, 0xD8, 0xFF, 0xE1];
-    jpg.push(((8 + tiff.len() + 2) >> 8) as u8);
-    jpg.push(((8 + tiff.len() + 2) & 0xFF) as u8);
+    jpg.push(((6 + tiff.len() + 2) >> 8) as u8);
+    jpg.push(((6 + tiff.len() + 2) & 0xFF) as u8);
     jpg.extend_from_slice(b"Exif\0\0");
     jpg.extend_from_slice(&tiff);
     assert_eq!(orientation(&jpg), Some(8));
@@ -83,4 +83,14 @@ fn orientation_real_bench_photos() {
             println!("{name}: no EXIF orientation");
         }
     }
+}
+
+#[test]
+fn xmp_before_exif_does_not_hide_the_images_orientation() {
+    let xmp = b"http://xmp";
+    let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+    jpeg.extend_from_slice(&((xmp.len() + 2) as u16).to_be_bytes());
+    jpeg.extend_from_slice(xmp);
+    jpeg.extend_from_slice(&test_app1_orientation(6));
+    assert_eq!(orientation(&jpeg), Some(6));
 }

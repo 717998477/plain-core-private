@@ -1,19 +1,18 @@
 use super::*;
 
-fn fact(id: &str, name: &str, path: &str, sort_name: &str, size: i64) -> ItemFact {
+fn fact(id: &str, name: &str, path: &str, size: i64) -> ItemFact {
     ItemFact {
         id: id.into(),
         name: name.into(),
         size,
         path: path.into(),
-        sort_name: sort_name.into(),
     }
 }
 
 #[test]
 fn aggregation_sums_sizes_counts_items_and_keeps_four_newest_paths() {
     let items = (0..6)
-        .map(|index| fact("1", "Photos", &format!("/p/{index}"), "photos", 10))
+        .map(|index| fact("1", "Photos", &format!("/p/{index}"), 10))
         .collect();
     let result = aggregate("IMAGE", items).unwrap();
     assert_eq!(result.len(), 1);
@@ -23,31 +22,25 @@ fn aggregation_sums_sizes_counts_items_and_keeps_four_newest_paths() {
 }
 
 #[test]
-fn aggregation_sorts_by_host_pinyin_key_and_rejects_invalid_facts() {
+fn aggregation_uses_shared_pinyin_sort_keys_and_rejects_invalid_facts() {
     let result = aggregate(
         "DOC",
-        vec![
-            fact("2", "照片", "/z/1", "zhaopian", 4),
-            fact("1", "Audio", "/a/1", "audio", 3),
-        ],
+        vec![fact("2", "照片", "/z/1", 4), fact("1", "Zulu", "/a/1", 3)],
     )
     .unwrap();
     assert_eq!(
         result.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(),
-        ["1", "2"]
+        ["2", "1"]
     );
     assert!(aggregate("CONTACT", vec![]).is_err());
-    assert!(aggregate("IMAGE", vec![fact("1", "Photos", "/p", "photos", -1)]).is_err());
+    assert!(aggregate("IMAGE", vec![fact("1", "Photos", "/p", -1)]).is_err());
 }
 
 #[test]
 fn aggregation_orders_equal_names_deterministically_and_rejects_overflow() {
     let result = aggregate(
         "IMAGE",
-        vec![
-            fact("b", "Same", "/b", "same", 0),
-            fact("a", "Same", "/a", "same", 0),
-        ],
+        vec![fact("b", "Same", "/b", 0), fact("a", "Same", "/a", 0)],
     )
     .unwrap();
     assert_eq!(
@@ -61,8 +54,8 @@ fn aggregation_orders_equal_names_deterministically_and_rejects_overflow() {
         aggregate(
             "AUDIO",
             vec![
-                fact("a", "Audio", "/1", "audio", i64::MAX),
-                fact("a", "Audio", "/2", "audio", 1)
+                fact("a", "Audio", "/1", i64::MAX),
+                fact("a", "Audio", "/2", 1)
             ]
         )
         .is_err()
@@ -70,11 +63,52 @@ fn aggregation_orders_equal_names_deterministically_and_rejects_overflow() {
     assert!(
         aggregate(
             "VIDEO",
-            vec![
-                fact("a", "First", "/1", "first", 1),
-                fact("a", "Other", "/2", "other", 1)
-            ]
+            vec![fact("a", "First", "/1", 1), fact("a", "Other", "/2", 1)]
         )
         .is_err()
+    );
+}
+
+#[test]
+fn sort_keys_are_computed_once_per_bucket_and_shared_across_provider_sources() {
+    let mut calls = Vec::new();
+    let buckets = aggregate_with_sort_key(
+        "IMAGE",
+        vec![
+            fact("b", "中国", "/b/1", 1),
+            fact("a", "Zulu", "/a/1", 1),
+            fact("b", "中国", "/b/2", 1),
+            fact("a", "Zulu", "/a/2", 1),
+        ],
+        |name| {
+            calls.push(name.to_owned());
+            plain_rs::utils::sort_name::sort_name(name)
+        },
+    )
+    .unwrap();
+    assert_eq!(calls, ["中国", "Zulu"]);
+    assert_eq!(
+        buckets
+            .iter()
+            .map(|bucket| bucket.id.as_str())
+            .collect::<Vec<_>>(),
+        ["b", "a"]
+    );
+    assert_eq!(buckets[0].sort_name, "zhongguo");
+    assert_eq!(buckets[1].sort_name, "zulu");
+    let raw = serde_json::json!([
+        {"id":"b", "name":"中国", "path":"content://image/b", "size":2},
+        {"id":"a", "name":"Zulu", "path":"content://image/a", "size":2}
+    ]);
+    let platform = aggregate("IMAGE", serde_json::from_value(raw).unwrap()).unwrap();
+    assert_eq!(
+        platform
+            .iter()
+            .map(|bucket| (&bucket.id, &bucket.sort_name))
+            .collect::<Vec<_>>(),
+        buckets
+            .iter()
+            .map(|bucket| (&bucket.id, &bucket.sort_name))
+            .collect::<Vec<_>>()
     );
 }

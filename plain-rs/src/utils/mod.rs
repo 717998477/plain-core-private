@@ -2,19 +2,24 @@ pub mod async_read_stream;
 pub mod base64;
 pub mod build_url;
 pub mod dbtime;
+#[cfg(feature = "library")]
+pub mod epoch_millis;
 #[cfg(feature = "crypto")]
 pub use crate::crypto::hash;
+pub mod file_uri;
 pub mod hex;
 pub mod hostname;
 pub mod http;
 pub mod http_url;
 pub mod ifaddr;
 pub mod image_dimensions;
+pub mod image_metadata;
 pub mod mime;
 pub mod query;
 pub mod search_dsl;
 pub mod short_uuid;
 pub mod shortid;
+pub mod sort_name;
 pub mod unique_path;
 pub mod xml;
 
@@ -25,3 +30,9 @@ pub mod html_to_markdown;
 pub mod keyed_locks;
 
 pub mod vector;
+
+pub mod image_exif;
+
+pub mod range_reader;
+
+pub mod iso6709;

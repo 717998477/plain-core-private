@@ -36,7 +36,7 @@ pub(crate) fn notifications(
                     .into_iter()
                     .any(|key| text(item, key).contains(&filter_text)))
     });
-    facts.sort_by(|a, b| instant(b, "time").cmp(&instant(a, "time")));
+    facts.sort_by(|a, b| instant(b, "postedAt").cmp(&instant(a, "postedAt")));
     Ok(facts)
 }
 

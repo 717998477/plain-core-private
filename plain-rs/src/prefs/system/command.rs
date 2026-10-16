@@ -19,7 +19,10 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn apply(self, prefs: &Prefs) -> anyhow::Result<bool> {
+    pub fn apply(mut self, prefs: &Prefs) -> anyhow::Result<bool> {
+        if let Self::SetMdnsHostname { hostname } = &mut self {
+            *hostname = hostname.trim().to_owned();
+        }
         match self {
             Self::SetPasswordType { value } if ![1, 2].contains(&value) => {
                 anyhow::bail!("Invalid password type")

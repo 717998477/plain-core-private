@@ -16,7 +16,7 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
         Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
     prefs.set("client_id", "fixture").unwrap();
     let server = ContentServer::start(
-        &directory.path().join("plain.db"),
+        directory.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )
@@ -78,4 +78,97 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
         .await;
     assert!(!response.errors.is_empty());
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn main_login_logout_and_rename_preserve_pairing_and_live_proxy_addresses() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let executor = core.native_graphql().unwrap();
+    let resolve = core.peer_proxy_resolver();
+    assert_eq!(resolve("peer-a"), None);
+    let response = executor.execute(async_graphql::Request::new(r#"mutation { loginPeer(input:{id:"peer-a",name:"Peer A",host:"127.0.0.1:9443",deviceType:COMPUTER,token:"session",signaturePublicKey:"public",chatKey:"pairing-key"}) }"#)).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(resolve("peer-a"), Some("127.0.0.1:9443".into()));
+    let query = "{loggedInPeers{peer{id name port token publicKey} online}}";
+    let response = executor.execute(async_graphql::Request::new(query)).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let value = response.data.into_json().unwrap();
+    assert_eq!(value["loggedInPeers"][0]["peer"]["port"], 9443);
+    assert_eq!(value["loggedInPeers"][0]["peer"]["token"], "session");
+    let response = executor
+        .execute(async_graphql::Request::new(
+            r#"mutation{updatePeerName(id:"peer-a",name:"Renamed peer")}"#,
+        ))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let response = executor.execute(async_graphql::Request::new(query)).await;
+    assert_eq!(
+        response.data.into_json().unwrap()["loggedInPeers"][0]["peer"]["name"],
+        "Renamed peer"
+    );
+    let response = executor
+        .execute(async_graphql::Request::new(
+            r#"mutation{logoutPeer(id:"peer-a")}"#,
+        ))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let response = executor.execute(async_graphql::Request::new(query)).await;
+    assert_eq!(
+        response.data.into_json().unwrap()["loggedInPeers"],
+        serde_json::json!([])
+    );
+    let mut row = plain_rs::db::chat_store::peers::get(&state.db, "peer-a")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.status, plain_rs::chat::enums::PeerStatus::Paired);
+    assert_eq!(row.key, "pairing-key");
+    assert!(row.token.is_empty());
+    assert_eq!(resolve("peer-a"), Some("127.0.0.1:9443".into()));
+    row.port = None;
+    plain_rs::db::chat_store::peers::save(
+        &state.db,
+        &[row],
+        plain_rs::db::chat_store::SaveMode::Update,
+    )
+    .unwrap();
+    assert_eq!(resolve("peer-a"), None);
+    core.stop_core().await;
+    assert_eq!(resolve("peer-a"), None);
+    assert!(
+        !executor
+            .execute(async_graphql::Request::new(query))
+            .await
+            .errors
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn remote_requests_cannot_access_or_change_local_login_sessions() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    for document in [
+        "{loggedInPeers{peer{token}}}",
+        r#"mutation{loginPeer(input:{id:"remote",name:"Remote",host:"127.0.0.1:9443",deviceType:COMPUTER,token:"token",signaturePublicKey:"public"})}"#,
+        r#"mutation{logoutPeer(id:"remote")}"#,
+        r#"mutation{updatePeerName(id:"remote",name:"changed")}"#,
+    ] {
+        let response = crate::graphql::executor::execute_graphql(
+            &state.public,
+            async_graphql::Request::new(document),
+            crate::graphql::executor::RequestContext::remote(Some(state.clone())),
+        )
+        .await;
+        assert_eq!(response.errors.len(), 1);
+        assert_eq!(response.errors[0].message, "no_permission");
+    }
+    assert!(
+        plain_rs::db::chat_store::peers::all(&state.db)
+            .unwrap()
+            .is_empty()
+    );
+    core.stop_core().await;
 }

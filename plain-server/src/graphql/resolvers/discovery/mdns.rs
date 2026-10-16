@@ -49,12 +49,50 @@ struct MdnsState {
     services: Vec<MdnsService>,
 }
 
+#[derive(SimpleObject)]
+struct MdnsActivity {
+    time: Long,
+    event: String,
+    detail: String,
+}
+#[derive(SimpleObject)]
+struct MdnsDebug {
+    services: Vec<MdnsService>,
+    activity: Vec<MdnsActivity>,
+}
+
 #[derive(SimpleObject, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PeerPrewarmAdvertisement {
     short_id: String,
     aware_supported: bool,
     aware_running: bool,
+}
+
+#[derive(SimpleObject, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiscoveryReply {
+    id: async_graphql::ID,
+    name: String,
+    port: i32,
+    device_type: String,
+    version: String,
+    platform: String,
+    ips: Vec<String>,
+    aware_supported: bool,
+    aware_running: bool,
+}
+
+async fn advertisement(
+    ctx: &Context<'_>,
+    request: crate::services::discovery::discovery_advertisement::Request,
+) -> async_graphql::Result<serde_json::Value> {
+    crate::services::discovery::discovery_advertisement::execute(
+        ctx.data::<ServerState>()?,
+        request,
+    )
+    .await
+    .map_err(|error| async_graphql::Error::new(error.to_string()))
 }
 
 async fn control(ctx: &Context<'_>, request: Request) -> async_graphql::Result<MdnsState> {
@@ -67,6 +105,44 @@ async fn control(ctx: &Context<'_>, request: Request) -> async_graphql::Result<M
 pub struct MdnsQuery;
 #[Object]
 impl MdnsQuery {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn mdns_debug(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsDebug> {
+        let runtime = &ctx.data::<ServerState>()?.mdns;
+        let services = serde_json::from_value(serde_json::to_value(runtime.browser_snapshot())?)?;
+        let activity = runtime
+            .browser_activity()
+            .into_iter()
+            .map(|entry| {
+                Ok(MdnsActivity {
+                    time: Long(i64::try_from(entry.time)?),
+                    event: entry.event,
+                    detail: entry.detail,
+                })
+            })
+            .collect::<async_graphql::Result<Vec<_>>>()?;
+        Ok(MdnsDebug { services, activity })
+    }
+    async fn discovery_reply(&self, ctx: &Context<'_>) -> async_graphql::Result<DiscoveryReply> {
+        Ok(serde_json::from_value(
+            advertisement(
+                ctx,
+                crate::services::discovery::discovery_advertisement::Request::Reply {},
+            )
+            .await?,
+        )?)
+    }
+    async fn discovery_ble_advertisement(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<String> {
+        Ok(serde_json::from_value(
+            advertisement(
+                ctx,
+                crate::services::discovery::discovery_advertisement::Request::Ble {},
+            )
+            .await?,
+        )?)
+    }
     async fn mdns_state(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
         control(ctx, Request::Snapshot {}).await
     }
@@ -75,6 +151,19 @@ impl MdnsQuery {
 pub struct MdnsMutation;
 #[Object]
 impl MdnsMutation {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn begin_ble_scan(&self, ctx: &Context<'_>) -> async_graphql::Result<async_graphql::ID> {
+        Ok(ctx.data::<ServerState>()?.ble_scans.begin()?.into())
+    }
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn end_ble_scan(
+        &self,
+        ctx: &Context<'_>,
+        scan_id: async_graphql::ID,
+    ) -> async_graphql::Result<bool> {
+        ctx.data::<ServerState>()?.ble_scans.end(&scan_id);
+        Ok(true)
+    }
     async fn start_mdns_receiver(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
         control(ctx, Request::Receiver {}).await
     }

@@ -22,6 +22,7 @@ pub struct Host {
     ready: Notify,
     capacity: Semaphore,
     connection: watch::Sender<u64>,
+    properties: serde_json::Map<String, Value>,
 }
 impl Default for Host {
     fn default() -> Self {
@@ -30,6 +31,7 @@ impl Default for Host {
             ready: Notify::new(),
             capacity: Semaphore::new(REQUEST_CAPACITY),
             connection: watch::channel(0).0,
+            properties: crate::platform::startup::properties(),
         }
     }
 }
@@ -42,7 +44,93 @@ impl Drop for Pending {
         self.state.lock().unwrap().pending.remove(&self.id);
     }
 }
+fn is_startup_property(key: &str) -> bool {
+    matches!(
+        key,
+        "cacheDir"
+            | "name"
+            | "deviceType"
+            | "buildChannel"
+            | "downloadsDir"
+            | "debug"
+            | "manufacturer"
+            | "model"
+            | "osName"
+            | "osVersion"
+            | "appVersion"
+            | "appBuildNumber"
+            | "cpuArch"
+            | "socModel"
+            | "wifiAwareSupported"
+            | "files.recentCatalog"
+            | "files.recentRoot"
+            | "android.sdkVersion"
+            | "android.versionCodeName"
+            | "android.securityPatch"
+            | "android.bootloader"
+            | "android.fingerprint"
+            | "android.hardware"
+            | "android.radioVersion"
+            | "android.board"
+            | "android.buildBrand"
+            | "android.buildNumber"
+            | "android.device"
+            | "android.javaVmVersion"
+            | "android.glEsVersion"
+            | "android.buildTime"
+    )
+}
+fn is_dynamic_property(key: &str) -> bool {
+    matches!(
+        key,
+        "language"
+            | "display.width"
+            | "display.height"
+            | "display.density"
+            | "ipv4Addresses"
+            | "wifiAwareRunning"
+    )
+}
 impl Host {
+    pub fn with_startup_properties(
+        properties: serde_json::Map<String, Value>,
+    ) -> Result<Self, String> {
+        for (key, value) in &properties {
+            if !is_startup_property(key) {
+                return Err(format!("System property is not fixed at startup: {key}"));
+            }
+            let valid = match key.as_str() {
+                "cacheDir" => value
+                    .as_str()
+                    .is_some_and(|path| std::path::Path::new(path).is_absolute()),
+                "debug" | "wifiAwareSupported" | "files.recentCatalog" => value.is_boolean(),
+                "socModel" | "files.recentRoot" => value.is_null() || value.is_string(),
+                "android.sdkVersion" => value
+                    .as_i64()
+                    .is_some_and(|number| number > 0 && number <= i32::MAX as i64),
+                "android.buildTime" => value.as_i64().is_some(),
+                "deviceType" => value.as_str().is_some_and(|name| {
+                    matches!(
+                        name,
+                        "COMPUTER" | "PHONE" | "TABLET" | "TV" | "NAS" | "OTHER"
+                    )
+                }),
+                "buildChannel" => value
+                    .as_str()
+                    .is_some_and(|name| matches!(name, "GITHUB" | "GOOGLE" | "FDROID")),
+                _ => value.is_string(),
+            };
+            if !valid {
+                return Err(format!("Invalid startup system property: {key}"));
+            }
+        }
+        let mut host = Self::default();
+        host.properties.extend(properties);
+        Ok(host)
+    }
+    pub(crate) fn startup_property(&self, name: &str) -> Option<&Value> {
+        self.properties.get(name)
+    }
     pub(crate) fn needs_socket_cleanup(&self) -> bool {
         self.state.lock().unwrap().peer_sockets
     }
@@ -116,6 +204,48 @@ impl Host {
         self.call_inner(method, params, None).await
     }
     async fn call_inner(&self, method: &str, params: Value, timeout: Option<Duration>) -> Reply {
+        if method == "systemProperties" {
+            let names = params["names"]
+                .as_array()
+                .ok_or("System property names required")?;
+            let mut values = serde_json::Map::new();
+            let mut dynamic = Vec::new();
+            for name in names {
+                let name = name.as_str().ok_or("Invalid system property name")?;
+                if let Some(value) = self.properties.get(name) {
+                    values.insert(name.to_owned(), value.clone());
+                } else if is_startup_property(name) {
+                    return Err(format!("Missing startup system property: {name}"));
+                } else if is_dynamic_property(name) {
+                    if !dynamic.iter().any(|existing| existing == name) {
+                        dynamic.push(name.to_owned());
+                    }
+                } else {
+                    return Err(format!("Unsupported system property: {name}"));
+                }
+            }
+            if !dynamic.is_empty() {
+                let mut params = params;
+                params["names"] = json!(dynamic);
+                let sampled = self.request(method, params, timeout).await?;
+                let sampled = sampled
+                    .as_object()
+                    .ok_or("Invalid system property sample")?;
+                for name in dynamic {
+                    values.insert(
+                        name.clone(),
+                        sampled
+                            .get(&name)
+                            .ok_or_else(|| format!("Missing system property: {name}"))?
+                            .clone(),
+                    );
+                }
+            }
+            return Ok(Value::Object(values));
+        }
+        self.request(method, params, timeout).await
+    }
+    async fn request(&self, method: &str, params: Value, timeout: Option<Duration>) -> Reply {
         let _permit = self
             .capacity
             .try_acquire()

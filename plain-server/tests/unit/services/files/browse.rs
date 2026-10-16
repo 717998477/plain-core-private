@@ -93,3 +93,58 @@ async fn main_browse_authorizes_effective_parent_and_owns_pagination_count_and_z
     server.shutdown().await;
     worker.abort();
 }
+
+#[tokio::test]
+async fn stat_authorizes_the_resolved_path_once_and_rejects_invalid_references_before_host_access()
+{
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("core");
+    let server = ContentServer::open(&directory).unwrap();
+    let state = server.runtime_state();
+    state.file_platform.use_sdk_for_test();
+    let path = directory.join("example.txt");
+    std::fs::write(&path, b"example").unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let observed = calls.clone();
+    let host = state.host.clone();
+    let (generation, mut incoming) = host.connect();
+    let worker = tokio::spawn(async move {
+        while let Some(request) = incoming.recv().await {
+            assert_eq!(request["method"], "fileTaskAuthorize");
+            observed
+                .lock()
+                .unwrap()
+                .push(request["params"]["paths"].clone());
+            host.reply(generation, json!({"id":request["id"],"result":false}))
+                .unwrap();
+        }
+    });
+    for reference in [
+        "app://example.txt".to_owned(),
+        format!("file://{}", path.display()),
+    ] {
+        assert!(
+            crate::services::files::browse::stat_record(&state.file_platform, &reference)
+                .await
+                .is_none()
+        );
+    }
+    assert_eq!(*calls.lock().unwrap(), vec![json!([path]), json!([path])]);
+    for reference in [
+        "",
+        " ",
+        ".",
+        "app://../example.txt",
+        "fid:invalid",
+        "file://remote/example.txt",
+    ] {
+        assert!(
+            crate::services::files::browse::stat_record(&state.file_platform, reference)
+                .await
+                .is_none()
+        );
+    }
+    assert_eq!(calls.lock().unwrap().len(), 2);
+    server.shutdown().await;
+    worker.abort();
+}

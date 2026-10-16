@@ -69,6 +69,43 @@ impl Db {
             .iter()
             .map(|guard| guard.into_inner().map_err(Into::into))
     }
+    pub fn backup_to(&self, path: &Path, cancelled: impl Fn() -> bool) -> Result<()> {
+        if cancelled() {
+            anyhow::bail!("Backup cancelled");
+        }
+        std::fs::create_dir(path)?;
+        let result = (|| {
+            use fjall::Readable;
+            let snapshot = self.0.database.snapshot();
+            let destination = Self::open(path)?;
+            let mut batch = destination.batch_with_capacity(512);
+            let mut pending = 0;
+            for entry in snapshot.iter(&self.0.keyspace) {
+                if cancelled() {
+                    anyhow::bail!("Backup cancelled");
+                }
+                let (key, value) = entry.into_inner()?;
+                batch.insert(&key, &value);
+                pending += 1;
+                if pending == 512 {
+                    destination.apply_batch(batch)?;
+                    batch = destination.batch_with_capacity(512);
+                    pending = 0;
+                }
+            }
+            if pending != 0 {
+                destination.apply_batch(batch)?;
+            }
+            if cancelled() {
+                anyhow::bail!("Backup cancelled");
+            }
+            destination.flush()
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+        result
+    }
     pub fn flush(&self) -> Result<()> {
         self.0
             .database
@@ -136,7 +173,7 @@ impl Batch {
 }
 
 pub fn default_db_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("fjall")
+    crate::data_paths::DataPaths::new(data_dir).kv()
 }
 
 #[cfg(test)]

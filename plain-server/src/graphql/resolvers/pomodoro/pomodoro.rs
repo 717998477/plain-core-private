@@ -21,6 +21,20 @@ impl PomodoroQuery {
 pub struct PomodoroMutation;
 #[Object]
 impl PomodoroMutation {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn import_pomodoro_sound(
+        &self,
+        ctx: &Context<'_>,
+        source: String,
+    ) -> async_graphql::Result<String> {
+        crate::services::pomodoro_sound::import(
+            ctx.data::<crate::assembly::server::ServerState>()?,
+            &source,
+        )
+        .await
+        .map_err(async_graphql::Error::new)
+    }
+
     async fn start_pomodoro(
         &self,
         ctx: &Context<'_>,

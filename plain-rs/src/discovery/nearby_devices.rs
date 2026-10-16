@@ -34,7 +34,7 @@ impl Device {
                 && self
                     .discovery_methods
                     .iter()
-                    .all(|v| v == "LAN" || v == "BLE"),
+                    .all(|v| v == "LAN" || v == "BLE" || v == "QR"),
             "Invalid nearby facts"
         );
         ensure!(

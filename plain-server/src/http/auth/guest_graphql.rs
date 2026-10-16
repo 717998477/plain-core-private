@@ -8,7 +8,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use plain_rs::files::shares::Service;
-use serde_json::{Value, json};
+#[cfg(test)]
+use serde_json::Value;
+use serde_json::json;
 
 #[derive(SimpleObject)]
 struct SharedFile {
@@ -68,22 +70,25 @@ impl Query {
                     "tiff", "tif", "svg",
                 ]
                 .contains(&ext.as_str());
-            let metadata = if root.is_dir {
-                Value::Null
+            let (size, mime_type) = if root.is_dir {
+                (0, String::new())
             } else {
-                guest
-                    .state
-                    .host
-                    .call("fileMetadataFacts", json!({"path":root.real_path}))
+                let metadata = tokio::fs::metadata(&root.real_path)
                     .await
-                    .map_err(async_graphql::Error::new)?
+                    .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+                let size = i64::try_from(metadata.len())
+                    .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+                (
+                    size,
+                    plain_rs::utils::mime::mime_from_ext(&root.real_path).to_owned(),
+                )
             };
             entries.push(SharedFile {
                 name,
                 virtual_path: root.virtual_path,
                 is_dir: root.is_dir,
-                size: Long(metadata["size"].as_i64().unwrap_or(0)),
-                mime_type: metadata["mimeType"].as_str().unwrap_or_default().to_owned(),
+                size: Long(size),
+                mime_type,
                 has_thumb,
             });
         }

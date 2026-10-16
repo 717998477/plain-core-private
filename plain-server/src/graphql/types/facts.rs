@@ -34,12 +34,10 @@ pub(crate) async fn provider_params(
 ) -> async_graphql::Result<Value> {
     crate::host::query::params(
         ctx.data_unchecked::<Arc<plain_rs::db::Db>>(),
-        ctx.data_unchecked::<Arc<Host>>(),
         provider,
         query,
         params,
     )
-    .await
     .map_err(|error| async_graphql::Error::new(error.to_string()))
 }
 

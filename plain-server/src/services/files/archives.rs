@@ -157,12 +157,20 @@ fn build_archive(
     std::fs::create_dir_all(directory)?;
     let path = directory.join(format!("archive-{}.tmp", uuid::Uuid::new_v4()));
     let staging = StagedFile(path.clone());
-    let file = std::fs::File::create(&path)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
     let mut writer = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
     let mut buffer = vec![0; 64 * 1024];
     for (source, entry_name) in items {
+        if source.is_dir() {
+            writer.add_directory(format!("{}/", entry_name.trim_end_matches('/')), options)?;
+            continue;
+        }
         let mut reader = std::fs::File::open(&source)?;
         writer.start_file(entry_name, options)?;
         loop {

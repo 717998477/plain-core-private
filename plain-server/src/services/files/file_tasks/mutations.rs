@@ -6,7 +6,12 @@ use plain_rs::files::tasks::FileTaskStatus;
 use plain_rs::files::tasks::FileTaskType;
 use plain_rs::files::tasks::Hooks;
 impl FileTasks {
-    pub async fn rename(&self, path: String, name: String) -> Result<Option<String>> {
+    pub async fn rename(
+        &self,
+        client_id: &str,
+        path: String,
+        name: String,
+    ) -> Result<Option<String>> {
         if name.is_empty()
             || matches!(name.as_str(), "." | "..")
             || name.contains('/')
@@ -37,34 +42,30 @@ impl FileTasks {
         if tokio::fs::symlink_metadata(&destination).await.is_ok() {
             return Ok(None);
         }
-        let client_id = self
-            .hooks
-            .prefs
-            .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("file task identity unavailable"))?;
+        if client_id.is_empty() {
+            bail!("unauthorized");
+        }
         let service = self.service()?;
-        let task = service.rename(&client_id, path, destination.clone())?;
-        loop {
-            let current = match service.get(&task.id)? {
-                Some(current) => current,
-                None => self
-                    .list(client_id.clone())
-                    .await?
-                    .into_iter()
-                    .find(|row| row.id == task.id)
-                    .ok_or_else(|| anyhow!("rename task unavailable"))?,
-            };
-            match current.status {
-                FileTaskStatus::Done => break,
-                FileTaskStatus::Error if current.completed_ops.is_empty() => return Ok(None),
-                FileTaskStatus::Error => bail!(
-                    "rename postprocessing failed for task {}: {}",
-                    current.id,
-                    current.error
-                ),
-                _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+        let task = service.rename(client_id, path, destination.clone())?;
+        let current = wait_for_completion(&self.completion, || {
+            let current = service
+                .get(&task.id)?
+                .ok_or_else(|| anyhow!("rename task unavailable"))?;
+            Ok(
+                matches!(current.status, FileTaskStatus::Done | FileTaskStatus::Error)
+                    .then_some(current),
+            )
+        })
+        .await?;
+        if current.status == FileTaskStatus::Error {
+            if current.completed_ops.is_empty() {
+                return Ok(None);
             }
+            bail!(
+                "rename postprocessing failed for task {}: {}",
+                current.id,
+                current.error
+            );
         }
         Ok(Some(destination))
     }

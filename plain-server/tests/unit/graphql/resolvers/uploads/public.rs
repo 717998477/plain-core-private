@@ -73,7 +73,7 @@ async fn multipart_regular_upload_streams_without_host_preserves_replacements_an
     );
     prefs.set_user("desktop_access", true).unwrap();
     let core = crate::assembly::server::ContentServer::start(
-        &directory.path().join("plain.db"),
+        directory.path(),
         &plain_rs::utils::base64::base64_encode(&[7; 32]),
         prefs,
     )
@@ -165,12 +165,8 @@ async fn native_upload_chunks_use_the_main_identity_key_and_the_owned_chunk_dire
     );
     prefs.set_user("desktop_access", true).unwrap();
     plain_rs::prefs::identity::ensure_url_token(&prefs);
-    let core = crate::assembly::server::ContentServer::start(
-        &directory.path().join("plain.db"),
-        &token,
-        prefs,
-    )
-    .unwrap();
+    let core =
+        crate::assembly::server::ContentServer::start(directory.path(), &token, prefs).unwrap();
     let state = core.runtime_state();
     let client_id = state.native_client_id().unwrap();
     let key = plain_rs::utils::base64::base64_decode(&core.native_url_token().unwrap());

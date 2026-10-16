@@ -22,6 +22,19 @@ fn stub(host: Arc<Host>, handler: impl Fn(&str, Value) -> Value + Send + 'static
     });
 }
 
+fn permission_sample(params: Value, grants: &[&str]) -> Value {
+    let values: serde_json::Map<String, Value> = params["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| {
+            let name = value.as_str().unwrap();
+            (name.to_owned(), Value::Bool(grants.contains(&name)))
+        })
+        .collect();
+    json!({"granted":values})
+}
+
 fn fixture(
     handler: impl Fn(&str, Value) -> Value + Send + 'static,
 ) -> (tempfile::TempDir, PublicSchema) {
@@ -36,7 +49,7 @@ fn fixture(
     prefs.set_user("device_name", "Pixel 8").unwrap();
     prefs.set_user("developer_mode", true).unwrap();
     let db = Arc::new(Db::open(&dir.path().join("data.db")).unwrap());
-    let host = Arc::new(Host::default());
+    let host = Arc::new(Host::with_startup_properties(json!({"deviceType":"PHONE","buildChannel":"GITHUB","downloadsDir":"/downloads","debug":false}).as_object().unwrap().clone()).unwrap());
     stub(host.clone(), handler);
     let directory = dir.path().to_path_buf();
     let (events, _) = tokio::sync::broadcast::channel(16);
@@ -161,34 +174,44 @@ async fn device_status_preserves_optional_battery_and_selected_values() {
 async fn the_app_root_exposes_the_identity_and_the_capability_lists() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let observed = calls.clone();
-    let (_dir, schema) = fixture(move |method, _| {
+    let (_dir, schema) = fixture(move |method, params| {
         observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         match method {
-            "systemAppFacts" => json!({
-                "clientId": "stale", "urlToken": "stale", "httpPort": 9999, "httpsPort": 9999,
-                "appDir": "/data/user/0/com.ismartcoding.plain", "deviceName": "stale",
-                "deviceType": "PHONE", "capabilities": ["SMS", "CONTACTS", "WAT"],
-                "buildChannel": "GITHUB", "permissions": ["RECORD_AUDIO", "READ_SMS", "ADB", "NOPE"],
-                "downloadsDir": "/storage/emulated/0/Download", "developerMode": false, "debug": false,
-            }),
+            "systemCapabilities" => json!(["SMS", "CONTACTS", "WAT"]),
+            "systemPermissionFacts" => {
+                permission_sample(params, &["RECORD_AUDIO", "READ_SMS", "ADB", "NOPE"])
+            }
             other => panic!("unexpected host call {other}"),
         }
     });
     let response = schema
         .execute(
             r#"query { app { clientId urlToken httpPort httpsPort deviceName deviceType
-                        buildChannel capabilities permissions developerMode debug } }"#,
+                        buildChannel capabilities repeatedCapabilities:capabilities permissions repeatedPermissions:permissions developerMode debug } }"#,
         )
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     let app = response.data.into_json().unwrap()["app"].clone();
     assert_eq!(app["clientId"], "c1");
     assert_eq!(app["httpPort"], 8080);
     assert_eq!(app["deviceType"], "PHONE");
     assert_eq!(app["buildChannel"], "GITHUB");
     assert_eq!(app["developerMode"], true);
-    assert_eq!(app["capabilities"], json!(["SMS", "CONTACTS"]));
+    assert!(
+        app["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("SMS"))
+    );
+    assert!(
+        !app["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("WAT"))
+    );
+    assert_eq!(app["repeatedCapabilities"], app["capabilities"]);
+    assert_eq!(app["repeatedPermissions"], app["permissions"]);
     assert_eq!(
         app["permissions"],
         json!(["READ_SMS", "RECORD_AUDIO", "ADB"])
@@ -281,7 +304,7 @@ async fn discovery_commands_use_the_shared_runtime_and_platform_multicast_lease(
     let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
     prefs.set("client_id", "discovery-test").unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[4; 32]),
         prefs,
     )
@@ -317,6 +340,7 @@ async fn renaming_the_device_forwards_the_new_name() {
             assert_eq!(params["name"], "New Name");
             json!(true)
         }
+        "systemCapabilities" => json!(["APP_RELAUNCH"]),
         "systemRelaunchApp" => json!(true),
         other => panic!("unexpected host call {other}"),
     });
@@ -331,12 +355,11 @@ async fn renaming_the_device_forwards_the_new_name() {
 
 #[tokio::test]
 async fn local_app_permissions_use_os_grants_without_web_opt_in() {
-    let (_dir, schema) = fixture(|method, _| match method {
-        "systemAppFacts" => json!({
-            "appDir": "/app", "deviceType": "PHONE", "capabilities": [],
-            "buildChannel": "GITHUB", "permissions": ["READ_SMS", "READ_CONTACTS", "RECORD_AUDIO", "UNKNOWN"],
-            "downloadsDir": "/downloads", "debug": false,
-        }),
+    let (_dir, schema) = fixture(|method, params| match method {
+        "systemPermissionFacts" => permission_sample(
+            params,
+            &["READ_SMS", "READ_CONTACTS", "RECORD_AUDIO", "UNKNOWN"],
+        ),
         other => panic!("unexpected host call {other}"),
     });
     let query = "{ app { permissions } }";
@@ -362,24 +385,17 @@ async fn local_app_permissions_use_os_grants_without_web_opt_in() {
 }
 
 #[tokio::test]
-async fn incomplete_app_facts_fail_instead_of_inventing_platform_values() {
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let observed = calls.clone();
-    let (_dir, schema) = fixture(move |method, _| {
-        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        match method {
-            "systemAppFacts" => json!({ "permissions": [] }),
-            other => panic!("unexpected host call {other}"),
-        }
+async fn incomplete_permission_samples_fail_instead_of_granting_access() {
+    let (_dir, schema) = fixture(|method, _| match method {
+        "systemPermissionFacts" => json!({"granted":{"READ_SMS":true}}),
+        other => panic!("unexpected host call {other}"),
     });
-    let response = schema.execute("{ app { deviceType debug } }").await;
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert_eq!(response.errors.len(), 2);
+    let response = schema.execute("{ app { permissions } }").await;
+    assert_eq!(response.errors.len(), 1);
     assert!(
-        response
-            .errors
-            .iter()
-            .all(|error| error.message.starts_with("invalid app facts:"))
+        response.errors[0]
+            .message
+            .starts_with("Missing permission sample:")
     );
 }
 
@@ -387,11 +403,73 @@ async fn incomplete_app_facts_fail_instead_of_inventing_platform_values() {
 async fn app_preferences_do_not_call_the_platform() {
     let (_dir, schema) = fixture(|method, _| panic!("unexpected host call {method}"));
     let response = schema
-        .execute("{app{clientId urlToken httpPort httpsPort deviceName developerMode}}")
+        .execute("{app{clientId urlToken httpPort httpsPort deviceName developerMode appDir deviceType buildChannel downloadsDir debug}}")
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
         response.data.into_json().unwrap()["app"]["urlToken"],
         "dG9rZW4="
+    );
+}
+
+#[tokio::test]
+async fn separate_app_queries_refresh_capabilities_and_permissions() {
+    let capabilities = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let permissions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let caps = capabilities.clone();
+    let grants = permissions.clone();
+    let (_directory, schema) = fixture(move |method, params| match method {
+        "systemCapabilities" => {
+            if caps.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                json!(["SMS"])
+            } else {
+                json!([])
+            }
+        }
+        "systemPermissionFacts" => {
+            if grants.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                permission_sample(params, &["READ_SMS"])
+            } else {
+                permission_sample(params, &[])
+            }
+        }
+        other => panic!("unexpected host call {other}"),
+    });
+    let first = schema.execute("{ app { capabilities permissions } }").await;
+    let second = schema.execute("{ app { capabilities permissions } }").await;
+    assert!(first.errors.is_empty(), "{:?}", first.errors);
+    assert!(second.errors.is_empty(), "{:?}", second.errors);
+    let first = first.data.into_json().unwrap();
+    let second = second.data.into_json().unwrap();
+    assert!(
+        first["app"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("SMS"))
+    );
+    assert!(
+        !second["app"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("SMS"))
+    );
+    assert_eq!(first["app"]["permissions"], json!(["READ_SMS"]));
+    assert_eq!(second["app"]["permissions"], json!([]));
+    assert_eq!(capabilities.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(permissions.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn unsupported_relaunch_never_invokes_the_platform_action() {
+    let (_directory, schema) = fixture(|method, _| match method {
+        "systemCapabilities" => json!([]),
+        other => panic!("unexpected host call {other}"),
+    });
+    let response = schema.execute("mutation { relaunchApp }").await;
+    assert_eq!(response.errors.len(), 1);
+    assert!(
+        response.errors[0]
+            .message
+            .contains("unsupported capability APP_RELAUNCH")
     );
 }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::graphql::schemas::public::PublicSchema;
+use crate::host::bridge::Host;
 use plain_rs::db::Db;
 use plain_rs::prefs::Prefs;
 use serde_json::{Value, json};
@@ -195,7 +196,10 @@ async fn a_refused_rename_reports_false() {
         other => panic!("unexpected host call {other}"),
     });
     let response = schema
-        .execute(r#"mutation { renameFile(path:"/a", name:"..") }"#)
+        .execute(
+            async_graphql::Request::new(r#"mutation { renameFile(path:"/a", name:"..") }"#)
+                .data("file-test".to_owned()),
+        )
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(response.data.into_json().unwrap()["renameFile"], false);
@@ -210,7 +214,7 @@ async fn copy_and_move_use_the_shared_file_tasks() {
         std::fs::write(&source, "new").unwrap();
         std::fs::write(&destination, "old").unwrap();
         let response = schema.execute(async_graphql::Request::new(format!("mutation($src:String!,$dst:String!){{{name}(src:$src,dst:$dst,overwrite:true)}}"))
-            .variables(async_graphql::Variables::from_json(json!({"src":source,"dst":destination})))).await;
+            .variables(async_graphql::Variables::from_json(json!({"src":source,"dst":destination}))).data("file-test".to_owned())).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
         assert_eq!(response.data.into_json().unwrap()[name], true);
         assert_eq!(std::fs::read_to_string(&destination).unwrap(), "new");
@@ -567,4 +571,42 @@ fn merge_results_preserve_status_output_size_and_failure() {
     assert_eq!(failed.status, MergeTaskStatus::Failed);
     assert_eq!(failed.error.as_deref(), Some("boom"));
     assert!(failed.value.is_none());
+}
+
+#[tokio::test]
+async fn main_upload_resume_query_observes_only_completed_native_byte_streams() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let (_generation, mut requests) = state.host.connect();
+    let executor = core.native_graphql().unwrap();
+    let query = r#"{uploadedChunks(fileId:"stream-fixture")}"#;
+    let uploads = core.native_uploads().unwrap();
+    let mut pending = uploads.open_chunk("stream-fixture", 0, 3).await.unwrap();
+    pending.write(b"abc").await.unwrap();
+    let response = executor.execute(async_graphql::Request::new(query)).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["uploadedChunks"],
+        json!([])
+    );
+    pending.finish().await.unwrap();
+    let mut aborted = uploads.open_chunk("stream-fixture", 1, 3).await.unwrap();
+    aborted.write(b"x").await.unwrap();
+    drop(aborted);
+    let response = executor.execute(async_graphql::Request::new(query)).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["uploadedChunks"],
+        json!(["0:3"])
+    );
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+    assert!(
+        !executor
+            .execute(async_graphql::Request::new(query))
+            .await
+            .errors
+            .is_empty()
+    );
 }

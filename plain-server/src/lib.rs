@@ -5,8 +5,6 @@
 
 #[cfg(feature = "core")]
 pub mod assembly;
-#[cfg(feature = "core")]
-pub mod files;
 pub mod graphql;
 pub mod http;
 #[cfg(feature = "core")]

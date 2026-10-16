@@ -12,6 +12,7 @@ pub(crate) struct FilePlatform {
     host: Arc<Host>,
     db: Arc<Db>,
     directory: PathBuf,
+    cache: PathBuf,
     #[cfg(test)]
     sdk: std::sync::atomic::AtomicBool,
     #[cfg(feature = "media")]
@@ -22,12 +23,14 @@ impl FilePlatform {
         host: Arc<Host>,
         db: Arc<Db>,
         directory: PathBuf,
+        cache: PathBuf,
         #[cfg(feature = "media")] scans: Arc<super::media_scans::MediaScans>,
     ) -> Self {
         Self {
             host,
             db,
             directory,
+            cache,
             #[cfg(test)]
             sdk: std::sync::atomic::AtomicBool::new(cfg!(any(
                 target_os = "android",
@@ -48,6 +51,10 @@ impl FilePlatform {
         }
     }
 
+    pub(crate) fn resolve_reference(&self, path: &str) -> Result<String> {
+        super::references::resolve(self.db.clone(), self.directory.clone(), path)
+    }
+
     #[cfg(test)]
     pub(crate) fn use_sdk_for_test(&self) {
         self.sdk.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -60,22 +67,13 @@ impl FilePlatform {
                 .call("thumbnailAuthorize", json!({"paths":[path]}))
                 .await
                 .map_err(anyhow::Error::msg)?;
-            let path = PathBuf::from(
-                value
-                    .as_str()
-                    .ok_or_else(|| anyhow!("invalid thumbnail cache root"))?,
-            );
-            if !path.is_absolute() {
-                bail!("absolute thumbnail cache root required");
+            if value.as_bool() != Some(true) {
+                bail!("Thumbnail source access denied");
             }
-            return Ok(path);
+        } else {
+            self.authorize(path, false).await?;
         }
-        self.authorize(path, false).await?;
-        #[cfg(feature = "media")]
-        if let Some(directory) = self.scans.cache_directory().map_err(anyhow::Error::msg)? {
-            return Ok(directory);
-        }
-        Ok(self.directory.join("cache"))
+        Ok(self.cache.clone())
     }
 
     pub(crate) async fn recent_files(
@@ -83,13 +81,47 @@ impl FilePlatform {
         prefs: &plain_rs::prefs::Prefs,
     ) -> Result<Vec<serde_json::Value>> {
         if self.uses_sdk() {
-            return serde_json::from_value(
-                self.host
-                    .call("systemRecentFileFacts", json!({}))
-                    .await
-                    .map_err(anyhow::Error::msg)?,
-            )
-            .map_err(Into::into);
+            let catalog = self
+                .host
+                .startup_property("files.recentCatalog")
+                .and_then(serde_json::Value::as_bool)
+                .ok_or_else(|| anyhow!("invalid recent catalog support"))?;
+            if catalog {
+                let mut plan = crate::host::query::Plan::default();
+                plan.add(
+                    "mime_type != ?".into(),
+                    vec!["vnd.android.document/directory".into()],
+                );
+                return serde_json::from_value(
+                    self.host
+                        .call(
+                            "systemFileIndexRows",
+                            json!({
+                                "plan":plan,"offset":0,"limit":100,"sortBy":"DATE_DESC"
+                            }),
+                        )
+                        .await
+                        .map_err(anyhow::Error::msg)?,
+                )
+                .map_err(Into::into);
+            }
+            match self.host.startup_property("files.recentRoot") {
+                Some(serde_json::Value::Null) => {}
+                Some(serde_json::Value::String(root)) if Path::new(root).is_absolute() => {
+                    let root = PathBuf::from(root);
+                    let entries = tokio::task::spawn_blocking(move || {
+                        plain_rs::files::filesystem::recent::list(&root, 100)
+                    })
+                    .await?;
+                    return Ok(entries.into_iter().map(|entry| json!({
+                        "name":Path::new(&entry.path).file_name().and_then(|name| name.to_str()).unwrap_or_default(),
+                        "path":entry.path,"permission":"","mediaId":null,"createdAt":null,
+                        "updatedAt":entry.updated_at.timestamp_millis(),"size":entry.size,
+                        "isDir":false,"childCount":0
+                    })).collect());
+                }
+                _ => bail!("invalid recent filesystem root"),
+            }
         }
         let mut items = Vec::new();
         for path in plain_rs::prefs::recent::get_recent_files(prefs, 500)? {

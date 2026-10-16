@@ -163,6 +163,7 @@ async fn provider_delete_uses_two_batch_exchanges_and_no_business_action_on_host
         host.clone(),
         db,
         directory.path().to_path_buf(),
+        directory.path().join("cache"),
         #[cfg(feature = "media")]
         Arc::new(super::super::media_scans::MediaScans::new(
             tokio::sync::broadcast::channel(8).0,

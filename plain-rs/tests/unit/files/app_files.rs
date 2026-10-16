@@ -51,3 +51,28 @@ fn resolve_rejects_a_suffix_that_does_not_match_the_stored_name() {
 
     assert!(store.resolve(&forged).is_err());
 }
+
+#[test]
+fn stored_paths_are_owned_by_the_file_store_without_requiring_the_file_to_exist() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Db::open(Path::new(":memory:")).unwrap());
+    let store = FileStore::new(db, directory.path().to_path_buf());
+    assert_eq!(
+        store.stored_path("files/aa/bb/file.jpg").unwrap(),
+        directory.path().join("files/aa/bb/file.jpg")
+    );
+    assert_eq!(
+        store
+            .stored_path(directory.path().join("files/photo.jpg").to_str().unwrap())
+            .unwrap(),
+        directory.path().join("files/photo.jpg")
+    );
+    for stored in [
+        "../outside",
+        "files/../../outside",
+        "other/file.jpg",
+        "files\\outside",
+    ] {
+        assert!(store.stored_path(stored).is_err(), "{stored}");
+    }
+}

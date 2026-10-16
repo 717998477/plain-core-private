@@ -127,14 +127,13 @@ impl NativeMediaCatalog {
     #[cfg(feature = "media")]
     pub fn configure_scan_directories(
         &self,
-        cache_directory: &std::path::Path,
         config_file: Option<&std::path::Path>,
     ) -> Result<(), String> {
         self.state.native_client_id()?;
         self.state
             .media_scans
             .configure(crate::services::files::media_scan_policy::Policy::load(
-                cache_directory,
+                self.state.cache.root(),
                 config_file,
             )?)
     }

@@ -1,5 +1,19 @@
 use super::*;
 #[tokio::test]
+async fn multiple_receivers_can_bind_the_shared_ssdp_port() {
+    let first = bind_ssdp_socket().await.unwrap();
+    let second = bind_ssdp_socket().await.unwrap();
+    assert_eq!(first.local_addr().unwrap().port(), SSDP_PORT);
+    assert_eq!(second.local_addr().unwrap().port(), SSDP_PORT);
+    for socket in [&first, &second] {
+        let options = socket2::SockRef::from(socket);
+        assert!(options.reuse_address().unwrap());
+        #[cfg(unix)]
+        assert!(options.reuse_port().unwrap());
+    }
+}
+
+#[tokio::test]
 async fn search_responses_reach_the_ephemeral_source_port() {
     let renderer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let control = UdpSocket::bind("127.0.0.1:0").await.unwrap();

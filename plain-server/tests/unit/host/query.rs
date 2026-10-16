@@ -1,5 +1,4 @@
 use super::*;
-use crate::host::bridge::Host;
 
 /// `plan` now rejects a field the provider does not know, so the cases below —
 /// which are all about what a *known* field produces — unwrap in one place.
@@ -371,8 +370,6 @@ fn unknown_fields_are_refused_instead_of_dropped() {
 async fn a_query_that_builds_no_clause_is_the_one_the_destructive_path_refuses() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("db")).unwrap();
-    // No `start_time` in any query below, so the host is never called.
-    let host = Host::default();
 
     // The same field name, two providers, opposite answers: `type` is a Call
     // column and a no-op on the media providers, whose own kind is the provider
@@ -396,9 +393,7 @@ async fn a_query_that_builds_no_clause_is_the_one_the_destructive_path_refuses()
             "{provider:?} {query:?} was expected to build no clause"
         );
         assert!(
-            require_narrowing(&db, &host, provider, query)
-                .await
-                .is_err(),
+            require_narrowing(&db, provider, query).is_err(),
             "{provider:?} {query:?} reaches a mutation with nothing selected"
         );
     }
@@ -410,21 +405,17 @@ async fn a_query_that_builds_no_clause_is_the_one_the_destructive_path_refuses()
         (Provider::Doc, "trash:false"),
         (Provider::File, "trash:false"),
     ] {
-        require_narrowing(&db, &host, provider, query)
-            .await
+        require_narrowing(&db, provider, query)
             .unwrap_or_else(|e| panic!("{provider:?} {query:?} was refused: {e}"));
     }
 
     // `all` builds no clause by design and says so; blank is the caller's own
     // guard to own. So does `trash:true`, which names the trashed set.
-    require_narrowing(&db, &host, Provider::Audio, "all:true")
-        .await
+    require_narrowing(&db, Provider::Audio, "all:true")
         .expect("all:true is the sanctioned whole-table ask");
-    require_narrowing(&db, &host, Provider::Audio, "trash:true")
-        .await
+    require_narrowing(&db, Provider::Audio, "trash:true")
         .expect("trash:true is the trashed set, which is a scope of its own");
-    require_narrowing(&db, &host, Provider::Audio, "")
-        .await
+    require_narrowing(&db, Provider::Audio, "")
         .expect("blank is refused by the caller's guard, not this one");
 }
 
@@ -450,4 +441,34 @@ fn all_file_media_providers_bind_size_filters_to_the_provider_column() {
             );
         }
     }
+}
+
+#[test]
+fn call_date_filters_are_resolved_by_rust_without_a_host() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(&directory.path().join("plain.db")).unwrap();
+    let input = params(
+        &db,
+        Provider::Call,
+        "start_time:>=1700000000 start_time:<1700000000001",
+        serde_json::json!({"limit":20}),
+    )
+    .unwrap();
+    assert_eq!(input["limit"], 20);
+    assert_eq!(
+        input["plan"]["clauses"],
+        serde_json::json!(["date >= ?", "date < ?"])
+    );
+    assert_eq!(
+        input["plan"]["args"],
+        serde_json::json!(["1700000000000", "1700000000001"])
+    );
+    let invalid = params(
+        &db,
+        Provider::Call,
+        "start_time:not-a-date",
+        serde_json::json!({}),
+    )
+    .unwrap();
+    assert!(invalid["plan"]["clauses"].as_array().unwrap().is_empty());
 }

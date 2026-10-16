@@ -1,14 +1,19 @@
 use async_graphql::Enum;
 
-/// Optional device features. A client hides a whole section when its
-/// capability is absent, which is why this is a list rather than a set of
-/// booleans on the app root.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Capability {
+    FileExport,
+    FileReveal,
+    FileClipboard,
+    AppRelaunch,
     MediaTrash,
     MediaDelete,
     MediaMove,
     MediaFavorite,
+    VideoRemux,
+    VideoTranscode,
+    #[graphql(name = "VIDEO_3GP_CONVERT")]
+    Video3gpConvert,
     AppUpdates,
     Donation,
 
@@ -33,14 +38,19 @@ pub enum Capability {
 }
 
 impl Capability {
-    /// Unknown members parse to `None` rather than to a capability the
-    /// client would render as a section it cannot drive.
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
+            "FILE_EXPORT" => Self::FileExport,
+            "FILE_REVEAL" => Self::FileReveal,
+            "FILE_CLIPBOARD" => Self::FileClipboard,
+            "APP_RELAUNCH" => Self::AppRelaunch,
             "MEDIA_TRASH" => Self::MediaTrash,
             "MEDIA_DELETE" => Self::MediaDelete,
             "MEDIA_MOVE" => Self::MediaMove,
             "MEDIA_FAVORITE" => Self::MediaFavorite,
+            "VIDEO_REMUX" => Self::VideoRemux,
+            "VIDEO_TRANSCODE" => Self::VideoTranscode,
+            "VIDEO_3GP_CONVERT" => Self::Video3gpConvert,
             "APP_UPDATES" => Self::AppUpdates,
             "DONATION" => Self::Donation,
 

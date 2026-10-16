@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 fn server(dir: &tempfile::TempDir) -> ContentServer {
     ContentServer::start(
-        &dir.path().join("db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[9; 32]),
         Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap()),
     )
@@ -18,6 +18,7 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
     let mut public = server.runtime_state().events.subscribe();
     for kind in [
         "MESSAGE_CREATED",
+        "SMS_SEND_RESULT",
         "PAIRING_SUCCESS",
         "CONTENT_CHANGED",
         "UNKNOWN_EVENT",
@@ -36,8 +37,11 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
                 | "NOTIFICATION_REPORTED"
                 | "AUDIO_PROGRESS_REPORTED"
                 | "AUDIO_STARTED_REPORTED"
-                | "MEDIA_DURATION_REPORTED"
                 | "IMAGE_INDEX_ERROR_REPORTED"
+                | "IMAGE_CATALOG_CHANGED"
+                | "NETWORK_INTERFACES_CHANGED"
+                | "BLE_ADVERTISEMENT_REPORTED"
+                | "SMS_PART_SENT_REPORTED"
         ) {
             assert!(
                 bridge.publish_text(kind, "{}".into()).await.is_err(),
@@ -188,6 +192,51 @@ async fn replaced_hosts_discard_requests_and_events_already_in_the_queue() {
             .runtime_state()
             .host
             .is_current(replacement.generation)
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn raw_ble_advertisements_are_consumed_without_public_rebroadcast() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(&dir);
+    let bridge = server.host_events();
+    let state = server.runtime_state();
+    let mut public = state.events.subscribe();
+    let scan = state.ble_scans.begin().unwrap();
+    bridge
+        .publish_text(
+            "BLE_ADVERTISEMENT_REPORTED",
+            serde_json::json!({"scanId":scan,"shortId":"invalid"}).to_string(),
+        )
+        .await
+        .unwrap();
+    assert!(public.try_recv().is_err());
+    state.ble_scans.end(&scan);
+    assert!(
+        bridge
+            .publish_text(
+                "BLE_ADVERTISEMENT_REPORTED",
+                serde_json::json!({"scanId":scan,"shortId":"0001020304050607"}).to_string()
+            )
+            .await
+            .is_err()
+    );
+    bridge
+        .publish_text("IMAGE_CATALOG_CHANGED", "null".into())
+        .await
+        .unwrap();
+    assert!(public.try_recv().is_err());
+    bridge
+        .publish_text("NETWORK_INTERFACES_CHANGED", "null".into())
+        .await
+        .unwrap();
+    assert!(public.try_recv().is_err());
+    assert!(
+        bridge
+            .publish_text("NETWORK_INTERFACES_CHANGED", "{}".into())
+            .await
+            .is_err()
     );
     server.shutdown().await;
 }

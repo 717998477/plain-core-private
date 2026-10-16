@@ -2,21 +2,7 @@ use crate::assembly::server::ServerState;
 use plain_rs::db::chat_store;
 use plain_rs::discovery::nearby_devices::Device;
 use plain_rs::events::WsEvent;
-use serde::Deserialize;
 use serde_json::json;
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Request {
-    Snapshot,
-    BleScanning {
-        ble: bool,
-    },
-    Seen {
-        device: Device,
-        visible: bool,
-        resident: bool,
-    },
-}
 pub(crate) const EVENT_UPDATED: &'static str = "NEARBY_DEVICES_UPDATED";
 
 fn publish(state: &ServerState) {
@@ -102,29 +88,6 @@ impl Context {
         }
         Ok(true)
     }
-}
-async fn execute(state: &ServerState, request: Request) -> anyhow::Result<serde_json::Value> {
-    match request {
-        Request::Snapshot => {}
-        Request::BleScanning { ble } => {
-            state.nearby_devices.scanning_modes(
-                None,
-                Some(ble),
-                chat_store::nearby::all(&state.db)?,
-            )?;
-            publish(state);
-        }
-        Request::Seen {
-            device,
-            visible,
-            resident,
-        } => {
-            if !Context::from(state).seen(device, visible, resident)? {
-                return Ok(json!({"ignored":true}));
-            }
-        }
-    }
-    snapshot(&state.db, &state.nearby_devices)
 }
 fn snapshot(
     db: &plain_rs::db::Db,

@@ -1,9 +1,15 @@
 #[cfg(feature = "core")]
+pub mod backups;
+#[cfg(feature = "core")]
+pub(crate) mod cache;
+#[cfg(feature = "core")]
 pub mod feeds;
 #[cfg(feature = "core")]
 pub mod link_preview;
 #[cfg(feature = "core")]
 pub mod pomodoro;
+#[cfg(feature = "core")]
+pub(crate) mod pomodoro_sound;
 
 pub mod discovery;
 
@@ -12,7 +18,6 @@ pub mod temp_values;
 pub mod chat;
 
 pub mod casting;
-
 
 pub mod settings;
 
@@ -46,3 +51,9 @@ pub(crate) mod device;
 
 #[cfg(feature = "core")]
 pub(crate) mod logs;
+
+#[cfg(feature = "core")]
+pub(crate) mod crash_reports;
+
+#[cfg(feature = "core")]
+pub(crate) mod http_server;

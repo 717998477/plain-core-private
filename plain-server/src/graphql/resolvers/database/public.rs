@@ -3,7 +3,6 @@
 //!
 
 use crate::graphql::types::Long;
-use crate::host::bridge::Host;
 use async_graphql::{Context, Enum, Object, SimpleObject};
 use plain_rs::db::devtools::SqliteFile;
 use std::sync::Arc;
@@ -65,14 +64,7 @@ impl DbQuery {
         if !has_path(&file) {
             return Ok(vec![]);
         }
-        spawn(move || {
-            Ok(file
-                .tables()?
-                .into_iter()
-                .filter(|name| !name.starts_with("android_") && !name.starts_with("room_"))
-                .collect())
-        })
-        .await
+        spawn(move || Ok(file.tables()?.into_iter().collect())).await
     }
 
     async fn db_table_row_count(
@@ -203,13 +195,9 @@ impl DbMutation {
 
 async fn app_db(ctx: &Context<'_>) -> async_graphql::Result<SqliteFile> {
     let path = ctx
-        .data_unchecked::<Arc<Host>>()
-        .call("systemDbPath", serde_json::json!({}))
-        .await
-        .map_err(async_graphql::Error::new)?
-        .as_str()
-        .unwrap_or_default()
-        .to_owned();
+        .data::<Arc<plain_rs::db::Db>>()?
+        .with_conn(|connection| connection.path().map(std::path::PathBuf::from))
+        .unwrap_or_default();
     Ok(SqliteFile::new(path))
 }
 

@@ -16,6 +16,7 @@ pub struct AppFile {
     pub id: String,
     pub size: Long,
     pub mime_type: String,
+    #[graphql(skip)]
     pub real_path: String,
     pub file_name: String,
     #[graphql(skip)]
@@ -26,6 +27,15 @@ pub struct AppFile {
 
 #[ComplexObject]
 impl AppFile {
+    async fn real_path(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
+        Ok(ctx
+            .data::<Arc<plain_rs::files::app_files::FileStore>>()?
+            .stored_path(&self.real_path)
+            .map_err(async_graphql::Error::new)?
+            .to_string_lossy()
+            .into_owned())
+    }
+
     async fn created_at(&self) -> async_graphql::Result<Instant> {
         parse_instant(&self.created_at)
     }

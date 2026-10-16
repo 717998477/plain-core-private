@@ -1,0 +1,113 @@
+use crate::{assembly::server::ServerState, graphql::types::Long};
+use async_graphql::SimpleObject;
+use std::sync::Mutex;
+
+#[derive(Clone, Default, SimpleObject)]
+pub(crate) struct HttpServerState {
+    pub revision: Long,
+    pub restarting: bool,
+    pub http_port: i32,
+    pub https_port: i32,
+    pub error: String,
+}
+
+#[derive(Default)]
+pub(crate) struct Runtime {
+    state: Mutex<HttpServerState>,
+    #[cfg(test)]
+    completion: tokio::sync::Notify,
+}
+
+impl Runtime {
+    pub(crate) fn snapshot(&self) -> HttpServerState {
+        self.state.lock().unwrap().clone()
+    }
+
+    fn begin(&self) -> Result<HttpServerState, String> {
+        let mut state = self.state.lock().unwrap();
+        if state.restarting {
+            return Err("HTTP server restart is already running".into());
+        }
+        state.revision.0 = state
+            .revision
+            .0
+            .checked_add(1)
+            .ok_or("HTTP revision exhausted")?;
+        state.restarting = true;
+        state.error.clear();
+        Ok(state.clone())
+    }
+
+    pub(crate) fn started(&self, ports: (u16, u16)) {
+        let mut state = self.state.lock().unwrap();
+        state.http_port = i32::from(ports.0);
+        state.https_port = i32::from(ports.1);
+    }
+
+    pub(crate) fn stopped(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.http_port = 0;
+        state.https_port = 0;
+    }
+
+    fn finish(&self, revision: Long, result: Result<(u16, u16), String>) {
+        let mut state = self.state.lock().unwrap();
+        if state.revision.0 != revision.0 {
+            return;
+        }
+        state.restarting = false;
+        match result {
+            Ok((http, https)) => {
+                state.http_port = i32::from(http);
+                state.https_port = i32::from(https);
+                state.error.clear();
+            }
+            Err(error) => state.error = error,
+        }
+        drop(state);
+        #[cfg(test)]
+        self.completion.notify_waiters();
+    }
+}
+
+pub(crate) fn restart(
+    state: &ServerState,
+    http: Option<u16>,
+    https: Option<u16>,
+) -> Result<HttpServerState, String> {
+    state.native_client_id()?;
+    #[cfg(feature = "http_transport")]
+    {
+        let receipt = state.http_server.begin()?;
+        let revision = receipt.revision;
+        let state = state.clone();
+        tokio::spawn(async move {
+            let result = async {
+                state.native_client_id()?;
+                crate::graphql::resolvers::settings::state::apply_user_patch(
+                    crate::graphql::resolvers::settings::state::UserPatchEnv::from_server(&state),
+                    plain_rs::prefs::user::UserSettingsPatch {
+                        http_port: http.map(i32::from),
+                        https_port: https.map(i32::from),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|error| error.message)?;
+                state.restart_public().await
+            }
+            .await;
+            state.http_server.finish(revision, result);
+        });
+        Ok(receipt)
+    }
+    #[cfg(not(feature = "http_transport"))]
+    {
+        let _ = (http, https);
+        Err("HTTP transport is unavailable".into())
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/services/http_server.rs"]
+mod tests;

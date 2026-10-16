@@ -56,7 +56,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
     }
     prefs.set_user("pomodoro_settings", settings).unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[12; 32]);
-    let server = ContentServer::start(&path, &token, prefs.clone()).unwrap();
+    let server = ContentServer::start(path.parent().unwrap(), &token, prefs.clone()).unwrap();
     let config = r#"mutation {configurePomodoroDay(date:"2026-10-03",dayStart:"2026-10-02T16:00:00.000Z") {date timeLeftSec}}"#;
     let result = call(server.port, &token, config).await;
     assert!(result.get("errors").is_none(), "{result}");
@@ -163,7 +163,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
     )
     .await;
     server.shutdown().await;
-    let server = ContentServer::start(&path, &token, prefs).unwrap();
+    let server = ContentServer::start(path.parent().unwrap(), &token, prefs).unwrap();
     assert_eq!(
         call(
             server.port,
@@ -231,7 +231,7 @@ async fn pomodoro_host_ticks_statistics_atomic_completion_and_restart() {
     call(server.port, &token, "mutation {pausePomodoro}").await;
     server.shutdown().await;
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
-    let server = ContentServer::start(&path, &token, prefs).unwrap();
+    let server = ContentServer::start(path.parent().unwrap(), &token, prefs).unwrap();
     call(server.port, &token, config).await;
     assert_eq!(
         call(

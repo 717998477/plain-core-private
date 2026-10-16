@@ -6,7 +6,6 @@ use crate::graphql::resolvers::media::public::MediaDataType;
 use crate::graphql::types::ActionResult;
 use crate::graphql::types::Long;
 use crate::graphql::types::facts::text;
-use crate::host::bridge::Host;
 use crate::host::query as provider_plan;
 use crate::host::query::Provider;
 use crate::http::auth::public_gate;
@@ -61,10 +60,10 @@ impl UploadQuery {
         ctx: &Context<'_>,
         file_id: String,
     ) -> async_graphql::Result<Vec<String>> {
-        let base = upload_base(ctx).await?;
-        plain_rs::files::uploads::list(&base, &file_id)
+        ctx.data::<Arc<crate::services::files::upload_chunks::UploadChunks>>()?
+            .list(&file_id)
             .await
-            .map_err(|error| async_graphql::Error::new(error.to_string()))
+            .map_err(async_graphql::Error::new)
     }
 
     /// `NONE` when no merge was ever started for this id, which is what a
@@ -105,7 +104,7 @@ impl FileOpsMutation {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         Ok(ctx
             .data::<Arc<crate::services::files::file_tasks::FileTasks>>()?
-            .rename(path, name)
+            .rename(&super::tasks::caller(ctx)?, path, name)
             .await?)
     }
     /// Counts what was actually removed. A path that was already gone
@@ -206,7 +205,7 @@ impl FileOpsMutation {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         Ok(ctx
             .data::<Arc<crate::services::files::file_tasks::FileTasks>>()?
-            .rename(path, name)
+            .rename(&super::tasks::caller(ctx)?, path, name)
             .await?
             .is_some())
     }
@@ -230,6 +229,20 @@ impl FileOpsMutation {
         .await
         .map_err(async_graphql::Error::new)?;
         Ok(written_file(record))
+    }
+
+    async fn copy_file_to_directory(
+        &self,
+        ctx: &Context<'_>,
+        src: String,
+        directory: String,
+        name: String,
+    ) -> async_graphql::Result<Option<String>> {
+        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
+        Ok(ctx
+            .data::<Arc<crate::services::files::file_tasks::FileTasks>>()?
+            .copy_to_directory(&super::tasks::caller(ctx)?, src, directory, name)
+            .await?)
     }
 
     async fn copy_file(
@@ -402,14 +415,8 @@ async fn require_narrowing_media(
         MediaDataType::IMAGE => Provider::Image,
         MediaDataType::DOC => Provider::Doc,
     };
-    provider_plan::require_narrowing(
-        ctx.data_unchecked::<Arc<Db>>(),
-        ctx.data_unchecked::<Arc<Host>>(),
-        provider,
-        query,
-    )
-    .await
-    .map_err(|error| async_graphql::Error::new(error.to_string()))
+    provider_plan::require_narrowing(ctx.data_unchecked::<Arc<Db>>(), provider, query)
+        .map_err(|error| async_graphql::Error::new(error.to_string()))
 }
 
 async fn transfer(
@@ -427,6 +434,7 @@ async fn transfer(
     Ok(ctx
         .data::<Arc<crate::services::files::file_tasks::FileTasks>>()?
         .execute(
+            &super::tasks::caller(ctx)?,
             kind,
             vec![plain_rs::files::tasks::FileTaskOp {
                 src,
@@ -434,7 +442,9 @@ async fn transfer(
                 overwrite,
             }],
         )
-        .await?)
+        .await?
+        .status
+        == plain_rs::files::tasks::FileTaskStatus::Done)
 }
 
 async fn media_action(

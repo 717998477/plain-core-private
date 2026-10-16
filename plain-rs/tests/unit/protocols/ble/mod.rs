@@ -149,3 +149,16 @@ fn timeout_rejects_continuation() {
             .is_err()
     );
 }
+
+#[test]
+fn peer_transport_does_not_accept_retired_app_gateway_operations() {
+    for operation in [3, 4] {
+        let mut metadata = vec![operation];
+        string(&mut metadata, "peer").unwrap();
+        let packet = message(&metadata, b"{}").unwrap();
+        assert_eq!(
+            Request::decode(&packet).unwrap_err().to_string(),
+            "Unknown BLE operation"
+        );
+    }
+}

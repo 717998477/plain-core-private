@@ -147,7 +147,7 @@ pub(crate) fn notification(value: &Value) -> Notification {
         is_clearable: flag(value, "isClearable"),
         app_id: id(value, "appId"),
         app_name: text(value, "appName"),
-        posted_at: instant(value, "time"),
+        posted_at: instant(value, "postedAt"),
         silent: flag(value, "silent"),
         title: text(value, "title"),
         body: text(value, "body"),

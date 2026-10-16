@@ -90,6 +90,47 @@ pub(crate) async fn pack(
     Ok(path.to_string_lossy().into_owned())
 }
 
+pub(crate) async fn pack_named_files(
+    files: Vec<(PathBuf, String)>,
+    target: PathBuf,
+    stop: watch::Receiver<bool>,
+) -> Result<String, String> {
+    if files.is_empty() {
+        return Err("Archive sources required".into());
+    }
+    let cancel = Cancel(Arc::new(AtomicBool::new(false)));
+    let cancelled = cancel.0.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        let mut names = HashSet::new();
+        let mut entries = Vec::with_capacity(files.len());
+        for (path, name) in files {
+            if !path.is_absolute()
+                || name.is_empty()
+                || name.contains(['\\', '\0'])
+                || Path::new(&name)
+                    .components()
+                    .any(|part| !matches!(part, Component::Normal(_)))
+                || !names.insert(name.clone())
+            {
+                return Err("Invalid archive source or entry name".into());
+            }
+            let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if !metadata.is_file() {
+                return Err("Regular archive source required".into());
+            }
+            entries.push(Entry {
+                path,
+                name,
+                directory: false,
+            });
+        }
+        pack_entries(entries, target, &stop, &cancelled)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(output.keep().0.to_string_lossy().into_owned())
+}
+
 pub(crate) async fn unpack(
     platform: &FilePlatform,
     source: String,
@@ -119,14 +160,14 @@ pub(crate) async fn unpack(
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn running(stop: &watch::Receiver<bool>, cancelled: &AtomicBool) -> Result<(), String> {
+pub(crate) fn running(stop: &watch::Receiver<bool>, cancelled: &AtomicBool) -> Result<(), String> {
     if *stop.borrow() || stop.has_changed().is_err() || cancelled.load(Ordering::Acquire) {
         return Err("Archive operation cancelled".into());
     }
     Ok(())
 }
 
-fn copy(
+pub(crate) fn copy(
     reader: &mut impl Read,
     writer: &mut impl Write,
     stop: &watch::Receiver<bool>,

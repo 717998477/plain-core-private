@@ -58,7 +58,7 @@ fn seed(db: &Arc<Db>, id: &str, from: &str, to: &str, channel: &str, content: &s
         id: id.to_string(),
         from_id: from.to_string(),
         to_id: to.to_string(),
-        channel_id: (!channel.is_empty()).then(||channel.to_string()),
+        channel_id: (!channel.is_empty()).then(|| channel.to_string()),
         content: content.to_string(),
         status: plain_rs::chat::enums::ChatStatus::Sent,
         status_data: None,
@@ -334,7 +334,7 @@ fn channel_fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServ
     let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
     prefs.set("client_id", "actor").unwrap();
     let server = crate::assembly::server::ContentServer::start(
-        &dir.path().join("plain.db"),
+        dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
         prefs,
     )

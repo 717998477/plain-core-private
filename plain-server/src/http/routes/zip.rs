@@ -240,7 +240,6 @@ async fn zip_dir(
         let items: Vec<(PathBuf, String)> = entries
             .into_iter()
             .map(|entry| (PathBuf::from(entry.real_path), entry.virtual_path))
-            .filter(|(path, _)| path.is_file())
             .collect();
         let name = format!(
             "{}.zip",

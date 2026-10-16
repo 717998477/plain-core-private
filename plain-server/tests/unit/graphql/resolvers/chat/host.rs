@@ -6,7 +6,7 @@ use std::sync::Arc;
 fn server(dir: &std::path::Path) -> ContentServer {
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.join("prefs.json")).unwrap());
     ContentServer::start(
-        &dir.join("db"),
+        &dir,
         &plain_rs::utils::base64::base64_encode(&[7; 32]),
         prefs,
     )

@@ -22,7 +22,6 @@ struct Mock {
     unpair_start: Option<Db>,
     entered: Option<Arc<tokio::sync::Notify>>,
     start_calls: AtomicUsize,
-    observations: Mutex<Vec<Advertisement>>,
 }
 impl Default for Mock {
     fn default() -> Self {
@@ -36,7 +35,6 @@ impl Default for Mock {
             unpair_start: None,
             entered: None,
             start_calls: AtomicUsize::new(0),
-            observations: Mutex::new(Vec::new()),
         }
     }
 }
@@ -72,10 +70,6 @@ impl Driver for Mock {
             peers::unpair(db, "peer")?;
         }
         Ok(self.starts)
-    }
-    async fn observe(&self, _: &str, value: &Advertisement) -> Result<()> {
-        self.observations.lock().unwrap().push(value.clone());
-        Ok(())
     }
 }
 #[test]
@@ -139,16 +133,6 @@ async fn actual_false_receipt_never_marks_running_and_capability_gates_avoid_sen
         let result = run(&db, &registry, "peer", &driver).await.unwrap().unwrap();
         assert_eq!(result.aware_running, expected_running);
         assert_eq!(driver.start_calls.load(Ordering::SeqCst), expected_calls);
-        assert_eq!(
-            driver
-                .observations
-                .lock()
-                .unwrap()
-                .last()
-                .unwrap()
-                .aware_running,
-            expected_running
-        );
         assert!(
             run(&db, &registry, "peer", &driver)
                 .await
@@ -159,7 +143,7 @@ async fn actual_false_receipt_never_marks_running_and_capability_gates_avoid_sen
     }
 }
 #[tokio::test]
-async fn unknown_unpaired_mismatched_and_deleted_peers_do_not_accept_late_observations() {
+async fn unknown_unpaired_mismatched_and_deleted_peers_do_not_accept_late_scan_results() {
     let db = db();
     let registry = Arc::new(Prewarmer::default());
     let driver = Mock::default();
@@ -176,14 +160,12 @@ async fn unknown_unpaired_mismatched_and_deleted_peers_do_not_accept_late_observ
             .unwrap()
             .is_none()
     );
-    assert!(driver.observations.lock().unwrap().is_empty());
     let db = self::db();
     let driver = Mock {
         wrong_id: true,
         ..Mock::default()
     };
     assert!(run(&db, &registry, "peer", &driver).await.is_err());
-    assert!(driver.observations.lock().unwrap().is_empty());
     registry.forget("peer");
     let driver = Mock {
         unpair_scan: Some(db.clone()),
@@ -196,7 +178,6 @@ async fn unknown_unpaired_mismatched_and_deleted_peers_do_not_accept_late_observ
             .is_none()
     );
     assert_eq!(driver.start_calls.load(Ordering::SeqCst), 0);
-    assert!(driver.observations.lock().unwrap().is_empty());
     let db = self::db();
     registry.forget("peer");
     let driver = Mock {
@@ -209,14 +190,7 @@ async fn unknown_unpaired_mismatched_and_deleted_peers_do_not_accept_late_observ
             .unwrap()
             .is_none()
     );
-    assert!(
-        driver
-            .observations
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|v| !v.aware_running)
-    );
+    assert_eq!(driver.start_calls.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
 async fn concurrent_requests_and_cancellation_release_only_the_active_claim() {
@@ -243,7 +217,6 @@ async fn concurrent_requests_and_cancellation_release_only_the_active_claim() {
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
     assert!(!registry.state.lock().unwrap().entries["peer"].active);
-    assert!(driver.observations.lock().unwrap().is_empty());
     assert_eq!(registry.slots.available_permits(), 2);
 }
 
@@ -261,7 +234,6 @@ async fn busy_prewarm_returns_without_scan_or_throttling_the_waiting_peer() {
             .is_none()
     );
     assert!(registry.state.lock().unwrap().entries.is_empty());
-    assert!(driver.observations.lock().unwrap().is_empty());
     drop(first);
     drop(second);
     assert!(

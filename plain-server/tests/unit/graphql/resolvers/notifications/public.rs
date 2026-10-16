@@ -41,7 +41,7 @@ fn fixture(permissions: Value) -> (tempfile::TempDir, PublicSchema) {
 fn fact(id: &str, app: &str, time: &str) -> Value {
     json!({
         "id":id,"onlyOnce":true,"isClearable":true,"appId":app,"appName":app,
-        "time":time,"silent":false,"title":"title","body":"body",
+        "postedAt":time,"silent":false,"title":"title","body":"body",
         "actions":["Reply","Open"],"replyActions":["Reply"],
     })
 }
@@ -161,7 +161,7 @@ fn reported_notifications_keep_permission_filtering_and_project_public_events() 
     let facts = |kind: &str| {
         serde_json::from_value(json!({
         "type":kind,
-        "notification":{"id":"notice", "appId":"app", "title":"hello", "time":"2026-10-01T00:00:00.000Z"}
+        "notification":{"id":"notice", "appId":"app", "title":"hello", "postedAt":"2026-10-01T00:00:00.000Z"}
     })).unwrap()
     };
     publish(&prefs, &events, facts("NOTIFICATION_CREATED")).unwrap();

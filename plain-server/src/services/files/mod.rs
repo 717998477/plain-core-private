@@ -77,3 +77,29 @@ pub mod media_action_io;
 
 #[cfg(feature = "core")]
 pub(crate) mod resources;
+
+#[cfg(feature = "core")]
+pub(crate) mod duration_updates;
+
+#[cfg(feature = "core")]
+pub mod browser;
+
+#[cfg(feature = "core")]
+pub(crate) mod input;
+
+#[cfg(feature = "core")]
+pub(crate) mod remote_cache;
+
+#[cfg(feature = "core")]
+pub(crate) mod info;
+
+pub(crate) mod references;
+
+#[cfg(feature = "core")]
+pub(crate) mod imports;
+
+#[cfg(feature = "core")]
+pub(crate) mod source_files;
+
+#[cfg(feature = "core")]
+pub(crate) mod note_images;

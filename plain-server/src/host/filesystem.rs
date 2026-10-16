@@ -18,47 +18,90 @@ async fn primitive(
     path: &str,
     extra: Value,
 ) -> anyhow::Result<Value> {
-    crate::services::files::resources::read(&state.host, &state.directory, operation, path, extra)
+    if operation == "convert3gp" {
+        if !crate::services::files::browser::capabilities().contains(&"VIDEO_3GP_CONVERT") {
+            return Ok(Value::Null);
+        }
+        let mime = crate::services::files::resources::read(&state.host, "mime", path, json!({}))
+            .await
+            .map_err(anyhow::Error::msg)?;
+        if !matches!(mime.as_str(), Some("video/3gpp" | "video/3gp")) {
+            return Ok(Value::Null);
+        }
+        let output = PathBuf::from(
+            extra["output"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Video output required"))?,
+        );
+        #[cfg(target_os = "android")]
+        let result = {
+            let input = state
+                .bridge
+                .read_file(path, state.stop.clone())
+                .await
+                .map_err(anyhow::Error::msg)?;
+            crate::services::files::browser::encode_android_file(
+                input,
+                output,
+                plain_rs::platform::android::media::Operation::Convert3gp,
+                state.stop.clone(),
+            )
+            .await
+            .map_err(anyhow::Error::msg)?
+        };
+        #[cfg(not(target_os = "android"))]
+        let input = {
+            let input = Temporary(
+                state
+                    .cache
+                    .root()
+                    .join(format!(".resource_input_{}", uuid::Uuid::new_v4())),
+            );
+            let body = state
+                .bridge
+                .resource(path, state.stop.clone())
+                .await
+                .map_err(|status| anyhow::anyhow!("Video source returned {status}"))?;
+            let mut chunks = body.into_data_stream();
+            use tokio::io::AsyncWriteExt;
+            let mut file = tokio::fs::File::create(&input.0).await?;
+            while let Some(chunk) = chunks.next().await {
+                file.write_all(&chunk?).await?;
+            }
+            file.flush().await?;
+            drop(file);
+            input
+        };
+        #[cfg(all(not(target_os = "android"), feature = "media"))]
+        let result = plain_media::previews::videos::encode_3gp(&input.0, &output).await?;
+        #[cfg(all(not(target_os = "android"), not(feature = "media")))]
+        let result = {
+            let _ = (input, output);
+            false
+        };
+        return Ok(Value::Bool(result));
+    }
+    if matches!(operation, "remux" | "transcode") {
+        let operation = if operation == "remux" {
+            crate::services::files::browser::Operation::Remux
+        } else {
+            crate::services::files::browser::Operation::Transcode
+        };
+        let output = state
+            .browser
+            .convert(path, operation)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        return Ok(output
+            .map(|path| Value::String(path.to_string_lossy().into_owned()))
+            .unwrap_or(Value::Null));
+    }
+    crate::services::files::resources::read(&state.host, operation, path, extra)
         .await
         .map_err(anyhow::Error::msg)
 }
 pub(crate) async fn resolve(state: &ServerState, path: &str) -> anyhow::Result<String> {
-    resolve_reference(&state.host, state.db.clone(), state.directory.clone(), path).await
-}
-pub(crate) async fn resolve_reference(
-    host: &std::sync::Arc<crate::host::bridge::Host>,
-    db: std::sync::Arc<plain_rs::db::Db>,
-    directory: PathBuf,
-    path: &str,
-) -> anyhow::Result<String> {
-    if path
-        .get(..4)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("fid:"))
-    {
-        return Ok(plain_rs::files::app_files::FileStore::new(db, directory)
-            .resolve(&path[4..])
-            .map_err(anyhow::Error::msg)?
-            .to_string_lossy()
-            .into_owned());
-    }
-    if path
-        .get(..6)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("app://"))
-    {
-        let dir = crate::services::files::resources::app_directory(host, &directory)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        let suffix = Path::new(&path[6..]);
-        anyhow::ensure!(
-            !suffix.is_absolute()
-                && !suffix
-                    .components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir)),
-            "Invalid app file path"
-        );
-        return Ok(dir.join(suffix).to_string_lossy().into_owned());
-    }
-    Ok(path.to_owned())
+    crate::services::files::references::resolve(state.db.clone(), state.directory.clone(), path)
 }
 pub(crate) async fn file(State(state): State<ServerState>, request: Request) -> Response {
     let request = request.into_parts().0;
@@ -329,7 +372,7 @@ pub(crate) async fn serve(
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
         let pdf = plain_media::previews::docs::get_or_create_pdf_preview(
-            &state.directory,
+            state.cache.root(),
             path,
             modified,
             meta.len() as i64,

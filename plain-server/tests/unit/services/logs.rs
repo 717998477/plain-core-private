@@ -135,3 +135,122 @@ async fn native_main_uses_the_injected_logger_path_without_host_requests() {
     assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }
+
+#[tokio::test]
+async fn storage_management_counts_log_family_and_preserves_the_active_append_handle() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("plain.log");
+    let backup = directory.path().join("plain.log.bak");
+    let rotated = directory.path().join("plain.log.1");
+    let unrelated = directory.path().join("unrelated.txt");
+    std::fs::write(&path, b"live").unwrap();
+    std::fs::write(&backup, b"backup").unwrap();
+    std::fs::write(&rotated, b"old").unwrap();
+    std::fs::write(&unrelated, b"preserved").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&unrelated, directory.path().join("plain.log.link")).unwrap();
+    let logs = Logs::new(Arc::new(Host::default()));
+    logs.set_path(path.clone()).unwrap();
+    assert_eq!(logs.size().await.unwrap(), 13);
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    logs.clear_files().await.unwrap();
+    assert!(path.is_file());
+    assert!(!backup.exists());
+    assert!(!rotated.exists());
+    assert_eq!(std::fs::read(&unrelated).unwrap(), b"preserved");
+    writer.write_all(b"after clear").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"after clear");
+    assert_eq!(logs.size().await.unwrap(), 11);
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn main_log_export_uses_shared_zip_and_keeps_current_only_clear_contract() {
+    let directory = tempfile::tempdir().unwrap();
+    let core =
+        crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
+    let path = directory.path().join("plain.log");
+    let backup = directory.path().join("plain.log.bak");
+    let unrelated = directory.path().join("unrelated.txt");
+    std::fs::write(&path, b"current bytes").unwrap();
+    std::fs::write(&backup, b"rotated bytes").unwrap();
+    std::fs::write(&unrelated, b"not a log").unwrap();
+    core.set_log_file(&path).unwrap();
+    let state = core.runtime_state();
+    let (_generation, mut requests) = state.host.connect();
+    let existing = state.cache.root().join("logs.zip");
+    std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
+    std::fs::write(&existing, b"preserved archive").unwrap();
+    let native = core.native_graphql().unwrap();
+    let response = native
+        .execute(async_graphql::Request::new("mutation { exportAppLogs }"))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let exported = PathBuf::from(data["exportAppLogs"].as_str().unwrap());
+    assert_ne!(exported, existing);
+    assert_eq!(exported.file_name().unwrap(), "logs (1).zip");
+    assert_eq!(std::fs::read(existing).unwrap(), b"preserved archive");
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(exported).unwrap()).unwrap();
+    let mut names = zip.file_names().map(str::to_owned).collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, vec!["logs/plain.log", "logs/plain.log.bak"]);
+    for (name, expected) in [
+        ("logs/plain.log", "current bytes"),
+        ("logs/plain.log.bak", "rotated bytes"),
+    ] {
+        let mut text = String::new();
+        zip.by_name(name)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, expected);
+    }
+    let response = native
+        .execute(async_graphql::Request::new("mutation { clearAppLogs }"))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert!(std::fs::read(&path).unwrap().is_empty());
+    assert_eq!(std::fs::read(&backup).unwrap(), b"rotated bytes");
+    let response = native
+        .execute(async_graphql::Request::new("{ appLogFilesSize }"))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["appLogFilesSize"], 13);
+    let response = native
+        .execute(async_graphql::Request::new("mutation { clearAppLogFiles }"))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert!(!backup.exists());
+    assert_eq!(std::fs::read(unrelated).unwrap(), b"not a log");
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn missing_log_family_reports_zero_and_exports_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let logs = Logs::new(Arc::new(Host::default()));
+    logs.set_path(directory.path().join("missing/latest.log"))
+        .unwrap();
+    assert_eq!(logs.size().await.unwrap(), 0);
+    logs.clear_files().await.unwrap();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let (_stop, stopped) = tokio::sync::watch::channel(false);
+        assert!(
+            logs.export(
+                directory.path(),
+                &plain_rs::cache_paths::CachePaths::new(&directory.path().join("cache")),
+                stopped
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        assert!(!directory.path().join("cache").exists());
+    }
+}

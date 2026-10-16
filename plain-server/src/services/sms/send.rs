@@ -65,11 +65,17 @@ fn claim(
 /// interleaved with itself through a second entry point.
 static SEND_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-pub(crate) async fn execute(prefs: &Prefs, host: &Host, request: Request) -> anyhow::Result<Value> {
+pub(crate) async fn execute(
+    prefs: &Prefs,
+    host: &Host,
+    sends: &super::send_runtime::Runtime,
+    request: Request,
+) -> anyhow::Result<Value> {
     anyhow::ensure!(!request.number.trim().is_empty(), "phone number is empty");
     let configured: Vec<String> =
         prefs.get_or(plain_rs::prefs::system::keys::API_PERMISSIONS, Vec::new());
     anyhow::ensure!(permission_allowed(&configured), "no_permission");
+    crate::services::capabilities::require(host, "SMS").await?;
     let request_id = request
         .client_request_id
         .as_deref()
@@ -105,18 +111,32 @@ pub(crate) async fn execute(prefs: &Prefs, host: &Host, request: Request) -> any
         // This makes an ambiguous timeout/retry at-most-once across restarts.
         prefs.set(RECEIPTS_KEY, &receipts)?;
     }
-    host.call(
-        "systemSendSms",
-        json!({
-            "number": request.number,
-            "body": request.body,
-            "subscriptionId": request.subscription_id,
-            "clientId": request.client_id,
-            "clientRequestId": request.client_request_id,
-        }),
-    )
-    .await
-    .map_err(anyhow::Error::msg)?;
+    let parts: Vec<String> = serde_json::from_value(
+        host.call(
+            "systemDivideSmsText",
+            json!({"body":request.body,"subscriptionId":request.subscription_id}),
+        )
+        .await
+        .map_err(anyhow::Error::msg)?,
+    )?;
+    anyhow::ensure!(
+        !parts.is_empty() && parts.len() <= 1024,
+        "Invalid SMS part count"
+    );
+    let request_id = uuid::Uuid::new_v4().to_string();
+    sends.register(request_id.clone(), request.client_request_id, parts.len())?;
+    let sent = host.call("systemSendSmsParts", json!({"requestId":request_id,"number":request.number,"parts":parts,"subscriptionId":request.subscription_id})).await;
+    match sent {
+        Ok(Value::Bool(true)) => {}
+        Ok(_) => {
+            sends.cancel(&request_id)?;
+            anyhow::bail!("SMS dispatch was rejected");
+        }
+        Err(error) => {
+            sends.cancel(&request_id)?;
+            anyhow::bail!(error);
+        }
+    }
     Ok(json!({"sent":true}))
 }
 

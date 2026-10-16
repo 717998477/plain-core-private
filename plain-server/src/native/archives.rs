@@ -47,15 +47,28 @@ impl NativeArchives {
             {
                 return Err("invalid archive entry".into());
             }
+            items.push((entry.path, entry.name));
+        }
+        let mut paths = items
+            .iter()
+            .map(|(path, _)| {
+                path.to_str()
+                    .map(str::to_owned)
+                    .ok_or("invalid file path encoding")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut seen = std::collections::HashSet::new();
+        paths.retain(|path| seen.insert(path.clone()));
+        for paths in paths.chunks(128) {
             self.platform
-                .authorize(
-                    entry.path.to_str().ok_or("invalid file path encoding")?,
-                    false,
-                )
+                .authorize_paths(paths, false)
                 .await
                 .map_err(|error| error.to_string())?;
-            items.push((entry.path, entry.name));
         }
         self.archives.build(items, permit, self.stop.clone()).await
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/native/archives.rs"]
+mod tests;

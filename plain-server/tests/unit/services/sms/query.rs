@@ -216,3 +216,48 @@ async fn the_ids_request_refuses_a_whole_table_selection_before_asking_the_platf
     .unwrap();
     assert_eq!(resolved, json!({"ids": ["1", "2"]}));
 }
+
+#[test]
+fn mms_text_search_joins_parts_and_requires_every_filter() {
+    let parts = serde_json::json!({"one":["First line", "Second Line"],"two":["First only"]});
+    assert_eq!(
+        text_ids(parts.clone(), &["first".into(), "LINE".into()]).unwrap(),
+        ["one"]
+    );
+    assert!(
+        text_ids(parts, &["first".into(), "missing".into()])
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn conversation_provider_reports_raw_candidates_and_rust_filters_own_numbers() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    let host = std::sync::Arc::new(crate::host::bridge::Host::default());
+    let (generation, mut requests) = host.connect();
+    let replies = host.clone();
+    let responder = tokio::spawn(async move {
+        let request = requests.recv().await.unwrap();
+        assert_eq!(request["method"], "systemSmsConversationFacts");
+        replies.reply(generation, serde_json::json!({"id":request["id"],"result":{"items":[{"id":"thread","date":"2026-10-16T00:00:00Z","snippet":"Message","messageCount":1,"read":true,"addresses":["+1 602 555 0100","+1 480 555 0101"]}],"ownNumbers":["6025550100"],"snippets":{}}})).unwrap();
+    });
+    let result = execute(
+        &db,
+        &host,
+        Request::Conversations {
+            query: String::new(),
+            offset: 0,
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["items"][0]["address"], "+1 480 555 0101");
+    assert_eq!(
+        result["items"][0]["addresses"],
+        serde_json::json!(["+1 480 555 0101"])
+    );
+    responder.await.unwrap();
+    host.disconnect(generation);
+}

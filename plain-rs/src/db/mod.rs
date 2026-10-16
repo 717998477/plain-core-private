@@ -140,6 +140,44 @@ impl Db {
             .map_err(|_| std::io::Error::other("app file store lock poisoned"))
     }
 
+    pub fn backup_to(&self, path: &Path, cancelled: impl Fn() -> bool) -> Result<(), String> {
+        if cancelled() {
+            return Err("Backup cancelled".into());
+        }
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|error| error.to_string())?;
+        let result = self.with_conn(|source| {
+            let mut destination = Connection::open(path).map_err(|error| error.to_string())?;
+            {
+                let backup = rusqlite::backup::Backup::new(source, &mut destination)
+                    .map_err(|error| error.to_string())?;
+                loop {
+                    if cancelled() {
+                        return Err("Backup cancelled".into());
+                    }
+                    match backup.step(128).map_err(|error| error.to_string())? {
+                        rusqlite::backup::StepResult::Done => break,
+                        rusqlite::backup::StepResult::More => {}
+                        _ => return Err("Database is busy during backup".into()),
+                    }
+                }
+            }
+            destination
+                .close()
+                .map_err(|(_, error)| error.to_string())?;
+            std::fs::File::open(path)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| error.to_string())
+        });
+        if result.is_err() {
+            let _ = std::fs::remove_file(path);
+        }
+        result
+    }
+
     pub fn with_conn<F, T>(&self, f: F) -> T
     where
         F: FnOnce(&Connection) -> T,
@@ -186,3 +224,7 @@ pub use repositories::media_file;
 #[cfg(all(test, feature = "chat", feature = "library"))]
 #[path = "../../tests/unit/db/design.rs"]
 mod design_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/db/backup.rs"]
+mod backup_tests;

@@ -78,6 +78,25 @@ pub struct Location {
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ImageFileInfo {
+    pub make: String,
+    pub model: String,
+    pub rotation: i32,
+    pub color_space: String,
+    pub aperture_value: f64,
+    pub exposure_time: String,
+    pub focal_length: String,
+    pub iso_speed: i32,
+    pub taken_at: Option<crate::graphql::types::Instant>,
+    pub flash: i32,
+    pub f_number: f64,
+    pub exposure_program: i32,
+    pub metering_mode: i32,
+    pub white_balance: i32,
+    pub creator: String,
+    pub resolution_x: i32,
+    pub resolution_y: i32,
+    pub description: String,
+
     pub width: i32,
     pub height: i32,
     pub location: Option<Location>,
@@ -96,6 +115,18 @@ pub struct VideoFileInfo {
     pub height: i32,
     #[graphql(name = "durationMs")]
     pub duration_ms: Long,
+    pub rotation: i32,
+    pub display_width: i32,
+    pub display_height: i32,
+    pub bitrate: Long,
+    pub frame_rate: f64,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub genre: String,
+    pub taken_at: Option<Instant>,
+    pub writer: String,
+    pub composer: String,
     pub location: Option<Location>,
 }
 

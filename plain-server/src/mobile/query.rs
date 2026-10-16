@@ -50,20 +50,17 @@ pub(crate) fn plan(
     Ok(plan)
 }
 
-pub(crate) async fn require_narrowing(
+pub(crate) fn require_narrowing(
     db: &plain_rs::db::Db,
-    host: &crate::host::bridge::Host,
     provider: Provider,
     query: &str,
 ) -> anyhow::Result<()> {
     crate::host::query::require_narrowing_with(
         |provider, fields, dates, _, _| plan(provider, fields, dates),
         db,
-        host,
         provider,
         query,
     )
-    .await
 }
 
 #[cfg(test)]

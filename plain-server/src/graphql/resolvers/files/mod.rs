@@ -1,9 +1,8 @@
 #[cfg(feature = "core")]
 pub mod app_file;
 
-
 #[cfg(feature = "core")]
-pub mod app_files_host;
+pub mod app_files;
 
 #[cfg(feature = "core")]
 pub mod tasks;
@@ -16,7 +15,6 @@ pub mod operations;
 
 #[cfg(feature = "core")]
 pub mod types;
-
 
 #[cfg(feature = "core")]
 pub(crate) mod trash;

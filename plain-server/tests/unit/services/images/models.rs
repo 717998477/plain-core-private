@@ -113,3 +113,48 @@ async fn failed_replacement_preserves_active_package_index_and_search() {
     assert!(!directory.path().join("ai_models").exists());
     task.abort();
 }
+
+#[tokio::test]
+async fn catalog_changes_share_one_cancellable_timer_and_do_not_retain_the_runtime() {
+    let directory = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    let (events, _) = tokio::sync::broadcast::channel(16);
+    let index = Arc::new(ImageIndex::new(db, host.clone(), events.clone()));
+    let runtime = Runtime::new(directory.path().into(), host.clone(), prefs, index, events);
+    runtime.catalog_changed();
+    assert!(runtime.catalog_task.lock().unwrap().is_none());
+    runtime.observing.store(true, Ordering::Release);
+    runtime.catalog_changed();
+    let old = runtime
+        .catalog_task
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .abort_handle();
+    runtime.catalog_changed();
+    let current = runtime
+        .catalog_task
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .abort_handle();
+    assert_ne!(old.id(), current.id());
+    assert_eq!(Arc::strong_count(&runtime), 1);
+    runtime.cancel_catalog_changes();
+    assert!(runtime.catalog_task.lock().unwrap().is_none());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !old.is_finished() || !current.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!runtime.index.status().is_running);
+    assert!(requests.try_recv().is_err());
+    host.disconnect(generation);
+}

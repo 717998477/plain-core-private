@@ -1,4 +1,4 @@
-use async_graphql::{ID, InputObject, Json, SimpleObject};
+use async_graphql::{ComplexObject, Context, ID, InputObject, Json, SimpleObject};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -253,8 +253,21 @@ pub struct UserSettingsInput {
 }
 
 #[derive(SimpleObject)]
+#[graphql(complex)]
 pub struct SettingsUpdate {
     pub result: crate::graphql::types::ActionResult,
-    pub system_settings: SystemSettings,
-    pub user_settings: UserSettings,
+}
+#[ComplexObject]
+impl SettingsUpdate {
+    async fn system_settings(&self, ctx: &Context<'_>) -> async_graphql::Result<SystemSettings> {
+        plain_rs::prefs::system::snapshot(ctx.data::<std::sync::Arc<plain_rs::prefs::Prefs>>()?)?
+            .try_into()
+            .map_err(Into::into)
+    }
+    async fn user_settings(&self, ctx: &Context<'_>) -> async_graphql::Result<UserSettings> {
+        Ok(
+            plain_rs::prefs::user::snapshot(ctx.data::<std::sync::Arc<plain_rs::prefs::Prefs>>()?)?
+                .into(),
+        )
+    }
 }
