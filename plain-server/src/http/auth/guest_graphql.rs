@@ -106,6 +106,10 @@ impl Query {
         })
     }
 }
+fn schema_builder() -> async_graphql::SchemaBuilder<Query, EmptyMutation, EmptySubscription> {
+    Schema::build(Query, EmptyMutation, EmptySubscription)
+}
+
 async fn execute(state: &ServerState, id: &str, body: &[u8]) -> (u16, Vec<u8>) {
     if id.is_empty() {
         return (401, vec![]);
@@ -140,7 +144,7 @@ async fn execute(state: &ServerState, id: &str, body: &[u8]) -> (u16, Vec<u8>) {
         "WEB_REQUEST_RECEIVED",
         json!({"clientId":id,"time":now}).to_string(),
     ));
-    let schema = Schema::build(Query, EmptyMutation, EmptySubscription)
+    let schema = schema_builder()
         .data(Guest {
             state: state.clone(),
             id: id.to_owned(),

@@ -1,0 +1,162 @@
+type Audio implements MediaItem {
+	albumId: ID!
+	id: ID!
+	title: String!
+	artist: String!
+	path: String!
+	durationMs: Long!
+	size: Long!
+	bucketId: ID!
+	createdAt: Instant!
+	updatedAt: Instant!
+	isFavorite: Boolean!
+	albumFileId: String!
+	tags: [Tag!]!
+}
+
+type AudioAlbumCover {
+	albumId: ID!
+	trackCount: Int!
+	candidatePaths: [String!]!
+}
+
+type AudioArtist {
+	name: String!
+	itemCount: Int!
+	playCount: Long!
+	samplePath: String!
+}
+
+type AudioArtistPlayCount {
+	artist: String!
+	count: Long!
+}
+
+enum AudioCommandAction {
+	PLAY
+	PAUSE
+	SEEK
+	NEXT
+	PREVIOUS
+	COMPLETED
+	CLEAR
+	RESTART
+	SET_SPEED
+}
+
+type AudioItem {
+	mediaId: ID
+	title: String!
+	artist: String!
+	path: String!
+	durationMs: Long!
+}
+
+type AudioOverview {
+	artists: [AudioArtist!]!
+	recentItems: [Audio!]!
+}
+
+type AudioPlayHistory {
+	mediaId: ID!
+	path: String!
+	title: String!
+	artist: String!
+	durationMs: Long!
+	playCount: Int!
+	playedAt: Instant!
+}
+
+type AudioPlayback {
+	revision: Long!
+	mediaId: ID
+	path: String
+	mode: MediaPlayMode!
+	isPlaying: Boolean!
+	positionMs: Long!
+}
+
+type AudioPlaybackState {
+	path: String!
+	positionMs: Long!
+	revision: Long!
+}
+
+type AudioPlaylist {
+	id: ID!
+	name: String!
+	itemCount: Int!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+type AudioPlaylistCovers {
+	id: ID!
+	albums: [AudioAlbumCover!]!
+}
+
+type AudioSelection {
+	track: AudioItem
+	path: String!
+	positionMs: Long!
+	revision: Long!
+}
+
+enum AudioSelectionAction {
+	NEXT
+	PREVIOUS
+	COMPLETED
+}
+
+enum MediaPlayMode {
+	REPEAT
+	REPEAT_ONE
+	SHUFFLE
+}
+
+extend type Mutation {
+	addAudioPlaylistItems(id: ID!, query: String!): Boolean!
+	addAudioPlaylistMedia(id: ID!, mediaIds: [ID!]!): Int!
+	addAudioToQueue(query: String!): Boolean!
+	advanceAudioSelection(action: AudioSelectionAction!, expectedPath: String!, expectedRevision: Long!, shuffle: Boolean! = false): AudioSelection
+	audioCommand(action: AudioCommandAction!, positionMs: Long!, speed: Float!): AudioPlaybackState!
+	audioPlayPath(path: String!): AudioPlaybackState!
+	audioPlayTrack(mediaId: ID!): AudioPlaybackState!
+	cacheAudioCover(path: String!): String
+	clearAudioQueue: Boolean!
+	createAudioPlaylist(name: String!): AudioPlaylist!
+	cycleAudioPlayMode: MediaPlayMode!
+	deleteAudioPlaylist(id: ID!): Boolean!
+	enqueueAudios(mediaIds: [ID!]!): Boolean!
+	invalidateAudioEngine: AudioPlaybackState!
+	playAudio(mediaId: ID!): AudioItem!
+	playAudioByPath(path: String!): AudioItem!
+	removeAudioFromQueue(mediaId: ID!): Boolean!
+	removeAudioPlaylistItem(id: ID!, query: String!): ActionResult!
+	reorderAudioQueue(mediaIds: [ID!]!): Boolean!
+	reportAudioPlayback(path: String!, revision: Long!, positionMs: Long!, started: Boolean!): Boolean!
+	selectAudio(mediaId: ID): Boolean!
+	selectNextAudio(isNext: Boolean!, shuffle: Boolean!): AudioItem
+	updateAudioPlayMode(mode: MediaPlayMode!): Boolean!
+	updateAudioPlaylist(id: ID!, name: String!): AudioPlaylist!
+}
+
+extend type Query {
+	audioArtistPlayCounts: [AudioArtistPlayCount!]!
+	audioCount(query: String!): Int!
+	audioLyrics(mediaId: ID!): String
+	audioMetadata(path: String!): AudioItem!
+	audioOverview: AudioOverview!
+	audioPlayHistory(query: String!, offset: Int!, limit: Int!): [AudioPlayHistory!]!
+	audioPlayHistoryCount: Int!
+	audioPlayback: AudioPlayback!
+	audioPlaylistCovers(ids: [ID!]!): [AudioPlaylistCovers!]!
+	audioPlaylistItemCount(id: ID!, query: String!): Int!
+	audioPlaylistItems(id: ID!, query: String!, offset: Int!, limit: Int!): [AudioItem!]!
+	audioPlaylists: [AudioPlaylist!]!
+	audioQueueItemCount: Int!
+	audioQueueItems(query: String!, offset: Int!, limit: Int!): [AudioItem!]!
+	audioQueuedMediaIds: [ID!]!
+	audios(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Audio!]!
+	embeddedAudioLyrics(path: String!): String
+}

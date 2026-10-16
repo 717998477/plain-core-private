@@ -1,0 +1,104 @@
+input DlnaMediaInput {
+	path: String!
+	title: String!
+	albumArt: String! = ""
+	artist: String! = ""
+	durationMs: Long! = 0
+	audio: Boolean! = false
+}
+
+enum DlnaPlaybackState {
+	NO_MEDIA_PRESENT
+	STOPPED
+	PLAYING
+	PAUSED_PLAYBACK
+	TRANSITIONING
+}
+
+enum DlnaReceiverAction {
+	START
+	STOP
+	RETRY
+	REMOVE_RULE
+	ACCEPT
+	REJECT
+	POSITION
+	SEEK_CONSUMED
+	PLAYBACK
+	STOPPED
+	SET_ENABLED
+}
+
+input DlnaReceiverInput {
+	action: DlnaReceiverAction!
+	port: Int
+	ip: String
+	allowed: Boolean
+	remember: Boolean
+	positionMs: Long
+	durationMs: Long
+	state: DlnaPlaybackState
+	enabled: Boolean
+}
+
+type DlnaRenderer {
+	udn: String!
+	name: String!
+	manufacturer: String
+	modelName: String
+	location: String!
+}
+
+type DlnaSenderDevice {
+	id: ID!
+	hostAddress: String!
+	name: String!
+	location: String!
+}
+
+type DlnaSenderMedia {
+	path: String!
+	title: String!
+	albumArt: String!
+	artist: String!
+	durationMs: Long!
+	audio: Boolean!
+}
+
+type DlnaSenderState {
+	version: Long!
+	devices: [DlnaSenderDevice!]!
+	currentDevice: DlnaSenderDevice
+	items: [DlnaSenderMedia!]!
+	currentUri: String!
+	playing: Boolean!
+	progressMs: Long!
+	durationMs: Long!
+	supportsCallback: Boolean!
+}
+
+extend type Mutation {
+	addDlnaItem(item: DlnaMediaInput!): DlnaSenderState!
+	castDlnaMedia(item: DlnaMediaInput!): DlnaSenderState!
+	clearDlnaItems: DlnaSenderState!
+	controlDlnaReceiver(input: DlnaReceiverInput!): JSON!
+	dlnaCast(rendererUdn: String!, url: String!, title: String!, mime: String!, type: MediaDataType!): Boolean!
+	exitDlna: DlnaSenderState!
+	pauseDlna: DlnaSenderState!
+	playDlna: DlnaSenderState!
+	removeDlnaItem(path: String!): DlnaSenderState!
+	removeDlnaItemAt(index: Int!): DlnaSenderState!
+	reorderDlnaItems(from: Int!, to: Int!): DlnaSenderState!
+	seekDlna(positionMs: Long!): DlnaSenderState!
+	selectDlnaDevice(id: ID!): DlnaSenderState!
+	startDlnaScan: DlnaSenderState!
+	stopDlna: DlnaSenderState!
+	stopDlnaScan: DlnaSenderState!
+}
+
+extend type Query {
+	dlnaReceiver: JSON!
+	dlnaReceiverRules: JSON!
+	dlnaRenderers: [DlnaRenderer!]!
+	dlnaSenderState: DlnaSenderState!
+}

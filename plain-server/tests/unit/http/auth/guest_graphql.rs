@@ -118,3 +118,20 @@ async fn shared_file_rows_read_metadata_directly_without_host_dispatch() {
     assert!(requests.try_recv().is_err());
     server.stop_core().await;
 }
+
+#[test]
+fn guest_schema_matches_committed_sdl() {
+    let actual = super::schema_builder().finish().sdl();
+    if std::env::var_os("UPDATE_GRAPHQL_SCHEMAS").is_some() {
+        std::fs::write(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../schema/guest-api.graphqls"),
+            &actual,
+        )
+        .unwrap();
+    } else {
+        assert_eq!(
+            actual,
+            include_str!("../../../../../schema/guest-api.graphqls")
+        );
+    }
+}

@@ -1,0 +1,34 @@
+type Notification {
+	id: ID!
+	"""
+	Android FLAG_ONLY_ALERT_ONCE: re-posted updates must not sound/vibrate again.
+	"""
+	onlyOnce: Boolean!
+	isClearable: Boolean!
+	appId: ID!
+	appName: String!
+	postedAt: Instant!
+	silent: Boolean!
+	title: String!
+	body: String!
+	actions: [String!]!
+	"""
+	Subset of `actions` that support inline reply; `replyNotification`'s
+	`actionIndex` indexes this list, not `actions`.
+	"""
+	replyActions: [String!]!
+}
+
+extend type Mutation {
+	deleteNotifications(ids: [ID!]!): ActionResult!
+	"""
+	`actionIndex` indexes [`Notification::reply_actions`], the
+	reply-capable subset — not the plain action list.
+	"""
+	replyNotification(id: ID!, actionIndex: Int!, text: String!): Boolean!
+}
+
+extend type Query {
+	notificationCount(query: String!): Int!
+	notifications(query: String!, offset: Int!, limit: Int!): [Notification!]!
+}

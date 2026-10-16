@@ -1,0 +1,55 @@
+type ChatDownloadFile {
+	fileId: String!
+	uri: String!
+	size: Long!
+	durationMs: Long!
+	width: Int!
+	height: Int!
+	summary: String!
+	fileName: String!
+}
+
+type ChatDownloadQueue {
+	runtimeId: String!
+	revision: Long!
+	tasks: [ChatDownloadTask!]!
+}
+
+type ChatDownloadTask {
+	id: ID!
+	messageId: ID!
+	file: ChatDownloadFile!
+	peer: PeerRecord!
+	status: DownloadStatus!
+	error: String!
+	downloaded: Long!
+	total: Long!
+	speed: Long!
+	generation: String!
+}
+
+enum DownloadStatus {
+	PENDING
+	DOWNLOADING
+	PAUSED
+	COMPLETED
+	FAILED
+	CANCELED
+}
+
+extend type Mutation {
+	cacheRemoteFile(url: String!, name: String!): String!
+	downloadPeerFile(messageId: ID!, peerId: ID!): Boolean!
+	enqueueChatDownload(messageId: ID!, fileId: String!, peerId: ID!): Boolean!
+	pauseChatDownload(id: ID!): Boolean!
+	pauseDownload(messageId: ID!): Boolean!
+	removeChatDownload(id: ID!): Boolean!
+	resumeChatDownload(id: ID!): Boolean!
+	resumeDownload(messageId: ID!, peerId: ID!): Boolean!
+	retryChatDownload(id: ID!): Boolean!
+	retryDownload(messageId: ID!, peerId: ID!): Boolean!
+}
+
+extend type Query {
+	chatDownloadQueue: ChatDownloadQueue!
+}

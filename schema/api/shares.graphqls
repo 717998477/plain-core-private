@@ -1,0 +1,215 @@
+type Root {
+	virtualPath: String!
+	realPath: String!
+	isDir: Boolean!
+}
+
+type ShareAuthRecord {
+	share: ShareRecord!
+	token: String!
+}
+
+type ShareListing {
+	share: ShareRecord!
+	entries: [Root!]!
+}
+
+type ShareRecord {
+	id: ID!
+	name: String!
+	password: String!
+	urlToken: String!
+	readOnly: Boolean!
+	expiresAt: Instant
+	createdAt: Instant!
+	updatedAt: Instant!
+	roots: [Root!]!
+}
+
+enum SharedBatchStatus {
+	PENDING
+	DOWNLOADING
+	PAUSED
+	COMPLETED
+	PARTIAL
+	FAILED
+	CANCELED
+}
+
+type SharedBrowseResult {
+	info: SharedLinkInfo!
+	link: SharedLink!
+	card: SharedMessageCard!
+}
+
+type SharedDownloadFailure {
+	path: String!
+	error: String!
+}
+
+input SharedDownloadInput {
+	messageId: ID!
+	kind: SharedDownloadKind!
+	link: SharedLinkInput!
+	urlToken: String!
+	entries: [SharedEntryInput!]!
+	targetDir: String!
+	zipName: String!
+}
+
+enum SharedDownloadKind {
+	FILE
+	SYNC
+	MULTI
+	ZIP
+}
+
+type SharedDownloadPlan {
+	targets: [SharedDownloadTarget!]!
+	totalFiles: Int!
+	totalSize: Long!
+}
+
+type SharedDownloadQueue {
+	runtimeId: String!
+	revision: Long!
+	tasks: [SharedDownloadTask!]!
+}
+
+type SharedDownloadTarget {
+	entry: SharedEntry!
+	writeDir: String!
+	storeToDownloads: Boolean!
+	entryName: String!
+}
+
+type SharedDownloadTask {
+	id: ID!
+	messageId: ID!
+	type: SharedDownloadKind!
+	title: String!
+	targetDir: String!
+	link: SharedLink!
+	urlToken: String!
+	entries: [SharedEntry!]!
+	zipName: String!
+	generation: String!
+	status: SharedBatchStatus!
+	error: String!
+	downloadedSize: Long!
+	totalSize: Long!
+	downloadSpeed: Long!
+	totalFiles: Int!
+	doneFiles: Int!
+	failedFiles: Int!
+	currentFile: String!
+	packing: Boolean!
+	failures: [SharedDownloadFailure!]!
+}
+
+type SharedEntry {
+	name: String!
+	virtualPath: String!
+	isDir: Boolean!
+	size: Long!
+	mimeType: String!
+	hasThumb: Boolean!
+}
+
+input SharedEntryInput {
+	name: String!
+	virtualPath: String!
+	isDir: Boolean!
+	size: Long!
+	mimeType: String!
+	hasThumb: Boolean!
+}
+
+type SharedLink {
+	host: String!
+	port: Int!
+	sharedId: ID!
+	token: String!
+	pageUrl: String!
+}
+
+type SharedLinkInfo {
+	name: String!
+	readOnly: Boolean!
+	requiresPassword: Boolean!
+	expiresAt: Instant
+	urlToken: String!
+	entries: [SharedEntry!]!
+}
+
+input SharedLinkInput {
+	host: String!
+	port: Int!
+	sharedId: ID!
+	token: String!
+	pageUrl: String
+}
+
+type SharedMessageCard {
+	shareId: ID!
+	urlToken: String!
+	peerInfo: SharedPeerAddress!
+	name: String!
+	itemCount: Long!
+	totalSize: Long!
+	expiresAt: Instant
+}
+
+input SharedMessageCardInput {
+	shareId: ID!
+	urlToken: String!
+	peerInfo: SharedPeerAddressInput!
+	name: String!
+	itemCount: Long!
+	totalSize: Long!
+	expiresAt: Instant
+}
+
+type SharedPeerAddress {
+	id: ID!
+	ip: String!
+	port: Int!
+}
+
+input SharedPeerAddressInput {
+	id: ID!
+	ip: String!
+	port: Int!
+}
+
+extend type Mutation {
+	browseSharedLink(messageId: ID!, expected: SharedMessageCardInput!, virtualPath: String): SharedBrowseResult
+	cacheSharedFile(link: SharedLinkInput!, urlToken: String!, entry: SharedEntryInput!, thumbnail: Boolean!): String!
+	cancelSharedDownload(id: ID!): Boolean!
+	createShare(name: String!, realPaths: [String!]!, readOnly: Boolean!, expiresAt: Instant): ShareRecord!
+	deleteShare(id: ID!): Boolean!
+	enqueueSharedDownload(input: SharedDownloadInput!): ID!
+	pauseSharedDownload(id: ID!): Boolean!
+	planSharedDownload(kind: SharedDownloadKind!, link: SharedLinkInput!, entries: [SharedEntryInput!]!, targetDir: String!, downloadsBase: String!): SharedDownloadPlan!
+	removeSharedDownload(id: ID!): Boolean!
+	resumeSharedDownload(id: ID!): Boolean!
+	retrySharedDownload(id: ID!): Boolean!
+	updateShare(id: ID!, name: String!, expiresAt: Instant, realPaths: [String!]): ShareRecord!
+}
+
+extend type Query {
+	browseShare(id: ID!, virtualPath: String!): ShareListing!
+	initialSharedLink(messageId: ID!, expected: SharedMessageCardInput!): SharedLink!
+	resolveShareFile(id: ID!, fileId: String!): String
+	resolveSharePath(id: ID!, virtualPath: String!): String
+	shareAuth(id: ID!): ShareAuthRecord
+	shareLink(id: ID!, host: String): SharedLink!
+	shareMessageContent(id: ID!): String!
+	shareRecord(id: ID!): ShareRecord
+	shareRecords: [ShareRecord!]!
+	shareToken(id: ID!): String!
+	shareZipEntries(id: ID!, fileId: String!): [Root!]!
+	sharedDownloadQueue: SharedDownloadQueue!
+	sharedFileUrl(link: SharedLinkInput!, urlToken: String!, virtualPath: String!, zip: Boolean! = false): String!
+	sharedLinkInfo(link: SharedLinkInput!, virtualPath: String): SharedLinkInfo!
+}

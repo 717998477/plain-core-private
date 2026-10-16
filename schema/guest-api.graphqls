@@ -1,0 +1,35 @@
+scalar Long
+
+type Query {
+	sharedInfo(virtualPath: String): SharedInfo!
+}
+
+type SharedFile {
+	name: String!
+	virtualPath: String!
+	isDir: Boolean!
+	size: Long!
+	mimeType: String!
+	hasThumb: Boolean!
+}
+
+type SharedInfo {
+	name: String!
+	readOnly: Boolean!
+	requiresPassword: Boolean!
+	expiresAt: Long
+	urlToken: String!
+	entries: [SharedFile!]!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Query
+}

@@ -1,0 +1,162 @@
+enum ChannelMemberStatus {
+	JOINED
+	PENDING
+}
+
+type ChatChannel {
+	actions: ChatChannelActions!
+	id: ID!
+	ownerId: ID!
+	name: String!
+	members: [ChatChannelMember!]!
+	"""
+	Monotonically increasing mutation counter; receivers ignore channel
+	updates whose version is not greater than their local copy.
+	"""
+	version: Long!
+	status: ChatChannelStatus!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+type ChatChannelActions {
+	isOwner: Boolean!
+	canRename: Boolean!
+	canManageMembers: Boolean!
+	canLeave: Boolean!
+	canDelete: Boolean!
+}
+
+type ChatChannelMember {
+	peerId: ID!
+	status: ChannelMemberStatus!
+}
+
+type ChatChannelRecord {
+	actions: ChatChannelActions!
+	id: ID!
+	name: String!
+	key: String!
+	ownerId: ID!
+	members: [ChatChannelMember!]!
+	version: Long!
+	status: String!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+enum ChatChannelStatus {
+	JOINED
+	LEFT
+	KICKED
+}
+
+type ChatConversation {
+	id: ID!
+	chat: ChatItem!
+}
+
+type ChatItem {
+	"""
+	`me` when this device created the item, otherwise the client id of
+	the originating peer.
+	"""
+	fromId: ID!
+	"""
+	Peer id for direct messages; empty for channel messages —
+	`channelId` is authoritative there.
+	"""
+	toId: ID!
+	"""
+	Null for direct messages: the store keeps "" and the contract says
+	null, because "" is not a channel a client can query.
+	"""
+	channelId: ID
+	id: ID!
+	"""
+	Message envelope JSON: `{type: TEXT|IMAGES|FILES|SHARE, value: {…}}` —
+	parse `value` according to `type`.
+	"""
+	content: String!
+	createdAt: Instant!
+	updatedAt: Instant!
+	status: ChatStatus!
+	"""
+	Per-recipient delivery details as JSON (peer delivery results);
+	empty when the message has no delivery failures. Drives
+	SENT/PARTIAL/FAILED alongside `status`.
+	"""
+	statusData: String!
+}
+
+enum ChatStatus {
+	SENT
+	FAILED
+	PARTIAL
+	PENDING
+}
+
+type ChatTextEdit {
+	changed: Boolean!
+	chat: ChatItem!
+}
+
+extend type Mutation {
+	acceptChatChannelInvite(id: ID!): Boolean!
+	addChatChannelMember(id: ID!, peerId: ID!): ChatChannel!
+	clearChatItems(target: String!): ActionResult!
+	createChatChannel(name: String!): ChatChannel!
+	createChatItem(target: String!, content: String!): ChatItem!
+	declineChatChannelInvite(id: ID!): Boolean!
+	deleteChatChannel(id: ID!): Boolean!
+	"""
+	Always true: an id that is already gone is the state the caller asked
+	for, and the contract has no way to say "nothing was there".
+	"""
+	deleteChatItem(id: ID!): Boolean!
+	deleteChatItems(query: String!): ActionResult!
+	deliverChatItem(id: ID!, recipients: [ID!]): ChatItem!
+	editChatText(id: ID!, text: String!): ChatTextEdit!
+	forwardChatItem(id: ID!, target: String!): ChatItem!
+	forwardChatItems(id: ID!, targets: [String!]!): [ChatItem!]!
+	leaveChatChannel(id: ID!): Boolean!
+	removeChatChannelMember(id: ID!, peerId: ID!): ChatChannel!
+	replaceChatFiles(id: ID!, content: String!): ChatItem
+	respondChannelInvite(id: ID!, accept: Boolean!): Boolean!
+	retryChatItem(id: ID!): ChatItem!
+	"""
+	Send a chat message. `target` is the chat target id — a bare peer id
+	(an optional `peer:` prefix is accepted), or a `channel:<id>`
+	prefixed channel id; same value space as the `chatItems` query.
+	`content` is the message envelope JSON, same shape as
+	`ChatItem.content`.
+	"""
+	sendChatItem(target: String!, content: String!): [ChatItem!]!
+	sendChatItems(targets: [String!]!, content: String!): [ChatItem!]!
+	sendChatText(target: String!, text: String!): ChatItem!
+	sendFolderShare(targets: [String!]!, path: String!, name: String!, expiresAt: Instant): [ChatItem!]!
+	sendShare(targets: [String!]!, shareId: ID!): [ChatItem!]!
+	updateChatChannel(id: ID!, name: String!): ChatChannel!
+}
+
+extend type Query {
+	chatChannelRecord(id: ID!): ChatChannelRecord
+	chatChannels: [ChatChannel!]!
+	chatConversations: [ChatConversation!]!
+	chatCount(query: String!): Int!
+	chatIds(query: String!): [ID!]!
+	chatItem(id: ID!): ChatItem
+	"""
+	Latest-first page of one conversation, returned oldest-to-newest so
+	clients can render directly. `target` is the chat target id: a bare
+	peer id (an optional `peer:` prefix is accepted), or a
+	`channel:<id>` prefixed channel id.
+	"""
+	chatItems(target: String!, query: String!, offset: Int!, limit: Int!): [ChatItem!]!
+	chatRecords(query: String!, offset: Int!, limit: Int!): [ChatItem!]!
+	"""
+	The most recent item of every conversation (direct and channel),
+	newest conversation first.
+	"""
+	latestChatItems: [ChatItem!]!
+}

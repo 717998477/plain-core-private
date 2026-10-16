@@ -1,0 +1,23 @@
+type Doc implements MediaItem {
+	durationMs: Long!
+	id: ID!
+	title: String!
+	path: String!
+	extension: String!
+	size: Long!
+	bucketId: ID!
+	createdAt: Instant!
+	updatedAt: Instant!
+	tags: [Tag!]!
+}
+
+type DocExtGroup {
+	ext: String!
+	count: Int!
+}
+
+extend type Query {
+	docCount(query: String!): Int!
+	docExtGroups(query: String! = ""): [DocExtGroup!]!
+	docs(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Doc!]!
+}

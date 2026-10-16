@@ -179,10 +179,11 @@ fn tagless_audio_falls_back_to_the_file_stem() {
 
 #[test]
 fn doc_row_keeps_real_stat_facts_and_unknown_optional_metadata() {
-    let m = read_file_metadata(&fixture("public-schema.graphqls"), DataType::Doc).unwrap();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../schema/guest-api.graphqls");
+    let m = read_file_metadata(&path, DataType::Doc).unwrap();
 
     assert_eq!(m.data_type, DataType::Doc);
-    assert_eq!(m.title, "public-schema");
+    assert_eq!(m.title, "guest-api");
     assert!(m.artist.is_empty());
     assert_eq!(m.duration_ms, 0);
     assert_eq!((m.width, m.height, m.rotation), (0, 0, 0));

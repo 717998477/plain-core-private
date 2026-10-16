@@ -1,0 +1,35 @@
+type Video implements MediaItem {
+	width: Int!
+	height: Int!
+	rotation: Int!
+	id: ID!
+	title: String!
+	path: String!
+	durationMs: Long!
+	size: Long!
+	bucketId: ID!
+	createdAt: Instant!
+	updatedAt: Instant!
+	takenAt: Instant
+	isFavorite: Boolean!
+	tags: [Tag!]!
+}
+
+type VideoPlayProgress {
+	mediaId: ID!
+	positionMs: Long!
+	updatedAt: Instant!
+}
+
+extend type Mutation {
+	deleteVideoPlayProgress(mediaId: ID!): Boolean!
+	recordVideoPlay(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
+	saveVideoPlayProgress(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
+}
+
+extend type Query {
+	recentVideoPlayProgress(since: Instant!): [VideoPlayProgress!]!
+	videoCount(query: String!): Int!
+	videoPlayProgress(mediaId: ID!): VideoPlayProgress
+	videos(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Video!]!
+}

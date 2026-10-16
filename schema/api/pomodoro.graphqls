@@ -1,0 +1,62 @@
+type PomodoroRecord {
+	id: ID!
+	"""
+	Calendar date (YYYY-MM-DD) in the host device's local timezone.
+	"""
+	date: String!
+	completedCount: Int!
+	totalWorkSec: Long!
+	totalBreakSec: Long!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+type PomodoroSettings {
+	workDurationMin: Int!
+	shortBreakDurationMin: Int!
+	longBreakDurationMin: Int!
+	pomodorosBeforeLongBreak: Int!
+	showNotification: Boolean!
+	playSoundOnComplete: Boolean!
+	soundPath: String!
+	originalSoundName: String!
+}
+
+enum PomodoroState {
+	WORK
+	SHORT_BREAK
+	LONG_BREAK
+}
+
+type PomodoroTickResult {
+	today: PomodoroToday!
+	completedState: PomodoroState
+}
+
+type PomodoroToday {
+	date: Instant!
+	completedCount: Int!
+	currentRound: Int!
+	timeLeftSec: Int!
+	totalTimeSec: Int!
+	isRunning: Boolean!
+	isPaused: Boolean!
+	state: PomodoroState!
+}
+
+extend type Mutation {
+	adjustPomodoro(durationSec: Int!): PomodoroToday!
+	importPomodoroSound(source: String!): String!
+	pausePomodoro: Boolean!
+	skipPomodoro: PomodoroTickResult!
+	startPomodoro(durationSec: Int!): Boolean!
+	stopPomodoro: Boolean!
+}
+
+extend type Query {
+	pomodoroRecord(date: String!): PomodoroRecord
+	pomodoroRecords(startDate: String!): [PomodoroRecord!]!
+	pomodoroSettings: PomodoroSettings!
+	pomodoroToday: PomodoroToday!
+	pomodoroTotalCompleted: Long!
+}

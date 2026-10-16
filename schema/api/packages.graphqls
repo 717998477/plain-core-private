@@ -1,0 +1,52 @@
+type Certificate {
+	issuer: String!
+	subject: String!
+	serialNumber: String!
+	validFrom: Instant!
+	validTo: Instant!
+}
+
+type Package {
+	id: ID!
+	name: String!
+	type: PackageType!
+	version: String!
+	path: String!
+	size: Long!
+	certs: [Certificate!]!
+	installedAt: Instant!
+	updatedAt: Instant!
+}
+
+type PackageInstallPending {
+	id: ID!
+	updatedAt: Instant
+	isNew: Boolean!
+}
+
+type PackageStatus {
+	id: ID!
+	exists: Boolean!
+	updatedAt: Instant
+}
+
+enum PackageType {
+	SYSTEM
+	"""
+	Anything the platform did not report as a pre-installed package.
+	Misclassifying a user app as system would hide it from uninstall.
+	"""
+	USER
+}
+
+extend type Mutation {
+	installPackage(path: String!): PackageInstallPending!
+	uninstallPackages(ids: [ID!]!): Boolean!
+}
+
+extend type Query {
+	packageCount(query: String!): Int!
+	packageManifest(id: ID!): String!
+	packageStatuses(ids: [ID!]!): [PackageStatus!]!
+	packages(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Package!]!
+}

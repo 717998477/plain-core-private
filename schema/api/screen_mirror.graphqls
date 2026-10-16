@@ -1,0 +1,56 @@
+enum ScreenMirrorMode {
+	HD
+	SMOOTH
+}
+
+type ScreenMirrorQuality {
+	mode: ScreenMirrorMode!
+	resolution: Int!
+}
+
+type ScreenMirrorVideoCodec {
+	"""
+	H.264 Annex-B codec configuration (SPS/PPS), base64-encoded.
+	"""
+	annexB: String!
+	"""
+	Latest H.264 keyframe, base64-encoded; null until the pipeline emits one.
+	"""
+	keyFrame: String
+}
+
+enum WebSettingsFeature {
+	FILES
+	CONTACTS
+	SMS
+	CALL_LOGS
+	CALL_PHONE
+	PHONE_NUMBER
+	APPS
+	NOTIFICATIONS
+	CLIPBOARD
+}
+
+extend type Mutation {
+	openAccessibilitySettings: Boolean!
+	openWebSettings(feature: WebSettingsFeature): Boolean!
+	"""
+	Returns false when the device has not granted RECORD_AUDIO yet; the
+	platform asks for it and the caller retries.
+	"""
+	requestScreenMirrorAudio: Boolean!
+	requestScreenMirrorKeyFrame: Boolean!
+	startScreenMirror(audio: Boolean!): Boolean!
+	stopScreenMirror: Boolean!
+	updateScreenMirrorQuality(mode: ScreenMirrorMode!): Boolean!
+}
+
+extend type Query {
+	isScreenMirroring: Boolean!
+	screenMirrorControlEnabled: Boolean!
+	screenMirrorQuality: ScreenMirrorQuality!
+	"""
+	Null while the pipeline has not published its codec configuration.
+	"""
+	screenMirrorVideoCodec: ScreenMirrorVideoCodec
+}

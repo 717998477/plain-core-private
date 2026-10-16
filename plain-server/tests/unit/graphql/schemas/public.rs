@@ -23,24 +23,12 @@ fn sdl() -> String {
         + "\n"
 }
 
-fn expected_sdl() -> &'static str {
-    include_str!("../../../../../plain-rs/testdata/public-schema.graphqls")
-}
+#[path = "public_sdl.rs"]
+mod snapshot;
 
 #[test]
 fn public_schema_matches_committed_sdl() {
-    let sdl = sdl();
-    if std::env::var_os("UPDATE_PUBLIC_SCHEMA").is_some() {
-        std::fs::write(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../plain-rs/testdata")
-                .join("public-schema.graphqls"),
-            &sdl,
-        )
-        .unwrap();
-    } else {
-        assert_eq!(sdl, expected_sdl());
-    }
+    snapshot::verify_or_write(&sdl());
 }
 
 /// The contract shapes every resolver must keep, spelled out so a rename or

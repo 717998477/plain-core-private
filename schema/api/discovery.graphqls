@@ -1,0 +1,109 @@
+type DiscoveryReply {
+	id: ID!
+	name: String!
+	port: Int!
+	deviceType: String!
+	version: String!
+	platform: String!
+	ips: [String!]!
+	awareSupported: Boolean!
+	awareRunning: Boolean!
+}
+
+type MdnsActivity {
+	time: Long!
+	event: String!
+	detail: String!
+}
+
+type MdnsDebug {
+	services: [MdnsService!]!
+	activity: [MdnsActivity!]!
+}
+
+type MdnsPacket {
+	time: Long!
+	direction: String!
+	srcIp: String!
+	srcPort: Int!
+	dstIp: String!
+	dstPort: Int!
+	size: Long!
+	summary: String!
+	detail: String!
+}
+
+type MdnsService {
+	serviceType: String!
+	instanceName: String!
+	instanceFqdn: String!
+	hostname: String!
+	port: Int!
+	txtRecords: [String!]!
+	ips: [String!]!
+	ipv6: [String!]!
+	complete: Boolean!
+}
+
+type MdnsState {
+	runtimeId: String!
+	packetsIn: [MdnsPacket!]!
+	packetsOut: [MdnsPacket!]!
+	revision: Long!
+	receiver: Boolean!
+	running: Boolean!
+	scanning: Boolean!
+	published: Boolean!
+	manualScanning: Boolean!
+	debugSessionCount: Int!
+	capturing: Boolean!
+	services: [MdnsService!]!
+}
+
+type NearbyDevice {
+	id: ID!
+	name: String!
+	ips: [String!]!
+	port: Int!
+	deviceType: String!
+	version: String!
+	platform: String!
+	lastSeen: String!
+	discoveryMethods: [String!]!
+	bestIp: String!
+	status: String!
+}
+
+type PeerPrewarmAdvertisement {
+	shortId: String!
+	awareSupported: Boolean!
+	awareRunning: Boolean!
+}
+
+extend type Mutation {
+	acquireDiscovery(token: ID!): Boolean!
+	acquireMdnsDebugSession(token: String!): MdnsState!
+	beginBleScan: ID!
+	browseMdns: MdnsState!
+	endBleScan(scanId: ID!): Boolean!
+	prewarmPeerTransport(id: ID!): PeerPrewarmAdvertisement
+	publishMdns: MdnsState!
+	releaseDiscovery(token: ID!): Boolean!
+	releaseMdnsDebugSession(token: String!): MdnsState!
+	restartMdnsDiscovery: MdnsState!
+	setMdnsCapture(enabled: Boolean!): MdnsState!
+	startMdnsDiscovery: MdnsState!
+	startMdnsReceiver: MdnsState!
+	stopMdnsDiscovery: MdnsState!
+	unpublishMdns: MdnsState!
+	updateMdnsPublication: MdnsState!
+}
+
+extend type Query {
+	discoveryBleAdvertisement: String!
+	discoveryReply: DiscoveryReply!
+	mdnsDebug: MdnsDebug!
+	mdnsState: MdnsState!
+	nearbyDevices: [NearbyDevice!]!
+	parsePairingCode(code: String!): NearbyDevice
+}

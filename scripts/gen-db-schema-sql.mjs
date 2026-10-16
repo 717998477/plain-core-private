@@ -19,7 +19,7 @@ export function generateDatabaseSql() {
       .split('\n')
       .map((l) => l.trimEnd())
       .filter((l, i) => l.trim() !== '' || i > 0)
-      .map((l) => l.trimStart())
+      .map((l, i, lines) => i > 0 && i < lines.length - 1 ? `    ${l.trim()}` : l.trim())
       .join('\n')
       .trim() + ';',
   )
@@ -31,10 +31,10 @@ export function generateDatabaseSql() {
     '-- Generate: node scripts/gen-db-schema-sql.mjs --write',
     '-- Check: node scripts/gen-db-schema-sql.mjs',
     '',
-    `PRAGMA user_version=${version};`,
+    `PRAGMA user_version = ${version};`,
     '',
   ]
-  return header.join('\n') + stmts.join('\n') + '\n'
+  return header.join('\n') + '\n' + stmts.join('\n\n') + '\n'
 }
 
 const FILE = 'schema/database.sql'

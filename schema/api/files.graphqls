@@ -1,0 +1,323 @@
+type AppFile {
+	id: String!
+	size: Long!
+	mimeType: String!
+	fileName: String!
+	realPath: String!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+type AudioFileInfo {
+	durationMs: Long!
+	location: Location
+}
+
+enum DriveType {
+	INTERNAL_STORAGE
+	SDCARD
+	USB_STORAGE
+	APP
+}
+
+"""
+One entry of a directory listing or a search page.
+"""
+type File {
+	permission: String!
+	"""
+	Empty for non-media files — exposed as `null` rather than an empty id.
+	"""
+	mediaId: ID
+	name: String!
+	path: String!
+	createdAt: Instant
+	updatedAt: Instant!
+	size: Long!
+	isDir: Boolean!
+	childCount: Int!
+}
+
+type FileHostCompletedOp {
+	src: String!
+	dst: String!
+}
+
+"""
+Stat plus the media probe for one path. `data` is `null` when the name
+is not a media extension, which is why it is a union and not a
+single struct.
+"""
+type FileInfo {
+	path: String!
+	updatedAt: Instant!
+	size: Long!
+	data: MediaFileInfo
+}
+
+type FilePage {
+	count: Long!
+	items: [File!]!
+}
+
+type FileTask {
+	id: ID!
+	clientId: String!
+	type: FileTaskType!
+	title: String!
+	status: FileTaskStatus!
+	error: String!
+	totalBytes: Long!
+	doneBytes: Long!
+	totalItems: Long!
+	doneItems: Long!
+	createdAt: Instant!
+	updatedAt: Instant!
+	completedOps: [FileHostCompletedOp!]!
+}
+
+input FileTaskOpInput {
+	src: String!
+	dst: String!
+	overwrite: Boolean!
+}
+
+enum FileTaskStatus {
+	QUEUED
+	RUNNING
+	DONE
+	ERROR
+}
+
+enum FileTaskType {
+	COPY
+	MOVE
+}
+
+type ImageFileInfo {
+	make: String!
+	model: String!
+	rotation: Int!
+	colorSpace: String!
+	apertureValue: Float!
+	exposureTime: String!
+	focalLength: String!
+	isoSpeed: Int!
+	takenAt: Instant
+	flash: Int!
+	fNumber: Float!
+	exposureProgram: Int!
+	meteringMode: Int!
+	whiteBalance: Int!
+	creator: String!
+	resolutionX: Int!
+	resolutionY: Int!
+	description: String!
+	width: Int!
+	height: Int!
+	location: Location
+}
+
+type Location {
+	latitude: Float!
+	longitude: Float!
+}
+
+union MediaFileInfo = ImageFileInfo | AudioFileInfo | VideoFileInfo
+
+type MergeTask {
+	status: MergeTaskStatus!
+	value: String
+	mergedSize: Long
+	error: String
+}
+
+enum MergeTaskStatus {
+	NONE
+	STARTED
+	MERGING
+	DONE
+	FAILED
+}
+
+"""
+A mounted volume. The phone reports one row per storage the platform
+knows about (internal, SD card, each USB disk, the app-private dir);
+the fields are all filled by the host, never derived here.
+"""
+type Mount {
+	id: ID!
+	name: String!
+	path: String!
+	mountPoint: String!
+	fsType: String!
+	totalBytes: Long!
+	usedBytes: Long!
+	freeBytes: Long!
+	remote: Boolean!
+	alias: String!
+	driveType: DriveType!
+	diskId: String!
+}
+
+enum PathKind {
+	FILE
+	DIR
+}
+
+type TrashedFile {
+	id: ID!
+	type: TrashedFileType!
+	originalPath: String!
+	disk: String!
+	trashRelPath: String!
+	deletedAt: Instant!
+	uid: Int!
+	gid: Int!
+	mode: Int!
+	sizeBytes: Long
+	entryCount: Int
+	displayName: String!
+	trashedPath: String!
+}
+
+enum TrashedFileSortBy {
+	DATE_ASC
+	DATE_DESC
+	SIZE_ASC
+	SIZE_DESC
+	NAME_ASC
+	NAME_DESC
+}
+
+enum TrashedFileType {
+	FILE
+	DIR
+}
+
+type VideoFileInfo {
+	width: Int!
+	height: Int!
+	durationMs: Long!
+	rotation: Int!
+	displayWidth: Int!
+	displayHeight: Int!
+	bitrate: Long!
+	frameRate: Float!
+	title: String!
+	artist: String!
+	album: String!
+	genre: String!
+	takenAt: Instant
+	writer: String!
+	composer: String!
+	location: Location
+}
+
+extend type Mutation {
+	cacheZipEntry(path: String!): String!
+	copyFile(src: String!, dst: String!, overwrite: Boolean!): Boolean!
+	copyFileToDirectory(src: String!, directory: String!, name: String!): String
+	createCopyTask(ops: [FileTaskOpInput!]!): FileTask!
+	createDir(path: String!): File!
+	createFile(path: String!): File!
+	createFileTask(type: FileTaskType!, title: String!, ops: [FileTaskOpInput!]!, waitForCompletion: Boolean! = false): FileTask!
+	createMoveTask(ops: [FileTaskOpInput!]!): FileTask!
+	createZipArchive(paths: [String!]!, target: String!): String!
+	deleteChunks(fileId: String!): Boolean!
+	deleteFiles(paths: [String!]!): ActionResult!
+	"""
+	A blank query would match the whole library, and a bulk delete is
+	not something a client should be able to aim at everything by
+	accident — it is refused before the platform is asked.
+	"""
+	deleteMediaItems(type: MediaDataType!, query: String!): ActionResult!
+	deleteTrashedFile(path: String!): Boolean!
+	extractZipArchive(path: String!, target: String!): String!
+	importAppFile(source: String!, fileName: String!, mimeType: String!, deleteSource: Boolean!): AppFile!
+	importNoteImage(source: String!, fileName: String!): String!
+	mergeAppFileChunks(fileId: String!, totalChunks: Int!, fileName: String!, totalSize: Long!): MergeTask!
+	"""
+	Starts the merge and returns immediately; completion arrives over the
+	websocket, and `mergeStatus` is the polling fallback for a lost event.
+	"""
+	mergeChunks(fileId: String!, totalChunks: Int!, path: String!, replace: Boolean!, totalSize: Long!): MergeTask!
+	moveFile(src: String!, dst: String!, overwrite: Boolean!): Boolean!
+	"""
+	The only media action that is also a storage write, so it is the
+	only one that gates — the others just move rows between the library
+	and the trash.
+	"""
+	moveMediaItems(type: MediaDataType!, query: String!, destDir: String!): ActionResult!
+	releaseAppFile(fileId: String!): Boolean!
+	removeFileTask(id: ID!): Boolean!
+	"""
+	`false` rather than an error when the rename is refused: a name that
+	is empty, a traversal segment, or an existing destination are all
+	ordinary outcomes for a user typing in a rename box.
+	"""
+	renameFile(path: String!, name: String!): Boolean!
+	renameFilePath(path: String!, name: String!): String
+	restoreFiles(paths: [String!]!): ActionResult!
+	restoreMediaItems(type: MediaDataType!, query: String!): ActionResult!
+	trashFiles(paths: [String!]!): ActionResult!
+	trashMediaItems(type: MediaDataType!, query: String!): ActionResult!
+	writeTextFile(path: String!, content: String!, overwrite: Boolean!): File!
+}
+
+extend type Query {
+	appFileCount(query: String!): Int!
+	appFiles(query: String!, offset: Int!, limit: Int!): [AppFile!]!
+	browseFiles(root: String!, query: String!, text: String, showHidden: Boolean, sortBy: FileSortBy!, offset: Int!, limit: Int!, countOnly: Boolean! = false): FilePage!
+	"""
+	Total matches for the same query, ignoring paging.
+	"""
+	fileCount(root: String!, query: String!): Int!
+	fileInfo(path: String!, fileName: String): FileInfo!
+	filePaths(paths: [String!]!): [String]!
+	fileTask(id: ID!): FileTask
+	fileTasks(query: String!, offset: Int!, limit: Int!): [FileTask!]!
+	"""
+	One page of a directory listing, filtered and sorted by the search
+	DSL. `query` may carry a `parent` field to redirect the root, which
+	is what the file manager's breadcrumb links send.
+	"""
+	files(root: String!, query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [File!]!
+	indexedFileCount(query: String!): Long!
+	indexedFiles(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [File!]!
+	mediaDurationMs(path: String!): Long!
+	"""
+	`NONE` when no merge was ever started for this id, which is what a
+	client sees before it calls `mergeChunks`.
+	"""
+	mergeStatus(fileId: String!): MergeTask!
+	"""
+	Volumes the platform reports. The host builds these because drive
+	enumeration is platform state; there is nothing to gate.
+	"""
+	mounts: [Mount!]!
+	"""
+	A total predicate, never an error: a blank path, `"."`, a missing
+	file and a denied path all read as `false` so callers can use it in
+	a filter without guarding every call.
+	"""
+	pathExists(path: String!): Boolean!
+	"""
+	Same total-predicate semantics as `pathExists`; `null` when the path
+	cannot be resolved.
+	"""
+	pathKind(path: String!): PathKind
+	"""
+	Recently-opened files. Reading them is a storage read, so this one
+	gates — plain-app's `recentFiles` calls `checkEnabledAsync`.
+	"""
+	recentFiles: [File!]!
+	trashedFileCount: Int!
+	trashedFiles(query: String!, offset: Int!, limit: Int!, sortBy: TrashedFileSortBy!): [TrashedFile!]!
+	"""
+	Chunk state for a client-chosen chunk-set id, as `index:byteSize`
+	strings. An empty list means the upload never started or was
+	discarded — the caller cannot tell, and does not need to.
+	"""
+	uploadedChunks(fileId: String!): [String!]!
+}

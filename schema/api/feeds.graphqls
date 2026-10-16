@@ -1,0 +1,70 @@
+type Feed {
+	id: ID!
+	name: String!
+	url: String!
+	fetchContent: Boolean!
+	logo: String!
+	lastSyncAt: Instant
+	lastError: FeedError!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+type FeedEntry {
+	id: ID!
+	title: String!
+	url: String!
+	image: String!
+	description: String!
+	author: String!
+	content: String!
+	feedId: ID!
+	rawId: String!
+	read: Boolean!
+	publishedAt: Instant!
+	createdAt: Instant!
+	updatedAt: Instant!
+	tags: [Tag!]!
+	feed: Feed
+}
+
+type FeedEntryCount {
+	id: ID!
+	count: Int!
+}
+
+type FeedError {
+	code: String!
+	detail: String!
+}
+
+type FeedSyncState {
+	feedId: ID!
+	taskId: ID!
+	revision: Long!
+	status: String!
+	error: String!
+}
+
+extend type Mutation {
+	createFeed(url: String!, fetchContent: Boolean!): Feed!
+	deleteFeed(id: ID!): Boolean!
+	deleteFeedEntries(query: String!): ActionResult!
+	exportFeeds: String!
+	importFeeds(content: String!): Boolean!
+	markFeedEntriesRead(query: String!, read: Boolean!): ActionResult!
+	syncFeedEntryContent(id: ID!): FeedEntry!
+	syncFeeds(id: ID): Boolean!
+	updateFeed(id: ID!, name: String!, fetchContent: Boolean!): Feed!
+	updateFeedUrl(id: ID!, url: String!): Feed!
+}
+
+extend type Query {
+	feed(id: ID!): Feed
+	feedEntries(query: String!, offset: Int!, limit: Int!): [FeedEntry!]!
+	feedEntry(id: ID!): FeedEntry
+	feedEntryCount(query: String!): Int!
+	feedEntryCounts: [FeedEntryCount!]!
+	feedSyncStates: [FeedSyncState!]!
+	feeds: [Feed!]!
+}

@@ -1,0 +1,50 @@
+type Call {
+	typeCode: Int!
+	photoUri: String!
+	id: ID!
+	number: String!
+	name: String!
+	photoId: String!
+	startedAt: Instant!
+	durationSec: Int!
+	type: CallType!
+	accountId: ID!
+	geo: PhoneGeo
+	tags: [Tag!]!
+}
+
+enum CallType {
+	INCOMING
+	OUTGOING
+	MISSED
+	VOICEMAIL
+	REJECTED
+	BLOCKED
+	ANSWERED_EXTERNALLY
+	UNKNOWN
+}
+
+type PhoneGeo {
+	country: String!
+	numberType: String!
+	carrier: String!
+	description: String!
+}
+
+extend type Mutation {
+	"""
+	`showDialer` hands the number to the dialer instead of placing the
+	call outright.
+	"""
+	call(number: String!, showDialer: Boolean!): Boolean!
+	deleteCalls(query: String!): ActionResult!
+}
+
+extend type Query {
+	callCount(query: String!): Int!
+	"""
+	plain-app degrades this to 0 rather than erroring.
+	"""
+	callIds(query: String!): [ID!]!
+	calls(query: String!, offset: Int!, limit: Int!): [Call!]!
+}

@@ -1,0 +1,150 @@
+type ActivePeerTransfer {
+	peerId: ID!
+	transport: TransportType!
+}
+
+enum DiscoveryMethod {
+	LAN
+	BLE
+	QR
+}
+
+type LoggedInPeer {
+	peer: PeerRecord!
+	online: Boolean!
+}
+
+input PairingDeviceInput {
+	id: ID!
+	name: String!
+	ips: [String!]!
+	port: Int!
+	deviceType: DeviceType!
+	version: String!
+	platform: String!
+	lastSeen: Instant!
+	discoveryMethods: [DiscoveryMethod!]!
+}
+
+input PairingRequestInput {
+	fromId: ID!
+	fromName: String!
+	port: Int!
+	deviceType: DeviceType!
+	ecdhPublicKey: String!
+	signaturePublicKey: String!
+	timestamp: Long!
+	ips: [String!]!
+	signature: String!
+	fromIp: String!
+	awareSupported: Boolean!
+}
+
+type PairingState {
+	deviceId: ID!
+	generation: String!
+	phase: String!
+}
+
+type PairingTicket {
+	deviceId: ID!
+	deviceName: String!
+	deviceIp: String!
+	devicePort: Int!
+	generation: String!
+	delayMs: Long!
+}
+
+type Peer {
+	id: ID!
+	name: String!
+	ip: String!
+	status: PeerStatus!
+	port: Int
+	deviceType: DeviceType!
+	createdAt: Instant!
+	updatedAt: Instant!
+	online: Boolean!
+}
+
+input PeerLoginInput {
+	id: ID!
+	name: String!
+	host: String!
+	deviceType: DeviceType!
+	token: String!
+	signaturePublicKey: String!
+	chatKey: String
+}
+
+input PeerRecordInput {
+	id: ID!
+	name: String!
+	ip: String!
+	key: String!
+	publicKey: String!
+	status: String!
+	port: Int
+	deviceType: String!
+	token: String!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+enum PeerStatus {
+	PAIRED
+	UNPAIRED
+	CHANNEL
+}
+
+enum PeerStatusAction {
+	START
+	STOP
+	RECONNECT
+	ENSURE_AWARE
+}
+
+type Sim {
+	id: ID!
+	label: String!
+	number: String!
+	subscriptionId: Int!
+}
+
+enum TransportType {
+	LAN
+	AWARE
+	BLE
+}
+
+extend type Mutation {
+	cancelPairing(deviceId: ID!): Boolean!
+	controlPeerStatus(action: PeerStatusAction!): Boolean!
+	deletePeer(id: ID!): Boolean!
+	loginPeer(input: PeerLoginInput!): Boolean!
+	logoutPeer(id: ID!): Boolean!
+	pairDevice(input: PairingDeviceInput!): Boolean!
+	removePeerRecord(id: ID!): Boolean!
+	respondToPairing(input: PairingRequestInput!, accepted: Boolean!): Boolean!
+	unpairPeer(id: ID!): Boolean!
+	unpairPeerRecord(id: ID!): Boolean!
+	updatePeerName(id: ID!, name: String!): Boolean!
+}
+
+extend type Query {
+	activePeerTransfers: [ActivePeerTransfer!]!
+	isPairingRequestCurrent(id: ID!, signature: String!): Boolean!
+	loggedInPeers: [LoggedInPeer!]!
+	pairingCode: String!
+	pairingStates: [PairingState!]!
+	pairingTickets: [PairingTicket!]!
+	peerFileUrl(id: ID!, expected: PeerRecordInput!, fileId: String!): String!
+	peerRecord(id: ID!): PeerRecord
+	peerRecords(ids: [ID!]): [PeerRecord!]!
+	peers: [Peer!]!
+	"""
+	The SIM slots the platform reports. Empty on a device with no
+	telephony, which is the honest answer rather than an error.
+	"""
+	sims: [Sim!]!
+}

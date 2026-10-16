@@ -1,0 +1,47 @@
+type Bookmark {
+	id: ID!
+	url: String!
+	title: String!
+	faviconPath: String!
+	groupId: ID!
+	pinned: Boolean!
+	clickCount: Int!
+	sortOrder: Int!
+	createdAt: Instant!
+	updatedAt: Instant!
+	lastClickedAt: Instant
+}
+
+type BookmarkGroup {
+	id: ID!
+	name: String!
+	collapsed: Boolean!
+	sortOrder: Int!
+	itemCount: Int!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+input BookmarkInput {
+	url: String!
+	title: String!
+	groupId: ID!
+	pinned: Boolean!
+	sortOrder: Int!
+}
+
+extend type Mutation {
+	addBookmarks(urls: [String!]!, groupId: ID!): [Bookmark!]!
+	createBookmarkGroup(name: String!): BookmarkGroup!
+	deleteBookmarkGroup(id: ID!): Boolean!
+	deleteBookmarks(ids: [ID!]!): ActionResult!
+	fetchBookmarkMetadata(id: ID!): Bookmark
+	recordBookmarkClick(id: ID!): Boolean!
+	updateBookmark(id: ID!, input: BookmarkInput!): Bookmark!
+	updateBookmarkGroup(id: ID!, name: String!, collapsed: Boolean!, sortOrder: Int!): BookmarkGroup!
+}
+
+extend type Query {
+	bookmarkGroups: [BookmarkGroup!]!
+	bookmarks: [Bookmark!]!
+}

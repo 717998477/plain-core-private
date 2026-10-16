@@ -1,0 +1,124 @@
+type ActionResult {
+	affectedCount: Int!
+}
+
+"""
+Taggable data domains — the plain-app `DataType` wire enum
+(`shared/src/commonMain/kotlin/com/ismartcoding/plain/enums/DataType.kt`).
+GraphQL-arg and tag-column domain; `kind()` is the ordinal stored in
+the shared library db `type` column.
+"""
+enum DataType {
+	DEFAULT
+	AUDIO
+	VIDEO
+	IMAGE
+	SMS
+	CONTACT
+	NOTE
+	FEED_ENTRY
+	CALL
+	PACKAGE
+	FILE
+	APP_FILE
+	DOC
+}
+
+enum DeviceType {
+	COMPUTER
+	PHONE
+	TABLET
+	TV
+	NAS
+	OTHER
+}
+
+enum FileSortBy {
+	DATE_ASC
+	DATE_DESC
+	SIZE_ASC
+	SIZE_DESC
+	NAME_ASC
+	NAME_DESC
+	TAKEN_AT_DESC
+}
+
+scalar Instant
+
+"""
+A scalar that can represent any JSON value.
+"""
+scalar JSON
+
+scalar Long
+
+"""
+Media-library item kinds accepted by media item actions and buckets
+(plain-app `MediaDataType`).
+"""
+enum MediaDataType {
+	AUDIO
+	VIDEO
+	IMAGE
+	DOC
+}
+
+interface MediaItem {
+	id: ID!
+	title: String!
+	path: String!
+	size: Long!
+	bucketId: ID!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
+type PeerRecord {
+	id: ID!
+	name: String!
+	ip: String!
+	key: String!
+	publicKey: String!
+	status: String!
+	port: Int
+	deviceType: String!
+	token: String!
+	createdAt: Instant!
+	updatedAt: Instant!
+	address: PeerRecordAddress
+}
+
+type PeerRecordAddress {
+	bestIp: String!
+	name: String!
+	baseUrl: String!
+	apiUrl: String!
+	statusWsUrl: String!
+}
+
+type Tag {
+	id: ID!
+	name: String!
+	"""
+	Numeric tag kind — the ordinal of the tag's `DataType`
+	(DEFAULT=0, AUDIO=1, VIDEO=2, IMAGE=3, …). The NAS only has data
+	for the media kinds; the Int is frozen phone contract.
+	"""
+	type: Int!
+	count: Int!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+
+schema {
+	query: Query
+	mutation: Mutation
+}
