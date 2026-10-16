@@ -57,6 +57,8 @@ fn is_startup_property(key: &str) -> bool {
             | "model"
             | "osName"
             | "osVersion"
+            | "updateSource"
+            | "supportedAbis"
             | "appVersion"
             | "appBuildNumber"
             | "cpuArch"

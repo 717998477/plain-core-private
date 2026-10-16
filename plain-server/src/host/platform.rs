@@ -15,17 +15,7 @@ pub struct DisksFacts {
     pub disks: Vec<DiskFacts>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppUpdateFacts {
-    pub current_version: String,
-    pub latest_version: Option<String>,
-    pub has_update: bool,
-    pub url: Option<String>,
-}
-
 pub const SYSTEM_DISKS_FACTS: &str = "systemDisksFacts";
-pub const SYSTEM_APP_UPDATE_FACTS: &str = "systemAppUpdateFacts";
 
 pub const SYSTEM_SAMBA_SERVICE_FACTS: &str = "systemSambaServiceFacts";
 pub const SYSTEM_SAMBA_APPLY: &str = "systemSambaApply";

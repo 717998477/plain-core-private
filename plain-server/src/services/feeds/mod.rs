@@ -201,7 +201,17 @@ fn article_html(html: &str) -> String {
 
 fn item_to_row(feed: &FeedRow, item: ParsedEntry) -> FeedEntryRow {
     let at = now();
-    let fallback = plain_rs::utils::hex::bytes_to_hex(&Sha256::digest(serde_json::to_vec(&(&item.title,&item.author,&item.content,&item.description,&item.published_at,&item.image)).expect("feed fields serialize")));
+    let fallback = plain_rs::utils::hex::bytes_to_hex(&Sha256::digest(
+        serde_json::to_vec(&(
+            &item.title,
+            &item.author,
+            &item.content,
+            &item.description,
+            &item.published_at,
+            &item.image,
+        ))
+        .expect("feed fields serialize"),
+    ));
     let raw_key = if !item.source_entry_id.is_empty() {
         item.source_entry_id.as_str()
     } else if !item.url.is_empty() {
@@ -240,6 +250,20 @@ fn item_to_row(feed: &FeedRow, item: ParsedEntry) -> FeedEntryRow {
     }
 }
 
+fn fetch_error(error_value: reqwest::Error) -> DomainError {
+    if let Some(status) = error_value.status() {
+        return error(format!("SERVER:{}: {error_value}", status.as_u16()));
+    }
+    let code = if error_value.is_timeout() {
+        "TIMEOUT"
+    } else if error_value.is_connect() {
+        "DNS"
+    } else {
+        "UNKNOWN"
+    };
+    error(format!("{code}: {error_value}"))
+}
+
 pub(crate) async fn fetch_text(url: &str, max_bytes: usize) -> DomainResult<String> {
     require_url(url)?;
     let client = reqwest::Client::builder()
@@ -250,22 +274,9 @@ pub(crate) async fn fetch_text(url: &str, max_bytes: usize) -> DomainResult<Stri
         .get(url)
         .send()
         .await
-        .map_err(error)?
+        .map_err(fetch_error)?
         .error_for_status()
-        .map_err(|e| {
-            error(format!(
-                "{}: {e}",
-                if e.is_timeout() {
-                    "TIMEOUT"
-                } else if e.status().is_some() {
-                    "SERVER"
-                } else if e.is_connect() {
-                    "DNS"
-                } else {
-                    "UNKNOWN"
-                }
-            ))
-        })?;
+        .map_err(fetch_error)?;
     if response
         .content_length()
         .is_some_and(|size| size > max_bytes as u64)
@@ -282,21 +293,6 @@ pub(crate) async fn fetch_text(url: &str, max_bytes: usize) -> DomainResult<Stri
         bytes.extend_from_slice(&chunk);
     }
     String::from_utf8(bytes).map_err(error)
-}
-
-pub async fn create(
-    db: Arc<Db>,
-    url: &str,
-    fetch_full_content: bool,
-    events: broadcast::Sender<WsEvent>,
-) -> DomainResult<FeedRow> {
-    if db.feed_get_by_url(url)?.is_some() {
-        return Err(error("feed_already_exists"));
-    }
-    let feed = create_without_sync(&db, url, fetch_full_content).await?;
-    let id = feed.id.clone();
-    queue_sync(db, events, Some(id));
-    Ok(feed)
 }
 
 pub async fn sync_entry_content(db: &Db, id: &str) -> DomainResult<FeedEntryRow> {
@@ -392,81 +388,46 @@ async fn sync_one(db: &Db, feed: &FeedRow, assets: Option<&FeedAssets>) -> Domai
     Ok(())
 }
 
-pub async fn sync(
-    db: Arc<Db>,
-    events: broadcast::Sender<WsEvent>,
-    id: Option<String>,
+pub(super) async fn sync_feed(
+    db: &Db,
+    events: &broadcast::Sender<WsEvent>,
+    feed: &FeedRow,
+    assets: Option<&FeedAssets>,
 ) -> DomainResult<()> {
-    sync_with_assets(db, events, id, None).await
-}
-pub async fn sync_with_assets(
-    db: Arc<Db>,
-    events: broadcast::Sender<WsEvent>,
-    id: Option<String>,
-    assets: Option<Arc<FeedAssets>>,
-) -> DomainResult<()> {
-    let feeds = match id.as_deref() {
-        Some(id) => vec![db.feed_get(id)?.ok_or_else(|| error("feed_not_found"))?],
-        None => db.feeds_list()?,
+    let result = sync_one(db, feed, assets).await;
+    let detail = result
+        .as_ref()
+        .err()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let code = if detail.is_empty() {
+        ""
+    } else if detail.contains("TIMEOUT:") || detail.contains("timed out") {
+        "TIMEOUT"
+    } else if detail.contains("SERVER:") {
+        "SERVER"
+    } else if detail.contains("DNS:") {
+        "DNS"
+    } else if detail.contains("invalid_feed_content")
+        || detail.contains("decode")
+        || detail.contains("XML")
+    {
+        "PARSE"
+    } else {
+        "UNKNOWN"
     };
-    let errors: Vec<String> = stream::iter(feeds)
-        .map(|feed| {
-            let db = db.clone();
-            let events = events.clone();
-            let assets = assets.clone();
-            async move {
-                let result = sync_one(&db, &feed, assets.as_deref()).await;
-                let detail = result
-                    .as_ref()
-                    .err()
-                    .map(ToString::to_string)
-                    .unwrap_or_default();
-                let code = if detail.is_empty() {
-                    ""
-                } else if detail.contains("TIMEOUT:") || detail.contains("timed out") {
-                    "TIMEOUT"
-                } else if detail.contains("SERVER:") {
-                    "SERVER"
-                } else if detail.contains("DNS:") {
-                    "DNS"
-                } else if detail.contains("invalid_feed_content")
-                    || detail.contains("decode")
-                    || detail.contains("XML")
-                {
-                    "PARSE"
-                } else {
-                    "UNKNOWN"
-                };
-                let stored = serde_json::json!({"code":code,"detail":detail}).to_string();
-                let persist = db.feed_set_sync_status(&feed.id, &now(), &stored);
-                let detail = persist.err().map(|e| e.to_string()).unwrap_or(detail);
-                let _ = events.send(WsEvent::broadcast(
-                    "FEEDS_FETCHED",
-                    serde_json::json!({"feedId":feed.id,"error":detail}).to_string(),
-                ));
-                detail
-            }
-        })
-        .buffer_unordered(16)
-        .filter(|e| std::future::ready(!e.is_empty()))
-        .collect()
-        .await;
-    if id.is_none() {
-        let _ = events.send(WsEvent::broadcast(
-            "FEEDS_FETCHED",
-            serde_json::json!({"feedId":"all","error":errors.join("\n")}).to_string(),
-        ));
-    }
-    if errors.is_empty() {
+    let stored = serde_json::json!({"code":code,"detail":detail}).to_string();
+    let persist = db.feed_set_sync_status(&feed.id, &now(), &stored);
+    let detail = persist.err().map(|e| e.to_string()).unwrap_or(detail);
+    let _ = events.send(WsEvent::broadcast(
+        "FEEDS_FETCHED",
+        serde_json::json!({"feedId":feed.id,"error":detail}).to_string(),
+    ));
+    if detail.is_empty() {
         Ok(())
     } else {
-        Err(error(errors.join("\n")))
+        Err(error(detail))
     }
-}
-pub fn queue_sync(db: Arc<Db>, events: broadcast::Sender<WsEvent>, id: Option<String>) {
-    tokio::spawn(async move {
-        let _ = sync(db, events, id).await;
-    });
 }
 
 #[cfg(test)]
@@ -474,9 +435,13 @@ pub fn queue_sync(db: Arc<Db>, events: broadcast::Sender<WsEvent>, id: Option<St
 mod tests;
 
 use plain_rs::feeds::date;
-mod sync_service;
+pub(crate) mod sync_service;
 pub use sync_service::{FeedSyncState, SyncService};
-pub async fn create_without_sync(db: &Db, url: &str, fetch_full_content: bool) -> DomainResult<FeedRow> {
+pub async fn create_without_sync(
+    db: &Db,
+    url: &str,
+    fetch_full_content: bool,
+) -> DomainResult<FeedRow> {
     if db.feed_get_by_url(url)?.is_some() {
         return Err(error("feed_already_exists"));
     }

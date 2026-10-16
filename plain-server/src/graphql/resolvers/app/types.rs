@@ -2,6 +2,8 @@ use async_graphql::Enum;
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Capability {
+    BackgroundTimer,
+    BackgroundWake,
     FileExport,
     FileReveal,
     FileClipboard,
@@ -40,6 +42,8 @@ pub enum Capability {
 impl Capability {
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
+            "BACKGROUND_TIMER" => Self::BackgroundTimer,
+            "BACKGROUND_WAKE" => Self::BackgroundWake,
             "FILE_EXPORT" => Self::FileExport,
             "FILE_REVEAL" => Self::FileReveal,
             "FILE_CLIPBOARD" => Self::FileClipboard,

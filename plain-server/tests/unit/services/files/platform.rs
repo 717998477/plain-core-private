@@ -190,3 +190,54 @@ async fn thumbnail_cache_uses_owned_data_root_and_keeps_authorization_live() {
     worker.await.unwrap();
     core.stop_core().await;
 }
+
+#[tokio::test]
+async fn metadata_authorization_batches_sdk_paths_without_requiring_existing_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    state.file_platform.use_sdk_for_test();
+    let (generation, mut requests) = state.host.connect();
+    assert!(
+        state
+            .file_platform
+            .authorize_metadata_paths(&["relative".into()])
+            .await
+            .is_err()
+    );
+    assert!(requests.try_recv().is_err());
+    let paths = vec![
+        directory
+            .path()
+            .join("missing-a")
+            .to_string_lossy()
+            .into_owned(),
+        directory
+            .path()
+            .join("missing-b")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    let expected = paths.clone();
+    let host = state.host.clone();
+    let worker = tokio::spawn(async move {
+        let request = requests.recv().await.unwrap();
+        assert_eq!(request["method"], "fileTaskAuthorize");
+        assert_eq!(
+            request["params"],
+            json!({"operation":"read", "paths":expected})
+        );
+        host.reply(generation, json!({"id":request["id"], "result":true}))
+            .unwrap();
+        requests
+    });
+    state
+        .file_platform
+        .authorize_metadata_paths(&paths)
+        .await
+        .unwrap();
+    let mut requests = worker.await.unwrap();
+    assert!(requests.try_recv().is_err());
+    state.host.disconnect(generation);
+    core.stop_core().await;
+}

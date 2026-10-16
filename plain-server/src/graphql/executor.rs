@@ -172,6 +172,8 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                                 | "cacheAudioCover"
                                 | "exportAppLogs"
                                 | "clearAppCache"
+                                | "checkAppUpdate"
+                                | "syncFeeds"
                                 | "exportAppBackup"
                                 | "stageAppRestore"
                                 | "confirmWebLogin"

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::assembly::server::ContentServer;
-use crate::host::platform::{SYSTEM_APP_UPDATE_FACTS, SYSTEM_DISKS_FACTS};
+use crate::host::platform::SYSTEM_DISKS_FACTS;
 use serde_json::Value;
 
 #[cfg(target_os = "linux")]
@@ -67,12 +67,7 @@ impl Runtime {
                     .map_err(|error| error.to_string())??;
                 serde_json::to_value(facts).map_err(|error| error.to_string())
             }
-            SYSTEM_APP_UPDATE_FACTS => {
-                let facts = tokio::task::spawn_blocking(super::native::platform::app_update)
-                    .await
-                    .map_err(|error| error.to_string())??;
-                serde_json::to_value(facts).map_err(|error| error.to_string())
-            }
+
             _ => Err(format!("Unsupported headless host method: {method}")),
         }
     }

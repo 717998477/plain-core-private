@@ -202,7 +202,7 @@ impl FeedMutation {
     }
 
     async fn sync_feeds(&self, ctx: &Context<'_>, id: Option<ID>) -> GqlResult<bool> {
-        sync_service(ctx)?.queue(id.map(|id| id.to_string()));
+        sync_service(ctx)?.queue(id.map(|id| id.to_string()))?;
         Ok(true)
     }
 
@@ -227,7 +227,7 @@ impl FeedMutation {
     ) -> GqlResult<Feed> {
         let db = ctx.data::<Arc<Db>>()?.clone();
         let feed = feeds::create_without_sync(&db, &url, fetch_content).await?;
-        sync_service(ctx)?.queue(Some(feed.id.clone()));
+        sync_service(ctx)?.queue(Some(feed.id.clone()))?;
         feed_model(ctx, feed)
     }
 
@@ -241,21 +241,7 @@ impl FeedMutation {
     }
 
     async fn delete_feed(&self, ctx: &Context<'_>, id: ID) -> GqlResult<bool> {
-        let db = ctx.data::<Arc<Db>>()?;
-        let feed = plain_rs::feeds::get(db, id.as_str())?;
-        let images = plain_rs::feeds::search(db, &format!("feed_id:{}", id.as_str()), i32::MAX, 0)?;
-        let deleted = plain_rs::feeds::delete(db, id.as_str())?;
-        if deleted {
-            if let Some(assets) = feed_assets(ctx) {
-                if let Some(feed) = feed {
-                    assets.release(&feed.logo);
-                }
-                for entry in images {
-                    assets.release(&entry.image);
-                }
-            }
-        }
-        Ok(deleted)
+        Ok(sync_service(ctx)?.delete(id.as_str()).await?)
     }
 
     async fn sync_feed_entry_content(&self, ctx: &Context<'_>, id: ID) -> GqlResult<FeedEntry> {

@@ -383,3 +383,48 @@ async fn graphql_feed_entry_joins_and_counts() {
     assert_eq!(data["feedEntryCount"], 1);
     assert_eq!(data["feedEntryCounts"][0]["count"], 1);
 }
+
+#[tokio::test]
+async fn deleting_entries_in_one_main_mutation_cleans_only_the_selected_feed_relations() {
+    let (_dir, schema) = fixture();
+    let db = database(&schema);
+    seed_feed(db, "selected", "Selected");
+    seed_feed(db, "other", "Other");
+    seed_entry(db, "selected", "remove", "");
+    seed_entry(db, "other", "keep", "");
+    db.with_conn(|connection| connection.execute_batch("INSERT INTO tags VALUES ('feed-tag','Feed',7,'2026-01-01','2026-01-01'),('note-tag','Note',6,'2026-01-01','2026-01-01'); INSERT INTO tag_relations VALUES ('feed-tag','entry-remove',7,'2026-01-01'),('feed-tag','entry-keep',7,'2026-01-01'),('note-tag','entry-remove',6,'2026-01-01');")).unwrap();
+    let response = query(
+        &schema,
+        r#"mutation { deleteFeedEntries(query: "feed_id:selected") { affectedCount } }"#,
+    )
+    .await;
+    assert!(
+        response["errors"].as_array().is_none_or(Vec::is_empty),
+        "{response}"
+    );
+    assert_eq!(response["data"]["deleteFeedEntries"]["affectedCount"], 1);
+    assert_eq!(db.feed_entry_count("all:true").unwrap(), 1);
+    let relations: Vec<(String, String)> = db
+        .with_conn(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT tag_id,target_key FROM tag_relations ORDER BY tag_id,target_key",
+            )?;
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()
+        })
+        .unwrap();
+    assert_eq!(
+        relations,
+        vec![
+            ("feed-tag".into(), "entry-keep".into()),
+            ("note-tag".into(), "entry-remove".into())
+        ]
+    );
+    assert_eq!(
+        db.with_conn(|connection| connection
+            .query_row("SELECT COUNT(*) FROM tags", [], |row| row.get::<_, i64>(0)))
+            .unwrap(),
+        2
+    );
+}

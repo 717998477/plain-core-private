@@ -18,6 +18,8 @@ pub(crate) struct ServerState {
     pub(crate) logs: Arc<crate::services::logs::Logs>,
     pub(crate) browser: Arc<crate::services::files::browser::Runtime>,
     pub(crate) file_platform: Arc<crate::services::files::platform::FilePlatform>,
+    pub(crate) feeds: Arc<crate::services::feeds::SyncService>,
+    pub(crate) update_checks: Arc<crate::services::settings::updates::Runtime>,
     pub(crate) duration_updates: Arc<crate::services::files::duration_updates::Runtime>,
     pub(crate) duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     pub(crate) store: Arc<plain_rs::kv::LazyDb>,
@@ -397,6 +399,8 @@ impl ContentServer {
             logs: services.logs.clone(),
             file_platform: services.file_platform.clone(),
             browser: services.browser.clone(),
+            feeds: services.feeds.clone(),
+            update_checks: Arc::new(crate::services::settings::updates::Runtime::default()),
             duration_cache: services.duration_cache.clone(),
             duration_updates: services.duration_updates.clone(),
             store,
@@ -471,6 +475,7 @@ impl ContentServer {
             .mobile
             .mms
             .set_resources(bridge.clone(), receiver.clone());
+        crate::services::feeds::sync_service::schedule::start(state.clone());
         crate::services::chat::download_queue::start(state.clone());
         crate::services::peers::shared_batch::start(state.clone());
         crate::services::discovery::pairing_timeout::start(
@@ -713,6 +718,7 @@ impl ContentServer {
             .shared_batches
             .shutdown(&self.state.directory)
             .await;
+        self.state.feeds.shutdown().await;
         self.state.download_runtime.shutdown().await;
         self.state.mobile.mms.shutdown().await;
         self.state.image_models.shutdown().await;

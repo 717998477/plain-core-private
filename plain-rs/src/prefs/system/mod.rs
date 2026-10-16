@@ -2,7 +2,7 @@ mod command;
 pub mod keys;
 mod update;
 pub use command::Command;
-pub use update::{UpdateInfo, UpdatePatch};
+pub use update::{ReleaseInfo, UpdateInfo, UpdatePatch};
 
 use super::{Prefs, PrefsError, Result};
 use keys::*;

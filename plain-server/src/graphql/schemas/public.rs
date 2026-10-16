@@ -108,6 +108,7 @@ pub struct Query(
 pub struct Mutation(
     crate::graphql::resolvers::app::cache::CacheMutation,
     crate::graphql::resolvers::settings::http_server::HttpServerMutation,
+    crate::graphql::resolvers::settings::updates::AppUpdateMutation,
     crate::graphql::resolvers::casting::receiver::DlnaReceiverMutation,
     crate::graphql::resolvers::settings::tls::TlsMutation,
     crate::graphql::resolvers::peers::records::PeerRecordMutation,

@@ -18,36 +18,7 @@ fn a_failed_read_is_reported_with_its_own_error() {
     assert_eq!(error, "lsblk spawn: no such file");
 }
 
-#[test]
-fn a_newer_release_is_carried_into_the_shared_facts() {
-    let facts = update_facts(AppUpdate {
-        current_version: "0.1.12".to_string(),
-        latest_version: Some("0.2.0".to_string()),
-        has_update: true,
-        url: Some("https://example.invalid/releases/0.2.0".to_string()),
-    });
-    assert_eq!(facts.current_version, "0.1.12");
-    assert_eq!(facts.latest_version.as_deref(), Some("0.2.0"));
-    assert!(facts.has_update);
-    assert_eq!(
-        facts.url.as_deref(),
-        Some("https://example.invalid/releases/0.2.0")
-    );
-}
 
-#[test]
-fn an_unreachable_release_lookup_invents_no_update() {
-    let facts = update_facts(AppUpdate {
-        current_version: "0.1.12".to_string(),
-        latest_version: None,
-        has_update: false,
-        url: None,
-    });
-    assert_eq!(facts.current_version, "0.1.12");
-    assert!(facts.latest_version.is_none());
-    assert!(!facts.has_update);
-    assert!(facts.url.is_none());
-}
 
 #[cfg(target_os = "linux")]
 #[test]

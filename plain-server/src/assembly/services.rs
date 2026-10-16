@@ -104,10 +104,10 @@ impl Services {
         let remote_cache = Arc::new(crate::services::files::remote_cache::RemoteCache::new(
             cache.root().to_owned(),
         ));
-        let feed_assets = Arc::new(crate::services::feeds::FeedAssets {
-            db: db.clone(),
-            directory: directory.clone(),
-        });
+        let feed_assets = Arc::new(crate::services::feeds::FeedAssets::new(
+            db.clone(),
+            directory.clone(),
+        ));
         let feeds = crate::services::feeds::SyncService::new(
             db.clone(),
             events.clone(),

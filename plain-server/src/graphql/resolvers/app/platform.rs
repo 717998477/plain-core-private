@@ -5,9 +5,7 @@ use crate::graphql::resolvers::app::capability_types::{
 };
 use crate::graphql::types::Long;
 use crate::host::bridge::Host;
-use crate::host::platform::{
-    AppUpdateFacts, DisksFacts, SYSTEM_APP_UPDATE_FACTS, SYSTEM_DISKS_FACTS,
-};
+use crate::host::platform::{DisksFacts, SYSTEM_DISKS_FACTS};
 use crate::host::platform::{
     SYSTEM_SAMBA_APPLY, SYSTEM_SAMBA_PASSWORD, SYSTEM_SAMBA_SERVICE_FACTS, SambaApplyRequest,
     SambaPasswordRequest, SambaServiceFacts,
@@ -90,20 +88,7 @@ impl PlatformQuery {
     }
 
     async fn app_update(&self, ctx: &Context<'_>) -> Result<AppUpdate> {
-        require_capability(ctx, "APP_UPDATES").await?;
-        let value = ctx
-            .data::<Arc<Host>>()?
-            .call(SYSTEM_APP_UPDATE_FACTS, serde_json::json!({}))
-            .await
-            .map_err(async_graphql::Error::new)?;
-        let facts: AppUpdateFacts = serde_json::from_value(value)
-            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-        Ok(AppUpdate {
-            current_version: facts.current_version,
-            latest_version: facts.latest_version,
-            has_update: facts.has_update,
-            url: facts.url,
-        })
+        Ok(crate::services::settings::updates::snapshot(ctx.data::<ServerState>()?).await?)
     }
 }
 

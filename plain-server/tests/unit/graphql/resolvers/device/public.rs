@@ -473,3 +473,24 @@ async fn unsupported_relaunch_never_invokes_the_platform_action() {
             .contains("unsupported capability APP_RELAUNCH")
     );
 }
+
+#[tokio::test]
+async fn main_app_capabilities_preserve_current_background_execution_opportunities() {
+    for timer in [true, false] {
+        let (_dir, schema) = fixture(move |method, _| {
+            assert_eq!(method, "systemCapabilities");
+            if timer {
+                json!(["FEEDS", "BACKGROUND_WAKE", "BACKGROUND_TIMER"])
+            } else {
+                json!(["FEEDS", "BACKGROUND_WAKE"])
+            }
+        });
+        let response = schema.execute("{ app { capabilities } }").await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        let names = data["app"]["capabilities"].as_array().unwrap();
+        assert!(names.contains(&json!("FEEDS")));
+        assert!(names.contains(&json!("BACKGROUND_WAKE")));
+        assert_eq!(names.contains(&json!("BACKGROUND_TIMER")), timer);
+    }
+}

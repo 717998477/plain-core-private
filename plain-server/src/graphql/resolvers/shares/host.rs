@@ -91,6 +91,18 @@ impl ShareHostQuery {
             .token(&id)
             .map_err(|e| async_graphql::Error::new(e.to_string()))
     }
+    async fn share_message_content(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> async_graphql::Result<String> {
+        Ok(crate::services::chat::share_card::content(
+            ctx.data::<crate::assembly::server::ServerState>()?,
+            ctx.data::<Arc<Service>>()?.clone(),
+            id.to_string(),
+        )
+        .await?)
+    }
     async fn share_auth(
         &self,
         ctx: &Context<'_>,
@@ -168,7 +180,12 @@ impl ShareHostMutation {
         let service = ctx.data::<Arc<Service>>()?.clone();
         record(
             blocking(move || {
-                service.update(&id, &name, expires_at.map(|i| i.0.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)), real_paths)
+                service.update(
+                    &id,
+                    &name,
+                    expires_at.map(|i| i.0.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+                    real_paths,
+                )
             })
             .await?,
         )
@@ -185,3 +202,7 @@ async fn blocking<T: Send + 'static>(
         .await?
         .map_err(|e| async_graphql::Error::new(e.to_string()))
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/graphql/resolvers/shares/host.rs"]
+mod tests;

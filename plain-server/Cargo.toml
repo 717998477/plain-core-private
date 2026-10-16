@@ -19,7 +19,7 @@ description = "Shared Plain server assembly and desktop/mobile adapters"
 "image-inference" = ["dep:plain-inference"]
 "http_transport" = ["dep:serde_json", "dep:reqwest", "reqwest/rustls-tls", "dep:axum", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile", "tokio/net", "tokio/rt", "tokio/sync", "tokio/time", "plain-rs/tls"]
 "api" = ["core"]
-"core" = ["dep:tempfile", "dep:sysinfo", "plain-rs/linux-system", "dep:rustls-pemfile", "dep:serde_json", "dep:chrono", "dep:rusqlite", "ble", "crypto", "dep:image", "sqlite_browse", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tokio-rustls", "dep:tower", "dep:zip", "dep:tokio-tungstenite", "tokio-tungstenite/rustls-tls-webpki-roots", "dep:rustls", "dep:hmac", "dep:sha2_mac", "dep:anyhow", "chat", "library", "dep:regex", "dep:async-graphql", "dep:axum", "dep:reqwest", "reqwest/rustls-tls", "dep:futures-util", "tokio/net", "tokio/rt-multi-thread", "tokio/sync", "tokio/time", "tokio/fs", "tokio/macros", "dep:subtle", "plain-rs/services", "plain-rs/filesystem", "plain-rs/trash", "plain-rs/html", "plain-rs/feeds", "plain-rs/tls", "plain-rs/graphql", "image-inference"]
+"core" = ["dep:netdev", "dep:tempfile", "dep:sysinfo", "plain-rs/linux-system", "dep:rustls-pemfile", "dep:serde_json", "dep:chrono", "dep:rusqlite", "ble", "crypto", "dep:image", "sqlite_browse", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tokio-rustls", "dep:tower", "dep:zip", "dep:tokio-tungstenite", "tokio-tungstenite/rustls-tls-webpki-roots", "dep:rustls", "dep:hmac", "dep:sha2_mac", "dep:anyhow", "chat", "library", "dep:regex", "dep:async-graphql", "dep:axum", "dep:reqwest", "reqwest/rustls-tls", "dep:futures-util", "tokio/net", "tokio/rt-multi-thread", "tokio/sync", "tokio/time", "tokio/fs", "tokio/macros", "dep:subtle", "plain-rs/services", "plain-rs/filesystem", "plain-rs/trash", "plain-rs/html", "plain-rs/feeds", "plain-rs/tls", "plain-rs/graphql", "image-inference"]
 "mounts" = ["dep:sysinfo", "dep:serde_json"]
 "mobile" = ["core"]
 "system" = ["api", "dep:ureq", "dep:http"]
@@ -95,3 +95,6 @@ plain-rs = { path = "../plain-rs", default-features = false, features = ["linux-
 
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 sysinfo = { version = "0.32", default-features = false, features = ["system"], optional = true }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+netdev = { version = "0.46.3", optional = true, default-features = false, features = ["gateway", "apple-system-configuration-extra"] }

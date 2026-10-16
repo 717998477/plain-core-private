@@ -18,3 +18,6 @@ pub mod download_queue;
 
 #[cfg(feature = "core")]
 pub mod prewarm;
+
+#[cfg(feature = "core")]
+pub mod share_card;

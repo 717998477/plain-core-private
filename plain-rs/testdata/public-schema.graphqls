@@ -59,8 +59,17 @@ type AppFile {
 type AppUpdate {
 	currentVersion: String!
 	latestVersion: String
+	releaseName: String!
+	publishedAt: Instant
 	hasUpdate: Boolean!
 	url: String
+}
+
+enum AppUpdateStatus {
+	AVAILABLE
+	UP_TO_DATE
+	RATE_LIMITED
+	NOT_DUE
 }
 
 type Audio implements MediaItem {
@@ -222,6 +231,8 @@ enum CallType {
 }
 
 enum Capability {
+	BACKGROUND_TIMER
+	BACKGROUND_WAKE
 	FILE_EXPORT
 	FILE_REVEAL
 	FILE_CLIPBOARD
@@ -849,6 +860,8 @@ type FeedError {
 
 type FeedSyncState {
 	feedId: ID!
+	taskId: ID!
+	revision: Long!
 	status: String!
 	error: String!
 }
@@ -1253,6 +1266,7 @@ type Mount {
 type Mutation {
 	clearAppCache: Boolean!
 	restartHttpServer(httpPort: Int, httpsPort: Int): HttpServerState!
+	checkAppUpdate(automatic: Boolean! = false): AppUpdateStatus!
 	controlDlnaReceiver(input: DlnaReceiverInput!): JSON!
 	regenerateTlsCertificate: [Int!]!
 	importTlsCertificatePem(certificatePem: String!, privateKeyPem: String!): [Int!]!
@@ -2023,6 +2037,7 @@ type Query {
 	shareRecord(id: ID!): ShareRecord
 	shareRecords: [ShareRecord!]!
 	shareToken(id: ID!): String!
+	shareMessageContent(id: ID!): String!
 	shareAuth(id: ID!): ShareAuthRecord
 	resolveSharePath(id: ID!, virtualPath: String!): String
 	resolveShareFile(id: ID!, fileId: String!): String
@@ -2617,6 +2632,7 @@ type SystemSettings {
 	clientId: ID!
 	mdnsHostname: String!
 	signaturePublicKey: String!
+	appUpdateAvailable: Boolean!
 }
 
 enum SystemSettingsAction {

@@ -42,6 +42,8 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
                 | "NETWORK_INTERFACES_CHANGED"
                 | "BLE_ADVERTISEMENT_REPORTED"
                 | "SMS_PART_SENT_REPORTED"
+                | "BACKGROUND_EXECUTION_GRANTED"
+                | "BACKGROUND_EXECUTION_REVOKED"
         ) {
             assert!(
                 bridge.publish_text(kind, "{}".into()).await.is_err(),

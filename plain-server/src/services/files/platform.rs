@@ -203,6 +203,20 @@ impl FilePlatform {
         })
         .await?
     }
+    pub(crate) async fn authorize_metadata_paths(&self, paths: &[String]) -> Result<()> {
+        if paths.iter().any(|path| !Path::new(path).is_absolute()) {
+            bail!("absolute file path required");
+        }
+        if self.uses_sdk() {
+            self.receipt(
+                "fileTaskAuthorize",
+                json!({"operation":"read", "paths":paths}),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn identities(
         &self,
         paths: &[String],

@@ -17,6 +17,9 @@ pub struct WsEvent {
 }
 
 pub const HOST_TEXT_TYPES: &[&str] = &[
+    "BACKGROUND_EXECUTION_GRANTED",
+    "BACKGROUND_EXECUTION_REVOKED",
+    "EXECUTION_STATE_CHANGED",
     "PAIRING_REQUEST_REPORTED",
     "PAIRING_RESPONSE_REPORTED",
     "PAIRING_CANCEL_REPORTED",
@@ -42,7 +45,9 @@ impl WsEvent {
     pub fn is_internal(&self) -> bool {
         matches!(
             self.event_type,
-            HTTP_SERVER_FAILED
+            "BACKGROUND_EXECUTION_FINISHED"
+                | "EXECUTION_STATE_CHANGED"
+                | HTTP_SERVER_FAILED
                 | HTTP_SERVER_STARTED
                 | MEDIA_ACTION_FINISHED
                 | "MDNS_UPDATED"

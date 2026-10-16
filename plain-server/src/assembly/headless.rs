@@ -170,6 +170,7 @@ fn capabilities() -> Vec<String> {
         "MEDIA_SCAN".into(),
         "NOTES".into(),
         "FEEDS".into(),
+        "BACKGROUND_TIMER".into(),
         "POMODORO".into(),
         "APP_UPDATES".into(),
     ];

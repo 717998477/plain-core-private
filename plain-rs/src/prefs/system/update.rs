@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default, rename_all = "camelCase")]
 pub struct UpdateInfo {
     pub new_version: String,
+    pub latest_release: Option<ReleaseInfo>,
     pub check_update_time: u64,
     pub skip_version: String,
     pub publish_date: String,
@@ -18,6 +19,7 @@ impl Default for UpdateInfo {
     fn default() -> Self {
         Self {
             new_version: String::new(),
+            latest_release: None,
             check_update_time: 0,
             skip_version: String::new(),
             publish_date: String::new(),
@@ -34,6 +36,7 @@ impl Default for UpdateInfo {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdatePatch {
     pub new_version: Option<String>,
+    pub latest_release: Option<ReleaseInfo>,
     pub check_update_time: Option<u64>,
     pub skip_version: Option<String>,
     pub publish_date: Option<String>,
@@ -47,6 +50,9 @@ pub struct UpdatePatch {
 impl UpdatePatch {
     pub(super) fn apply(self, info: &mut UpdateInfo) {
         macro_rules! patch { ($($field:ident),*) => { $(if let Some(value) = self.$field { info.$field = value; })* }; }
+        if let Some(release) = self.latest_release {
+            info.latest_release = Some(release);
+        }
         patch!(
             new_version,
             check_update_time,
@@ -59,4 +65,13 @@ impl UpdatePatch {
             auto_check_update
         );
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseInfo {
+    pub version: String,
+    pub name: String,
+    pub url: String,
+    pub published_at: String,
 }

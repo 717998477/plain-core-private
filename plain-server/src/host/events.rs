@@ -171,6 +171,24 @@ impl HostEvents {
         {
             return Ok(());
         }
+        if kind == "BACKGROUND_EXECUTION_GRANTED" {
+            return crate::services::feeds::sync_service::schedule::grant(
+                &self.state,
+                serde_json::from_str(&payload).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string());
+        }
+        if kind == "BACKGROUND_EXECUTION_REVOKED" {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Revoke {
+                id: String,
+            }
+            let value: Revoke =
+                serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+            crate::services::feeds::sync_service::schedule::revoke(&self.state, &value.id).await;
+            return Ok(());
+        }
         if kind == "NOTIFICATION_REPORTED" {
             return crate::graphql::resolvers::notifications::public::publish(
                 &self.state.prefs,

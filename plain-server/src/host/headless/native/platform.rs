@@ -1,5 +1,4 @@
-use crate::host::platform::{AppUpdateFacts, DiskFacts, DisksFacts};
-use crate::platform::system::app_update::AppUpdate;
+use crate::host::platform::{DiskFacts, DisksFacts};
 
 #[cfg(target_os = "linux")]
 use plain_rs::platform::linux::disks::list::{Disk, read_disks};
@@ -9,26 +8,11 @@ pub fn disks() -> Result<DisksFacts, String> {
     disks_facts(read_disks())
 }
 
-pub fn app_update() -> Result<AppUpdateFacts, String> {
-    Ok(update_facts(
-        crate::platform::system::app_update::app_update(),
-    ))
-}
-
 #[cfg(target_os = "linux")]
 fn disks_facts(disks: Result<Vec<Disk>, String>) -> Result<DisksFacts, String> {
     disks.map(|disks| DisksFacts {
         disks: disks.into_iter().map(to_facts).collect(),
     })
-}
-
-fn update_facts(update: AppUpdate) -> AppUpdateFacts {
-    AppUpdateFacts {
-        current_version: update.current_version,
-        latest_version: update.latest_version,
-        has_update: update.has_update,
-        url: update.url,
-    }
 }
 
 #[cfg(target_os = "linux")]

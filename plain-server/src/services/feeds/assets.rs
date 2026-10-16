@@ -5,12 +5,111 @@ use plain_rs::error::DomainResult;
 use plain_rs::utils::html_to_markdown::dom::Dom;
 use plain_rs::utils::http_url::join;
 use plain_rs::utils::http_url::parse_http_url;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+use tokio::sync::Notify;
+
+#[derive(Default)]
+struct Writes {
+    pending: AtomicUsize,
+    finished: Notify,
+}
+struct Write(Arc<Writes>);
+impl Drop for Write {
+    fn drop(&mut self) {
+        if self.0.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.0.finished.notify_waiters();
+        }
+    }
+}
+struct ImportedAsset {
+    db: Arc<Db>,
+    directory: PathBuf,
+    file: plain_rs::chat::attachments::app_file_store::ImportResult,
+    retained: bool,
+    _write: Write,
+}
+impl ImportedAsset {
+    fn retain(mut self) -> String {
+        self.retained = true;
+        self.file.real_path.to_string_lossy().into_owned()
+    }
+}
+impl Drop for ImportedAsset {
+    fn drop(&mut self) {
+        if !self.retained {
+            if let Err(error) = plain_rs::chat::attachments::app_file_store::release(
+                &self.db,
+                &self.directory,
+                &self.file.id,
+            ) {
+                log::warn!("Cancelled feed asset release failed: {error}");
+            }
+        }
+    }
+}
 pub struct FeedAssets {
     pub db: Arc<Db>,
     pub directory: PathBuf,
+    writes: Arc<Writes>,
 }
 impl FeedAssets {
+    pub fn new(db: Arc<Db>, directory: PathBuf) -> Self {
+        Self {
+            db,
+            directory,
+            writes: Arc::new(Writes::default()),
+        }
+    }
+    pub(super) fn scoped(&self) -> Self {
+        Self::new(self.db.clone(), self.directory.clone())
+    }
+    pub(super) async fn wait_writes(&self) {
+        loop {
+            let finished = self.writes.finished.notified();
+            tokio::pin!(finished);
+            finished.as_mut().enable();
+            if self.writes.pending.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            finished.await;
+        }
+    }
+    async fn import(
+        &self,
+        operation: impl FnOnce(
+            &Db,
+            &Path,
+        ) -> std::io::Result<
+            plain_rs::chat::attachments::app_file_store::ImportResult,
+        > + Send
+        + 'static,
+    ) -> DomainResult<String> {
+        self.writes.pending.fetch_add(1, Ordering::AcqRel);
+        let write = Write(self.writes.clone());
+        let db = self.db.clone();
+        let directory = self.directory.clone();
+        tokio::task::spawn_blocking(move || {
+            let file = operation(&db, &directory)?;
+            Ok::<_, std::io::Error>(ImportedAsset {
+                db,
+                directory,
+                file,
+                retained: false,
+                _write: write,
+            })
+        })
+        .await
+        .map_err(|error| DomainError::Other(error.to_string()))?
+        .map(ImportedAsset::retain)
+        .map_err(|error| DomainError::Other(error.to_string()))
+    }
+
     pub async fn cache(&self, url: &str) -> DomainResult<String> {
         self.cache_formats(url, false).await
     }
@@ -53,18 +152,12 @@ impl FeedAssets {
             }
             bytes.extend_from_slice(&chunk);
         }
-        let db = self.db.clone();
-        let directory = self.directory.clone();
-        let file = tokio::task::spawn_blocking(move || {
-            plain_rs::chat::attachments::app_file_store::import_bytes(
-                &db, &directory, &bytes, &mime,
-            )
+        self.import(move |db, directory| {
+            plain_rs::chat::attachments::app_file_store::import_bytes(db, directory, &bytes, &mime)
         })
         .await
-        .map_err(|e| DomainError::Other(e.to_string()))?
-        .map_err(|e| DomainError::Other(e.to_string()))?;
-        Ok(file.real_path.to_string_lossy().into_owned())
     }
+
     pub fn release(&self, uri: &str) {
         let path = std::path::Path::new(uri);
         let Some(id) = path.file_stem().and_then(|v| v.to_str()) else {
@@ -137,3 +230,7 @@ pub fn main_image(html: &str, base: &str) -> Option<String> {
         .filter(|node| node.tag == "img")
         .find_map(|node| absolute_url(base, node.attr("src")))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/feeds/assets.rs"]
+mod tests;

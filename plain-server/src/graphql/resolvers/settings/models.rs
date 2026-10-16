@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(SimpleObject)]
+#[graphql(complex)]
 pub struct SystemSettings {
     #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
     pub password: String,
@@ -20,6 +21,24 @@ pub struct SystemSettings {
     pub mdns_hostname: String,
     pub signature_public_key: String,
 }
+#[ComplexObject]
+impl SystemSettings {
+    async fn app_update_available(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        #[cfg(feature = "core")]
+        if let Some(state) = ctx.data_opt::<crate::assembly::server::ServerState>() {
+            let version = state
+                .host
+                .startup_property("appVersion")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let info = serde_json::from_value(self.update_info.0.clone())?;
+            return Ok(plain_rs::updates::available(&info, version));
+        }
+        let _ = ctx;
+        Ok(false)
+    }
+}
+
 impl TryFrom<plain_rs::prefs::system::SystemState> for SystemSettings {
     type Error = serde_json::Error;
     fn try_from(s: plain_rs::prefs::system::SystemState) -> Result<Self, Self::Error> {
