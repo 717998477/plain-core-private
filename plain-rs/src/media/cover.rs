@@ -84,6 +84,13 @@ pub fn extract_embedded_cover_reader(
     reader: &mut (impl std::io::Read + std::io::Seek),
 ) -> Option<CoverData> {
     reader.seek(std::io::SeekFrom::Start(0)).ok()?;
+    let mut signature = [0; 16];
+    if std::io::Read::read_exact(reader, &mut signature).is_ok() && signature == super::asf::HEADER
+    {
+        let mut buffered = std::io::BufReader::new(reader);
+        return super::asf::cover(&mut buffered);
+    }
+    reader.seek(std::io::SeekFrom::Start(0)).ok()?;
     let tagged_file = Probe::new(std::io::BufReader::new(reader))
         .options(lofty::config::ParseOptions::new().read_properties(false))
         .guess_file_type()

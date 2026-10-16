@@ -1,4 +1,7 @@
+mod cover;
+mod objects;
 mod tags;
+use objects::{METADATA, METADATA_LIBRARY};
 
 use super::video_info::VideoInfo;
 use std::io::{Read, Seek, SeekFrom};
@@ -42,38 +45,15 @@ fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
 
 fn parse(reader: &mut (impl Read + Seek), details: bool) -> Option<(VideoInfo, Option<i64>)> {
     let length = reader.seek(SeekFrom::End(0)).ok()?;
-    reader.seek(SeekFrom::Start(0)).ok()?;
-    let mut header = [0; 30];
-    reader.read_exact(&mut header).ok()?;
-    if header[..16] != HEADER {
-        return None;
-    }
-    let end = u64_at(&header, 16)?;
-    if end > length || end < 30 {
-        return None;
-    }
-    let count = u64::from(u32_at(&header, 24)?);
-    if count > 100_000 || count > (end - 30) / 24 {
-        return None;
-    }
     let mut result = VideoInfo::default();
     let mut duration = None;
     let mut file_properties = false;
     let mut metadata_bytes = 4 * 1024 * 1024u64;
-    let mut offset = 30u64;
-    for _ in 0..count {
-        if end.checked_sub(offset)? < 24 {
-            return None;
-        }
-        reader.seek(SeekFrom::Start(offset)).ok()?;
-        let mut object = [0; 24];
-        reader.read_exact(&mut object).ok()?;
-        let size = u64_at(&object, 16)?;
-        let next = offset.checked_add(size)?;
-        if size < 24 || next > end {
-            return None;
-        }
-        if object[..16] == FILE_PROPERTIES {
+    objects::visit(reader, details, |reader, object| {
+        let size = object.size;
+        let offset = object.data - 24;
+        let next = object.end;
+        if object.guid == FILE_PROPERTIES {
             file_properties = true;
             if size < 104 {
                 return None;
@@ -86,9 +66,9 @@ fn parse(reader: &mut (impl Read + Seek), details: bool) -> Option<(VideoInfo, O
                     .and_then(|value| i64::try_from(value).ok());
             }
             if !details {
-                return Some((result, duration));
+                return Some(false);
             }
-        } else if details && object[..16] == STREAM_PROPERTIES && result.width == 0 {
+        } else if details && object.guid == STREAM_PROPERTIES && result.width == 0 {
             if size < 78 {
                 return None;
             }
@@ -121,16 +101,23 @@ fn parse(reader: &mut (impl Read + Seek), details: bool) -> Option<(VideoInfo, O
                     result.height = height as u32;
                 }
             }
-        } else if details && (object[..16] == CONTENT || object[..16] == EXTENDED_CONTENT) {
-            metadata_bytes = metadata_bytes.checked_sub(size)?;
-            if object[..16] == CONTENT {
-                tags::content(reader, offset + 24, next, &mut result)?;
+        } else if details && (object.guid == CONTENT || object.guid == EXTENDED_CONTENT) {
+            if object.guid == CONTENT {
+                tags::content(reader, offset + 24, next, &mut result, &mut metadata_bytes)?;
             } else {
-                tags::extended(reader, offset + 24, next, &mut result)?;
+                tags::extended(reader, offset + 24, next, &mut result, &mut metadata_bytes)?;
             }
+        } else if details && matches!(object.guid, METADATA | METADATA_LIBRARY) {
+            tags::records(
+                reader,
+                object.data,
+                object.end,
+                &mut result,
+                &mut metadata_bytes,
+            )?;
         }
-        offset = next;
-    }
+        Some(true)
+    })?;
     if !file_properties {
         return None;
     }
@@ -155,3 +142,7 @@ pub(super) fn video(reader: &mut (impl Read + Seek)) -> Option<VideoInfo> {
 #[cfg(test)]
 #[path = "../../tests/unit/media/asf.rs"]
 mod tests;
+
+pub(super) fn cover(reader: &mut (impl Read + Seek)) -> Option<super::cover::CoverData> {
+    cover::read(reader)
+}

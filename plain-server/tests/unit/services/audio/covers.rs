@@ -45,3 +45,24 @@ async fn local_embedded_cover_uses_rust_without_host_metadata_and_has_a_nullable
     );
     assert!(requests.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn asf_metadata_library_artwork_uses_the_shared_reader_without_platform_queries() {
+    let directory = tempfile::tempdir().unwrap();
+    let host = Arc::new(crate::host::bridge::Host::default());
+    let (_generation, mut requests) = host.connect();
+    let resources = crate::host::resources::NativeResources::new(host);
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../plain-rs/testdata/audio-asf-library-cover.wma"
+    );
+    let cover = cache(&resources, directory.path(), path)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        std::fs::read(cover).unwrap(),
+        include_bytes!("../../../../../plain-rs/testdata/v-prog-gray.jpg")
+    );
+    assert!(requests.try_recv().is_err());
+}

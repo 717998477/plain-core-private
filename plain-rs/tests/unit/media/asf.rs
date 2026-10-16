@@ -257,3 +257,216 @@ fn generated_wmv_and_wma_use_the_same_portable_reader() {
     assert_eq!(audio.title, "WmaFixture");
     assert_eq!(audio.artist, "FixtureArtist");
 }
+
+fn metadata_record(stream: u16, name: &str, kind: u16, value: &[u8]) -> Vec<u8> {
+    let name = wide(name);
+    [
+        0u16.to_le_bytes().to_vec(),
+        stream.to_le_bytes().to_vec(),
+        (name.len() as u16).to_le_bytes().to_vec(),
+        kind.to_le_bytes().to_vec(),
+        (value.len() as u32).to_le_bytes().to_vec(),
+        name,
+        value.to_vec(),
+    ]
+    .concat()
+}
+fn extension(children: &[Vec<u8>]) -> Vec<u8> {
+    let children = children.concat();
+    let reserved = [
+        0x11, 0xd2, 0xd3, 0xab, 0xba, 0xa9, 0xcf, 0x11, 0x8e, 0xe6, 0, 0xc0, 0x0c, 0x20, 0x53, 0x65,
+    ];
+    object(
+        objects::HEADER_EXTENSION,
+        &[
+            reserved.to_vec(),
+            6u16.to_le_bytes().to_vec(),
+            (children.len() as u32).to_le_bytes().to_vec(),
+            children,
+        ]
+        .concat(),
+    )
+}
+fn library(records: &[Vec<u8>]) -> Vec<u8> {
+    object(
+        METADATA_LIBRARY,
+        &[
+            (records.len() as u16).to_le_bytes().to_vec(),
+            records.concat(),
+        ]
+        .concat(),
+    )
+}
+fn picture(kind: u8, bytes: &[u8]) -> Vec<u8> {
+    [
+        vec![kind],
+        (bytes.len() as u32).to_le_bytes().to_vec(),
+        wide("image/jpeg"),
+        wide("Artwork"),
+        bytes.to_vec(),
+    ]
+    .concat()
+}
+#[test]
+fn header_extension_metadata_is_shared_by_video_and_audio_and_ignores_other_streams() {
+    let bytes = with_objects(
+        fixture(3211, 3000, false),
+        &[
+            stream(),
+            extension(&[library(&[
+                metadata_record(0, "Title", 0, &wide("Library title")),
+                metadata_record(0, "Author", 0, &wide("Library artist")),
+                metadata_record(0, "WM/AlbumTitle", 0, &wide("Album")),
+                metadata_record(2, "Title", 0, &wide("Other stream")),
+            ])]),
+        ],
+    );
+    let facts = video(&mut Cursor::new(&bytes)).unwrap();
+    assert_eq!(facts.title, "Library title");
+    assert_eq!(facts.artist, "Library artist");
+    assert_eq!(facts.album, "Album");
+    let audio = crate::media::probe::probe_audio_reader(&mut Cursor::new(bytes));
+    assert!(audio.parsed && audio.duration_available);
+    assert_eq!(audio.title, "Library title");
+    assert_eq!(audio.artist, "Library artist");
+    assert_eq!(audio.duration_ms, 3211);
+}
+#[test]
+fn embedded_artwork_prefers_front_cover_across_description_and_metadata_library() {
+    let other = include_bytes!("../../../testdata/v-prog-gray.jpg");
+    let front = include_bytes!("../../../testdata/v-prog420.jpg");
+    let bytes = with_objects(
+        fixture(0, 0, false),
+        &[
+            object(
+                EXTENDED_CONTENT,
+                &[
+                    1u16.to_le_bytes().to_vec(),
+                    descriptor("WM/Picture", 1, &picture(0, other)),
+                ]
+                .concat(),
+            ),
+            extension(&[library(&[metadata_record(
+                0,
+                "WM/Picture",
+                1,
+                &picture(3, front),
+            )])]),
+        ],
+    );
+    let cover =
+        crate::media::cover::extract_embedded_cover_reader(&mut Cursor::new(&bytes)).unwrap();
+    assert_eq!(cover.mime, "image/jpeg");
+    assert_eq!(cover.bytes, front);
+    assert_eq!(milliseconds(&mut Cursor::new(bytes)), Some(0));
+}
+#[test]
+fn large_unselected_library_values_are_skipped_in_metadata_and_owned_range_cover_reads() {
+    let image = include_bytes!("../../../testdata/v-prog-gray.jpg");
+    let bytes = with_objects(
+        fixture(3211, 0, false),
+        &[extension(&[library(&[
+            metadata_record(0, "Unselected", 1, &vec![7; 5 * 1024 * 1024]),
+            metadata_record(0, "Title", 0, &wide("After binary")),
+            metadata_record(0, "WM/Picture", 1, &picture(3, image)),
+        ])])],
+    );
+    let mut source = Counted {
+        reader: Cursor::new(bytes.clone()),
+        read: 0,
+    };
+    assert_eq!(metadata(&mut source).unwrap().0.title, "After binary");
+    assert!(source.read < 4096, "{}", source.read);
+    let mut wrapped = b"outside".to_vec();
+    wrapped.extend(&bytes);
+    wrapped.extend(b"outside");
+    let mut source = Counted {
+        reader: Cursor::new(wrapped),
+        read: 0,
+    };
+    let mut range =
+        crate::utils::range_reader::RangeReader::new(&mut source, 7, bytes.len() as u64).unwrap();
+    let cover = crate::media::cover::extract_embedded_cover_reader(&mut range).unwrap();
+    assert_eq!(cover.bytes, image);
+    drop(range);
+    assert!(source.read < image.len() + 24 * 1024, "{}", source.read);
+}
+#[test]
+fn invalid_picture_lengths_and_strings_do_not_hide_later_valid_artwork() {
+    let image = include_bytes!("../../../testdata/v-prog-gray.jpg");
+    let mut oversized = picture(3, image);
+    oversized[1..5].copy_from_slice(&u32::MAX.to_le_bytes());
+    let unterminated = [vec![3], 1u32.to_le_bytes().to_vec(), vec![65; 32]].concat();
+    let bytes = with_objects(
+        fixture(0, 0, false),
+        &[extension(&[library(&[
+            metadata_record(0, "WM/Picture", 1, &oversized),
+            metadata_record(0, "WM/Picture", 1, &unterminated),
+            metadata_record(0, "WM/Picture", 1, &picture(0, image)),
+        ])])],
+    );
+    assert_eq!(cover(&mut Cursor::new(bytes)).unwrap().bytes, image);
+}
+#[test]
+fn malformed_extensions_nested_objects_and_incomplete_counts_are_rejected() {
+    let mut malformed = extension(&[]);
+    malformed[24 + 18..24 + 22].copy_from_slice(&u32::MAX.to_le_bytes());
+    let bytes = with_objects(fixture(0, 0, false), &[malformed]);
+    assert!(metadata(&mut Cursor::new(&bytes)).is_none());
+    assert!(cover(&mut Cursor::new(&bytes)).is_none());
+    assert_eq!(milliseconds(&mut Cursor::new(bytes)), Some(0));
+    let bytes = with_objects(fixture(0, 0, false), &[extension(&[extension(&[])])]);
+    assert!(metadata(&mut Cursor::new(bytes)).is_none());
+    let mut bytes = fixture(0, 0, false);
+    bytes[24..28].copy_from_slice(&2u32.to_le_bytes());
+    assert!(metadata(&mut Cursor::new(bytes)).is_none());
+}
+#[test]
+fn text_budget_rejects_excessive_selected_values_without_reading_all_of_them() {
+    let record = metadata_record(0, "Title", 0, &wide(&"x".repeat(1024)));
+    let bytes = with_objects(
+        fixture(0, 0, false),
+        &[extension(&[library(&vec![record; 3000])])],
+    );
+    let mut source = Counted {
+        reader: Cursor::new(bytes),
+        read: 0,
+    };
+    assert!(metadata(&mut source).is_none());
+    assert!(source.read <= 4 * 1024 * 1024 + 256, "{}", source.read);
+}
+
+#[test]
+fn metadata_library_artwork_accepts_32_bit_lengths_and_prefers_other_to_back_cover() {
+    let mut image = include_bytes!("../../../testdata/v-prog-gray.jpg").to_vec();
+    image.resize(70_000, 0);
+    let bytes = with_objects(
+        fixture(0, 0, false),
+        &[extension(&[library(&[
+            metadata_record(0, "WM/Picture", 1, &picture(4, b"back cover")),
+            metadata_record(0, "WM/Picture", 1, &picture(0, &image)),
+            metadata_record(2, "WM/Picture", 1, &picture(3, b"foreign front")),
+        ])])],
+    );
+    let cover =
+        crate::media::cover::extract_embedded_cover_reader(&mut Cursor::new(bytes)).unwrap();
+    assert_eq!(cover.bytes, image);
+}
+#[test]
+fn generated_wma_library_fixture_preserves_audio_metadata_duration_and_embedded_image() {
+    let bytes = include_bytes!("../../../testdata/audio-asf-library-cover.wma");
+    let audio = crate::media::probe::probe_audio_reader(&mut Cursor::new(bytes));
+    assert!(audio.parsed && audio.duration_available);
+    assert_eq!(audio.title, "ASF fixture title");
+    assert_eq!(audio.artist, "ASF fixture artist");
+    let original = crate::media::probe::probe_audio_reader(&mut Cursor::new(include_bytes!(
+        "../../../testdata/audio-wmav2.wma"
+    )));
+    assert_eq!(audio.duration_ms, original.duration_ms);
+    let picture =
+        crate::media::cover::extract_embedded_cover_reader(&mut Cursor::new(bytes)).unwrap();
+    assert_eq!(
+        picture.bytes,
+        include_bytes!("../../../testdata/v-prog-gray.jpg")
+    );
+}
