@@ -151,6 +151,14 @@ async fn configured_public_uses_core_settings_and_keeps_listeners_on_tls_preflig
     assert_ne!(ports.1, 0);
     assert_eq!(core.http_ports().await, Some(ports));
     assert!(core.task.is_none());
+    core.state
+        .prefs
+        .set("rotate_url_token_on_restart", true)
+        .unwrap();
+    let preferences = core.state.prefs.entries();
+    core.runtime_state().restart_public().await.unwrap();
+    assert_eq!(core.state.prefs.entries(), preferences);
+    let ports = core.http_ports().await.unwrap();
     std::fs::write(directory.path().join("tls-identity.json"), "{}").unwrap();
     assert!(core.runtime_state().restart_public().await.is_err());
     assert_eq!(core.http_ports().await, Some(ports));
@@ -160,6 +168,86 @@ async fn configured_public_uses_core_settings_and_keeps_listeners_on_tls_preflig
     assert!(core.native_graphql().is_err());
     assert!(core.start_configured_public().await.is_err());
     assert!(core.runtime_state().restart_public().await.is_err());
+}
+
+#[tokio::test]
+async fn core_startup_persists_complete_identity_and_only_rotates_url_token_on_recreation() {
+    use plain_rs::prefs::system::keys::*;
+    let directory = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let core = ContentServer::open_with_cache(directory.path(), cache.path()).unwrap();
+    let prefs = core.state.prefs.clone();
+    let first = prefs.entries();
+    for key in [
+        CLIENT_ID,
+        SIGNATURE_KEY_PAIR,
+        MASTER_SECRET,
+        PASSWORD,
+        ADB_TOKEN,
+        MDNS_HOSTNAME,
+        URL_TOKEN,
+    ] {
+        assert!(
+            !prefs.get::<String>(key).unwrap().unwrap().is_empty(),
+            "{key}"
+        );
+    }
+    assert_eq!(prefs.get::<i32>(PASSWORD_TYPE).unwrap(), Some(2));
+    assert_eq!(prefs.get::<bool>(AUTH_TWO_FACTOR).unwrap(), Some(true));
+    let persisted = plain_rs::prefs::Prefs::load(prefs.path()).unwrap();
+    assert_eq!(persisted.entries(), first);
+    core.stop_core().await;
+    drop(core);
+    let core = ContentServer::open_with_cache(directory.path(), cache.path()).unwrap();
+    assert_eq!(core.state.prefs.entries(), first);
+    core.state
+        .prefs
+        .set(ROTATE_URL_TOKEN_ON_RESTART, true)
+        .unwrap();
+    core.state.prefs.set(PASSWORD, "custom-password").unwrap();
+    core.state.prefs.set(AUTH_TWO_FACTOR, false).unwrap();
+    let before: std::collections::BTreeMap<_, _> = core.state.prefs.entries().into_iter().collect();
+    core.stop_core().await;
+    drop(core);
+    let core = ContentServer::open_with_cache(directory.path(), cache.path()).unwrap();
+    assert_ne!(
+        core.state.prefs.get::<String>(URL_TOKEN).unwrap(),
+        persisted.get::<String>(URL_TOKEN).unwrap()
+    );
+    let mut after: std::collections::BTreeMap<_, _> =
+        core.state.prefs.entries().into_iter().collect();
+    after.insert(URL_TOKEN.into(), before[URL_TOKEN].clone());
+    assert_eq!(after, before);
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn core_startup_propagates_system_initialization_failure_without_publishing_partial_secrets()
+{
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("prefs.json");
+    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&path).unwrap());
+    prefs.set("dev_token", "existing").unwrap();
+    let before = prefs.entries();
+    let blocker = path.with_extension("json.tmp");
+    std::fs::create_dir(&blocker).unwrap();
+    let token = plain_rs::utils::base64::base64_encode(&[21; 32]);
+    assert!(ContentServer::start_core(directory.path(), &token, prefs.clone()).is_err());
+    assert_eq!(prefs.entries(), before);
+    assert_eq!(
+        plain_rs::prefs::Prefs::load(&path).unwrap().entries(),
+        before
+    );
+    std::fs::remove_dir(blocker).unwrap();
+    let core = ContentServer::start_core(directory.path(), &token, prefs).unwrap();
+    assert!(
+        core.state
+            .prefs
+            .get::<String>("master_secret")
+            .unwrap()
+            .is_some()
+    );
+    core.stop_core().await;
 }
 
 #[cfg(feature = "core")]

@@ -93,10 +93,6 @@ fn runtime_defaults(map: &mut Map<String, Value>) -> Result<()> {
     Ok(())
 }
 
-pub fn bootstrap_runtime(prefs: &Prefs) -> Result<()> {
-    prefs.update_system(runtime_defaults)
-}
-
 pub fn dev_token(prefs: &Prefs) -> Result<String> {
     Ok(prefs.get(DEV_TOKEN)?.unwrap_or_default())
 }

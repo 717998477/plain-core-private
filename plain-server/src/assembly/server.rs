@@ -312,7 +312,7 @@ impl ContentServer {
             directory.clone(),
             data_directory.cache_paths().root().to_owned(),
         );
-        plain_rs::prefs::system::bootstrap_runtime(&prefs).map_err(|error| error.to_string())?;
+        plain_rs::prefs::system::bootstrap(&prefs).map_err(|error| error.to_string())?;
         log::set_max_level(
             plain_rs::prefs::system::log_level(&prefs).map_err(|error| error.to_string())?,
         );
@@ -335,7 +335,6 @@ impl ContentServer {
             .map_err(|error| error.to_string())?;
         }
         plain_rs::prefs::identity::ensure_identity(&prefs);
-        plain_rs::prefs::ensure_mdns_hostname(&prefs);
         let (stop, receiver) = watch::channel(false);
         let lan =
             Arc::new(crate::services::peers::peer_lan::Lan::new().map_err(|e| e.to_string())?);

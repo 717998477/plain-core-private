@@ -93,7 +93,7 @@ fn update_patch_preserves_other_fields_and_write_failure_does_not_publish_state(
 #[test]
 fn runtime_preferences_use_shared_defaults_and_persist_only_system_values() {
     let (dir, prefs) = fixture();
-    bootstrap_runtime(&prefs).unwrap();
+    bootstrap(&prefs).unwrap();
     assert_eq!(dev_token(&prefs).unwrap(), "");
     assert_eq!(log_level(&prefs).unwrap(), log::LevelFilter::Info);
     assert_eq!(
@@ -102,7 +102,7 @@ fn runtime_preferences_use_shared_defaults_and_persist_only_system_values() {
     );
     set_entry(&prefs, DEV_TOKEN, serde_json::json!("development")).unwrap();
     set_entry(&prefs, LOG_LEVEL, serde_json::json!("warn")).unwrap();
-    bootstrap_runtime(&prefs).unwrap();
+    bootstrap(&prefs).unwrap();
     let reloaded = Prefs::load(&dir.path().join("system_prefs.json")).unwrap();
     assert_eq!(dev_token(&reloaded).unwrap(), "development");
     assert_eq!(log_level(&reloaded).unwrap(), log::LevelFilter::Warn);

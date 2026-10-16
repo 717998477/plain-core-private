@@ -7,12 +7,6 @@ use std::sync::Arc;
 async fn main_share_content_uses_saved_roots_identity_and_live_port() {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
-    prefs
-        .set(
-            "master_secret",
-            plain_rs::utils::base64::base64_encode(&[11; 32]),
-        )
-        .unwrap();
     let server = ContentServer::start(
         dir.path(),
         &plain_rs::utils::base64::base64_encode(&[7; 32]),
