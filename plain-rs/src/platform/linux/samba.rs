@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use std::io::Write;
 use std::process::Command;
 
-pub const UNIX_USER: &str = "plainapp";
+pub const UNIX_USER: &str = crate::prefs::samba::DEFAULT_USERNAME;
 pub const SMB_CONF_PATH: &str = "/etc/samba/smb.conf";
 
 pub use crate::prefs::samba::{

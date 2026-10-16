@@ -108,7 +108,11 @@ pub fn receive(
         let peer=tx.query_row(&format!("SELECT {PEER_COLS} FROM peers WHERE id=?1"),[from_id],row_to_peer).optional()?.ok_or_else(||anyhow::anyhow!("invalid peer"))?;
         let channel=if channel_id.is_empty() {None}else {
             let channel=tx.query_row(&format!("SELECT {CHANNEL_COLS} FROM chat_channels WHERE id=?1"),[channel_id],row_to_channel).optional()?.ok_or_else(||anyhow::anyhow!("Unknown channel"))?;
-            if channel.status!=ChannelStatus::Joined {bail!("Channel not joined");}Some(channel)
+            if channel.status!=ChannelStatus::Joined {bail!("Channel not joined");}
+            if !channel.joined_member_ids().iter().any(|member| member == from_id) {
+                bail!("Sender is not a joined channel member");
+            }
+            Some(channel)
         };
         messages::validate_content(content)?;
         tx.execute("DELETE FROM chat_receipts WHERE sent_at<?1",[crate::db::iso_from_unix_millis(now.saturating_sub(crate::transport::auth::TIMESTAMP_WINDOW_MS as i64))])?;

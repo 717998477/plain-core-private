@@ -94,3 +94,39 @@ fn flatten_devices_walks_children_depth_first() {
         .collect();
     assert_eq!(names, vec!["sda", "sda1", "sda2"]);
 }
+
+#[test]
+fn lsblk_accepts_null_optional_text_without_losing_disk_identity() {
+    let output: LsblkOutput = serde_json::from_value(serde_json::json!({
+        "blockdevices": [{
+            "name": "vda", "path": "/dev/vda", "type": "disk",
+            "fstype": null, "uuid": null, "label": null, "pkname": null,
+            "mountpoint": null,
+            "children": [{"name":"vda1", "path":"/dev/vda1", "type":"part", "fstype":"ext4", "uuid":null, "label":null, "pkname":"vda", "mountpoint":"/"}]
+        }]
+    })).unwrap();
+    let disk = &output.blockdevices[0];
+    assert_eq!(
+        (&*disk.name, &*disk.path, &*disk.kind),
+        ("vda", "/dev/vda", "disk")
+    );
+    assert_eq!(
+        (&*disk.fstype, &*disk.uuid, &*disk.label, &*disk.pkname),
+        ("", "", "", "")
+    );
+    assert_eq!(disk.children[0].mountpoint.as_deref(), Some("/"));
+    assert_eq!(disk.children[0].fstype, "ext4");
+}
+
+#[test]
+fn lsblk_rejects_invalid_metadata_and_null_identity() {
+    for value in [
+        serde_json::json!({"name":null}),
+        serde_json::json!({"path":null}),
+        serde_json::json!({"type":null}),
+        serde_json::json!({"fstype":123}),
+        serde_json::json!({"label":false}),
+    ] {
+        assert!(serde_json::from_value::<LsblkDevice>(value).is_err());
+    }
+}

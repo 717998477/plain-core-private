@@ -341,28 +341,80 @@ async fn a_blank_query_is_refused_before_the_platform_is_touched() {
     }
 }
 
-/// NOTE and FEED_ENTRY resolve their ids through the notes and feeds roots.
-/// A tag write must not re-enter the public schema to reach them, so those
-/// kinds are refused until those roots land in Rust.
 #[tokio::test]
-async fn note_and_feed_entry_tag_writes_are_refused() {
-    let (_dir, schema) =
-        fixture_with(|method, _| panic!("the platform must not be asked: {method}"));
-    for kind in ["NOTE", "FEED_ENTRY"] {
-        let response = schema
-            .execute(&format!(
-                r#"mutation {{ addToTags(type:{kind}, tagIds:["t1"], query:"text:x") }}"#
-            ))
-            .await;
-        assert_eq!(response.errors.len(), 1, "{kind}");
-        assert!(
-            response.errors[0]
-                .message
-                .starts_with("Unsupported tag query type"),
-            "{}",
-            response.errors[0].message
-        );
+async fn notes_and_feed_entries_tag_selected_ids_without_host_or_body_reads() {
+    use async_graphql::{EmptySubscription, Schema};
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    let now = "2026-01-02T03:04:05.000Z";
+    for id in ["selected", "neighbor"] {
+        db.note_save(&format!("note-{id}"), id, "body", now)
+            .unwrap();
+        db.with_conn(|connection| connection.execute(
+            "INSERT INTO feed_entries(id,title,url,image,description,author,content,feed_id,source_entry_id,published_at,is_read,created_at,updated_at) VALUES(?1,?1,'https://example.invalid/','','','','body','feed',?1,?2,0,?2,?2)",
+            rusqlite::params![format!("feed-{id}"), now],
+        )).unwrap();
     }
+    db.with_conn(|connection| {
+        connection.authorizer(Some(|context: AuthContext<'_>| match context.action {
+            AuthAction::Read {
+                table_name: "notes" | "feed_entries",
+                column_name,
+            } if !["id", "deleted_at"].contains(&column_name) => Authorization::Deny,
+            _ => Authorization::Allow,
+        }))
+    });
+    let host = Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    let schema = Schema::build(TagsQuery, TagsMutation, EmptySubscription)
+        .data(db.clone())
+        .data(host.clone())
+        .finish();
+    for (kind, name, selected) in [
+        (DataType::Note, "NOTE", "note-selected"),
+        (DataType::FeedEntry, "FEED_ENTRY", "feed-selected"),
+    ] {
+        let tag = tags::create_tag(&db, kind.kind(), name).unwrap();
+        for action in ["addToTags", "removeFromTags"] {
+            if action == "removeFromTags" {
+                assert_eq!(tags::keys_for_tag(&db, &tag.id).unwrap(), [selected]);
+            }
+            for query in [
+                "".to_owned(),
+                " \t\n".to_owned(),
+                "all:false".to_owned(),
+                "unsupported_scope:value".to_owned(),
+                format!("ids:{selected}"),
+            ] {
+                let request = async_graphql::Request::new(format!(
+                    "mutation($q:String!){{ {action}(type:{name},tagIds:[\"{}\"],query:$q) }}",
+                    tag.id
+                ))
+                .variables(async_graphql::Variables::from_json(json!({"q":&query})));
+                let response = tokio::select! {
+                    response = schema.execute(request) => response,
+                    request = requests.recv() => panic!("unexpected host request {request:?}"),
+                };
+                if query == format!("ids:{selected}") {
+                    assert!(response.errors.is_empty(), "{:?}", response.errors);
+                } else {
+                    assert!(
+                        !response.errors.is_empty(),
+                        "accepted unsafe scope {query:?}"
+                    );
+                    let expected = if action == "removeFromTags" {
+                        vec![selected.to_owned()]
+                    } else {
+                        vec![]
+                    };
+                    assert_eq!(tags::keys_for_tag(&db, &tag.id).unwrap(), expected);
+                }
+            }
+        }
+        assert!(tags::keys_for_tag(&db, &tag.id).unwrap().is_empty());
+    }
+    assert!(requests.try_recv().is_err());
+    host.disconnect(generation);
 }
 
 #[tokio::test]

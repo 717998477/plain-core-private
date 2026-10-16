@@ -1,6 +1,8 @@
 use super::{Prefs, PrefsError};
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_USERNAME: &str = "plainapp";
+
 const KEY_SAMBA_SETTINGS: &str = "samba_settings";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +41,7 @@ impl Default for SambaSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            username: "nas".to_string(),
+            username: DEFAULT_USERNAME.to_owned(),
             has_password: false,
             shares: Vec::new(),
             service_name: "smbd".to_string(),

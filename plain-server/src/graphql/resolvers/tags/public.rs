@@ -189,8 +189,11 @@ async fn tag_query_stubs(
     query: &str,
 ) -> async_graphql::Result<Vec<TagRelationStub>> {
     require_queryable(r#type, query)?;
-    if matches!(r#type, DataType::Call | DataType::Contact | DataType::Sms) {
-        return Ok(provider_query_keys(ctx, r#type, query)
+    if matches!(
+        r#type,
+        DataType::Call | DataType::Contact | DataType::Sms | DataType::Note | DataType::FeedEntry
+    ) {
+        return Ok(tag_query_keys(ctx, r#type, query)
             .await?
             .into_iter()
             .map(|key| TagRelationStub {
@@ -226,6 +229,12 @@ async fn tag_query_keys(
     query: &str,
 ) -> async_graphql::Result<Vec<String>> {
     require_queryable(r#type, query)?;
+    if r#type == DataType::Note {
+        return Ok(db(ctx).note_ids(query, None)?);
+    }
+    if r#type == DataType::FeedEntry {
+        return Ok(db(ctx).feed_entry_ids(query)?);
+    }
     if matches!(r#type, DataType::Call | DataType::Contact | DataType::Sms) {
         return provider_query_keys(ctx, r#type, query).await;
     }
@@ -294,6 +303,8 @@ fn tags_queryable(kind: DataType) -> bool {
             | DataType::Call
             | DataType::Contact
             | DataType::Sms
+            | DataType::Note
+            | DataType::FeedEntry
     )
 }
 

@@ -392,6 +392,14 @@ impl Db {
         })
     }
 
+    pub fn feed_entry_ids(&self, query: &str) -> rusqlite::Result<Vec<String>> {
+        let (where_sql, values) = filter(query, false, None)?;
+        self.with_conn(|connection| {
+            let mut statement = connection.prepare(&format!("SELECT id FROM feed_entries WHERE {where_sql}"))?;
+            statement.query_map(params_from_iter(values), |row| row.get(0))?.collect()
+        })
+    }
+
     pub fn feed_entry_count(&self, query: &str) -> rusqlite::Result<i32> {
         let (where_sql, values) = filter(query, false, None)?;
         self.with_conn(|c| {

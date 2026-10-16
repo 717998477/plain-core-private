@@ -148,3 +148,83 @@ fn forwarding_creates_one_atomic_batch_from_the_stored_message() {
     assert!(forward_many(&db, "missing", &[]).unwrap().is_empty());
     assert_eq!(db.get_all_chats().len(), 3);
 }
+
+#[test]
+fn channel_reception_requires_current_joined_membership_before_consuming_receipt() {
+    use crate::chat::channels::messages::ChannelMember;
+    use crate::db::chat_store::{SaveMode, channels};
+    let db = db();
+    let mut channel = crate::chat::channels::state::create(&db, "owner", "Fixture").unwrap();
+    let signature = crate::base64_encode(&[19; 64]);
+    let timestamp = crate::peers::pairing::now_ms();
+    for members in [
+        serde_json::to_string(&[ChannelMember::new("owner")]).unwrap(),
+        serde_json::to_string(&[ChannelMember::new("owner"), ChannelMember::pending("peer")])
+            .unwrap(),
+        "invalid roster".to_owned(),
+    ] {
+        db.with_conn(|connection| {
+            connection.execute(
+                "UPDATE chat_channels SET members=?1 WHERE id=?2",
+                rusqlite::params![members, channel.id],
+            )
+        })
+        .unwrap();
+        assert!(receive(&db, "peer", &channel.id, TEXT, &signature, timestamp).is_err());
+        db.with_conn(|connection| -> anyhow::Result<()> {
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM chats", [], |row| row.get::<_, i64>(0))?,
+                0
+            );
+            assert_eq!(
+                connection.query_row("SELECT COUNT(*) FROM chat_receipts", [], |row| row
+                    .get::<_, i64>(0))?,
+                0
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+    channel.members =
+        serde_json::to_string(&[ChannelMember::new("owner"), ChannelMember::new("peer")]).unwrap();
+    channels::save(&db, std::slice::from_ref(&channel), SaveMode::Update).unwrap();
+    let received = receive(&db, "peer", &channel.id, TEXT, &signature, timestamp)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        received.chat.channel_id.as_deref(),
+        Some(channel.id.as_str())
+    );
+    assert!(
+        receive(&db, "peer", &channel.id, TEXT, &signature, timestamp)
+            .unwrap()
+            .is_none()
+    );
+    channel.members = serde_json::to_string(&[ChannelMember::new("owner")]).unwrap();
+    channels::save(&db, std::slice::from_ref(&channel), SaveMode::Update).unwrap();
+    assert!(
+        receive(
+            &db,
+            "peer",
+            &channel.id,
+            TEXT,
+            &crate::base64_encode(&[20; 64]),
+            timestamp
+        )
+        .is_err()
+    );
+    db.with_conn(|connection| -> anyhow::Result<()> {
+        assert_eq!(
+            connection.query_row("SELECT COUNT(*) FROM chats", [], |row| row.get::<_, i64>(0))?,
+            1
+        );
+        assert_eq!(
+            connection.query_row("SELECT COUNT(*) FROM chat_receipts", [], |row| row
+                .get::<_, i64>(0))?,
+            1
+        );
+        Ok(())
+    })
+    .unwrap();
+}

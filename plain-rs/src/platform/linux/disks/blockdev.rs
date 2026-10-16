@@ -2,6 +2,12 @@ use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use std::process::Command;
 
+fn empty_string_if_null<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct LsblkDevice {
     #[serde(default)]
@@ -10,17 +16,17 @@ pub struct LsblkDevice {
     pub path: String,
     #[serde(rename = "type", default)]
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_if_null")]
     pub fstype: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_if_null")]
     pub uuid: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_if_null")]
     pub label: String,
     #[serde(default)]
     pub size: Option<i64>,
     #[serde(default)]
     pub mountpoint: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_if_null")]
     pub pkname: String,
     #[serde(default)]
     pub partn: Option<i64>,
