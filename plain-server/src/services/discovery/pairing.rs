@@ -56,6 +56,7 @@ fn response(
     let kp = signing_keypair(prefs)?;
     let ecdh = accepted.then(EcdhSession::generate);
     let mut response = PairingResponse {
+        request_signature: request.signature.clone(),
         from_id: actor(prefs)?,
         to_id: request.from_id,
         port: device.port,
@@ -102,11 +103,30 @@ pub(crate) fn start(
     target: Target,
     device: Device,
 ) -> Result<Value> {
+    start_generation(prefs, sessions, target, device, None)
+}
+pub(crate) fn start_generation(
+    prefs: &Prefs,
+    sessions: &Sessions,
+    target: Target,
+    device: Device,
+    generation: Option<String>,
+) -> Result<Value> {
     if target.device_id.is_empty() {
         bail!("Missing pairing target");
     }
     let (request, ecdh) = request(prefs, device)?;
-    let ticket = sessions.start(target, ecdh);
+    let ticket = match generation {
+        Some(generation) => sessions.start_generation(target, ecdh, generation),
+        None => sessions.start(target, ecdh),
+    };
+    let ticket = sessions
+        .bind_request(
+            &ticket.target.device_id,
+            &ticket.generation,
+            &request.signature,
+        )
+        .ok_or_else(|| anyhow::anyhow!("Pairing replaced"))?;
     Ok(json!({"request":request,"ticket":ticket}))
 }
 pub(crate) fn complete(
@@ -129,7 +149,9 @@ pub(crate) fn complete_checked(
     if !validate_response(prefs, &response, &response.from_id)? {
         return Ok(Value::Null);
     }
-    let Some(pending) = sessions.take_checked(&response.from_id, generation) else {
+    let Some(pending) =
+        sessions.take_response(&response.from_id, generation, &response.request_signature)
+    else {
         return Ok(Value::Null);
     };
     let ticket = pending.ticket.clone();
@@ -139,6 +161,12 @@ pub(crate) fn complete_checked(
         }
         if !response.accepted {
             bail!("Pairing request was rejected");
+        }
+        if let Some(saved) = plain_rs::db::chat_store::peers::get(db, &response.from_id)? {
+            anyhow::ensure!(
+                saved.public_key.is_empty() || saved.public_key == response.signature_public_key,
+                "Peer identity changed"
+            );
         }
         let key = pending
             .ecdh
@@ -218,10 +246,20 @@ pub(crate) fn cancel(
     generation: Option<&str>,
 ) -> Result<Value> {
     let from_id = actor(prefs)?;
-    Ok(sessions
-        .cancel(id, generation)
-        .map(|ticket| json!({"ticket":ticket,"cancel":PairingCancel{from_id,to_id:id.into()}}))
-        .unwrap_or(Value::Null))
+    let Some(ticket) = sessions.cancel(id, generation) else {
+        return Ok(Value::Null);
+    };
+    let keypair = signing_keypair(prefs)?;
+    let mut cancel = PairingCancel {
+        from_id,
+        to_id: id.into(),
+        request_signature: ticket.request_signature.clone(),
+        signature_public_key: plain_rs::utils::base64::base64_encode(&keypair[32..]),
+        timestamp: now_ms(),
+        signature: String::new(),
+    };
+    cancel.signature = plain_rs::crypto::ed25519_sign(&keypair, cancel.signature_data().as_bytes());
+    Ok(json!({"ticket":ticket,"cancel":cancel}))
 }
 pub(crate) fn receive_request(sessions: &Sessions, request: &PairingRequest) -> Option<bool> {
     security::verify_request(request).then(|| sessions.receive(request))
@@ -231,12 +269,10 @@ pub(crate) fn receive_cancel(
     sessions: &Sessions,
     cancel: PairingCancel,
 ) -> Result<Value> {
-    if cancel.to_id != actor(prefs)? || cancel.from_id.is_empty() {
+    if !security::verify_cancel(&cancel, &actor(prefs)?) {
         return Ok(Value::Null);
     }
-    Ok(serde_json::to_value(
-        sessions.receive_cancel(&cancel.from_id),
-    )?)
+    Ok(serde_json::to_value(sessions.receive_cancel(&cancel))?)
 }
 
 #[cfg(test)]

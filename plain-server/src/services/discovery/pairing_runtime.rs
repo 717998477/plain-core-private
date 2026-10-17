@@ -21,14 +21,18 @@ struct Association {
     received: Instant,
 }
 #[derive(Default)]
-pub(crate) struct Runtime(Mutex<HashMap<String, Association>>);
+pub(crate) struct Runtime {
+    associations: Mutex<HashMap<String, Association>>,
+    pub(crate) attempts: super::pairing_attempts::Attempts,
+    pub(crate) commit: Mutex<()>,
+}
 impl Runtime {
     fn check_address(&self, request: &PairingRequest, address: &str) -> anyhow::Result<()> {
         anyhow::ensure!(
             !address.is_empty() && address.len() <= 256,
             "Invalid BLE sender address"
         );
-        let mut map = self.0.lock().unwrap();
+        let mut map = self.associations.lock().unwrap();
         map.retain(|_, v| v.received.elapsed() < Duration::from_secs(300));
         anyhow::ensure!(
             map.contains_key(&request.from_id) || map.len() < 128,
@@ -41,7 +45,7 @@ impl Runtime {
             !address.is_empty() && address.len() <= 256,
             "Invalid BLE sender address"
         );
-        let mut map = self.0.lock().unwrap();
+        let mut map = self.associations.lock().unwrap();
         map.retain(|_, v| v.received.elapsed() < Duration::from_secs(300));
         anyhow::ensure!(
             map.contains_key(&request.from_id) || map.len() < 128,
@@ -58,7 +62,7 @@ impl Runtime {
         Ok(())
     }
     fn take(&self, id: &str, signature: &str) -> Option<String> {
-        let mut map = self.0.lock().unwrap();
+        let mut map = self.associations.lock().unwrap();
         if !map.get(id).is_some_and(|a| a.signature == signature) {
             return None;
         }
@@ -67,7 +71,7 @@ impl Runtime {
             .map(|a| a.address)
     }
     fn forget(&self, id: &str) {
-        self.0.lock().unwrap().remove(id);
+        self.associations.lock().unwrap().remove(id);
     }
 }
 #[derive(Deserialize)]
@@ -80,11 +84,13 @@ pub(crate) enum Request {
         methods: Vec<String>,
         ble: bool,
         device: Device,
+        generation: Option<String>,
     },
     StartLan {
         target: Target,
         ips: Vec<String>,
         device: Device,
+        generation: Option<String>,
     },
     Cancel {
         id: String,
@@ -120,6 +126,12 @@ pub(crate) fn failed(state: &ServerState, target: &Target, error: &str, generati
     if let Some(generation) = generation {
         result["generation"] = json!(generation);
     }
+    if let Some(generation) = generation {
+        state
+            .pairing_runtime
+            .attempts
+            .transition(state, generation, "FAILED", Some(error), None);
+    }
     event(state, plain_rs::chat::events::WS_PAIRING_FAILED, result);
 }
 fn canceled(state: &ServerState, value: &Value) {
@@ -137,7 +149,7 @@ pub(crate) fn success(state: &ServerState, peer: &Value, ip: &str) {
         json!({"deviceId":peer["id"],"deviceName":peer["name"],"ip":ip,"key":peer["key"]}),
     );
 }
-async fn local_device(state: &ServerState) -> anyhow::Result<Device> {
+pub(super) async fn local_device(state: &ServerState) -> anyhow::Result<Device> {
     let reply: plain_rs::discovery::nearby_wire::DiscoverReply = serde_json::from_value(
         crate::services::discovery::discovery_advertisement::execute(
             state,
@@ -158,6 +170,7 @@ pub(crate) async fn start_device(
     target: Target,
     ips: Vec<String>,
     methods: Vec<String>,
+    generation: Option<String>,
 ) -> anyhow::Result<Value> {
     let ble = if methods.iter().any(|method| method == "BLE")
         && !(methods.iter().any(|method| method == "LAN") && !ips.is_empty())
@@ -181,6 +194,7 @@ pub(crate) async fn start_device(
             methods,
             ble,
             device,
+            generation,
         },
     )
     .await
@@ -203,13 +217,14 @@ pub(crate) async fn respond_device(
 }
 pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Result<Value> {
     Ok(match request {
-        Request::States=>json!(state.pairing.states().into_iter().map(|(ticket,phase)|json!({"deviceId":ticket.target.device_id,"generation":ticket.generation,"phase":phase})).collect::<Vec<_>>()),
+        Request::States => json!(state.pairing_runtime.attempts.states()),
         Request::Start {
             target,
             ips,
             methods,
             ble,
             device,
+            generation,
         } => {
             if methods.iter().any(|m| m == "LAN") && !ips.is_empty() {
                 Box::pin(execute(
@@ -217,12 +232,13 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                     Request::StartLan {
                         target,
                         ips,
-                                    device,
+                        device,
+                        generation,
                     },
                 ))
                 .await?
             } else if methods.iter().any(|m| m == "BLE") && ble {
-                crate::services::discovery::ble_pairing::start(state, target, device)?
+                crate::services::discovery::ble_pairing::start(state, target, device, generation)?
             } else {
                 failed(state, &target, "No pairing transport available", None);
                 Value::Null
@@ -232,13 +248,29 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
             mut target,
             ips,
             device,
+            generation,
         } => {
-            target.device_ip = plain_rs::transport::lan::best(&ips, &plain_rs::transport::lan::local_interfaces());
+            target.device_ip = plain_rs::transport::lan::best_host(
+                &ips,
+                &plain_rs::transport::lan::local_interfaces(),
+            );
             if target.device_ip.is_empty() {
                 failed(state, &target, "No reachable pairing address", None);
                 return Ok(Value::Null);
             }
-            let result = pairing::start(&state.prefs, &state.pairing, target, device)?;
+            let result = {
+                let _commit = state.pairing_runtime.commit.lock().unwrap();
+                if generation.as_ref().is_some_and(|g| {
+                    state
+                        .pairing_runtime
+                        .attempts
+                        .get(g)
+                        .is_none_or(|s| s.phase == "CANCELLED")
+                }) {
+                    return Ok(Value::Null);
+                }
+                pairing::start_generation(&state.prefs, &state.pairing, target, device, generation)?
+            };
             let ticket: Ticket = serde_json::from_value(result["ticket"].clone())?;
             let request: PairingRequest = serde_json::from_value(result["request"].clone())?;
             let sent = nearby_http::send(
@@ -249,8 +281,17 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
             .await
             .unwrap_or(false);
             if sent {
-                if state.pairing.mark_sent(&ticket.target.device_id,&ticket.generation)
+                if state
+                    .pairing
+                    .mark_sent(&ticket.target.device_id, &ticket.generation)
                 {
+                    state.pairing_runtime.attempts.transition(
+                        state,
+                        &ticket.generation,
+                        "PAIRING",
+                        None,
+                        None,
+                    );
                     event(
                         state,
                         plain_rs::chat::events::WS_PAIRING_STARTED,
@@ -344,6 +385,22 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
             response,
             sender_ip,
         } => {
+            let _commit = state.pairing_runtime.commit.lock().unwrap();
+            if state
+                .pairing
+                .tickets()
+                .into_iter()
+                .find(|t| t.target.device_id == response.from_id)
+                .is_some_and(|t| {
+                    state
+                        .pairing_runtime
+                        .attempts
+                        .get(&t.generation)
+                        .is_some_and(|s| s.terminal())
+                })
+            {
+                return Ok(Value::Null);
+            }
             let result = pairing::complete(
                 &state.db,
                 &state.prefs,
@@ -361,6 +418,15 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                         Some(&ticket.generation),
                     );
                 } else {
+                    if let Some(generation) = result["ticket"]["generation"].as_str() {
+                        state.pairing_runtime.attempts.transition(
+                            state,
+                            generation,
+                            "SUCCEEDED",
+                            None,
+                            None,
+                        );
+                    }
                     success(state, &result["peer"], &sender_ip);
                 }
             }

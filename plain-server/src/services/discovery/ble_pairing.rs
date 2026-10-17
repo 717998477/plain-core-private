@@ -20,6 +20,7 @@ pub(crate) fn start(
     state: &ServerState,
     mut target: Target,
     device: Device,
+    generation: Option<String>,
 ) -> anyhow::Result<Value> {
     let mut jobs = state.ble_pairing.0.lock().unwrap();
     if let Some(ticket) = jobs.get(&target.device_id) {
@@ -38,7 +39,19 @@ pub(crate) fn start(
         return Ok(Value::Null);
     }
     target.device_ip.clear();
-    let value = pairing::start(&state.prefs, &state.pairing, target, device)?;
+    let value = {
+        let _commit = state.pairing_runtime.commit.lock().unwrap();
+        if generation.as_ref().is_some_and(|g| {
+            state
+                .pairing_runtime
+                .attempts
+                .get(g)
+                .is_none_or(|s| s.phase == "CANCELLED")
+        }) {
+            return Ok(Value::Null);
+        }
+        pairing::start_generation(&state.prefs, &state.pairing, target, device, generation)?
+    };
     let ticket: Ticket = serde_json::from_value(value["ticket"].clone())?;
     let request = serde_json::from_value(value["request"].clone())?;
     let body = Message::PairRequest(request).wire()?;
@@ -110,6 +123,10 @@ async fn run(state: &ServerState, ticket: &Ticket, body: &str) -> Result<(), Cau
     {
         return Err(Cause::Stopped);
     }
+    state
+        .pairing_runtime
+        .attempts
+        .transition(state, &ticket.generation, "PAIRING", None, None);
     event(
         state,
         WS_PAIRING_STARTED,
@@ -140,6 +157,15 @@ async fn run(state: &ServerState, ticket: &Ticket, body: &str) -> Result<(), Cau
         if response.from_id != ticket.target.device_id {
             continue;
         }
+        let _commit = state.pairing_runtime.commit.lock().unwrap();
+        if state
+            .pairing_runtime
+            .attempts
+            .get(&ticket.generation)
+            .is_some_and(|s| s.terminal())
+        {
+            return Err(Cause::Stopped);
+        }
         let result = pairing::complete_checked(
             &state.db,
             &state.prefs,
@@ -160,6 +186,13 @@ async fn run(state: &ServerState, ticket: &Ticket, body: &str) -> Result<(), Cau
                 Some(&ticket.generation),
             );
         } else {
+            state.pairing_runtime.attempts.transition(
+                state,
+                &ticket.generation,
+                "SUCCEEDED",
+                None,
+                None,
+            );
             success(state, &result["peer"], "");
         }
         return Ok(());

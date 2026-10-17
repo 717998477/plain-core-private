@@ -73,27 +73,34 @@ interface MediaItem {
 	updatedAt: Instant!
 }
 
-type PeerRecord {
+type Peer {
 	id: ID!
 	name: String!
 	ip: String!
-	key: String!
-	publicKey: String!
-	status: String!
+	status: PeerStatus!
 	port: Int
-	deviceType: String!
-	token: String!
+	deviceType: DeviceType!
 	createdAt: Instant!
 	updatedAt: Instant!
-	address: PeerRecordAddress
+	online: Boolean!
+	key: String!
+	publicKey: String!
+	token: String!
+	address: PeerAddress
 }
 
-type PeerRecordAddress {
+type PeerAddress {
 	bestIp: String!
 	name: String!
 	baseUrl: String!
 	apiUrl: String!
 	statusWsUrl: String!
+}
+
+enum PeerStatus {
+	PAIRED
+	UNPAIRED
+	CHANNEL
 }
 
 type Tag {

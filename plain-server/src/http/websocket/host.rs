@@ -124,7 +124,11 @@ pub(crate) async fn upgrade(
         .into_response()
 }
 async fn completed(state: &ServerState, result: &Value) {
-    let _ = state.events.send(WsEvent::broadcast("WEB_LOGIN_COMPLETED", json!({"request":result["request"],"chatPaired":result["response"]["chatPaired"],"clientIp":result["clientIp"]}).to_string()));
+    let mut request = result["request"].clone();
+    if let Some(request) = request.as_object_mut() {
+        request.remove("password");
+    }
+    let _ = state.events.send(WsEvent::broadcast("WEB_LOGIN_COMPLETED", json!({"request":request,"chatPaired":result["response"]["chatPaired"],"clientIp":result["clientIp"]}).to_string()));
 }
 async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: String) {
     if !enabled(&state) || params.cid.is_empty() {

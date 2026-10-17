@@ -22,16 +22,16 @@ async fn main_peer_records_and_file_urls_use_current_addresses_and_reject_stale_
     .unwrap();
     let (_generation, mut requests) = state.host.connect();
     let native = server.native_graphql().unwrap();
-    let response = native.execute(r#"{peerRecord(id:"fixture"){ip address{bestIp name baseUrl apiUrl statusWsUrl}} peerRecords(ids:["fixture"]){ip address{bestIp name baseUrl apiUrl statusWsUrl}}}"#.into()).await;
+    let response = native.execute(r#"{fixture:peers(ids:["fixture"]){ip address{bestIp name baseUrl apiUrl statusWsUrl}} peers(ids:["fixture"]){ip address{bestIp name baseUrl apiUrl statusWsUrl}}}"#.into()).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let rows = response.data.into_json().unwrap();
-    let row = &rows["peerRecord"];
+    let row = &rows["fixture"][0];
     assert_eq!(row["ip"], "bad, 127.0.0.1");
     assert_eq!(
         row["address"],
         json!({"bestIp":"127.0.0.1","name":"127.0.0.1","baseUrl":"https://127.0.0.1","apiUrl":"https://127.0.0.1/peer_graphql","statusWsUrl":"wss://127.0.0.1/status"})
     );
-    assert_eq!(rows["peerRecords"][0], *row);
+    assert_eq!(rows["peers"][0], *row);
     let file_id = "id +/?#&中文%";
     async fn file(
         server: &crate::assembly::server::ContentServer,
@@ -73,4 +73,35 @@ async fn main_peer_records_and_file_urls_use_current_addresses_and_reject_stale_
     );
     assert!(requests.try_recv().is_err());
     server.shutdown().await;
+}
+
+#[test]
+fn all_address_fields_reuse_the_supplied_interface_snapshot() {
+    let peer = DPeer::new(
+        "fixture",
+        "Fixture",
+        "192.0.2.5,198.51.100.5",
+        Some(8443),
+        plain_rs::chat::enums::DeviceType::Computer,
+    );
+    let interfaces = vec![plain_rs::transport::lan::Interface {
+        ip: "198.51.100.8".parse().unwrap(),
+        prefix_length: 24,
+    }];
+    let address = address_with_interfaces(&peer, &interfaces);
+    assert_eq!(address.best_ip, "198.51.100.5");
+    assert_eq!(address.base_url, "https://198.51.100.5:8443");
+    assert_eq!(address.api_url, "https://198.51.100.5:8443/peer_graphql");
+    assert_eq!(address.status_ws_url, "wss://198.51.100.5:8443/status");
+    let hostname = DPeer::new(
+        "fixture",
+        "Fixture",
+        "device.example",
+        Some(443),
+        plain_rs::chat::enums::DeviceType::Computer,
+    );
+    assert_eq!(
+        address_with_interfaces(&hostname, &[]).base_url,
+        "https://device.example"
+    );
 }

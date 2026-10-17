@@ -46,7 +46,26 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
     assert!(playback.contains("mediaId: ID\n"));
     assert!(playback.contains("path: String\n"));
     assert!(!playback.contains("currentPath"));
-    assert!(sdl.contains("lastSeen: Instant!"));
+    assert!(sdl.contains("lastSeen: String!"));
+    let pairing_input = sdl
+        .split("input PairingDeviceInput {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    for field in [
+        "id: ID",
+        "host: String",
+        "mode: PairingMode",
+        "password: String",
+        "generation: String",
+    ] {
+        assert!(pairing_input.contains(field));
+    }
+    for obsolete in ["name:", "ips:", "lastSeen:", "deviceType:"] {
+        assert!(!pairing_input.contains(obsolete));
+    }
     assert!(sdl.contains("enum AudioCommandAction {"));
     assert!(sdl.contains("enum MediaAction {"));
     assert!(sdl.contains("TTY_TDD"));
@@ -194,10 +213,10 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "removeChatChannelMember(id: ID!, peerId: ID!): ChatChannel!",
         "acceptChatChannelInvite(id: ID!): Boolean!",
         "declineChatChannelInvite(id: ID!): Boolean!",
-        "peers: [Peer!]!",
+        "peers(ids: [ID!]): [Peer!]!",
         "sims: [Sim!]!",
-        "pairDevice(input: PairingDeviceInput!): Boolean!",
-        "cancelPairing(deviceId: ID!): Boolean!",
+        "pairDevice(input: PairingDeviceInput!): PairingState!",
+        "cancelPairing(generation: String!): Boolean!",
         "respondToPairing(input: PairingRequestInput!, accepted: Boolean!): Boolean!",
         "deletePeer(id: ID!): Boolean!",
         "unpairPeer(id: ID!): Boolean!",

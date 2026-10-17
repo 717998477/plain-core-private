@@ -29,6 +29,31 @@ pub fn local_interfaces() -> Vec<Interface> {
         })
         .collect()
 }
+pub fn valid_host(host: &str) -> bool {
+    host.parse::<IpAddr>().is_ok()
+        || (host.len() <= 253
+            && host.bytes().any(|b| b.is_ascii_alphabetic())
+            && host.trim_end_matches('.').split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            }))
+}
+pub fn best_host(hosts: &[String], local: &[Interface]) -> String {
+    let ip = best(hosts, local);
+    if !ip.is_empty() {
+        return ip;
+    }
+    hosts
+        .iter()
+        .find(|host| valid_host(host))
+        .cloned()
+        .unwrap_or_default()
+}
 pub fn best(ips: &[String], local: &[Interface]) -> String {
     let valid: Vec<_> = ips
         .iter()

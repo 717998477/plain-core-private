@@ -142,6 +142,32 @@ impl Connections {
             .map(|p| p.id.clone())
             .collect()
     }
+    pub fn snapshot_peers(&self, peers: &[DPeer]) -> Value {
+        let peers = peers
+            .iter()
+            .map(|p| (p.id.as_str(), p))
+            .collect::<HashMap<_, _>>();
+        let state = self.state.lock().unwrap();
+        let current = |expected: &DPeer| {
+            peers
+                .get(expected.id.as_str())
+                .filter(|p| p.key == expected.key && p.public_key == expected.public_key)
+        };
+        let mut online = state
+            .connections
+            .values()
+            .filter(|p| current(p).is_some_and(|p| p.is_paired()))
+            .map(|p| p.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        online.extend(
+            state
+                .hints
+                .values()
+                .filter(|p| current(p).is_some_and(|row| row.status == p.status))
+                .map(|p| p.id.clone()),
+        );
+        json!({"runtimeId":self.id,"revision":state.revision,"online":online})
+    }
     pub fn snapshot(&self, db: &Db) -> Value {
         let state = self.state.lock().unwrap();
         let mut online: std::collections::BTreeSet<_> = state

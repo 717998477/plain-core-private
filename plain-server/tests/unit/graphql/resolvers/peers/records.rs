@@ -33,15 +33,15 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
     channel.version = 5000000001;
     channels::save(&state.db, &[channel], SaveMode::Insert).unwrap();
     let native = server.native_graphql().unwrap();
-    let response=native.execute(Request::new(r#"{ peerRecords(ids:["peer"]) { id key address { bestIp baseUrl apiUrl statusWsUrl } } peerRecord(id:"absent") { id } chatChannelRecord(id:"channel") { key ownerId members { peerId status } version } }"#)).await;
+    let response=native.execute(Request::new(r#"{ peers(ids:["peer"]) { id key address { bestIp baseUrl apiUrl statusWsUrl } } absent: peers(ids:["absent"]) { id } chatChannelRecord(id:"channel") { key ownerId members { peerId status } version } }"#)).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["peerRecords"][0]["key"], peer.key);
+    assert_eq!(data["peers"][0]["key"], peer.key);
     assert_eq!(
-        data["peerRecords"][0]["address"]["baseUrl"],
+        data["peers"][0]["address"]["baseUrl"],
         "https://127.0.0.1:8443"
     );
-    assert!(data["peerRecord"].is_null());
+    assert_eq!(data["absent"], json!([]));
     assert_eq!(data["chatChannelRecord"]["version"], 5000000001_i64);
     assert_eq!(data["chatChannelRecord"]["key"], "channel-key");
     assert_eq!(data["chatChannelRecord"]["members"][0]["peerId"], "peer");
@@ -90,15 +90,26 @@ async fn main_login_logout_and_rename_preserve_pairing_and_live_proxy_addresses(
     let executor = core.native_graphql().unwrap();
     let resolve = core.peer_proxy_resolver();
     assert_eq!(resolve("peer-a"), None);
-    let response = executor.execute(async_graphql::Request::new(r#"mutation { loginPeer(input:{id:"peer-a",name:"Peer A",host:"127.0.0.1:9443",deviceType:COMPUTER,token:"session",signaturePublicKey:"public",chatKey:"pairing-key"}) }"#)).await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    state
+        .db
+        .login_peer(
+            "peer-a",
+            "Peer A",
+            "127.0.0.1",
+            9443,
+            DeviceType::Computer,
+            "session",
+            "public",
+            "pairing-key",
+        )
+        .unwrap();
     assert_eq!(resolve("peer-a"), Some("127.0.0.1:9443".into()));
-    let query = "{loggedInPeers{peer{id name port token publicKey} online}}";
+    let query = "{peers{id name port token publicKey online}}";
     let response = executor.execute(async_graphql::Request::new(query)).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let value = response.data.into_json().unwrap();
-    assert_eq!(value["loggedInPeers"][0]["peer"]["port"], 9443);
-    assert_eq!(value["loggedInPeers"][0]["peer"]["token"], "session");
+    assert_eq!(value["peers"][0]["port"], 9443);
+    assert_eq!(value["peers"][0]["token"], "session");
     let response = executor
         .execute(async_graphql::Request::new(
             r#"mutation{updatePeerName(id:"peer-a",name:"Renamed peer")}"#,
@@ -107,7 +118,7 @@ async fn main_login_logout_and_rename_preserve_pairing_and_live_proxy_addresses(
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let response = executor.execute(async_graphql::Request::new(query)).await;
     assert_eq!(
-        response.data.into_json().unwrap()["loggedInPeers"][0]["peer"]["name"],
+        response.data.into_json().unwrap()["peers"][0]["name"],
         "Renamed peer"
     );
     let response = executor
@@ -118,8 +129,8 @@ async fn main_login_logout_and_rename_preserve_pairing_and_live_proxy_addresses(
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let response = executor.execute(async_graphql::Request::new(query)).await;
     assert_eq!(
-        response.data.into_json().unwrap()["loggedInPeers"],
-        serde_json::json!([])
+        response.data.into_json().unwrap()["peers"][0]["token"],
+        serde_json::json!("")
     );
     let mut row = plain_rs::db::chat_store::peers::get(&state.db, "peer-a")
         .unwrap()
@@ -152,9 +163,22 @@ async fn remote_requests_cannot_access_or_change_local_login_sessions() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
+    state
+        .db
+        .login_peer(
+            "fixture",
+            "Fixture",
+            "127.0.0.1",
+            9443,
+            DeviceType::Computer,
+            "unchanged-token",
+            "public",
+            "chat-key",
+        )
+        .unwrap();
     for document in [
-        "{loggedInPeers{peer{token}}}",
-        r#"mutation{loginPeer(input:{id:"remote",name:"Remote",host:"127.0.0.1:9443",deviceType:COMPUTER,token:"token",signaturePublicKey:"public"})}"#,
+        "{peers{token}}",
+        r#"mutation{pairDevice(input:{host:"127.0.0.1:9443",mode:MANAGE}){generation}}"#,
         r#"mutation{logoutPeer(id:"remote")}"#,
         r#"mutation{updatePeerName(id:"remote",name:"changed")}"#,
     ] {
@@ -167,10 +191,8 @@ async fn remote_requests_cannot_access_or_change_local_login_sessions() {
         assert_eq!(response.errors.len(), 1);
         assert_eq!(response.errors[0].message, "no_permission");
     }
-    assert!(
-        plain_rs::db::chat_store::peers::all(&state.db)
-            .unwrap()
-            .is_empty()
-    );
+    let rows = plain_rs::db::chat_store::peers::all(&state.db).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].token, "unchanged-token");
     core.stop_core().await;
 }

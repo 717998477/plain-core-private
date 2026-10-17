@@ -3,11 +3,11 @@ use serde::{Serialize, Serializer};
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Address {
-    best_ip: String,
-    name: String,
-    base_url: String,
-    api_url: String,
-    status_ws_url: String,
+    pub(crate) best_ip: String,
+    pub(crate) name: String,
+    pub(crate) base_url: String,
+    pub(crate) api_url: String,
+    pub(crate) status_ws_url: String,
 }
 #[derive(Serialize)]
 pub(crate) struct View<'a> {
@@ -16,19 +16,35 @@ pub(crate) struct View<'a> {
     address: Address,
 }
 pub(crate) fn address(peer: &DPeer) -> Address {
-    let ip = peer.best_ip();
-    let base_url = peer.base_url().unwrap_or_default();
+    address_with_interfaces(peer, &plain_rs::transport::lan::local_interfaces())
+}
+pub(crate) fn address_with_interfaces(
+    peer: &DPeer,
+    local: &[plain_rs::transport::lan::Interface],
+) -> Address {
+    let ip = peer.best_ip_with_interfaces(local);
+    let base_url = peer
+        .port
+        .filter(|port| *port > 0)
+        .filter(|_| !ip.is_empty())
+        .map(|port| plain_rs::utils::http_url::build_url("https", &ip, port, ""))
+        .unwrap_or_default();
     Address {
         name: if peer.name.trim().is_empty() {
             ip.clone()
         } else {
             peer.name.clone()
         },
-        api_url: peer.peer_graphql_url().unwrap_or_default(),
-        status_ws_url: peer
-            .base_url()
-            .map(|url| url.replacen("https", "wss", 1) + "/status")
-            .unwrap_or_default(),
+        api_url: if base_url.is_empty() {
+            String::new()
+        } else {
+            format!("{base_url}/peer_graphql")
+        },
+        status_ws_url: if base_url.is_empty() {
+            String::new()
+        } else {
+            base_url.replacen("https", "wss", 1) + "/status"
+        },
         best_ip: ip,
         base_url,
     }

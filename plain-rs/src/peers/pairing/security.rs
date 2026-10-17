@@ -11,7 +11,8 @@ pub fn verify_request(request: &PairingRequest) -> bool {
         )
 }
 pub fn verify_response(response: &PairingResponse, actor: &str, expected: &str) -> bool {
-    response.to_id == actor
+    !response.request_signature.is_empty()
+        && response.to_id == actor
         && response.from_id == expected
         && !actor.is_empty()
         && !expected.is_empty()
@@ -20,5 +21,18 @@ pub fn verify_response(response: &PairingResponse, actor: &str, expected: &str) 
             &response.signature_public_key,
             response.signature_data().as_bytes(),
             &response.signature,
+        )
+}
+
+pub fn verify_cancel(cancel: &crate::peers::pairing::protocol::PairingCancel, actor: &str) -> bool {
+    cancel.to_id == actor
+        && !actor.is_empty()
+        && !cancel.from_id.is_empty()
+        && !cancel.request_signature.is_empty()
+        && timestamp_ok(cancel.timestamp)
+        && crate::ed25519_verify(
+            &cancel.signature_public_key,
+            cancel.signature_data().as_bytes(),
+            &cancel.signature,
         )
 }

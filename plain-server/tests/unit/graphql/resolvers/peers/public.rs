@@ -141,14 +141,14 @@ async fn pairing_sends_the_device_the_contract_described() {
     let (_dir, schema) = fixture();
     let paired = query(
         &schema,
-        r#"mutation { pairDevice(input: {
-            id: "peer-9", name: "Tablet", ips: [], port: 4321,
-            deviceType: TABLET, version: "1.2.3", platform: "android",
-            lastSeen: "2026-01-02T03:04:05+00:00", discoveryMethods: [LAN, BLE]
-        }) }"#,
+        r#"mutation { pairDevice(input: { id: "peer-9" }) { deviceId generation mode phase } }"#,
     )
     .await;
-    assert_eq!(paired["data"]["pairDevice"], true, "{paired}");
+    assert_eq!(
+        paired["data"]["pairDevice"]["deviceId"], "peer-9",
+        "{paired}"
+    );
+    assert_eq!(paired["data"]["pairDevice"]["mode"], "CHAT");
 }
 
 #[tokio::test]
@@ -172,7 +172,7 @@ async fn cancelling_and_unpairing_both_acknowledge() {
     let (_dir, schema) = fixture();
     for (document, field) in [
         (
-            r#"mutation { cancelPairing(deviceId: "peer-9") }"#,
+            r#"mutation { cancelPairing(generation: "peer-9") }"#,
             "cancelPairing",
         ),
         (r#"mutation { unpairPeer(id: "peer-1") }"#, "unpairPeer"),
@@ -183,7 +183,7 @@ async fn cancelling_and_unpairing_both_acknowledge() {
             result["errors"].as_array().is_none_or(Vec::is_empty),
             "{result}"
         );
-        assert_eq!(result["data"][field], true, "{result}");
+        assert_eq!(result["data"][field], field != "cancelPairing", "{result}");
     }
 }
 
@@ -193,33 +193,34 @@ async fn unsupported_transport_does_not_call_native_pairing() {
     let mut events = schema.state.events.subscribe();
     let paired = query(
         &schema,
-        r#"mutation { pairDevice(input: {
-        id: "peer-9", name: "Tablet", ips: [], port: 4321,
-        deviceType: TABLET, version: "1", platform: "android",
-        lastSeen: "2026-01-02T03:04:05+00:00", discoveryMethods: [LAN, QR]
-    }) }"#,
+        r#"mutation { pairDevice(input: { id: "peer-9" }) { deviceId generation mode phase } }"#,
     )
     .await;
     assert!(
         paired["errors"].as_array().is_none_or(Vec::is_empty),
         "{paired}"
     );
-    assert_eq!(
-        events.recv().await.unwrap().event_type,
-        plain_rs::chat::events::WS_PAIRING_FAILED
-    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.event_type == "PAIRING_STATE_CHANGED" {
+                let value: Value = serde_json::from_str(&event.payload).unwrap();
+                if value["phase"] == "FAILED" {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
-async fn pairing_rejects_an_invalid_last_seen_instant() {
+async fn pairing_rejects_caller_supplied_discovery_metadata() {
     let (_dir, schema) = fixture();
     let result = query(
         &schema,
-        r#"mutation { pairDevice(input: {
-        id: "peer-invalid", name: "Tablet", ips: [], port: 4321,
-        deviceType: TABLET, version: "1", platform: "android",
-        lastSeen: "invalid-time", discoveryMethods: [LAN]
-    }) }"#,
+        r#"mutation { pairDevice(input: { id: "peer-invalid", lastSeen: "invalid-time" }) { generation } }"#,
     )
     .await;
     assert!(
@@ -228,7 +229,10 @@ async fn pairing_rejects_an_invalid_last_seen_instant() {
             .is_some_and(|errors| !errors.is_empty()),
         "{result}"
     );
-    assert!(result["errors"].to_string().contains("Instant"), "{result}");
+    assert!(
+        result["errors"].to_string().contains("lastSeen"),
+        "{result}"
+    );
 }
 
 #[tokio::test]

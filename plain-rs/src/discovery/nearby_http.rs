@@ -1,10 +1,6 @@
 pub use crate::discovery::nearby_wire::Message;
 use anyhow::Result;
-use std::{
-    net::{IpAddr, SocketAddr},
-    sync::OnceLock,
-    time::Duration,
-};
+use std::{sync::OnceLock, time::Duration};
 
 fn client() -> Result<&'static reqwest::Client> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
@@ -25,12 +21,14 @@ fn client() -> Result<&'static reqwest::Client> {
 /// tests in plain-server, which assert against the same URL.
 pub fn url(ip: &str, port: u16) -> Result<String> {
     anyhow::ensure!(port != 0, "Missing nearby port");
-    let ip: IpAddr = ip
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .parse()?;
-    Ok(format!("https://{}/nearby", SocketAddr::new(ip, port)))
+    let host = ip.trim().trim_start_matches('[').trim_end_matches(']');
+    anyhow::ensure!(
+        crate::transport::lan::valid_host(host),
+        "Invalid nearby host"
+    );
+    Ok(crate::utils::http_url::build_url(
+        "https", host, port, "/nearby",
+    ))
 }
 /// POST a raw wire body; `false` on transport failure, timeout or a
 /// non-success status. `timeout` is the per-call deadline.

@@ -19,6 +19,8 @@ pub(crate) async fn remove(state: &ServerState, id: &str) -> anyhow::Result<bool
     Ok(changed)
 }
 fn remove_record(state: &ServerState, id: &str) -> anyhow::Result<bool> {
+    let _commit = state.pairing_runtime.commit.lock().unwrap();
+    state.pairing_runtime.attempts.cancel_peer(state, id);
     let removed = plain_rs::chat::attachments::app_file_store::chat_deletion::delete(
         &state.db,
         &state.directory,
@@ -44,6 +46,8 @@ pub(crate) async fn unpair(state: &ServerState, id: &str) -> anyhow::Result<bool
     Ok(changed)
 }
 fn unpair_record(state: &ServerState, id: &str) -> anyhow::Result<bool> {
+    let _commit = state.pairing_runtime.commit.lock().unwrap();
+    state.pairing_runtime.attempts.cancel_peer(state, id);
     let changed_peer = plain_rs::db::chat_store::peers::unpair(&state.db, id)?;
     if changed_peer {
         changed(state, id);

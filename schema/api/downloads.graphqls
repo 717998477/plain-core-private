@@ -19,7 +19,7 @@ type ChatDownloadTask {
 	id: ID!
 	messageId: ID!
 	file: ChatDownloadFile!
-	peer: PeerRecord!
+	peer: Peer!
 	status: DownloadStatus!
 	error: String!
 	downloaded: Long!

@@ -1,5 +1,5 @@
 use crate::assembly::server::ServerState;
-use crate::graphql::resolvers::peers::records::PeerRecord;
+use crate::graphql::resolvers::peers::public::Peer;
 use crate::graphql::types::Long;
 use async_graphql::{Context, Object, SimpleObject};
 use plain_rs::chat::attachments::download_status::DownloadStatus;
@@ -63,7 +63,7 @@ struct TaskReceipt {
     id: String,
     message_id: async_graphql::ID,
     file: FileReceipt,
-    peer: PeerRecord,
+    peer: plain_rs::db::DPeer,
     status: DownloadStatus,
     error: String,
     downloaded: Long,
@@ -83,7 +83,7 @@ struct ChatDownloadTask {
     id: async_graphql::ID,
     message_id: async_graphql::ID,
     file: ChatDownloadFile,
-    peer: PeerRecord,
+    peer: Peer,
     status: DownloadStatus,
     error: String,
     downloaded: Long,
@@ -97,7 +97,11 @@ struct ChatDownloadQueue {
     revision: Long,
     tasks: Vec<ChatDownloadTask>,
 }
-fn snapshot(value: serde_json::Value) -> async_graphql::Result<ChatDownloadQueue> {
+fn snapshot(
+    value: serde_json::Value,
+    online: &std::collections::HashSet<&str>,
+) -> async_graphql::Result<ChatDownloadQueue> {
+    let local = plain_rs::transport::lan::local_interfaces();
     let receipt: QueueReceipt = serde_json::from_value(value)?;
     Ok(ChatDownloadQueue {
         runtime_id: receipt.runtime_id,
@@ -110,7 +114,10 @@ fn snapshot(value: serde_json::Value) -> async_graphql::Result<ChatDownloadQueue
                     id: task.id.into(),
                     message_id: task.message_id.into(),
                     file: task.file.try_into()?,
-                    peer: task.peer,
+                    peer: {
+                        let connected = online.contains(task.peer.id.as_str());
+                        Peer::from_record(task.peer, connected, &local)
+                    },
                     status: task.status,
                     error: task.error,
                     downloaded: task.downloaded,
@@ -130,8 +137,19 @@ impl ChatDownloadQuery {
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<ChatDownloadQueue> {
-        let queue = ctx.data::<ServerState>()?.downloads.clone();
-        snapshot(tokio::task::spawn_blocking(move || queue.snapshot()).await?)
+        let state = ctx.data::<ServerState>()?;
+        let queue = state.downloads.clone();
+        let connections = state.peer_status.connections.snapshot(&state.db);
+        let online = connections["online"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        snapshot(
+            tokio::task::spawn_blocking(move || queue.snapshot()).await?,
+            &online,
+        )
     }
 }
 #[derive(Default)]

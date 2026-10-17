@@ -35,3 +35,16 @@ fn repairing_preserves_creation_and_independent_token_and_rolls_back_errors() {
     invalid.key = "bad".into();
     assert!(save(&db, invalid).is_err());
 }
+
+#[test]
+fn a_known_signing_identity_cannot_be_replaced_by_repairing() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    let previous = save(&db, facts()).unwrap();
+    let mut replacement = facts();
+    replacement.public_key = crate::base64_encode(&[9; 32]);
+    replacement.key = crate::base64_encode(&[8; 32]);
+    assert!(save(&db, replacement).is_err());
+    let current = db.get_peer_by_id("peer").unwrap();
+    assert_eq!(current.public_key, previous.public_key);
+    assert_eq!(current.key, previous.key);
+}

@@ -229,6 +229,16 @@ async fn issue(state: &ServerState, request: &Pending) -> anyhow::Result<Value> 
         "timestamp": timestamp,
         "chatPaired": chat_paired,
     });
+    if chat_paired {
+        let id = &request.client_id;
+        let offered_key = text(&request.request["peer"], "signaturePublicKey");
+        if let Some(saved) = plain_rs::db::chat_store::peers::get(&state.db, id)? {
+            anyhow::ensure!(
+                saved.public_key.is_empty() || saved.public_key == offered_key,
+                "Peer identity changed"
+            );
+        }
+    }
     persist(state, request, &token)?;
     if chat_paired {
         let peer = &request.request["peer"];

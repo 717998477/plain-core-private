@@ -5,7 +5,7 @@ use serde_json::json;
 fn canonical_messages_round_trip_and_reject_unknown_or_malformed_payloads() {
     for value in [
         json!({"kind":"DISCOVER"}),
-        json!({"kind":"PAIR_CANCEL","payload":{"fromId":"a","toId":"b"}}),
+        json!({"kind":"PAIR_CANCEL","payload":{"fromId":"a","toId":"b","requestSignature":"request","signaturePublicKey":"public","timestamp":1,"signature":"proof"}}),
         json!({"kind":"DISCOVER_REPLY","payload":{"id":"peer","name":"Fixture","port":1234,"deviceType":"PHONE","version":"1","platform":"test"}}),
     ] {
         let message: Message = serde_json::from_value(value).unwrap();

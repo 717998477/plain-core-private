@@ -61,6 +61,11 @@ impl Default for NativeRequestScope {
 }
 
 impl NativeRequestScope {
+    pub(crate) async fn wait_closed(&self) {
+        let mut closed = self.closed.subscribe();
+        let _ = closed.wait_for(|closed| *closed).await;
+    }
+
     pub fn is_closed(&self) -> bool {
         *self.closed.borrow()
     }

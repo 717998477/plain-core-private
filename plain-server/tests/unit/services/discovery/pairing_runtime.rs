@@ -130,6 +130,7 @@ async fn lan_runtime_sends_signed_tls_requests_and_cancel_cannot_remove_replacem
         target: target.clone(),
         ips: vec!["invalid".into(), "127.0.0.1".into()],
         device: device(),
+        generation: None,
     };
     let first = execute(&state, start()).await.unwrap();
     assert_eq!(first["sent"], true);
@@ -313,19 +314,18 @@ async fn incoming_ble_response_uses_matching_address_and_shared_handshake_exactl
 async fn native_main_pairing_queries_are_read_only_and_reject_stale_request_identity() {
     let (_dir, server) = fixture("fixture");
     let native = server.native_graphql().unwrap();
-    let response = native.execute(async_graphql::Request::new(r#"{ pairingTickets { deviceId generation delayMs } pairingStates { deviceId generation phase } isPairingRequestCurrent(id:"absent",signature:"stale") }"#)).await;
+    let response = native.execute(async_graphql::Request::new(r#"{ pairingStates { deviceId generation phase } isPairingRequestCurrent(id:"absent",signature:"stale") }"#)).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["pairingTickets"], json!([]));
     assert_eq!(data["pairingStates"], json!([]));
     assert_eq!(data["isPairingRequestCurrent"], false);
     let response = native
         .execute(async_graphql::Request::new(
-            r#"mutation { cancelPairing(deviceId:"absent") }"#,
+            r#"mutation { cancelPairing(generation:"absent") }"#,
         ))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["cancelPairing"], true);
+    assert_eq!(response.data.into_json().unwrap()["cancelPairing"], false);
     server.shutdown().await;
 }
 

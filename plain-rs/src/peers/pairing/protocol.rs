@@ -42,6 +42,7 @@ impl PairingRequest {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingResponse {
+    pub request_signature: String,
     pub from_id: String,
     pub to_id: String,
     pub port: u16,
@@ -61,7 +62,8 @@ pub struct PairingResponse {
 impl PairingResponse {
     pub fn signature_data(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "plain-pair-response-v2|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            self.request_signature,
             self.from_id,
             self.to_id,
             self.port,
@@ -80,6 +82,22 @@ impl PairingResponse {
 pub struct PairingCancel {
     pub from_id: String,
     pub to_id: String,
+    pub request_signature: String,
+    pub signature_public_key: String,
+    pub timestamp: i64,
+    pub signature: String,
+}
+impl PairingCancel {
+    pub fn signature_data(&self) -> String {
+        format!(
+            "plain-pair-cancel-v2|{}|{}|{}|{}|{}",
+            self.from_id,
+            self.to_id,
+            self.request_signature,
+            self.signature_public_key,
+            self.timestamp
+        )
+    }
 }
 
 #[cfg(test)]

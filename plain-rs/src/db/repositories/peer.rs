@@ -51,7 +51,8 @@ impl Db {
 
     pub fn upsert_peer(&self, peer: &DPeer) {
         let conn = self.0.lock().unwrap();
-        let result = (|| -> rusqlite::Result<usize> { conn.execute(
+        let result = (|| -> rusqlite::Result<usize> {
+            conn.execute(
             "INSERT INTO peers (id,name,ip,key,public_key,status,port,device_type,token,created_at,updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
              ON CONFLICT(id) DO UPDATE SET
@@ -64,7 +65,8 @@ impl Db {
                 peer.status, peer.port.map(i64::from), peer.device_type, peer.token,
                 crate::utils::dbtime::normalize(&peer.created_at)?, crate::utils::dbtime::normalize(&peer.updated_at)?
             ],
-        ) })();
+        )
+        })();
         if let Err(e) = result {
             log::error!("upsert_peer failed id={} err={e}", peer.id);
         } else {
@@ -100,12 +102,6 @@ impl Db {
         );
     }
 
-    /// Records a login session for a remote device. Creates the peer as
-    /// UNPAIRED when missing without a chat key; otherwise writes PAIRED
-    /// and the chat key. A login without a chat key keeps existing pairing
-    /// state. Empty `name`/`device_type` keep the stored values; a
-    /// non-empty `signature_public_key` (TOFU login key) replaces the
-    /// stored one.
     #[allow(clippy::too_many_arguments)]
     pub fn login_peer(
         &self,
@@ -130,10 +126,13 @@ impl Db {
                public_key=CASE WHEN excluded.public_key<>'' THEN excluded.public_key ELSE peers.public_key END,
                key=CASE WHEN excluded.key<>'' THEN excluded.key ELSE peers.key END,
                status=CASE WHEN excluded.key<>'' THEN 'PAIRED' ELSE peers.status END,
-               updated_at=excluded.updated_at",
+               updated_at=excluded.updated_at
+             WHERE peers.public_key='' OR excluded.public_key='' OR peers.public_key=excluded.public_key",
             params![id, name, ip, port as i64, device_type, token, signature_public_key, now, chat_key],
         );
-        result.map_err(|e| e.to_string())?;
+        if result.map_err(|e| e.to_string())? != 1 {
+            return Err("Peer identity changed".into());
+        }
         log::info!("login_peer ok id={} name={} host={}:{}", id, name, ip, port);
         Ok(())
     }

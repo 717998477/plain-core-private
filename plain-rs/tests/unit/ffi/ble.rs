@@ -87,7 +87,7 @@ fn nearby_codec_roundtrips_shared_wire_without_a_runtime() {
         call(11, 0, 0, 0, 0, false, discover).unwrap().unwrap(),
         b"DISCOVER:"
     );
-    let input = br#"{"kind":"PAIR_CANCEL","payload":{"fromId":"sender","toId":"receiver"}}"#;
+    let input = br#"{"kind":"PAIR_CANCEL","payload":{"fromId":"sender","toId":"receiver","requestSignature":"request","signaturePublicKey":"public","timestamp":1,"signature":"proof"}}"#;
     let wire = call(11, 0, 0, 0, 0, false, input).unwrap().unwrap();
     let output = call(12, 0, 0, 0, 0, false, &wire).unwrap().unwrap();
     assert_eq!(

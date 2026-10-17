@@ -31,6 +31,19 @@ fn respond(
     super::receive_request(&sessions, &request);
     super::respond(db, prefs, &sessions, request, accepted, device)
 }
+fn signed_cancel(prefs: &Prefs, request: &PairingRequest, to: &str) -> PairingCancel {
+    let keypair = signing_keypair(prefs).unwrap();
+    let mut value = PairingCancel {
+        from_id: request.from_id.clone(),
+        to_id: to.into(),
+        request_signature: request.signature.clone(),
+        signature_public_key: request.signature_public_key.clone(),
+        timestamp: now_ms(),
+        signature: String::new(),
+    };
+    value.signature = plain_rs::crypto::ed25519_sign(&keypair, value.signature_data().as_bytes());
+    value
+}
 #[test]
 fn signed_handshake_and_atomic_session_consumption_and_recipient_binding() {
     let dir = std::env::temp_dir().join(format!(
@@ -70,7 +83,11 @@ fn signed_handshake_and_atomic_session_consumption_and_recipient_binding() {
             &sessions,
             PairingCancel {
                 from_id: "b".into(),
-                to_id: "wrong".into()
+                to_id: "wrong".into(),
+                request_signature: String::new(),
+                signature_public_key: String::new(),
+                timestamp: now_ms(),
+                signature: String::new()
             }
         )
         .unwrap()
@@ -175,20 +192,27 @@ fn incoming_requests_cancel_once_and_only_current_invitation_can_be_answered() {
     let (next, _) = request(&a, device()).unwrap();
     assert_eq!(receive_request(&sessions, &next), Some(true));
     assert!(
-        super::respond(&db, &b, &sessions, req, true, device())
+        super::respond(&db, &b, &sessions, req.clone(), true, device())
             .unwrap()
             .is_null()
     );
-    let cancelled = receive_cancel(
-        &b,
-        &sessions,
-        PairingCancel {
-            from_id: "a".into(),
-            to_id: "b".into(),
+    let stale = signed_cancel(&a, &req, "b");
+    assert!(receive_cancel(&b, &sessions, stale).unwrap().is_null());
+    let mut forged = signed_cancel(&a, &next, "b");
+    forged.signature.clear();
+    assert!(receive_cancel(&b, &sessions, forged).unwrap().is_null());
+    sessions.start(
+        Target {
+            device_id: "a".into(),
+            device_name: "A".into(),
+            device_ip: String::new(),
+            device_port: 2443,
         },
-    )
-    .unwrap();
+        EcdhSession::generate(),
+    );
+    let cancelled = receive_cancel(&b, &sessions, signed_cancel(&a, &next, "b")).unwrap();
     assert_eq!(cancelled["deviceId"], "a");
+    assert!(sessions.contains("a"));
     assert!(
         super::respond(&db, &b, &sessions, next, true, device())
             .unwrap()
@@ -198,4 +222,37 @@ fn incoming_requests_cancel_once_and_only_current_invitation_can_be_answered() {
     drop(a);
     drop(b);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_captured_response_cannot_consume_or_overwrite_a_replacement_attempt() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = prefs(directory.path(), "a");
+    let b = prefs(directory.path(), "b");
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    let sessions = Sessions::default();
+    let target = || Target {
+        device_id: "b".into(),
+        device_name: "B".into(),
+        device_ip: "127.0.0.1".into(),
+        device_port: 2443,
+    };
+    let first = start(&a, &sessions, target(), device()).unwrap();
+    let request = serde_json::from_value(first["request"].clone()).unwrap();
+    let (captured, _) = response(&b, request, true, device()).unwrap().unwrap();
+    let next = start(&a, &sessions, target(), device()).unwrap();
+    let generation = next["ticket"]["generation"].as_str().unwrap();
+    assert!(
+        complete(&db, &a, &sessions, captured, "127.0.0.1")
+            .unwrap()
+            .is_null()
+    );
+    assert!(sessions.current("b", generation));
+    assert!(db.get_peer_by_id("b").is_none());
+    let request = serde_json::from_value(next["request"].clone()).unwrap();
+    let (current, _) = response(&b, request, true, device()).unwrap().unwrap();
+    assert_eq!(
+        complete(&db, &a, &sessions, current, "127.0.0.1").unwrap()["peer"]["id"],
+        "b"
+    );
 }

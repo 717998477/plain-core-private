@@ -20,6 +20,8 @@ pub struct Ticket {
     #[serde(flatten)]
     pub target: Target,
     pub generation: String,
+    #[serde(default)]
+    pub request_signature: String,
     pub delay_ms: u64,
 }
 pub struct Pending {
@@ -35,6 +37,7 @@ pub struct Sessions(
 );
 struct Incoming {
     signature: String,
+    public_key: String,
     target: Target,
     timestamp: i64,
 }
@@ -65,6 +68,7 @@ impl Sessions {
             request.from_id.clone(),
             Incoming {
                 signature: request.signature.clone(),
+                public_key: request.signature_public_key.clone(),
                 target,
                 timestamp: request.timestamp,
             },
@@ -89,19 +93,56 @@ impl Sessions {
         }
         incoming.remove(id).map(|p| p.target)
     }
-    pub fn receive_cancel(&self, id: &str) -> Option<Target> {
-        let outgoing = self.cancel(id, None).map(|p| p.target);
-        self.1
-            .lock()
-            .unwrap()
-            .remove(id)
-            .map(|p| p.target)
-            .or(outgoing)
+    pub fn receive_cancel(
+        &self,
+        cancel: &crate::peers::pairing::protocol::PairingCancel,
+    ) -> Option<Target> {
+        let mut incoming = self.1.lock().unwrap();
+        let current = incoming.get(&cancel.from_id)?;
+        if current.signature != cancel.request_signature
+            || current.public_key != cancel.signature_public_key
+        {
+            return None;
+        }
+        incoming.remove(&cancel.from_id).map(|p| p.target)
+    }
+    pub fn bind_request(&self, id: &str, generation: &str, signature: &str) -> Option<Ticket> {
+        let mut pending = self.0.lock().unwrap();
+        let current = pending
+            .get_mut(id)
+            .filter(|p| p.ticket.generation == generation)?;
+        current.ticket.request_signature = signature.into();
+        Some(current.ticket.clone())
+    }
+    pub fn take_response(
+        &self,
+        id: &str,
+        generation: Option<&str>,
+        request_signature: &str,
+    ) -> Option<Pending> {
+        let mut pending = self.0.lock().unwrap();
+        let current = pending.get(id)?;
+        if request_signature.is_empty()
+            || current.ticket.request_signature != request_signature
+            || generation.is_some_and(|g| g != current.ticket.generation)
+        {
+            return None;
+        }
+        pending.remove(id)
     }
     pub fn start(&self, target: Target, ecdh: EcdhSession) -> Ticket {
+        self.start_generation(target, ecdh, uuid::Uuid::new_v4().to_string())
+    }
+    pub fn start_generation(
+        &self,
+        target: Target,
+        ecdh: EcdhSession,
+        generation: String,
+    ) -> Ticket {
         let ticket = Ticket {
             target,
-            generation: uuid::Uuid::new_v4().to_string(),
+            generation,
+            request_signature: String::new(),
             delay_ms: RESPONSE_TIMEOUT.as_millis() as u64,
         };
         self.0.lock().unwrap().insert(

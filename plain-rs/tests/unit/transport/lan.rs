@@ -76,3 +76,24 @@ fn non24_masks_and_multihomed_selection_follow_actual_prefixes() {
             .all(|p| p.prefix_length <= 32 && !p.ip.is_loopback())
     );
 }
+
+#[test]
+fn hostname_fallback_preserves_numeric_subnet_priority_and_rejects_url_fragments() {
+    assert_eq!(best_host(&["device.example".into()], &[]), "device.example");
+    assert_eq!(
+        best_host(&["device.example".into(), "127.0.0.1".into()], &[]),
+        "127.0.0.1"
+    );
+    for invalid in [
+        "",
+        "bad host",
+        "user@host",
+        "host/path",
+        "host?token",
+        "-host",
+        "host-",
+        "host..test",
+    ] {
+        assert!(!valid_host(invalid), "{invalid}");
+    }
+}

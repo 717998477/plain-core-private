@@ -36,10 +36,10 @@ fn request_signature_data_format_is_locked() {
     assert_eq!(aware.signature_data(), req.signature_data());
 }
 
-/// `PairingResponse::signature_data` adds `to_id` + `accepted` (9 fields).
 #[test]
 fn response_signature_data_format_is_locked() {
     let resp = PairingResponse {
+        request_signature: "REQUEST_SIGNATURE".into(),
         from_id: "client-b".to_string(),
         to_id: "client-a".to_string(),
         port: 2443,
@@ -54,7 +54,7 @@ fn response_signature_data_format_is_locked() {
     };
     assert_eq!(
         resp.signature_data(),
-        "client-b|client-a|2443|PHONE|ECDH2|SIGPK2|true|1700000000500|"
+        "plain-pair-response-v2|REQUEST_SIGNATURE|client-b|client-a|2443|PHONE|ECDH2|SIGPK2|true|1700000000500|"
     );
 }
 
@@ -71,4 +71,13 @@ fn wire_json_is_camelcase() {
     assert_eq!(json["fromIp"], "");
     let back: PairingRequest = serde_json::from_value(json).unwrap();
     assert_eq!(back.from_id, "client-a");
+}
+
+#[test]
+fn legacy_unsigned_cancellation_and_unbound_response_are_rejected() {
+    assert!(
+        serde_json::from_value::<PairingCancel>(serde_json::json!({"fromId":"a","toId":"b"}))
+            .is_err()
+    );
+    assert!(serde_json::from_value::<PairingResponse>(serde_json::json!({"fromId":"b","toId":"a","port":2443,"deviceType":"PHONE","ecdhPublicKey":"key","signaturePublicKey":"signer","accepted":true,"timestamp":1,"signature":"old"})).is_err());
 }

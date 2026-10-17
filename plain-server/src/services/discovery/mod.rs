@@ -28,3 +28,9 @@ pub mod pairing_runtime;
 
 #[cfg(feature = "core")]
 pub mod pairing_timeout;
+
+#[cfg(feature = "core")]
+pub(crate) mod pairing_attempts;
+
+#[cfg(feature = "core")]
+mod pairing_login;

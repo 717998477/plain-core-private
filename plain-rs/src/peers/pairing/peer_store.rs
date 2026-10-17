@@ -30,6 +30,9 @@ pub fn save(db: &Db, facts: Facts) -> Result<DPeer> {
             &format!("SELECT {PEER_COLS} FROM peers WHERE id=?1"),
             [&facts.id], row_to_peer,
         ).optional()?;
+        if existing.as_ref().is_some_and(|peer| !peer.public_key.is_empty() && peer.public_key != facts.public_key) {
+            bail!("Peer identity changed");
+        }
         let new = existing.is_none();
         let mut peer = existing.unwrap_or_else(|| DPeer::new(&facts.id, &facts.name, "", Some(facts.port), facts.device_type));
         peer.name = facts.name;

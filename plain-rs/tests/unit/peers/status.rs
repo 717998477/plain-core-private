@@ -40,3 +40,37 @@ fn status_proof_is_bound_to_connection_and_rejects_old_signed_content() {
     assert!(handshake(&key, &keypair, "peer", "").is_err());
     assert!(handshake(&key, &keypair, "", &first).is_err());
 }
+
+#[test]
+fn peer_list_snapshot_uses_supplied_rows_without_any_database_access() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    let mut peer = DPeer::new(
+        "snapshot",
+        "Fixture",
+        "127.0.0.1",
+        Some(8443),
+        crate::chat::enums::DeviceType::Phone,
+    );
+    peer.key = crate::base64_encode(&[1; 32]);
+    peer.public_key = crate::base64_encode(&[2; 32]);
+    peer.status = crate::chat::enums::PeerStatus::Paired;
+    crate::db::chat_store::peers::save(
+        &db,
+        &[peer.clone()],
+        crate::db::chat_store::SaveMode::Insert,
+    )
+    .unwrap();
+    let connections = Connections::default();
+    connections.hint(&db, &peer.id).unwrap();
+    connections.admit(&db, peer.clone()).unwrap();
+    db.with_conn(|_| {
+        assert_eq!(
+            connections.snapshot_peers(&[peer.clone()])["online"],
+            json!(["snapshot"])
+        );
+        let mut rotated = peer.clone();
+        rotated.key = crate::base64_encode(&[3; 32]);
+        assert_eq!(connections.snapshot_peers(&[rotated])["online"], json!([]));
+        assert_eq!(connections.snapshot_peers(&[])["online"], json!([]));
+    });
+}

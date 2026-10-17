@@ -127,9 +127,9 @@ async fn ble_initiator_signs_filters_notifications_commits_shared_key_and_closes
                 .unwrap();
         }
     });
-    let first = start(&state, target("remote"), device()).unwrap();
+    let first = start(&state, target("remote"), device(), None).unwrap();
     assert_eq!(state.pairing.states()[0].1, "STARTING");
-    let duplicate = start(&state, target("remote"), device()).unwrap();
+    let duplicate = start(&state, target("remote"), device(), None).unwrap();
     assert_eq!(
         first["ticket"]["generation"],
         duplicate["ticket"]["generation"]
@@ -162,7 +162,7 @@ async fn cancellation_interrupts_pending_connect_and_preserves_replacement_gener
     let (_dir, server) = fixture("local");
     let state = server.runtime_state();
     let (generation, mut effects) = state.host.connect();
-    let old = start(&state, target("remote"), device()).unwrap();
+    let old = start(&state, target("remote"), device(), None).unwrap();
     let connect = effects.recv().await.unwrap();
     assert_eq!(connect["method"], "blePairConnect");
     let replacement =
@@ -229,9 +229,13 @@ async fn capacity_and_actual_connect_refusal_release_only_their_ticket() {
     let (_dir, server) = fixture("local");
     let state = server.runtime_state();
     let (generation, mut effects) = state.host.connect();
-    start(&state, target("first"), device()).unwrap();
-    start(&state, target("second"), device()).unwrap();
-    assert!(start(&state, target("third"), device()).unwrap().is_null());
+    start(&state, target("first"), device(), None).unwrap();
+    start(&state, target("second"), device(), None).unwrap();
+    assert!(
+        start(&state, target("third"), device(), None)
+            .unwrap()
+            .is_null()
+    );
     assert_eq!(state.pairing.tickets().len(), 2);
     for _ in 0..4 {
         let effect = tokio::time::timeout(Duration::from_secs(2), effects.recv())

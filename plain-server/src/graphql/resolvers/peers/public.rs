@@ -16,16 +16,6 @@ pub enum DiscoveryMethod {
     Qr,
 }
 
-impl DiscoveryMethod {
-    fn as_str(self) -> &'static str {
-        match self {
-            DiscoveryMethod::Lan => "LAN",
-            DiscoveryMethod::Ble => "BLE",
-            DiscoveryMethod::Qr => "QR",
-        }
-    }
-}
-
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Peer {
     pub id: async_graphql::ID,
@@ -40,6 +30,42 @@ pub struct Peer {
     #[graphql(name = "updatedAt")]
     pub updated_at: crate::graphql::types::Instant,
     pub online: bool,
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    pub key: String,
+    pub public_key: String,
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    pub token: String,
+    pub address: Option<super::records::PeerAddress>,
+}
+
+impl Peer {
+    pub(crate) fn from_record(
+        row: plain_rs::db::DPeer,
+        online: bool,
+        local: &[plain_rs::transport::lan::Interface],
+    ) -> Self {
+        Self {
+            address: Some(
+                crate::services::peers::peer_address::address_with_interfaces(&row, local).into(),
+            ),
+            key: row.key,
+            public_key: row.public_key,
+            token: row.token,
+            online,
+            id: row.id.into(),
+            name: row.name,
+            ip: row.ip,
+            status: match row.status {
+                plain_rs::chat::enums::PeerStatus::Paired => PeerStatus::Paired,
+                plain_rs::chat::enums::PeerStatus::Unpaired => PeerStatus::Unpaired,
+                plain_rs::chat::enums::PeerStatus::Channel => PeerStatus::Channel,
+            },
+            port: row.port.map(i32::from),
+            device_type: parse_device_type(&row.device_type.to_string()),
+            created_at: crate::graphql::types::facts::stored_instant(&row.created_at),
+            updated_at: crate::graphql::types::facts::stored_instant(&row.updated_at),
+        }
+    }
 }
 
 #[derive(SimpleObject, Clone, Debug)]
@@ -51,20 +77,13 @@ pub struct Sim {
     pub subscription_id: i32,
 }
 
-#[derive(InputObject, Clone, Debug)]
+#[derive(InputObject, Clone)]
 pub struct PairingDeviceInput {
-    pub id: async_graphql::ID,
-    pub name: String,
-    pub ips: Vec<String>,
-    pub port: i32,
-    #[graphql(name = "deviceType")]
-    pub device_type: DeviceType,
-    pub version: String,
-    pub platform: String,
-    #[graphql(name = "lastSeen")]
-    pub last_seen: crate::graphql::types::Instant,
-    #[graphql(name = "discoveryMethods")]
-    pub discovery_methods: Vec<DiscoveryMethod>,
+    pub id: Option<async_graphql::ID>,
+    pub host: Option<String>,
+    pub mode: Option<PairingMode>,
+    pub password: Option<String>,
+    pub generation: Option<String>,
 }
 
 #[derive(InputObject, Clone, Debug)]
@@ -89,23 +108,28 @@ pub struct PairingRequestInput {
     pub aware_supported: bool,
 }
 
-#[derive(SimpleObject, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PairingTicket {
-    device_id: async_graphql::ID,
-    device_name: String,
-    device_ip: String,
-    device_port: i32,
-    generation: String,
-    delay_ms: crate::graphql::types::Long,
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PairingMode {
+    Chat,
+    Manage,
 }
-
+impl From<PairingMode> for crate::services::discovery::pairing_attempts::Mode {
+    fn from(mode: PairingMode) -> Self {
+        match mode {
+            PairingMode::Chat => Self::Chat,
+            PairingMode::Manage => Self::Manage,
+        }
+    }
+}
 #[derive(SimpleObject, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PairingState {
-    device_id: async_graphql::ID,
+    device_id: Option<async_graphql::ID>,
     generation: String,
+    mode: PairingMode,
     phase: String,
+    error: Option<String>,
 }
 
 #[derive(Default)]
@@ -132,16 +156,6 @@ impl PeersQuery {
         })
     }
 
-    async fn pairing_tickets(
-        &self,
-        ctx: &Context<'_>,
-    ) -> async_graphql::Result<Vec<PairingTicket>> {
-        Ok(serde_json::from_value(serde_json::to_value(
-            ctx.data::<crate::assembly::server::ServerState>()?
-                .pairing
-                .tickets(),
-        )?)?)
-    }
     async fn pairing_states(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<PairingState>> {
         let value = crate::services::discovery::pairing_runtime::execute(
             ctx.data::<crate::assembly::server::ServerState>()?,
@@ -162,27 +176,32 @@ impl PeersQuery {
             .incoming_target(&id, &signature)
             .is_some())
     }
-    async fn peers(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Peer>> {
+    async fn peers(
+        &self,
+        ctx: &Context<'_>,
+        ids: Option<Vec<async_graphql::ID>>,
+    ) -> async_graphql::Result<Vec<Peer>> {
         let state = ctx.data::<crate::assembly::server::ServerState>()?;
-        let online = state.peer_status.connections.snapshot(&state.db);
-        Ok(plain_rs::db::chat_store::peers::all(&state.db)?
+        let rows = plain_rs::db::chat_store::peers::all(&state.db)?;
+        let local = plain_rs::transport::lan::local_interfaces();
+        let connections = state.peer_status.connections.snapshot_peers(&rows);
+        let online = connections["online"]
+            .as_array()
             .into_iter()
-            .map(|row| Peer {
-                online: online["online"]
-                    .as_array()
-                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(row.id.as_str()))),
-                id: row.id.into(),
-                name: row.name,
-                ip: row.ip,
-                status: match row.status {
-                    plain_rs::chat::enums::PeerStatus::Paired => PeerStatus::Paired,
-                    plain_rs::chat::enums::PeerStatus::Unpaired => PeerStatus::Unpaired,
-                    plain_rs::chat::enums::PeerStatus::Channel => PeerStatus::Channel,
-                },
-                port: row.port.map(i32::from),
-                device_type: parse_device_type(&row.device_type.to_string()),
-                created_at: crate::graphql::types::facts::stored_instant(&row.created_at),
-                updated_at: crate::graphql::types::facts::stored_instant(&row.updated_at),
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        let ids = ids.map(|ids| {
+            ids.into_iter()
+                .map(|id| id.to_string())
+                .collect::<std::collections::HashSet<_>>()
+        });
+        Ok(rows
+            .into_iter()
+            .filter(|row| ids.as_ref().is_none_or(|ids| ids.contains(&row.id)))
+            .map(|row| {
+                let connected = online.contains(row.id.as_str());
+                Peer::from_record(row, connected, &local)
             })
             .collect())
     }
@@ -209,40 +228,42 @@ impl PeersMutation {
         &self,
         ctx: &Context<'_>,
         input: PairingDeviceInput,
-    ) -> async_graphql::Result<bool> {
-        crate::services::discovery::pairing_runtime::start_device(
+    ) -> async_graphql::Result<PairingState> {
+        if (input.mode == Some(PairingMode::Manage) || input.generation.is_some())
+            && !crate::http::auth::public_gate::is_local(ctx)
+        {
+            return Err(async_graphql::Error::new("no_permission"));
+        }
+        let state = crate::services::discovery::pairing_attempts::start(
             ctx.data::<crate::assembly::server::ServerState>()?,
-            plain_rs::peers::pairing::sessions::Target {
-                device_id: input.id.to_string(),
-                device_name: input.name,
-                device_ip: String::new(),
-                device_port: u16::try_from(input.port)?,
-            },
-            input.ips,
-            input
-                .discovery_methods
-                .iter()
-                .map(|method| method.as_str().to_owned())
-                .collect(),
+            input.id.map(|id| id.to_string()),
+            input.host,
+            input.mode.map(Into::into),
+            input.password,
+            input.generation,
+            ctx.data_opt::<crate::native::graphql::NativeRequestScope>()
+                .cloned(),
         )
         .await?;
-        Ok(true)
+        Ok(serde_json::from_value(serde_json::to_value(state)?)?)
     }
 
     async fn cancel_pairing(
         &self,
         ctx: &Context<'_>,
-        device_id: async_graphql::ID,
+        generation: String,
     ) -> async_graphql::Result<bool> {
-        crate::services::discovery::pairing_runtime::execute(
-            ctx.data::<crate::assembly::server::ServerState>()?,
-            crate::services::discovery::pairing_runtime::Request::Cancel {
-                id: device_id.to_string(),
-                generation: None,
-            },
-        )
-        .await?;
-        Ok(true)
+        let state = ctx.data::<crate::assembly::server::ServerState>()?;
+        if state
+            .pairing_runtime
+            .attempts
+            .get(&generation)
+            .is_some_and(|s| s.mode == crate::services::discovery::pairing_attempts::Mode::Manage)
+            && !crate::http::auth::public_gate::is_local(ctx)
+        {
+            return Err(async_graphql::Error::new("no_permission"));
+        }
+        Ok(crate::services::discovery::pairing_attempts::cancel(state, &generation).await?)
     }
 
     async fn respond_to_pairing(

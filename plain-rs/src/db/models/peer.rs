@@ -45,6 +45,10 @@ impl DPeer {
     }
 
     pub fn best_ip(&self) -> String {
+        self.best_ip_with_interfaces(&crate::transport::lan::local_interfaces())
+    }
+
+    pub fn best_ip_with_interfaces(&self, local: &[crate::transport::lan::Interface]) -> String {
         let ips = self
             .ip
             .split(',')
@@ -52,7 +56,7 @@ impl DPeer {
             .filter(|ip| !ip.is_empty())
             .map(str::to_string)
             .collect::<Vec<_>>();
-        crate::transport::lan::best(&ips, &crate::transport::lan::local_interfaces())
+        crate::transport::lan::best_host(&ips, local)
     }
 
     pub fn base_url(&self) -> Option<String> {
