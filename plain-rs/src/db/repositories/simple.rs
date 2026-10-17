@@ -312,7 +312,7 @@ impl Db {
     ) -> rusqlite::Result<Vec<VideoPlayProgressRow>> {
         self.with_conn(|c| {
             let mut stmt = c.prepare(&format!(
-                "SELECT {VIDEO_PROGRESS_COLUMNS} FROM media_play_history WHERE played_at >= ?1 AND media_id NOT IN (SELECT media_id FROM audio_media)"
+                "SELECT {VIDEO_PROGRESS_COLUMNS} FROM media_play_history WHERE media_type=2 AND played_at >= ?1"
             ))?;
             stmt.query_map([since], video_progress_from_row)?.collect()
         })
@@ -325,7 +325,7 @@ impl Db {
         self.with_conn(|c| {
             c.query_row(
                 &format!(
-                    "SELECT {VIDEO_PROGRESS_COLUMNS} FROM media_play_history WHERE media_id=?1"
+                    "SELECT {VIDEO_PROGRESS_COLUMNS} FROM media_play_history WHERE media_type=2 AND media_id=?1"
                 ),
                 [media_id],
                 video_progress_from_row,
@@ -336,11 +336,12 @@ impl Db {
 
     pub fn video_progress_upsert(&self, row: &VideoPlayProgressRow) -> rusqlite::Result<()> {
         self.with_conn(|c| {
-            c.execute(
-                "INSERT INTO media_play_history (media_id, position_ms, play_count, played_at)
-                 VALUES (?1, ?2, 0, ?3) ON CONFLICT(media_id) DO UPDATE SET position_ms=excluded.position_ms,played_at=excluded.played_at",
+            let changed = c.execute(
+                "INSERT INTO media_play_history (media_id, position_ms, play_count, played_at, media_type)
+                 VALUES (?1, ?2, 0, ?3, 2) ON CONFLICT(media_id) DO UPDATE SET position_ms=excluded.position_ms,played_at=excluded.played_at WHERE media_play_history.media_type=excluded.media_type",
                 params![row.media_id, row.position_ms, crate::utils::dbtime::normalize(&row.updated_at)?],
             )?;
+            if changed == 0 { return Err(rusqlite::Error::QueryReturnedNoRows); }
             Ok(())
         })
     }
@@ -348,7 +349,7 @@ impl Db {
     pub fn video_progress_delete(&self, media_id: &str) -> rusqlite::Result<usize> {
         self.with_conn(|c| {
             c.execute(
-                "DELETE FROM media_play_history WHERE media_id=?1",
+                "DELETE FROM media_play_history WHERE media_type=2 AND media_id=?1",
                 [media_id],
             )
         })

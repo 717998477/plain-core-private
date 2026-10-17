@@ -157,7 +157,7 @@ fn save_position(
     path: &str,
     position_ms: i64,
 ) -> rusqlite::Result<()> {
-    conn.execute("UPDATE media_play_history SET position_ms=?1,played_at=?2 WHERE media_id=(SELECT media_id FROM audio_media WHERE path=?3 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?3)",rusqlite::params![position_ms,crate::utils::dbtime::now_iso_millis(),path])?;
+    conn.execute("UPDATE media_play_history SET position_ms=?1,played_at=?2 WHERE media_type=1 AND media_id=(SELECT media_id FROM audio_media WHERE path=?3 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?3)",rusqlite::params![position_ms,crate::utils::dbtime::now_iso_millis(),path])?;
     Ok(())
 }
 

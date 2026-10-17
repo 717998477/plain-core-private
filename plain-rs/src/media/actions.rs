@@ -87,7 +87,7 @@ pub fn cleanup(
         .map(|item| item.path.clone())
         .collect::<Vec<_>>();
     db.audio_transaction(|tx, state| {
-        if matches!(kind,DataType::Audio|DataType::Video) && matches!(action,Action::Trash|Action::Delete) {
+        if kind==DataType::Audio && matches!(action,Action::Trash|Action::Delete) {
             for table in ["audio_queue_items","audio_playlist_items"] {
                 tx.execute(&format!("DELETE FROM {table} WHERE media_id IN (SELECT value FROM json_each(?1))"),[&ids])?;
             }
@@ -96,7 +96,7 @@ pub fn cleanup(
         if action!=Action::Move && action!=Action::Restore {
             tx.execute("DELETE FROM tag_relations WHERE type=?1 AND target_key IN (SELECT value FROM json_each(?2))",params![kind.kind(),ids])?;
             if matches!(kind,DataType::Audio|DataType::Video) {
-                tx.execute("DELETE FROM media_play_history WHERE media_id IN (SELECT value FROM json_each(?1))",[&ids])?;
+                tx.execute("DELETE FROM media_play_history WHERE media_type=?2 AND media_id IN (SELECT value FROM json_each(?1))",params![ids,kind.kind()])?;
             }
         }
         if kind==DataType::Image && action!=Action::Restore {

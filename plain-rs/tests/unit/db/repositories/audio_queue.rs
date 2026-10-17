@@ -149,3 +149,23 @@ fn playlist_item_counts_and_bulk_delete() {
         1
     );
 }
+
+#[test]
+fn queue_path_lookup_does_not_require_a_play_history_row() {
+    let db = test_db("queue_path_lookup");
+    let track = audio("/queued.mp3", "Queued", 123);
+    register_audio(&db, &track);
+    crate::media::audio::queue::enqueue(&db, std::slice::from_ref(&track), false).unwrap();
+    assert!(crate::db::audio_queue::all_history(&db).unwrap().is_empty());
+    let row = crate::db::audio_queue::queue_item_by_path(&db, &track.path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.path, track.path);
+    assert_eq!(row.title, "Queued");
+    assert_eq!(row.duration_ms, 123);
+    assert!(
+        crate::db::audio_queue::queue_item_by_path(&db, "/missing.mp3")
+            .unwrap()
+            .is_none()
+    );
+}

@@ -14,7 +14,7 @@ fn binding(kind: i32, old: &str, new: &str) -> Binding {
 #[test]
 fn typed_bindings_preserve_tags_video_progress_and_remove_old_audio_paths() {
     let db = db();
-    db.with_conn(|c|c.execute_batch("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('audio','old',1,'first'),('video','old',2,'first'),('foreign','old',6,'first'),('file','/source/nested/file.txt',22,'first'); INSERT INTO media_play_history(media_id,position_ms,played_at,play_count) VALUES('old',4000000001,'first',0); INSERT INTO media_items(id,data_type,path,mime_type,file_name,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,created_at,updated_at) VALUES('test:/source/old',1,'/source/old','audio/mpeg','song','audio','','',1,5000000001,'',0,0,0,'now','now'),('test:/unrelated',1,'/unrelated','audio/mpeg','song','unrelated','','',1,1,'',0,0,0,'now','now'); INSERT INTO audio_queue_items(media_id,sort_order) VALUES('test:/source/old',0),('test:/unrelated',1);")).unwrap();
+    db.with_conn(|c|c.execute_batch("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('audio','old',1,'first'),('video','old',2,'first'),('foreign','old',6,'first'),('file','/source/nested/file.txt',22,'first'); INSERT INTO media_play_history(media_type,media_id,position_ms,played_at,play_count) VALUES(2,'old',4000000001,'first',0); INSERT INTO media_items(id,data_type,path,mime_type,file_name,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,created_at,updated_at) VALUES('test:/source/old',1,'/source/old','audio/mpeg','song','audio','','',1,5000000001,'',0,0,0,'now','now'),('test:/unrelated',1,'/unrelated','audio/mpeg','song','unrelated','','',1,1,'',0,0,0,'now','now'); INSERT INTO audio_queue_items(media_id,sort_order) VALUES('test:/source/old',0),('test:/unrelated',1);")).unwrap();
     assert_eq!(
         rebind(
             &db,
@@ -66,9 +66,12 @@ fn typed_bindings_preserve_tags_video_progress_and_remove_old_audio_paths() {
             "/target/nested/file.txt"
         );
         assert_eq!(
-            c.query_row("SELECT m.path FROM audio_queue_items q JOIN audio_media m USING(media_id)", [], |r| r
-                .get::<_, String>(0))
-                .unwrap(),
+            c.query_row(
+                "SELECT m.path FROM audio_queue_items q JOIN audio_media m USING(media_id)",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
             "/unrelated"
         );
     });
@@ -76,7 +79,7 @@ fn typed_bindings_preserve_tags_video_progress_and_remove_old_audio_paths() {
 #[test]
 fn source_snapshots_handle_permuted_provider_ids_without_overwriting_the_other_source() {
     let db = db();
-    db.with_conn(|c|c.execute_batch("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('one','a',2,'first'),('two','b',2,'second'); INSERT INTO media_play_history(media_id,position_ms,played_at,play_count) VALUES('a',1,'first',0),('b',2,'second',0);")).unwrap();
+    db.with_conn(|c|c.execute_batch("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('one','a',2,'first'),('two','b',2,'second'); INSERT INTO media_play_history(media_type,media_id,position_ms,played_at,play_count) VALUES(2,'a',1,'first',0),(2,'b',2,'second',0);")).unwrap();
     rebind(
         &db,
         &[binding(2, "a", "b"), binding(2, "b", "a")],
@@ -155,9 +158,12 @@ fn private_files_without_provider_ids_clear_only_audio_paths_inside_the_moved_ro
     rebind(&db, &[], "/private", "/destination").unwrap();
     db.with_conn(|c| {
         assert_eq!(
-            c.query_row("SELECT m.path FROM audio_queue_items q JOIN audio_media m USING(media_id)", [], |row| row
-                .get::<_, String>(0))
-                .unwrap(),
+            c.query_row(
+                "SELECT m.path FROM audio_queue_items q JOIN audio_media m USING(media_id)",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
             "/private_sibling/song"
         );
     });
@@ -213,7 +219,7 @@ fn raw_alias_and_canonical_roots_rebind_file_tags_and_remove_stale_path_caches()
 #[test]
 fn rebinding_swaps_provider_ids_atomically_and_rolls_back_on_failure() {
     let db = db();
-    db.with_conn(|c|c.execute_batch("INSERT INTO media_play_history(media_id,position_ms,played_at,play_count) VALUES('a',1,'first',0),('b',2,'second',0);")).unwrap();
+    db.with_conn(|c|c.execute_batch("INSERT INTO media_play_history(media_type,media_id,position_ms,played_at,play_count) VALUES(2,'a',1,'first',0),(2,'b',2,'second',0);")).unwrap();
     let bindings = [binding(2, "a", "b"), binding(2, "b", "a")];
     assert_eq!(rebind(&db, &bindings, "/source", "/target").unwrap(), 2);
     assert_eq!(db.video_progress_get("a").unwrap().unwrap().position_ms, 2);

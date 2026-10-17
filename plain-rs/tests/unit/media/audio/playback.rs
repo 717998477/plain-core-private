@@ -51,7 +51,10 @@ fn reopening_remembers_only_the_current_track_and_preserves_queue_and_history() 
         .unwrap()
         .id;
     assert_eq!(
-        db.media_play_history_get(&id).unwrap().unwrap().position_ms,
+        db.media_play_history_get(crate::enums::DataType::Audio, &id)
+            .unwrap()
+            .unwrap()
+            .position_ms,
         234_567
     );
     assert_eq!(db.audio_current_media_id().unwrap(), id);
@@ -253,7 +256,7 @@ fn selected_playback_reports_count_actual_start_once_and_update_position_without
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].play_count, 1);
     assert_eq!(
-        db.media_play_history_get(&history[0].media_id)
+        db.media_play_history_get(crate::enums::DataType::Audio, &history[0].media_id)
             .unwrap()
             .unwrap()
             .position_ms,

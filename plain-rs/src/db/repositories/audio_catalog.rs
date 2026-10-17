@@ -43,7 +43,7 @@ impl Db {
 
     pub fn audio_reference_ids(&self) -> rusqlite::Result<Vec<String>> {
         let mut ids = self.with_conn(|conn| {
-            conn.prepare("SELECT media_id FROM audio_queue_items UNION SELECT media_id FROM audio_playlist_items UNION SELECT media_id FROM media_play_history")?
+            conn.prepare("SELECT media_id FROM audio_queue_items UNION SELECT media_id FROM audio_playlist_items UNION SELECT media_id FROM media_play_history WHERE media_type=1")?
                 .query_map([], |row| row.get(0))?.collect::<rusqlite::Result<Vec<String>>>()
         })?;
         if let Some(id) = self.audio_current_media_id().filter(|id| !ids.contains(id)) {

@@ -1054,7 +1054,7 @@ async fn overview_projects_the_authoritative_catalog_without_sdk_metadata_calls(
         &[("/one.mp3", "One", "Artist"), ("/two.mp3", "Two", "Artist")],
     );
     database(&schema)
-        .media_play_history_start("test:/two.mp3", 0)
+        .media_play_history_start(plain_rs::enums::DataType::Audio, "test:/two.mp3", 0)
         .unwrap();
     let result = query(&schema,"{ audioOverview { artists { name itemCount playCount samplePath } recentItems { id path } } }").await;
     assert!(result["errors"].is_null(), "{result}");
@@ -1162,7 +1162,7 @@ async fn browser_actual_start_and_progress_use_main_history_without_host_command
     let history = domain::history_page(db, 0, 10, "").unwrap();
     assert_eq!(history[0].play_count, 1);
     assert_eq!(
-        db.media_play_history_get(&history[0].media_id)
+        db.media_play_history_get(plain_rs::enums::DataType::Audio, &history[0].media_id)
             .unwrap()
             .unwrap()
             .position_ms,

@@ -117,7 +117,10 @@ impl Db {
                     params![data_type, id],
                 )?;
                 tx.execute("DELETE FROM image_embeddings WHERE id=?1", [id])?;
-                tx.execute("DELETE FROM media_play_history WHERE media_id=?1", [id])?;
+                tx.execute(
+                    "DELETE FROM media_play_history WHERE media_id=?1 AND media_type=?2",
+                    params![id, data_type],
+                )?;
                 if *data_type == 1 {
                     for table in ["audio_queue_items", "audio_playlist_items"] {
                         tx.execute(&format!("DELETE FROM {table} WHERE media_id=?1"), [id])?;

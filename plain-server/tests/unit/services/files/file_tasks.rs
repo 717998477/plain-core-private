@@ -149,7 +149,7 @@ async fn media_move_case(missing_destination: bool) {
             c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES(?1,?2,?3,'first')",rusqlite::params![tag,id,kind])?;
         }
         c.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('file',?1,22,'first')",[source.join("document").to_str().unwrap()])?;
-        c.execute_batch("INSERT INTO media_play_history(media_id,position_ms,play_count,played_at) VALUES('2',4000000001,0,'first');")?;
+        c.execute_batch("INSERT INTO media_play_history(media_type,media_id,position_ms,play_count,played_at) VALUES(2,'2',4000000001,0,'first');")?;
         c.execute("INSERT INTO audio_queue_items(media_id,sort_order) SELECT id,0 FROM media_items WHERE path=?1",[&audio_path])?;
 
         Ok(())

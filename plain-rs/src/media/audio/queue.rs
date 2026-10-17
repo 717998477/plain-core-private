@@ -266,7 +266,7 @@ pub(crate) fn remove_root_paths_except_conn(
     retained_ids: &[String],
 ) -> DomainResult<()> {
     let prefix = format!("{}/", root.trim_end_matches('/'));
-    let mut statement = c.prepare("SELECT path FROM audio_media WHERE media_id IN (SELECT media_id FROM audio_queue_items UNION SELECT media_id FROM audio_playlist_items UNION SELECT media_id FROM media_play_history) AND media_id NOT IN (SELECT value FROM json_each(?3)) AND (path=?1 OR substr(path,1,length(?2))=?2)")?;
+    let mut statement = c.prepare("SELECT path FROM audio_media WHERE media_id IN (SELECT media_id FROM audio_queue_items UNION SELECT media_id FROM audio_playlist_items UNION SELECT media_id FROM media_play_history WHERE media_type=1) AND media_id NOT IN (SELECT value FROM json_each(?3)) AND (path=?1 OR substr(path,1,length(?2))=?2)")?;
     let mut paths = statement
         .query_map(
             rusqlite::params![
@@ -621,9 +621,9 @@ pub(crate) fn record_history_conn(
     let Some(media_id) = media_id else {
         return Ok(());
     };
-    crate::db::media_play_history::record_play(c, &media_id, 0)?;
+    crate::db::media_play_history::record_play(c, crate::enums::DataType::Audio, &media_id, 0)?;
     let count: i64 = c.query_row(
-        "SELECT COUNT(*) FROM media_play_history h JOIN audio_media m USING(media_id)",
+        "SELECT COUNT(*) FROM media_play_history h JOIN audio_media m USING(media_id) WHERE h.media_type=1",
         [],
         |r| r.get(0),
     )?;

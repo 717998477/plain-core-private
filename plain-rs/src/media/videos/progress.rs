@@ -20,12 +20,19 @@ pub fn save(
     Ok(row)
 }
 
-pub fn started(db: &Db, media_id: &str, position_ms: i64) -> crate::error::DomainResult<VideoPlayProgressRow> {
+pub fn started(
+    db: &Db,
+    media_id: &str,
+    position_ms: i64,
+) -> crate::error::DomainResult<VideoPlayProgressRow> {
     if media_id.trim().is_empty() || position_ms < 0 {
-        return Err(crate::error::DomainError::Other("invalid video playback".into()));
+        return Err(crate::error::DomainError::Other(
+            "invalid video playback".into(),
+        ));
     }
-    db.media_play_history_start(media_id,position_ms)?;
-    db.video_progress_get(media_id)?.ok_or_else(|| crate::error::DomainError::Other("video history unavailable".into()))
+    db.media_play_history_start(crate::enums::DataType::Video, media_id, position_ms)?;
+    db.video_progress_get(media_id)?
+        .ok_or_else(|| crate::error::DomainError::Other("video history unavailable".into()))
 }
 
 pub fn recent(

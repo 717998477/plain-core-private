@@ -41,7 +41,7 @@ pub fn cleanup(db: &Db, items: &[Item], paths: &[String], roots: &[String]) -> D
             }
             match item.media_type {
                 1|2=>{
-                    if matches!(item.media_type,1|2) { tx.execute("DELETE FROM media_play_history WHERE media_id=?1",[&item.id])?; }
+                    tx.execute("DELETE FROM media_play_history WHERE media_id=?1 AND media_type=?2",params![item.id,item.media_type])?;
                 },
                 3=>{tx.execute("DELETE FROM image_embeddings WHERE id=?1",[&item.id])?;}, _=>{},
             }
