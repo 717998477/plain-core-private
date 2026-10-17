@@ -2,7 +2,6 @@ use crate::db::Db;
 use crate::db::TagRelationRow;
 use crate::db::TagRow;
 use crate::db::tag;
-use crate::error::DomainError;
 use crate::error::DomainResult;
 
 pub fn create_tag(db: &Db, kind: i32, name: &str) -> DomainResult<TagRow> {
@@ -62,29 +61,12 @@ pub fn edit_relations(
     add: &[String],
     remove: &[String],
 ) -> DomainResult<()> {
-    if key.is_empty() {
-        return Err(DomainError::Other("empty tag key".into()));
-    }
-    db.with_conn(|c| {
-        let tx = c.unchecked_transaction()?;
-        for id in add.iter().chain(remove) {
-            if tag::io::tag_by_id(&tx, id)?.is_none_or(|row| row.kind != kind) {
-                return Err(DomainError::Other("tag type mismatch".into()));
-            }
-        }
-        tag::io::insert_relations(
-            &tx,
-            &add.iter()
-                .map(|id| (id.clone(), key.into()))
-                .collect::<Vec<_>>(),
-        )?;
-        tag::io::remove_relations(&tx, &[key.into()], remove)?;
-        tx.commit()?;
-        Ok(())
-    })
+    update_relations(db, kind, &[key.into()], add, remove)
 }
+
+mod relations;
+pub use relations::update_relations;
+
 #[cfg(test)]
 #[path = "../tests/unit/tags.rs"]
 mod tests;
-
-pub mod records;

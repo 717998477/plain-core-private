@@ -124,10 +124,8 @@ extend type Mutation {
 	loginPeer(input: PeerLoginInput!): Boolean!
 	logoutPeer(id: ID!): Boolean!
 	pairDevice(input: PairingDeviceInput!): Boolean!
-	removePeerRecord(id: ID!): Boolean!
 	respondToPairing(input: PairingRequestInput!, accepted: Boolean!): Boolean!
 	unpairPeer(id: ID!): Boolean!
-	unpairPeerRecord(id: ID!): Boolean!
 	updatePeerName(id: ID!, name: String!): Boolean!
 }
 

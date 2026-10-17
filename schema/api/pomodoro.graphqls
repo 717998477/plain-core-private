@@ -1,16 +1,3 @@
-type PomodoroRecord {
-	id: ID!
-	"""
-	Calendar date (YYYY-MM-DD) in the host device's local timezone.
-	"""
-	date: String!
-	completedCount: Int!
-	totalWorkSec: Long!
-	totalBreakSec: Long!
-	createdAt: Instant!
-	updatedAt: Instant!
-}
-
 type PomodoroSettings {
 	workDurationMin: Int!
 	shortBreakDurationMin: Int!
@@ -54,8 +41,6 @@ extend type Mutation {
 }
 
 extend type Query {
-	pomodoroRecord(date: String!): PomodoroRecord
-	pomodoroRecords(startDate: String!): [PomodoroRecord!]!
 	pomodoroSettings: PomodoroSettings!
 	pomodoroToday: PomodoroToday!
 	pomodoroTotalCompleted: Long!

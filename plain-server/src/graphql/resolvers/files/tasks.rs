@@ -15,11 +15,11 @@ struct FileTaskOpInput {
     overwrite: bool,
 }
 #[derive(SimpleObject)]
-struct FileHostCompletedOp {
+struct FileTaskCompletedOp {
     src: String,
     dst: String,
 }
-impl From<CompletedOp> for FileHostCompletedOp {
+impl From<CompletedOp> for FileTaskCompletedOp {
     fn from(op: CompletedOp) -> Self {
         Self {
             src: op.src,
@@ -29,7 +29,7 @@ impl From<CompletedOp> for FileHostCompletedOp {
 }
 #[derive(SimpleObject)]
 #[graphql(name = "FileTask")]
-struct FileHostTask {
+struct FileTaskResult {
     id: ID,
     client_id: String,
     r#type: FileTaskType,
@@ -42,9 +42,9 @@ struct FileHostTask {
     done_items: Long,
     created_at: Instant,
     updated_at: Instant,
-    completed_ops: Vec<FileHostCompletedOp>,
+    completed_ops: Vec<FileTaskCompletedOp>,
 }
-impl From<FileTask> for FileHostTask {
+impl From<FileTask> for FileTaskResult {
     fn from(t: FileTask) -> Self {
         Self {
             id: ID(t.id),
@@ -67,7 +67,7 @@ impl From<FileTask> for FileHostTask {
 pub struct FileTaskQuery;
 #[Object]
 impl FileTaskQuery {
-    async fn file_task(&self, ctx: &Context<'_>, id: ID) -> Result<Option<FileHostTask>> {
+    async fn file_task(&self, ctx: &Context<'_>, id: ID) -> Result<Option<FileTaskResult>> {
         let client_id = caller(ctx)?;
         Ok(ctx
             .data::<Arc<FileTasks>>()?
@@ -83,7 +83,7 @@ impl FileTaskQuery {
         query: String,
         offset: i32,
         limit: i32,
-    ) -> Result<Vec<FileHostTask>> {
+    ) -> Result<Vec<FileTaskResult>> {
         let client_id = caller(ctx)?;
         if offset < 0 || limit < 0 {
             return Err("invalid pagination".into());
@@ -109,14 +109,14 @@ impl FileTaskMutation {
         &self,
         ctx: &Context<'_>,
         ops: Vec<FileTaskOpInput>,
-    ) -> Result<FileHostTask> {
+    ) -> Result<FileTaskResult> {
         create(ctx, FileTaskType::Copy, "COPY".into(), ops, false).await
     }
     async fn create_move_task(
         &self,
         ctx: &Context<'_>,
         ops: Vec<FileTaskOpInput>,
-    ) -> Result<FileHostTask> {
+    ) -> Result<FileTaskResult> {
         create(ctx, FileTaskType::Move, "MOVE".into(), ops, false).await
     }
     async fn remove_file_task(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
@@ -133,7 +133,7 @@ impl FileTaskMutation {
         title: String,
         ops: Vec<FileTaskOpInput>,
         #[graphql(default)] wait_for_completion: bool,
-    ) -> Result<FileHostTask> {
+    ) -> Result<FileTaskResult> {
         create(ctx, r#type, title, ops, wait_for_completion).await
     }
 }
@@ -152,7 +152,7 @@ async fn create(
     title: String,
     ops: Vec<FileTaskOpInput>,
     wait_for_completion: bool,
-) -> Result<FileHostTask> {
+) -> Result<FileTaskResult> {
     crate::http::auth::public_gate::require(
         ctx,
         ctx.data::<Arc<plain_rs::prefs::Prefs>>()?,

@@ -1,9 +1,5 @@
-
 #[cfg(feature = "core")]
 pub mod actions;
-
-#[cfg(feature = "core")]
-pub mod aux;
 
 #[cfg(feature = "core")]
 pub mod public;
@@ -13,7 +9,6 @@ pub mod types;
 
 #[cfg(feature = "core")]
 pub mod item;
-
 
 #[cfg(feature = "core")]
 pub mod scan;

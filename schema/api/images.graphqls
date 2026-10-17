@@ -43,15 +43,6 @@ type ImageEditorProjectSummary {
 	updatedAt: Instant!
 }
 
-type ImageHostIndexStatus {
-	version: Long!
-	isRunning: Boolean!
-	totalImages: Long!
-	indexedImages: Long!
-	skippedImages: Long!
-	errorMessage: String!
-}
-
 type ImageModelsState {
 	version: Long!
 	status: ImageSearchStatusType!
@@ -91,20 +82,17 @@ type SemanticImageMatch {
 extend type Mutation {
 	broadcastImageEditorUpdate(id: ID!, update: String!): Boolean!
 	cancelImageIndex: Boolean!
-	cancelImageIndexTask: ImageHostIndexStatus!
 	cancelImageModelDownload: Boolean!
 	deleteImageEditorProject(id: ID!): Boolean!
 	disableImageSearch: Boolean!
 	enableImageSearch: Boolean!
 	importImageSearchModel: Boolean!
-	indexSelectedImages(ids: [ID!]!): ImageHostIndexStatus!
 	releaseImageModelMemory: Boolean!
 	saveImageEditorProject(id: ID!, input: ImageEditorProjectInput!): ImageEditorProject!
 	"""
 	`force` re-scans images that already have an embedding.
 	"""
 	startImageIndex(force: Boolean): Boolean!
-	startImageIndexTask(force: Boolean!): ImageHostIndexStatus!
 }
 
 extend type Query {
@@ -112,7 +100,6 @@ extend type Query {
 	imageEditorProject(id: ID!): ImageEditorProject
 	imageEditorProjectItems(query: String!, offset: Int!, limit: Int!): [ImageEditorProjectSummary!]!
 	imageEditorProjects: [ImageEditorProjectSummary!]!
-	imageIndexStatus: ImageHostIndexStatus!
 	imageModelsState: ImageModelsState!
 	imageSearchStatus: ImageSearchStatus!
 	images(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!

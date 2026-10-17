@@ -137,7 +137,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
         "Query",
         "images",
         resolvers::images::models::ImageModelsQuery,
-        resolvers::images::host_index::ImageIndexTaskQuery,
         resolvers::images::editor_host::ImageEditorItemsQuery,
         resolvers::images::image_editor_project::ImageEditorProjectQuery,
         resolvers::images::public_index::ImageIndexQuery,
@@ -155,23 +154,17 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
         resolvers::videos::progress::VideoProgressQuery,
         resolvers::videos::public::VideosQuery
     );
-    group!(
-        "Query",
-        "tags",
-        resolvers::tags::access::TagHostQuery,
-        resolvers::tags::public::TagsQuery
-    );
+    group!("Query", "tags", resolvers::tags::public::TagsQuery);
     group!(
         "Query",
         "media",
-        resolvers::media::aux::MediaAuxQuery,
         resolvers::media::scan::MediaScanQuery,
         resolvers::media::public::MediaQuery
     );
     group!(
         "Query",
         "pomodoro",
-        resolvers::pomodoro::state::PomodoroRecordQuery,
+        resolvers::pomodoro::state::PomodoroStatsQuery,
         resolvers::pomodoro::pomodoro::PomodoroQuery
     );
     group!(
@@ -284,7 +277,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
         "Mutation",
         "images",
         resolvers::images::models::ImageModelsMutation,
-        resolvers::images::host_index::ImageIndexTaskMutation,
         resolvers::images::image_editor_project::ImageEditorProjectMutation,
         resolvers::images::public_index::ImageIndexMutation
     );
@@ -305,16 +297,10 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
         "videos",
         resolvers::videos::progress::VideoProgressMutation
     );
-    group!(
-        "Mutation",
-        "tags",
-        resolvers::tags::access::TagHostMutation,
-        resolvers::tags::public::TagsMutation
-    );
+    group!("Mutation", "tags", resolvers::tags::public::TagsMutation);
     group!(
         "Mutation",
         "media",
-        resolvers::media::aux::MediaAuxMutation,
         resolvers::media::actions::MediaActionMutation,
         resolvers::media::scan::MediaScanMutation
     );

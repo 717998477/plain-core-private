@@ -1,77 +1,15 @@
-input TagHostItemInput {
-	key: String!
-	sizeBytes: Long!
-	title: String!
-}
-
-type TagHostRecord {
-	id: ID!
-	name: String!
-	type: Int!
-	count: Int!
-	createdAt: Instant!
-	updatedAt: Instant!
-}
-
-type TagHostRelation {
-	tagId: ID!
-	key: String!
-	type: Int!
-	createdAt: Instant!
-	sizeBytes: Long!
-	title: String!
-}
-
-input TagHostRelationInput {
-	tagId: ID!
-	key: String!
-	type: DataType!
-	sizeBytes: Long!
-	title: String!
-}
-
-"""
-One (tag, item-key) relation (plain-app contract). `key` is the media id
-/ entity key the tag is attached to.
-"""
 type TagRelation {
 	tagId: ID!
 	key: String!
 }
 
-input TagRelationStub {
-	key: String!
-	title: String!
-	size: Long!
-}
-
 extend type Mutation {
-	addTagRelationRecords(items: [TagHostRelationInput!]!): Boolean!
-	"""
-	Attaches every tag to every key the query matches. An empty query
-	would tag the whole library, so it is rejected before the platform
-	ever sees it.
-	"""
 	addToTags(type: DataType!, tagIds: [ID!]!, query: String!): Boolean!
-	clearTagRelationTag(id: ID!): Boolean!
-	clearTagRelationType(type: DataType!): Boolean!
 	createTag(type: DataType!, name: String!): Tag!
 	deleteTag(id: ID!): Boolean!
-	editTagRelationRecords(type: DataType!, item: TagHostItemInput!, addTagIds: [ID!]!, removeTagIds: [ID!]!): Boolean!
-	"""
-	Same key resolution as `addToTags`, minus the title and size the
-	relation stub carries — removal has nothing to record.
-	"""
 	removeFromTags(type: DataType!, tagIds: [ID!]!, query: String!): Boolean!
-	removeTagRelationKeys(type: DataType!, keys: [String!]!): Boolean!
-	removeTagRelationRecords(keys: [String!]!, tagIds: [ID!]!): Boolean!
 	updateTag(id: ID!, name: String!): Tag!
-	"""
-	One key, an explicit add and remove list. The stub's title and size are
-	stored on the relation: the tag editor shows them without a second
-	lookup, so dropping them would make a tagged row render blank.
-	"""
-	updateTagRelations(type: DataType!, item: TagRelationStub!, addTagIds: [ID!]!, removeTagIds: [ID!]!): Boolean!
+	updateTagRelations(type: DataType!, keys: [String!]!, addTagIds: [ID!]!, removeTagIds: [ID!]!): Boolean!
 }
 
 extend type Query {
@@ -80,11 +18,7 @@ extend type Query {
 	and drops the tag from its list.
 	"""
 	tag(id: ID!): Tag
-	tagIntersection(tagIds: [ID!]!): [String!]!
 	tagKeys(id: ID!): [String!]!
-	tagRecord(id: ID!): TagHostRecord
-	tagRecords(type: DataType!): [TagHostRecord!]!
-	tagRelationRecords(type: DataType!, keys: [String!]!): [TagHostRelation!]!
 	tagRelations(type: DataType!, keys: [String!]!): [TagRelation!]!
 	tags(type: DataType!): [Tag!]!
 }

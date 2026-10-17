@@ -1,62 +1,17 @@
-use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
 use crate::services::pomodoro::PomodoroTickResult;
 use crate::services::pomodoro::PomodoroToday;
 use crate::services::pomodoro::Service;
-use async_graphql::{Context, ID, Object, SimpleObject};
+use async_graphql::{Context, Object};
 use plain_rs::db::Db;
 use std::sync::Arc;
-#[derive(SimpleObject)]
-pub struct PomodoroRecord {
-    pub id: ID,
-    /// Calendar date (YYYY-MM-DD) in the host device's local timezone.
-    pub date: String,
-    pub completed_count: i32,
-    pub total_work_sec: Long,
-    pub total_break_sec: Long,
-    pub created_at: Instant,
-    pub updated_at: Instant,
-}
 #[derive(Default)]
-pub struct PomodoroRecordQuery;
+pub struct PomodoroStatsQuery;
 #[Object]
-impl PomodoroRecordQuery {
-    async fn pomodoro_record(
-        &self,
-        ctx: &Context<'_>,
-        date: String,
-    ) -> async_graphql::Result<Option<PomodoroRecord>> {
-        ctx.data::<Arc<Db>>()?
-            .pomodoro_get_by_date(&date)?
-            .map(record)
-            .transpose()
-    }
-    async fn pomodoro_records(
-        &self,
-        ctx: &Context<'_>,
-        start_date: String,
-    ) -> async_graphql::Result<Vec<PomodoroRecord>> {
-        ctx.data::<Arc<Db>>()?
-            .pomodoro_list()?
-            .into_iter()
-            .filter(|r| r.date >= start_date)
-            .map(record)
-            .collect()
-    }
+impl PomodoroStatsQuery {
     async fn pomodoro_total_completed(&self, ctx: &Context<'_>) -> async_graphql::Result<Long> {
         Ok(Long(ctx.data::<Arc<Db>>()?.pomodoro_total_completed()?))
     }
-}
-fn record(r: plain_rs::db::PomodoroItemRow) -> async_graphql::Result<PomodoroRecord> {
-    Ok(PomodoroRecord {
-        id: r.id.into(),
-        date: r.date,
-        completed_count: r.completed_count,
-        total_work_sec: Long(r.total_work_secs as i64),
-        total_break_sec: Long(r.total_break_secs as i64),
-        created_at: crate::graphql::resolvers::common::content_common::instant(&r.created_at)?,
-        updated_at: crate::graphql::resolvers::common::content_common::instant(&r.updated_at)?,
-    })
 }
 #[derive(Default)]
 pub struct PomodoroControlMutation;

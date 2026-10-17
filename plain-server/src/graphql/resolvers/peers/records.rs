@@ -220,29 +220,6 @@ impl PeerRecordMutation {
             .map_err(async_graphql::Error::new)?;
         Ok(true)
     }
-
-    async fn remove_peer_record(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        id: async_graphql::ID,
-    ) -> async_graphql::Result<bool> {
-        Ok(crate::graphql::resolvers::peers::actions::remove(
-            ctx.data::<crate::assembly::server::ServerState>()?,
-            &id,
-        )
-        .await?)
-    }
-    async fn unpair_peer_record(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        id: async_graphql::ID,
-    ) -> async_graphql::Result<bool> {
-        Ok(crate::graphql::resolvers::peers::actions::unpair(
-            ctx.data::<crate::assembly::server::ServerState>()?,
-            &id,
-        )
-        .await?)
-    }
 }
 
 #[cfg(all(test, feature = "http_transport"))]

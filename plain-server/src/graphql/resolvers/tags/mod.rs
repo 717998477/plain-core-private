@@ -1,7 +1,3 @@
-
-#[cfg(feature = "core")]
-pub mod access;
-
 #[cfg(feature = "core")]
 pub mod public;
 

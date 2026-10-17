@@ -108,12 +108,6 @@ pub struct SmsCounts {
     pub drafts: i32,
 }
 
-#[derive(SimpleObject)]
-pub struct SmsArchiveRecord {
-    pub conversation_id: ID,
-    pub archived_at: crate::graphql::types::Instant,
-}
-
 #[derive(Default)]
 pub struct SmsQuery;
 
@@ -168,66 +162,6 @@ impl SmsQuery {
         .await
         .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         Ok(strings(&receipt, "ids").into_iter().map(ID::from).collect())
-    }
-
-    async fn sms_conversation_date(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> async_graphql::Result<Option<crate::graphql::types::Instant>> {
-        if !public_gate::require_granted(ctx, &[READ]).await? {
-            return Ok(None);
-        }
-        let receipt = sms_query::execute(
-            ctx.data_unchecked::<Arc<Db>>(),
-            ctx.data_unchecked::<Arc<Host>>(),
-            sms_query::Request::ConversationDate { id: id.0 },
-        )
-        .await
-        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-        receipt["date"]
-            .as_str()
-            .map(|date| {
-                chrono::DateTime::parse_from_rfc3339(date)
-                    .map(|date| crate::graphql::types::Instant(date.with_timezone(&chrono::Utc)))
-                    .map_err(|error| async_graphql::Error::new(error.to_string()))
-            })
-            .transpose()
-    }
-
-    async fn sms_archive_records(
-        &self,
-        ctx: &Context<'_>,
-    ) -> async_graphql::Result<Vec<SmsArchiveRecord>> {
-        if !public_gate::require_granted(ctx, &[READ]).await? {
-            return Ok(Vec::new());
-        }
-        ctx.data_unchecked::<Arc<Db>>()
-            .archived_conversation_list()
-            .map_err(|error| async_graphql::Error::new(error.to_string()))?
-            .into_iter()
-            .map(|row| {
-                let date = chrono::DateTime::parse_from_rfc3339(&row.archived_at)
-                    .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-                Ok(SmsArchiveRecord {
-                    conversation_id: ID::from(row.conversation_id),
-                    archived_at: crate::graphql::types::Instant(date.with_timezone(&chrono::Utc)),
-                })
-            })
-            .collect()
-    }
-
-    async fn trashed_sms_ids(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<ID>> {
-        if !public_gate::require_granted(ctx, &[READ]).await? {
-            return Ok(Vec::new());
-        }
-        Ok(ctx
-            .data_unchecked::<Arc<Db>>()
-            .trashed_message_ids()
-            .map_err(|error| async_graphql::Error::new(error.to_string()))?
-            .into_iter()
-            .map(ID::from)
-            .collect())
     }
 
     async fn sms_count(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<i32> {

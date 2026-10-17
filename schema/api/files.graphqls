@@ -38,11 +38,6 @@ type File {
 	childCount: Int!
 }
 
-type FileHostCompletedOp {
-	src: String!
-	dst: String!
-}
-
 """
 Stat plus the media probe for one path. `data` is `null` when the name
 is not a media extension, which is why it is a union and not a
@@ -73,7 +68,12 @@ type FileTask {
 	doneItems: Long!
 	createdAt: Instant!
 	updatedAt: Instant!
-	completedOps: [FileHostCompletedOp!]!
+	completedOps: [FileTaskCompletedOp!]!
+}
+
+type FileTaskCompletedOp {
+	src: String!
+	dst: String!
 }
 
 input FileTaskOpInput {

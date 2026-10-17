@@ -390,15 +390,10 @@ async fn server_assembly_runs_the_timer_and_main_controls_share_its_statistics()
         .with_timezone(&chrono::Local)
         .date_naive()
         .to_string();
-    let history = call(&server, &token, &format!("{{pomodoroRecord(date:\"{date}\") {{completedCount totalWorkSec}} pomodoroRecords(startDate:\"{date}\") {{id}}}}")).await;
-    assert_eq!(
-        history["data"]["pomodoroRecord"],
-        json!({"completedCount":1,"totalWorkSec":60})
-    );
-    assert_eq!(
-        history["data"]["pomodoroRecords"].as_array().unwrap().len(),
-        1
-    );
+    let row = state.db.pomodoro_get_by_date(&date).unwrap().unwrap();
+    assert_eq!(row.completed_count, 1);
+    assert_eq!(row.total_work_secs, 60);
+    assert_eq!(state.db.pomodoro_list().unwrap().len(), 1);
     call(
         &server,
         &token,

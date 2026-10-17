@@ -1,14 +1,3 @@
-input ImageHostEmbeddingInput {
-	id: ID!
-	path: String!
-	embeddingBase64: String!
-}
-
-type ImageHostSearchResult {
-	imageId: ID!
-	score: Float!
-}
-
 enum MediaAction {
 	TRASH
 	RESTORE
@@ -27,16 +16,6 @@ type MediaBucket {
 	name: String!
 	itemCount: Int!
 	topItemPaths: [String!]!
-}
-
-type MediaHostDuration {
-	type: DataType!
-	mediaId: ID!
-	durationMs: Long!
-	path: String!
-	sizeBytes: Long!
-	modifiedAt: Instant!
-	updatedAt: Instant!
 }
 
 type ScanProgress {
@@ -60,26 +39,18 @@ enum ScanState {
 }
 
 extend type Mutation {
-	clearImageEmbeddings: Long!
 	mediaAction(type: DataType!, action: MediaAction!, ids: [ID!]!, fromTrash: Boolean!, destDir: String!): MediaActionOutcome!
 	pauseMediaScan: Boolean!
 	rebuildMediaIndex(root: String!): Boolean!
-	removeImageEmbeddings(ids: [ID!]!): Long!
-	removeMediaDurations(type: DataType!, mediaIds: [ID!]!): Long!
 	resumeMediaScan: Boolean!
-	saveImageEmbeddings(items: [ImageHostEmbeddingInput!]!): Boolean!
 	setMediaSourceDirs(dirs: [String!]!): Boolean!
 	startMediaScan(root: String!): Boolean!
 	stopMediaScan: Boolean!
 }
 
 extend type Query {
-	imageEmbeddingCount: Long!
-	imageEmbeddingIds: [ID!]!
 	mediaBuckets(type: MediaDataType!): [MediaBucket!]!
-	mediaDurations: [MediaHostDuration!]!
 	mediaIds(type: MediaDataType!, query: String!, fromTrash: Boolean! = false): [ID!]!
 	mediaSourceDirs: [String!]!
 	scanProgress: ScanProgress!
-	searchImageEmbeddings(embeddingBase64: String!, maxResults: Int!): [ImageHostSearchResult!]!
 }

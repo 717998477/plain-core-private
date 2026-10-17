@@ -5,14 +5,10 @@ pub mod image_editor_project;
 pub mod editor_host;
 
 #[cfg(feature = "core")]
-pub mod host_index;
-
-#[cfg(feature = "core")]
 pub mod public_index;
 
 #[cfg(feature = "core")]
 pub mod public;
-
 
 #[cfg(feature = "core")]
 pub(crate) mod models;

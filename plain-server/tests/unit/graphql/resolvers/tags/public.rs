@@ -149,7 +149,7 @@ async fn deleting_a_tag_drops_its_relations_too() {
         .to_string();
     let response = schema
         .execute(&format!(
-            r#"mutation {{ updateTagRelations(type:DOC, item:{{key:"d1", title:"a", size:10}},
+            r#"mutation {{ updateTagRelations(type:DOC, keys:["d1"],
                               addTagIds:["{id}"], removeTagIds:[]) }}"#
         ))
         .await;
@@ -182,11 +182,11 @@ async fn relations_are_listed_for_the_requested_keys_and_kind() {
     let b = data["b"]["id"].as_str().unwrap().to_string();
     let response = schema
         .execute(&format!(
-            r#"mutation {{ one: updateTagRelations(type:VIDEO, item:{{key:"k1", title:"t", size:1}},
+            r#"mutation {{ one: updateTagRelations(type:VIDEO, keys:["k1"],
                                     addTagIds:["{a}"], removeTagIds:[])
-                              two: updateTagRelations(type:VIDEO, item:{{key:"k2", title:"t", size:1}},
+                              two: updateTagRelations(type:VIDEO, keys:["k2"],
                                     addTagIds:["{a}"], removeTagIds:[])
-                              rel: updateTagRelations(type:VIDEO, item:{{key:"k1", title:"t", size:1}},
+                              rel: updateTagRelations(type:VIDEO, keys:["k1"],
                                     addTagIds:["{b}"], removeTagIds:["{a}"]) }}"#
         ))
         .await;
@@ -227,7 +227,7 @@ async fn a_relation_cannot_cross_kinds() {
         .to_string();
     let response = schema
         .execute(&format!(
-            r#"mutation {{ updateTagRelations(type:VIDEO, item:{{key:"k1", title:"t", size:1}},
+            r#"mutation {{ updateTagRelations(type:VIDEO, keys:["k1"],
                               addTagIds:["{id}"], removeTagIds:[]) }}"#
         ))
         .await;
@@ -299,7 +299,7 @@ async fn removing_a_tag_takes_it_off_every_match() {
         .to_string();
     for row in &stored {
         let query = format!(
-            r#"mutation {{ updateTagRelations(type:DOC, item:{{key:"{}", title:"t", size:1}}, addTagIds:["{id}"], removeTagIds:[]) }}"#,
+            r#"mutation {{ updateTagRelations(type:DOC, keys:["{}"], addTagIds:["{id}"], removeTagIds:[]) }}"#,
             row.id
         );
         let response = schema.execute(&query).await;

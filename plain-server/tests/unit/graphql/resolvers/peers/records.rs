@@ -60,12 +60,14 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
     peer.key = plain_rs::base64_encode(&[8; 32]);
     peers::save(&state.db, &[peer], SaveMode::Update).unwrap();
     assert!(!native.execute(request()).await.errors.is_empty());
-    let response=native.execute(Request::new(r#"mutation { removePeerRecord(id:"absent") deletePeer(id:"absent") unpairPeerRecord(id:"absent") unpairPeer(id:"absent") }"#)).await;
+    let response = native
+        .execute(Request::new(
+            r#"mutation { deletePeer(id:"absent") unpairPeer(id:"absent") }"#,
+        ))
+        .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["removePeerRecord"], false);
     assert_eq!(data["deletePeer"], true);
-    assert_eq!(data["unpairPeerRecord"], false);
     assert_eq!(data["unpairPeer"], true);
     state
         .db

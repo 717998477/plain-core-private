@@ -14,11 +14,6 @@ type Sms {
 	tags: [Tag!]!
 }
 
-type SmsArchiveRecord {
-	conversationId: ID!
-	archivedAt: Instant!
-}
-
 type SmsAttachment {
 	path: String!
 	contentType: String!
@@ -73,12 +68,9 @@ extend type Mutation {
 extend type Query {
 	archivedSmsConversations(query: String!, offset: Int!, limit: Int!): [SmsConversation!]!
 	sms(query: String!, offset: Int!, limit: Int!, includeTrashed: Boolean! = false): [Sms!]!
-	smsArchiveRecords: [SmsArchiveRecord!]!
 	smsBoxCounts: SmsCounts!
 	smsConversationCount(query: String!): Int!
-	smsConversationDate(id: ID!): Instant
 	smsConversations(query: String!, offset: Int!, limit: Int!): [SmsConversation!]!
 	smsCount(query: String!): Int!
 	smsIds(query: String!, includeTrashed: Boolean! = false): [ID!]!
-	trashedSmsIds: [ID!]!
 }
