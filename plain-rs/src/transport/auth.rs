@@ -58,7 +58,36 @@ impl AuthError {
         }
     }
 }
-pub fn decrypt(key: &[u8], public_key: &str, body: &[u8]) -> Result<Envelope, AuthError> {
+#[derive(Clone, Copy)]
+enum Purpose {
+    Graphql,
+    Status,
+}
+fn signature_payload_for(
+    purpose: Purpose,
+    timestamp: i64,
+    channel_id: &str,
+    content: &str,
+) -> String {
+    let domain = match purpose {
+        Purpose::Graphql => "plain-peer-v2",
+        Purpose::Status => "plain-status-v2",
+    };
+    serde_json::json!([domain, channel_id, timestamp.to_string(), content]).to_string()
+}
+pub fn signature_payload(timestamp: i64, channel_id: &str, content: &str) -> String {
+    signature_payload_for(Purpose::Graphql, timestamp, channel_id, content)
+}
+pub(crate) fn status_signature_payload(timestamp: i64, client_id: &str) -> String {
+    signature_payload_for(Purpose::Status, timestamp, "", client_id)
+}
+fn decrypt(
+    key: &[u8],
+    public_key: &str,
+    channel_id: &str,
+    body: &[u8],
+    purpose: Purpose,
+) -> Result<Envelope, AuthError> {
     let plaintext = xchacha_decrypt_raw(key, body).ok_or(AuthError::DecryptFailed)?;
     let plaintext = std::str::from_utf8(&plaintext).map_err(|_| AuthError::NotUtf8)?;
     let mut parts = plaintext.splitn(3, '|');
@@ -83,7 +112,7 @@ pub fn decrypt(key: &[u8], public_key: &str, body: &[u8]) -> Result<Envelope, Au
     }
     if !ed25519_verify(
         public_key,
-        format!("{timestamp}{content}").as_bytes(),
+        signature_payload_for(purpose, timestamp, channel_id, content).as_bytes(),
         signature_b64,
     ) {
         return Err(AuthError::BadSignature);
@@ -99,6 +128,22 @@ pub fn authenticate(
     client_id: &str,
     channel_id: &str,
     body: &[u8],
+) -> Result<AuthenticatedPeer, AuthError> {
+    authenticate_for(db, client_id, channel_id, body, Purpose::Graphql)
+}
+pub(crate) fn authenticate_status(
+    db: &Db,
+    client_id: &str,
+    body: &[u8],
+) -> Result<AuthenticatedPeer, AuthError> {
+    authenticate_for(db, client_id, "", body, Purpose::Status)
+}
+fn authenticate_for(
+    db: &Db,
+    client_id: &str,
+    channel_id: &str,
+    body: &[u8],
+    purpose: Purpose,
 ) -> Result<AuthenticatedPeer, AuthError> {
     let (peer, key) = db.with_conn(|c| -> Result<_, AuthError> {
         let peer = c
@@ -129,7 +174,7 @@ pub fn authenticate(
         };
         Ok((peer, key))
     })?;
-    let envelope = decrypt(&key, &peer.public_key, body)?;
+    let envelope = decrypt(&key, &peer.public_key, channel_id, body, purpose)?;
     Ok(AuthenticatedPeer {
         peer,
         key,

@@ -49,11 +49,12 @@ fn private_prepare_uses_persisted_signing_identity_and_current_peer_keys() {
     assert_eq!(result.targets[0].channel_id, "");
     assert_eq!(result.targets[1].key, channel.key);
     assert_eq!(result.targets[1].channel_id, channel.id);
-    let body = wire(&prefs, result.message_type, &result.payload).unwrap();
+    let body = wire(&prefs, result.message_type, &result.payload, "").unwrap();
     let pieces: Vec<_> = body.splitn(3, '|').collect();
     assert!(plain_rs::crypto::ed25519_verify(
         &base64_encode(&public),
-        format!("{}{}", pieces[1], pieces[2]).as_bytes(),
+        plain_rs::transport::auth::signature_payload(pieces[1].parse().unwrap(), "", pieces[2])
+            .as_bytes(),
         pieces[0]
     ));
     let wire: serde_json::Value = serde_json::from_str(pieces[2]).unwrap();

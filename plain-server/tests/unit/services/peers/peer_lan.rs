@@ -50,7 +50,7 @@ async fn direct_tls_peer_exchange_uses_xchacha_and_current_identity_without_host
     )
     .unwrap();
     let wire =
-        plain_rs::transport::contract::signed_request(&kp, "query { __typename }", json!({}))
+        plain_rs::transport::contract::signed_request(&kp, "query { __typename }", json!({}), "")
             .unwrap();
     let result = crate::services::peers::peer_transport::send(
         &a.runtime_state(),

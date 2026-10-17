@@ -135,7 +135,16 @@ async fn signed_invites_ack_keys_and_deleted_broadcast_use_rust_snapshot() {
                     );
                     assert!(plain_rs::crypto::ed25519_verify(
                         &public,
-                        format!("{}{}", pieces[1], pieces[2]).as_bytes(),
+                        plain_rs::transport::auth::signature_payload(
+                            pieces[1].parse().unwrap(),
+                            if p["peer"]["id"] == "paired" {
+                                ""
+                            } else {
+                                &channel_id
+                            },
+                            pieces[2]
+                        )
+                        .as_bytes(),
                         pieces[0]
                     ));
                     let wire: Value = serde_json::from_str(pieces[2]).unwrap();

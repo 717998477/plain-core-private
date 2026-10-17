@@ -39,14 +39,14 @@ pub(crate) fn prepare(db: &Db, prefs: &Prefs, id: &str, operation: Operation) ->
                     .key
             };
             (
-                chat_item_request(&signing_keypair(prefs)?, &content)
+                chat_item_request(&signing_keypair(prefs)?, &content, &channel_id)
                     .map_err(anyhow::Error::msg)?,
                 channel_id,
                 key,
             )
         }
         Operation::StartAware => (
-            signed_request(&signing_keypair(prefs)?, START_AWARE, json!({}))
+            signed_request(&signing_keypair(prefs)?, START_AWARE, json!({}), "")
                 .map_err(anyhow::Error::msg)?,
             String::new(),
             peer.key.clone(),

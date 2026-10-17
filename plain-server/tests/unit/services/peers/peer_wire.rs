@@ -37,7 +37,8 @@ fn signing_current_peer_and_channel_keys_and_authenticated_crypto_roundtrip() {
     let split: Vec<_> = first.body.splitn(3, '|').collect();
     assert!(plain_rs::crypto::ed25519_verify(
         &base64_encode(&public),
-        format!("{}{}", split[1], split[2]).as_bytes(),
+        plain_rs::transport::auth::signature_payload(split[1].parse().unwrap(), "", split[2])
+            .as_bytes(),
         split[0]
     ));
     let gql: serde_json::Value = serde_json::from_str(split[2]).unwrap();

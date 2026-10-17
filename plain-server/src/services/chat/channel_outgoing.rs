@@ -93,8 +93,13 @@ pub(crate) fn prepare(
         targets,
     })
 }
-pub(crate) fn wire(prefs: &Prefs, kind: ChannelSystemMessageType, payload: &str) -> Result<String> {
-    channel_system_request(&signing_keypair(prefs)?, kind.as_str(), payload)
+pub(crate) fn wire(
+    prefs: &Prefs,
+    kind: ChannelSystemMessageType,
+    payload: &str,
+    channel_id: &str,
+) -> Result<String> {
+    channel_system_request(&signing_keypair(prefs)?, kind.as_str(), payload, channel_id)
         .map_err(anyhow::Error::msg)
 }
 #[cfg(test)]

@@ -28,8 +28,8 @@ impl Default for Connections {
 }
 impl Connections {
     pub fn open(&self, db: &Db, id: &str, body: &[u8]) -> Result<(String, bool)> {
-        let authenticated =
-            peer_auth::authenticate(db, id, "", body).map_err(|e| anyhow::anyhow!(e.reason()))?;
+        let authenticated = peer_auth::authenticate_status(db, id, body)
+            .map_err(|e| anyhow::anyhow!(e.reason()))?;
         if authenticated.graphql_json != id {
             bail!("Status identity does not match peer");
         }
@@ -158,7 +158,10 @@ pub fn handshake(key: &[u8], keypair: &[u8], client_id: &str) -> Result<Vec<u8>>
         bail!("Missing client identity");
     }
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let signature = crate::ed25519_sign(keypair, format!("{timestamp}{client_id}").as_bytes());
+    let signature = crate::ed25519_sign(
+        keypair,
+        peer_auth::status_signature_payload(timestamp, client_id).as_bytes(),
+    );
     if signature.is_empty() {
         bail!("Invalid signing identity");
     }

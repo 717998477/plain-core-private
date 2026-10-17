@@ -101,7 +101,9 @@ impl Delivery {
             }
             vec![chat.to_id.clone()]
         } else {
-            let Some(channel) = channels::get(&self.db, chat.channel_id.as_deref().unwrap_or_default())? else {
+            let Some(channel) =
+                channels::get(&self.db, chat.channel_id.as_deref().unwrap_or_default())?
+            else {
                 return self.finish(&chat, None, retry, true);
             };
             let members: Vec<ChannelMember> = serde_json::from_str(&channel.members)?;
@@ -164,10 +166,11 @@ impl Delivery {
                         }
                         peer.key.clone()
                     } else {
-                        let channel =
-                            channels::get(&self.db, chat.channel_id.as_deref().unwrap_or_default())?.ok_or_else(|| {
-                                anyhow::anyhow!("Channel unavailable during delivery")
-                            })?;
+                        let channel = channels::get(
+                            &self.db,
+                            chat.channel_id.as_deref().unwrap_or_default(),
+                        )?
+                        .ok_or_else(|| anyhow::anyhow!("Channel unavailable during delivery"))?;
                         let members: Vec<ChannelMember> = serde_json::from_str(&channel.members)?;
                         if channel.status != ChannelStatus::Joined
                             || !members
@@ -183,11 +186,21 @@ impl Delivery {
                     if key.len() != 32 {
                         Some("Invalid peer transport key".into())
                     } else {
-                        let body =
-                            chat_item_request(signing_key, &content).map_err(anyhow::Error::msg)?;
+                        let body = chat_item_request(
+                            signing_key,
+                            &content,
+                            chat.channel_id.as_deref().unwrap_or_default(),
+                        )
+                        .map_err(anyhow::Error::msg)?;
                         match tokio::time::timeout(
                             Duration::from_secs(20),
-                            transport.message(&peer, client_id, chat.channel_id.as_deref().unwrap_or_default(), &key, &body),
+                            transport.message(
+                                &peer,
+                                client_id,
+                                chat.channel_id.as_deref().unwrap_or_default(),
+                                &key,
+                                &body,
+                            ),
                         )
                         .await
                         {

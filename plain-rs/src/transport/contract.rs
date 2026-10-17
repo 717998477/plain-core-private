@@ -78,7 +78,9 @@ impl<T: PeerTransport> PeerTransport for std::sync::Arc<T> {
 /// Build all candidate URLs for a peer's /peer_graphql endpoint,
 /// ordered with the most-recently-seen IP first.
 pub fn peer_graphql_urls(peer: &DPeer) -> Vec<String> {
-    let Some(port) = peer.port.filter(|port| *port > 0) else { return Vec::new(); };
+    let Some(port) = peer.port.filter(|port| *port > 0) else {
+        return Vec::new();
+    };
     peer.ip
         .split(',')
         .map(str::trim)
@@ -107,7 +109,7 @@ pub async fn deliver_to_peer<T: PeerTransport>(
     content: &str,
     channel_id: Option<&str>,
 ) -> Result<(), String> {
-    let payload = chat_item_request(kp_bytes, content)?;
+    let payload = chat_item_request(kp_bytes, content, channel_id.unwrap_or_default())?;
 
     deliver_signed(
         transport,
@@ -195,11 +197,12 @@ pub fn signed_request(
     kp_bytes: &[u8],
     query: &str,
     variables: serde_json::Value,
+    channel_id: &str,
 ) -> Result<String, String> {
     let graphql_json = serde_json::to_string(&json!({"query":query,"variables":variables}))
         .map_err(|e| e.to_string())?;
     let ts = now_ms();
-    let signed = format!("{ts}{graphql_json}");
+    let signed = crate::transport::auth::signature_payload(ts, channel_id, &graphql_json);
     let signature = ed25519_sign(kp_bytes, signed.as_bytes());
     if kp_bytes.len() != 64
         || !crate::ed25519_verify(
@@ -212,18 +215,29 @@ pub fn signed_request(
     }
     Ok(format!("{signature}|{ts}|{graphql_json}"))
 }
-pub fn chat_item_request(kp_bytes: &[u8], content: &str) -> Result<String, String> {
-    signed_request(kp_bytes, CREATE_CHAT_ITEM, json!({"content":content}))
+pub fn chat_item_request(
+    kp_bytes: &[u8],
+    content: &str,
+    channel_id: &str,
+) -> Result<String, String> {
+    signed_request(
+        kp_bytes,
+        CREATE_CHAT_ITEM,
+        json!({"content":content}),
+        channel_id,
+    )
 }
 pub fn channel_system_request(
     kp_bytes: &[u8],
     kind: &str,
     payload: &str,
+    channel_id: &str,
 ) -> Result<String, String> {
     signed_request(
         kp_bytes,
         "mutation ChannelSystemMessage($type: ChannelSystemMessageType!, $payload: String!) { channelSystemMessage(type: $type, payload: $payload) }",
         json!({"type":kind,"payload":payload}),
+        channel_id,
     )
 }
 
@@ -248,7 +262,12 @@ pub async fn deliver_channel_system_message<T: PeerTransport>(
     payload: &str,
     channel_id_opt: Option<&str>,
 ) -> bool {
-    let Ok(wire) = channel_system_request(kp_bytes, msg_type, payload) else {
+    let Ok(wire) = channel_system_request(
+        kp_bytes,
+        msg_type,
+        payload,
+        channel_id_opt.unwrap_or_default(),
+    ) else {
         return false;
     };
 

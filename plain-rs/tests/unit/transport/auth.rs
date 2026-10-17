@@ -56,7 +56,7 @@ fn now_ms() -> i64 {
 /// Build an encrypted+signed request body exactly like the sender side
 /// (`deliver_to_peer` wire format).
 fn build_body(kp: &[u8], key: &[u8; 32], graphql_json: &str, ts: i64) -> Vec<u8> {
-    let sig_data = format!("{ts}{graphql_json}");
+    let sig_data = signature_payload(ts, "", graphql_json);
     let signature = ed25519_sign(kp, sig_data.as_bytes());
     let payload = format!("{signature}|{ts}|{graphql_json}");
     xchacha_encrypt_raw(key, payload.as_bytes()).expect("encrypt")
@@ -155,7 +155,16 @@ fn authenticate_channel_message_uses_channel_key_without_paired_check() {
         .unwrap();
     let graphql_json =
         r#"{"query":"mutation { channelSystemMessage(type: INVITE, payload: \"{}\") }"}"#;
-    let body = build_body(&kp, &channel_key, graphql_json, now_ms());
+    let timestamp = now_ms();
+    let signature = ed25519_sign(
+        &kp,
+        signature_payload(timestamp, "ch-1", graphql_json).as_bytes(),
+    );
+    let body = xchacha_encrypt_raw(
+        &channel_key,
+        format!("{signature}|{timestamp}|{graphql_json}").as_bytes(),
+    )
+    .unwrap();
 
     // With c-cid set, the channel key decrypts and no paired check fires.
     let authed = authenticate(&db, "peer-a", "ch-1", &body).expect("channel auth ok");
@@ -196,5 +205,85 @@ fn extreme_timestamp_and_malformed_envelopes_do_not_panic_and_storage_failures_a
     assert!(matches!(
         authenticate(&db, &id, "", &build_body(&kp, &key, "{}", now_ms())),
         Err(AuthError::Storage)
+    ));
+}
+
+#[test]
+fn signed_context_rejects_reencrypted_cross_channel_direct_and_legacy_frames() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    let (peer, key, kp) = seed_paired_peer(&db);
+    let mut channels = Vec::new();
+    for (id, key) in [("first", [41; 32]), ("second", [42; 32])] {
+        let mut channel = crate::db::DChannel::new(id, "owner");
+        channel.id = id.into();
+        channel.key = base64_encode(&key);
+        channels.push(channel);
+    }
+    crate::db::chat_store::channels::save(&db, &channels, crate::db::chat_store::SaveMode::Insert)
+        .unwrap();
+    let content = r#"{"query":"mutation($content:String!){createChatItem(content:$content){id}}","variables":{"content":"{\"type\":\"TEXT\",\"value\":{\"text\":\"context\"}}"}}"#;
+    let timestamp = now_ms();
+    let signature = ed25519_sign(
+        &kp,
+        signature_payload(timestamp, "first", content).as_bytes(),
+    );
+    let envelope = format!("{signature}|{timestamp}|{content}");
+    let first = xchacha_encrypt_raw(&[41; 32], envelope.as_bytes()).unwrap();
+    assert!(authenticate(&db, &peer, "first", &first).is_ok());
+    for (channel, key) in [("second", vec![42; 32]), ("", key.to_vec())] {
+        let body = xchacha_encrypt_raw(&key, envelope.as_bytes()).unwrap();
+        assert!(matches!(
+            authenticate(&db, &peer, channel, &body),
+            Err(AuthError::BadSignature)
+        ));
+    }
+    let legacy = ed25519_sign(&kp, format!("{timestamp}{content}").as_bytes());
+    let body = xchacha_encrypt_raw(
+        &[41; 32],
+        format!("{legacy}|{timestamp}|{content}").as_bytes(),
+    )
+    .unwrap();
+    assert!(matches!(
+        authenticate(&db, &peer, "first", &body),
+        Err(AuthError::BadSignature)
+    ));
+    let body = build_body(&kp, &key, content, timestamp);
+    assert!(authenticate(&db, &peer, "", &body).is_ok());
+    let envelope = crate::xchacha_decrypt_raw(&key, &body).unwrap();
+    let body = xchacha_encrypt_raw(&[41; 32], &envelope).unwrap();
+    assert!(matches!(
+        authenticate(&db, &peer, "first", &body),
+        Err(AuthError::BadSignature)
+    ));
+    assert_eq!(
+        db.with_conn(|c| c.query_row("SELECT COUNT(*) FROM chats", [], |row| row.get::<_, i64>(0)))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn status_handshake_and_graphql_signatures_cannot_cross_protocols() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    let (peer, key, kp) = seed_paired_peer(&db);
+    let body = crate::peers::status::handshake(&key, &kp, &peer).unwrap();
+    assert!(authenticate_status(&db, &peer, &body).is_ok());
+    assert!(matches!(
+        authenticate(&db, &peer, "", &body),
+        Err(AuthError::BadSignature)
+    ));
+    let body = build_body(&kp, &key, &peer, now_ms());
+    assert!(authenticate(&db, &peer, "", &body).is_ok());
+    assert!(matches!(
+        authenticate_status(&db, &peer, &body),
+        Err(AuthError::BadSignature)
+    ));
+    let timestamp = now_ms();
+    let signature = ed25519_sign(&kp, format!("{timestamp}{peer}").as_bytes());
+    let body =
+        xchacha_encrypt_raw(&key, format!("{signature}|{timestamp}|{peer}").as_bytes()).unwrap();
+    assert!(matches!(
+        authenticate_status(&db, &peer, &body),
+        Err(AuthError::BadSignature)
     ));
 }

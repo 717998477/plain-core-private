@@ -152,7 +152,7 @@ async fn aware_host_only_moves_raw_socket_bytes_rust_performs_tls_crypto_and_gra
         }
     });
     let wire =
-        plain_rs::transport::contract::signed_request(&kp, "query { __typename }", json!({}))
+        plain_rs::transport::contract::signed_request(&kp, "query { __typename }", json!({}), "")
             .unwrap();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),

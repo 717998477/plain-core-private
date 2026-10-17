@@ -110,7 +110,12 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
                     let parts: Vec<_> = wire.splitn(3, '|').collect();
                     assert!(plain_rs::crypto::ed25519_verify(
                         &plain_rs::utils::base64::base64_encode(&local_public_key),
-                        format!("{}{}", parts[1], parts[2]).as_bytes(),
+                        plain_rs::transport::auth::signature_payload(
+                            parts[1].parse().unwrap(),
+                            "",
+                            parts[2]
+                        )
+                        .as_bytes(),
                         parts[0]
                     ));
                     let document: Value = serde_json::from_str(parts[2]).unwrap();
@@ -155,7 +160,10 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
     let wire = |document: Value| {
         let content = document.to_string();
         let ts = plain_rs::peers::pairing::now_ms();
-        let signature = plain_rs::crypto::ed25519_sign(&kp, format!("{ts}{content}").as_bytes());
+        let signature = plain_rs::crypto::ed25519_sign(
+            &kp,
+            plain_rs::transport::auth::signature_payload(ts, "", &content).as_bytes(),
+        );
         plain_rs::crypto::xchacha_encrypt_raw(
             &key,
             format!("{signature}|{ts}|{content}").as_bytes(),

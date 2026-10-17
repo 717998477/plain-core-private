@@ -120,8 +120,8 @@ async fn deliver(
         &device.name,
         device.device_type,
     )?;
-    let wire =
-        crate::services::chat::channel_outgoing::wire(&state.prefs, kind, &prepared.payload)?;
+    let direct_wire = tokio::sync::OnceCell::<String>::new();
+    let channel_wire = tokio::sync::OnceCell::<String>::new();
     let mut response = json!({"data":{"channelSystemMessage":true}});
     for group in prepared.targets.chunks(4) {
         let results = futures_util::future::join_all(group.iter().map(|target| async {
@@ -141,12 +141,26 @@ async fn deliver(
             } else {
                 (&peer.key, "")
             };
+            let wire = if cid.is_empty() {
+                &direct_wire
+            } else {
+                &channel_wire
+            }
+            .get_or_try_init(|| async {
+                crate::services::chat::channel_outgoing::wire(
+                    &state.prefs,
+                    kind,
+                    &prepared.payload,
+                    cid,
+                )
+            })
+            .await?;
             let response = crate::services::peers::peer_transport::send_checked(
                 state,
                 &peer,
                 cid,
                 &plain_rs::utils::base64::base64_decode(key),
-                &wire,
+                wire,
                 || {
                     if !current(state, channel, removed).map_err(|e| e.to_string())? {
                         return Err("Channel changed before send".into());
