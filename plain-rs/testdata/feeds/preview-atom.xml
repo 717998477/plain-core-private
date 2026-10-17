@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<title>Atom <![CDATA[preview]]> &#8217;</title>
+<entry><title>
+ <![CDATA[atom entry]]>
+</title><link href="https://example.org/one?x=1&amp;y=2" rel="alternate"/><summary>First &amp; second</summary></entry>
+</feed>

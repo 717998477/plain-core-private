@@ -134,7 +134,9 @@ fn query_filter(
                 }
             }
             "tag_id" => {
-                clauses.push("id IN (SELECT target_key FROM tag_relations WHERE tag_id=?)".to_string());
+                clauses.push(
+                    "id IN (SELECT target_key FROM tag_relations WHERE tag_id=?)".to_string(),
+                );
                 values.push(Value::Text(field.value));
             }
             "read" if !notes => {
@@ -355,6 +357,26 @@ impl Db {
         })
     }
 
+    pub fn feed_update(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        url: Option<&str>,
+        fetch_full_content: Option<bool>,
+        now: &str,
+    ) -> rusqlite::Result<Option<FeedRow>> {
+        self.with_conn(|connection| {
+            let affected = connection.execute(
+                "UPDATE feeds SET name=COALESCE(?2,name),url=COALESCE(?3,url),fetch_full_content=COALESCE(?4,fetch_full_content),updated_at=?5 WHERE id=?1",
+                params![id, name, url, fetch_full_content, now],
+            )?;
+            if affected == 0 {
+                return Ok(None);
+            }
+            connection.query_row(&format!("SELECT {FEED_COLUMNS} FROM feeds WHERE id=?1"), [id], feed_from_row).map(Some)
+        })
+    }
+
     pub fn feed_delete(&self, id: &str) -> rusqlite::Result<bool> {
         self.with_conn(|c| {
             let tx = c.unchecked_transaction()?;
@@ -395,8 +417,11 @@ impl Db {
     pub fn feed_entry_ids(&self, query: &str) -> rusqlite::Result<Vec<String>> {
         let (where_sql, values) = filter(query, false, None)?;
         self.with_conn(|connection| {
-            let mut statement = connection.prepare(&format!("SELECT id FROM feed_entries WHERE {where_sql}"))?;
-            statement.query_map(params_from_iter(values), |row| row.get(0))?.collect()
+            let mut statement =
+                connection.prepare(&format!("SELECT id FROM feed_entries WHERE {where_sql}"))?;
+            statement
+                .query_map(params_from_iter(values), |row| row.get(0))?
+                .collect()
         })
     }
 

@@ -38,6 +38,10 @@ type FeedError {
 	detail: String!
 }
 
+type FeedPreview {
+	title: String!
+}
+
 type FeedSyncState {
 	feedId: ID!
 	taskId: ID!
@@ -47,7 +51,7 @@ type FeedSyncState {
 }
 
 extend type Mutation {
-	createFeed(url: String!, fetchContent: Boolean!): Feed!
+	createFeed(url: String!, fetchContent: Boolean!, name: String): Feed!
 	deleteFeed(id: ID!): Boolean!
 	deleteFeedEntries(query: String!): ActionResult!
 	exportFeeds: String!
@@ -55,7 +59,7 @@ extend type Mutation {
 	markFeedEntriesRead(query: String!, read: Boolean!): ActionResult!
 	syncFeedEntryContent(id: ID!): FeedEntry!
 	syncFeeds(id: ID): Boolean!
-	updateFeed(id: ID!, name: String!, fetchContent: Boolean!): Feed!
+	updateFeed(id: ID!, name: String, fetchContent: Boolean, url: String): Feed!
 	updateFeedUrl(id: ID!, url: String!): Feed!
 }
 
@@ -65,6 +69,7 @@ extend type Query {
 	feedEntry(id: ID!): FeedEntry
 	feedEntryCount(query: String!): Int!
 	feedEntryCounts: [FeedEntryCount!]!
+	feedPreview(url: String!): FeedPreview!
 	feedSyncStates: [FeedSyncState!]!
 	feeds: [Feed!]!
 }

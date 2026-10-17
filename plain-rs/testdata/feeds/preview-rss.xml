@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>A &amp; <![CDATA[x &amp; y &#8217;]]> B<!-- ignored --><?preview ignored?></title>
+<item><title>
+ <![CDATA[示例标题]]>
+</title><link>https://example.org/one</link><description><![CDATA[<p>hello</p>]]></description></item>
+<item><title>Second &#x2019; title</title><link>https://example.org/two</link></item>
+</channel></rss>

@@ -25,11 +25,30 @@ pub fn require_url(url: &str) -> DomainResult<()> {
     Ok(())
 }
 
-pub fn update(db: &Db, id: &str, name: &str, fetch_full_content: bool) -> DomainResult<FeedRow> {
-    let feed = db
-        .feed_get(id)?
-        .ok_or_else(|| error(format!("Feed {id} not found")))?;
-    Ok(db.feed_save(id, name, &feed.url, fetch_full_content, &now())?)
+pub fn save_error(error_value: rusqlite::Error) -> DomainError {
+    if matches!(&error_value, rusqlite::Error::SqliteFailure(code, _) if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE)
+    {
+        return error("feed_already_exists");
+    }
+    error_value.into()
+}
+
+pub fn update_fields(
+    db: &Db,
+    id: &str,
+    name: Option<&str>,
+    url: Option<&str>,
+    fetch_full_content: Option<bool>,
+) -> DomainResult<FeedRow> {
+    if name.is_none() && url.is_none() && fetch_full_content.is_none() {
+        return Err(error("feed_update_requires_changes"));
+    }
+    if let Some(url) = url {
+        require_url(url)?;
+    }
+    db.feed_update(id, name, url, fetch_full_content, &now())
+        .map_err(save_error)?
+        .ok_or_else(|| error("feed_not_found"))
 }
 
 pub fn delete(db: &Db, id: &str) -> DomainResult<bool> {
@@ -70,9 +89,7 @@ pub fn delete_entries(db: &Db, query: &str) -> DomainResult<usize> {
 }
 
 pub fn update_url(db: &Db, id: &str, url: &str) -> DomainResult<FeedRow> {
-    require_url(url)?;
-    let feed = db.feed_get(id)?.ok_or_else(|| error("feed_not_found"))?;
-    Ok(db.feed_save(id, &feed.name, url, feed.fetch_full_content, &now())?)
+    update_fields(db, id, None, Some(url), None)
 }
 
 pub fn mark_read(db: &Db, query: &str, read: bool) -> DomainResult<usize> {
@@ -145,3 +162,7 @@ pub fn export_opml(db: &Db) -> DomainResult<String> {
 }
 
 pub mod date;
+
+#[cfg(test)]
+#[path = "../../tests/unit/feeds/mod.rs"]
+mod tests;

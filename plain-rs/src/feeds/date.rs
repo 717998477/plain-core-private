@@ -17,6 +17,7 @@ pub fn parse(text: &str) -> Option<DateTime<FixedOffset>> {
     DateTime::parse_from_rfc3339(text)
         .ok()
         .or_else(|| DateTime::parse_from_rfc2822(text).ok())
+        .or_else(|| DateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S %z").ok())
         .or_else(|| parse_unzoned(text))
         .or_else(|| parse_rfc822(text))
 }
@@ -175,3 +176,7 @@ fn build(
         .from_local_datetime(&date)
         .single()
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/feeds/date.rs"]
+mod tests;

@@ -1,3 +1,6 @@
+mod preview;
+pub use preview::title as preview_title;
+
 use chrono::Utc;
 use futures_util::StreamExt;
 use futures_util::stream;
@@ -11,12 +14,10 @@ use plain_rs::feeds::{error, now, require_url};
 use plain_rs::utils::html_to_markdown::dom::Dom;
 use plain_rs::utils::html_to_markdown::dom::Node;
 use plain_rs::utils::html_to_markdown::html_to_markdown;
-use plain_rs::utils::http_url::parse_http_url;
 use plain_rs::utils::xml;
 use plain_rs::utils::xml::Event;
 use plain_rs::utils::xml::StartTag;
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
 use tokio::sync::broadcast;
 
 #[derive(Default)]
@@ -441,19 +442,18 @@ pub async fn create_without_sync(
     db: &Db,
     url: &str,
     fetch_full_content: bool,
+    name: Option<&str>,
 ) -> DomainResult<FeedRow> {
-    if db.feed_get_by_url(url)?.is_some() {
-        return Err(error("feed_already_exists"));
-    }
-    require_url(url)?;
-    let title = parse_feed(&fetch_text(url, 4 * 1024 * 1024).await?)?.title;
-    Ok(db.feed_save(
-        &uuid::Uuid::new_v4().to_string(),
-        &title,
-        url,
-        fetch_full_content,
-        &now(),
-    )?)
+    let title = preview_title(db, url).await?;
+    Ok(db
+        .feed_save(
+            &uuid::Uuid::new_v4().to_string(),
+            name.filter(|value| !value.is_empty()).unwrap_or(&title),
+            url,
+            fetch_full_content,
+            &now(),
+        )
+        .map_err(plain_rs::feeds::save_error)?)
 }
 
 pub mod assets;

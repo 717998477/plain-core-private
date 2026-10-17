@@ -212,7 +212,10 @@ fn feed_dates_cover_the_formats_publishers_emit() {
     // a future date would otherwise pin the entry to the top forever.
     assert_eq!(parse_date("not a date", "fallback"), "fallback");
     assert_eq!(parse_date("", "fallback"), "fallback");
-    assert_eq!(parse_date("2999-01-01T00:00:00.000Z", "fallback"), "fallback");
+    assert_eq!(
+        parse_date("2999-01-01T00:00:00.000Z", "fallback"),
+        "fallback"
+    );
 }
 
 #[test]
@@ -379,12 +382,12 @@ async fn create_fetches_channel_title_without_preview_api() {
             .await
             .unwrap();
     });
-    let feed = create_without_sync(&db, &url, false).await.unwrap();
+    let feed = create_without_sync(&db, &url, false, None).await.unwrap();
     assert_eq!(feed.name, "A & B");
     assert_eq!(db.feed_entry_count("").unwrap(), 0);
-    assert!(create_without_sync(&db, &url, false).await.is_err());
+    assert!(create_without_sync(&db, &url, false, None).await.is_err());
     assert!(
-        create_without_sync(&db, "file:///tmp/test", false)
+        create_without_sync(&db, "file:///fixture/feed", false, None)
             .await
             .is_err()
     );

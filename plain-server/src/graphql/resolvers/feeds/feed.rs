@@ -14,6 +14,11 @@ use plain_rs::enums::DataType;
 type GqlResult<T> = async_graphql::Result<T>;
 
 #[derive(SimpleObject, Clone)]
+pub struct FeedPreview {
+    pub title: String,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct FeedError {
     pub code: String,
     pub detail: String,
@@ -132,6 +137,11 @@ pub struct FeedQuery;
 
 #[Object]
 impl FeedQuery {
+    async fn feed_preview(&self, ctx: &Context<'_>, url: String) -> GqlResult<FeedPreview> {
+        Ok(FeedPreview {
+            title: feeds::preview_title(ctx.data::<Arc<Db>>()?, &url).await?,
+        })
+    }
     async fn feed_sync_states(&self, ctx: &Context<'_>) -> GqlResult<Vec<feeds::FeedSyncState>> {
         Ok(sync_service(ctx)?.states())
     }
@@ -210,12 +220,19 @@ impl FeedMutation {
         &self,
         ctx: &Context<'_>,
         id: ID,
-        name: String,
-        fetch_content: bool,
+        name: Option<String>,
+        fetch_content: Option<bool>,
+        url: Option<String>,
     ) -> GqlResult<Feed> {
         feed_model(
             ctx,
-            plain_rs::feeds::update(ctx.data::<Arc<Db>>()?, id.as_str(), &name, fetch_content)?,
+            plain_rs::feeds::update_fields(
+                ctx.data::<Arc<Db>>()?,
+                id.as_str(),
+                name.as_deref(),
+                url.as_deref(),
+                fetch_content,
+            )?,
         )
     }
 
@@ -224,9 +241,10 @@ impl FeedMutation {
         ctx: &Context<'_>,
         url: String,
         fetch_content: bool,
+        name: Option<String>,
     ) -> GqlResult<Feed> {
         let db = ctx.data::<Arc<Db>>()?.clone();
-        let feed = feeds::create_without_sync(&db, &url, fetch_content).await?;
+        let feed = feeds::create_without_sync(&db, &url, fetch_content, name.as_deref()).await?;
         sync_service(ctx)?.queue(Some(feed.id.clone()))?;
         feed_model(ctx, feed)
     }

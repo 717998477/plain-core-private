@@ -428,3 +428,77 @@ async fn deleting_entries_in_one_main_mutation_cleans_only_the_selected_feed_rel
         2
     );
 }
+
+#[tokio::test]
+async fn preview_and_atomic_patch_use_main_schema_without_host_calls() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (_dir, schema) = fixture();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/preview", listener.local_addr().unwrap());
+    let responder = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 2048];
+        stream.read(&mut request).await.unwrap();
+        let body = "<rss><channel><title>Preview &amp; title</title></channel></rss>";
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    let response = query(
+        &schema,
+        &format!("query {{ feedPreview(url: {}) {{ title }} }}", json!(url)),
+    )
+    .await;
+    assert!(
+        response["errors"].as_array().is_none_or(Vec::is_empty),
+        "{response}"
+    );
+    assert_eq!(response["data"]["feedPreview"]["title"], "Preview & title");
+    assert!(database(&schema).feeds_list().unwrap().is_empty());
+    tokio::time::timeout(std::time::Duration::from_secs(5), responder)
+        .await
+        .unwrap()
+        .unwrap();
+    seed_feed(database(&schema), "one", "Original");
+    seed_feed(database(&schema), "neighbor", "Neighbor");
+    let response = query(&schema, "mutation { updateFeed(id:\"one\",name:\"Renamed\",url:\"https://example.org/changed\",fetchContent:true) { name url fetchContent } }").await;
+    assert!(
+        response["errors"].as_array().is_none_or(Vec::is_empty),
+        "{response}"
+    );
+    assert_eq!(
+        response["data"]["updateFeed"],
+        json!({"name":"Renamed","url":"https://example.org/changed","fetchContent":true})
+    );
+    let response = query(
+        &schema,
+        "mutation { updateFeed(id:\"one\",fetchContent:false) { name url fetchContent } }",
+    )
+    .await;
+    assert_eq!(
+        response["data"]["updateFeed"],
+        json!({"name":"Renamed","url":"https://example.org/changed","fetchContent":false})
+    );
+    let response = query(&schema, "mutation { updateFeed(id:\"one\",name:\"Must not persist\",url:\"https://example.com/neighbor.xml\") { id } }").await;
+    assert!(!response["errors"].as_array().unwrap().is_empty());
+    let row = database(&schema).feed_get("one").unwrap().unwrap();
+    assert_eq!(
+        (&*row.name, &*row.url),
+        ("Renamed", "https://example.org/changed")
+    );
+    assert_eq!(
+        database(&schema)
+            .feed_get("neighbor")
+            .unwrap()
+            .unwrap()
+            .name,
+        "Neighbor"
+    );
+}
