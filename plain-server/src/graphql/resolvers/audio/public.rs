@@ -224,7 +224,7 @@ impl AudioQuery {
         Ok(items.iter().map(audio_from_facts).collect())
     }
 
-    async fn embedded_audio_lyrics(
+    async fn audio_lyrics_by_path(
         &self,
         ctx: &Context<'_>,
         path: String,
@@ -360,13 +360,6 @@ impl AudioQuery {
             .map(history)
             .collect::<async_graphql::Result<Vec<_>>>()?)
     }
-    async fn audio_play_history_count(&self, ctx: &Context<'_>) -> async_graphql::Result<i32> {
-        Ok(audio(ctx)?
-            .run(|db, _| Ok(plain_rs::db::audio_queue::all_history(db)?.len()))
-            .await?
-            .try_into()?)
-    }
-
     async fn audio_playback(&self, ctx: &Context<'_>) -> async_graphql::Result<AudioPlayback> {
         let (current, media_id) = audio(ctx)?
             .run(|db, _| {

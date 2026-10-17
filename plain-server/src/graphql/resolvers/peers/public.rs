@@ -176,11 +176,7 @@ impl PeersQuery {
             .incoming_target(&id, &signature)
             .is_some())
     }
-    async fn peers(
-        &self,
-        ctx: &Context<'_>,
-        ids: Option<Vec<async_graphql::ID>>,
-    ) -> async_graphql::Result<Vec<Peer>> {
+    async fn peers(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Peer>> {
         let state = ctx.data::<crate::assembly::server::ServerState>()?;
         let rows = plain_rs::db::chat_store::peers::all(&state.db)?;
         let local = plain_rs::transport::lan::local_interfaces();
@@ -191,14 +187,8 @@ impl PeersQuery {
             .flatten()
             .filter_map(Value::as_str)
             .collect::<std::collections::HashSet<_>>();
-        let ids = ids.map(|ids| {
-            ids.into_iter()
-                .map(|id| id.to_string())
-                .collect::<std::collections::HashSet<_>>()
-        });
         Ok(rows
             .into_iter()
-            .filter(|row| ids.as_ref().is_none_or(|ids| ids.contains(&row.id)))
             .map(|row| {
                 let connected = online.contains(row.id.as_str());
                 Peer::from_record(row, connected, &local)

@@ -132,12 +132,15 @@ fn plans(
     if let Some(plan) = mms.as_mut() {
         plan.add("m_type IN (128,132)".into(), vec![]);
     }
-    let trashed = if include_trashed {
+    let show_trashed = fields.iter().any(|f| {
+        (f.name == "trash" && matches!(f.value.as_str(), "true" | "1"))
+            || (f.name == "trashed" && f.value == "1")
+    });
+    let trashed = if include_trashed && !show_trashed {
         vec![]
     } else {
         db.trashed_message_ids()?
     };
-    let show_trashed = fields.iter().any(|f| f.name == "trashed" && f.value == "1");
     let sms_ids = trashed
         .iter()
         .filter(|id| !id.starts_with("mms_"))

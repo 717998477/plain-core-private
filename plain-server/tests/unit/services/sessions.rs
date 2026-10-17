@@ -425,7 +425,7 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
         "{sessions{token}}",
         "{peers{key}}",
         "{peers{token}}",
-        "{peers(ids:[\"peer\"]){key}}",
+        "{peers{key}}",
         "{chatChannelRecord(id:\"channel\"){key}}",
     ] {
         let denied = remote(&state, &headers, query).await;

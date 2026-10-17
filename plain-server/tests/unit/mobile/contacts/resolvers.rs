@@ -35,23 +35,31 @@ fn fixture(permissions: Value) -> (tempfile::TempDir, PublicSchema) {
 }
 
 fn contact_fact(id: &str) -> Value {
-    json!({
-        "id": id, "prefix": "Dr", "firstName": "Ada", "middleName": "M", "lastName": "Lovelace",
-        "suffix": "Jr", "nickname": "ada", "photoId": "content://photo/1", "source": "Local",
-        "starred": true, "contactId": "c1", "thumbnailId": "content://thumb/1", "notes": "note",
-        "ringtone": "content://ring/1", "updatedAt": "2026-10-05T00:00:00.000Z",
-        "phoneNumbers": [
-            {"value": "+1 555", "type": 2, "label": "mobile", "normalizedNumber": "+1555"},
-            {"value": "+1 999", "type": 99, "label": "", "normalizedNumber": "+1999"},
-        ],
-        "emails": [{"value": "ada@example.com", "type": 1, "label": "home"}],
-        "addresses": [{"value": "1 Main St", "type": 1, "label": ""}],
-        "events": [{"value": "1815-12-10", "type": 2, "label": ""}],
-        "websites": [{"value": "https://example.com", "type": 4, "label": ""}],
-        "ims": [{"value": "ada@example.im", "type": 6, "label": "custom"}],
-        "groups": [{"id": "7", "name": "Friends"}],
-        "organization": {"company": "Analytical", "title": "Engineer"},
-    })
+    json!({"id":id,"prefix":"Dr","firstName":"Ada","middleName":"M","lastName":"Lovelace",
+        "suffix":"Jr","photoId":"content://photo/1","source":"Local","starred":true,
+        "contactId":"c1","thumbnailId":"content://thumb/1","ringtone":"content://ring/1",
+        "updatedAt":"2026-10-05T00:00:00.000Z"})
+}
+
+fn contact_page(id: &str) -> Value {
+    let data = |kind: &str, a: &str, b: &str, c: &str, d: &str, e: &str, f: &str| {
+        json!({
+            "rawId":id,"mimeType":format!("vnd.android.cursor.item/{kind}"),
+            "data1":a,"data2":b,"data3":c,"data4":d,"data5":e,"data6":f
+        })
+    };
+    json!({"rows":[contact_fact(id)],"groups":[{"id":"7","name":"Friends"}],"details":[
+        data("phone_v2","+1 555","2","mobile","+1555","",""),
+        data("phone_v2","+1 999","99","","+1999","",""),
+        data("email_v2","ada-mail","1","home","","",""),
+        data("postal-address_v2","1 Main St","1","","","",""),
+        data("contact_event","1815-12-10","2","","","",""),
+        data("website","https://example.com","4","","","",""),
+        data("im","ada-im","","","","6","custom"),
+        data("group_membership","7","","","","",""),
+        data("organization","Analytical","","","Engineer","",""),
+        data("nickname","ada","","","","",""),data("note","note","","","","","")
+    ]})
 }
 
 fn schema_host(schema: &PublicSchema) -> Arc<Host> {
@@ -136,7 +144,7 @@ async fn contacts_map_the_host_facts_onto_the_contract_type() {
             );
             assert_eq!(params["offset"], 0);
             assert_eq!(params["limit"], 20);
-            json!([contact_fact("raw-1")])
+            contact_page("raw-1")
         }
         other => panic!("unexpected host call {other}"),
     });
@@ -197,8 +205,10 @@ async fn contact_reads_refuse_to_answer_without_the_web_permission() {
 async fn create_contact_reads_the_new_row_back_through_the_provider_search() {
     let (_dir, schema) = fixture(json!(["WRITE_CONTACTS"]));
     stub(schema_host(&schema), |method, params| match method {
+        "systemContactSources" => json!([{"name":"Local","type":"local"}]),
         "systemCreateContact" => {
             // The payload the platform deserializes into its ContactInput.
+            assert_eq!(params["accountType"], "local");
             assert_eq!(params["input"]["firstName"], "Ada");
             assert_eq!(params["input"]["phoneNumbers"][0]["type"], "MOBILE");
             assert_eq!(params["input"]["groupIds"], json!(["7"]));
@@ -209,7 +219,7 @@ async fn create_contact_reads_the_new_row_back_through_the_provider_search() {
                 params["plan"]["args"],
                 json!(["vnd.android.cursor.item/name", "raw-9"])
             );
-            json!([contact_fact("raw-9")])
+            contact_page("raw-9")
         }
         other => panic!("unexpected host call {other}"),
     });
@@ -233,7 +243,7 @@ async fn a_write_that_cannot_be_read_back_fails_the_mutation() {
     let (_dir, schema) = fixture(json!(["WRITE_CONTACTS"]));
     stub(schema_host(&schema), |method, _| match method {
         "systemUpdateContact" => json!(true),
-        "systemContactFacts" => json!([]),
+        "systemContactFacts" => json!({"rows":[],"details":[],"groups":[]}),
         other => panic!("unexpected host call {other}"),
     });
     let response = schema

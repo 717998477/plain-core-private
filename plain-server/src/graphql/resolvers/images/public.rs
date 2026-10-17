@@ -95,46 +95,6 @@ impl ImagesQuery {
         Ok(rows(&items, image))
     }
 
-    async fn search_images(
-        &self,
-        ctx: &Context<'_>,
-        text: String,
-        query: String,
-        offset: i32,
-        limit: i32,
-        sort_by: crate::graphql::resolvers::files::types::FileSortBy,
-    ) -> async_graphql::Result<Vec<Image>> {
-        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        let facts = crate::services::images::search::rows(
-            &crate::graphql::resolvers::media::public::catalog(ctx),
-            ctx.data::<Arc<crate::services::images::models::Runtime>>()?,
-            &text,
-            &query,
-            offset,
-            limit,
-            sort_by.as_str(),
-        )
-        .await
-        .map_err(async_graphql::Error::new)?;
-        Ok(facts.iter().map(image).collect())
-    }
-
-    async fn search_image_count(
-        &self,
-        ctx: &Context<'_>,
-        text: String,
-        query: String,
-    ) -> async_graphql::Result<i32> {
-        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        crate::services::images::search::count(
-            &crate::graphql::resolvers::media::public::catalog(ctx),
-            ctx.data::<Arc<crate::services::images::models::Runtime>>()?,
-            &text,
-            &query,
-        )
-        .await
-        .map_err(async_graphql::Error::new)
-    }
 }
 
 fn image(item: &Value) -> Image {

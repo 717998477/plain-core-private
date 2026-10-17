@@ -100,8 +100,6 @@ fn bounded_field(
     bounded(value, max, field)
 }
 
-/// Android creates the raw contact first and only then resolves the account
-/// behind `source`, so an unknown or empty source aborts the whole write.
 fn validate_contact_input(input: &Value, require_source: bool) -> anyhow::Result<()> {
     let object = input
         .as_object()
@@ -206,6 +204,19 @@ pub(crate) async fn execute(prefs: &Prefs, host: &Host, request: Request) -> any
                 params["id"] = Value::String(id.to_owned());
             }
             validate_contact_input(input, creating)?;
+            if creating {
+                let sources = host
+                    .call("systemContactSources", json!({}))
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                let sources: Vec<Value> = serde_json::from_value(sources)?;
+                let sources = super::projection::sources(sources);
+                let source = sources
+                    .iter()
+                    .find(|source| source["name"] == input["source"])
+                    .ok_or_else(|| anyhow::anyhow!("Contact source not found"))?;
+                params["accountType"] = json!(source["type"].as_str().unwrap_or_default());
+            }
             let result = host
                 .call(
                     if creating {

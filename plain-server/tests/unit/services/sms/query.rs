@@ -283,3 +283,58 @@ fn mms_page_uses_raw_parts_for_body_attachments_and_address_fallback() {
     assert!(items[0].get("parts").is_none());
     assert!(page(vec![serde_json::json!({"isMms":true,"date":"2026-10-16T00:00:00Z","addressCandidates":[]})], 0, 10, "").is_err());
 }
+
+#[test]
+fn query_trash_selector_applies_to_sms_and_mms_even_for_internal_all_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = db(&dir);
+    db.trashed_message_save_many(&[
+        plain_rs::db::TrashedMessageRow {
+            message_id: "1".into(),
+            is_mms: false,
+            trashed_at: "2026-01-01T00:00:00Z".into(),
+        },
+        plain_rs::db::TrashedMessageRow {
+            message_id: "2".into(),
+            is_mms: true,
+            trashed_at: "2026-01-01T00:00:00Z".into(),
+        },
+    ])
+    .unwrap();
+    for query in ["trash:true", "trashed:1"] {
+        let fields = provider_plan::fields(&db, query).unwrap();
+        for all in [false, true] {
+            let selected = plans(&db, &fields, all, None).unwrap();
+            assert!(
+                selected
+                    .sms
+                    .clauses
+                    .iter()
+                    .any(|clause| clause.contains(" IN "))
+            );
+            assert!(
+                !selected
+                    .sms
+                    .clauses
+                    .iter()
+                    .any(|clause| clause.contains("NOT IN"))
+            );
+            assert!(selected.sms.args.contains(&"1".into()));
+            let mms = selected.mms.unwrap();
+            assert!(mms.args.contains(&"2".into()));
+        }
+    }
+    for query in ["", "trash:false"] {
+        let fields = provider_plan::fields(&db, query).unwrap();
+        let active = plans(&db, &fields, false, None).unwrap();
+        assert!(
+            active
+                .sms
+                .clauses
+                .iter()
+                .any(|clause| clause.contains("NOT IN"))
+        );
+        assert!(active.sms.args.contains(&"1".into()));
+        assert!(active.mms.unwrap().args.contains(&"2".into()));
+    }
+}

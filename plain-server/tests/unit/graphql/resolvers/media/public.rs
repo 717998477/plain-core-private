@@ -625,3 +625,35 @@ async fn media_tags_are_loaded_only_when_selected_and_batch_all_rows() {
     }
     assert_eq!(loads.load(Ordering::Relaxed), 1);
 }
+
+#[tokio::test]
+async fn image_search_uses_the_original_query_for_text_filters_paging_and_count() {
+    let (_dir, schema, _) = fixture_seeded(
+        GRANTED,
+        true,
+        |db| {
+            db.record_media_files(&[
+                media(DataType::Image, "/fixture/a.jpg", "sunset blue a", 100, "b1"),
+                media(DataType::Image, "/fixture/b.jpg", "sunset blue b", 100, "b1"),
+                media(DataType::Image, "/fixture/c.jpg", "sunset blue c", 100, "b2"),
+                media(DataType::Image, "/fixture/d.jpg", "sunset red", 100, "b1"),
+            ])
+            .unwrap();
+        },
+        |method, _| panic!("unexpected host call {method}"),
+    );
+    let response = schema
+        .execute(
+            async_graphql::Request::new(
+                "query($query:String!){images(query:$query,offset:1,limit:1,sortBy:NAME_ASC){title} imageCount(query:$query)}",
+            )
+            .variables(async_graphql::Variables::from_json(json!({
+                "query": "text:\"sunset blue\" bucket_id:b1 trash:false"
+            }))),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    assert_eq!(data["images"], json!([{"title":"sunset blue b"}]));
+    assert_eq!(data["imageCount"], 2);
+}

@@ -34,9 +34,8 @@ impl ContactsQuery {
             return Ok(Vec::new());
         }
 
-        let facts = host_json(
+        let facts = contact_rows(
             ctx,
-            "systemContactFacts",
             provider_params(
                 ctx,
                 crate::host::query::Provider::Contact,
@@ -111,23 +110,25 @@ impl ContactsQuery {
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Vec<ContactSource>> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[READ])?;
-        Ok(host_json(ctx, "systemContactSources", json!({}))
-            .await?
-            .iter()
-            .map(|fact| ContactSource {
-                name: text(fact, "name"),
-                r#type: text(fact, "type"),
-            })
-            .collect())
+        Ok(
+            super::projection::sources(host_json(ctx, "systemContactSources", json!({})).await?)
+                .iter()
+                .map(|fact| ContactSource {
+                    name: text(fact, "name"),
+                    r#type: text(fact, "type"),
+                })
+                .collect(),
+        )
     }
 
     async fn contact_groups(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<ContactGroup>> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[READ])?;
-        Ok(host_json(ctx, "systemContactGroupFacts", json!({}))
-            .await?
-            .iter()
-            .map(group)
-            .collect())
+        Ok(
+            super::projection::groups(host_json(ctx, "systemContactGroupFacts", json!({})).await?)
+                .iter()
+                .map(group)
+                .collect(),
+        )
     }
 }
 
@@ -311,10 +312,18 @@ async fn contact_write_call(
 
 /// The contract returns the freshly written contact, so the row is read back
 /// through the same provider search instead of being assembled from the input.
+async fn contact_rows(ctx: &Context<'_>, params: Value) -> async_graphql::Result<Vec<Value>> {
+    let value = ctx
+        .data_unchecked::<Arc<Host>>()
+        .call("systemContactFacts", params)
+        .await
+        .map_err(async_graphql::Error::new)?;
+    super::projection::contacts(value).map_err(|error| async_graphql::Error::new(error.to_string()))
+}
+
 async fn reload(ctx: &Context<'_>, id: &str, phase: &str) -> async_graphql::Result<Contact> {
-    let facts = host_json(
+    let facts = contact_rows(
         ctx,
-        "systemContactFacts",
         provider_params(
             ctx,
             crate::host::query::Provider::Contact,

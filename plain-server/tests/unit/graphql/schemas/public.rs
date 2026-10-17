@@ -36,6 +36,15 @@ fn public_schema_matches_committed_sdl() {
 #[test]
 fn public_schema_exposes_the_contract_it_has_to_serve() {
     let sdl = sdl();
+    assert!(!sdl.contains("includeTrashed"));
+    assert!(!sdl.contains("embeddedAudioLyrics"));
+    for removed in ["searchImages(", "searchImageCount(", "semanticImageSearch(", "SemanticImageMatch", "audioPlayHistoryCount:"] {
+        assert!(!sdl.contains(removed), "Retired root/type: {removed}");
+    }
+    assert!(sdl.contains("images(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!"));
+    assert!(sdl.contains("imageCount(query: String!): Int!"));
+    assert!(sdl.contains("audioLyricsByPath(path: String!): String"));
+    assert!(sdl.contains("smsIds(query: String!): [ID!]!"));
     let playback = sdl
         .split("type AudioPlayback {")
         .nth(1)
@@ -94,7 +103,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "createContactGroup(name: String!, accountName: String!, accountType: String!): ContactGroup!",
         "updateContactGroup(id: ID!, name: String!): ContactGroup!",
         "deleteContactGroup(id: ID!): Boolean!",
-        "sms(query: String!, offset: Int!, limit: Int!, includeTrashed: Boolean! = false): [Sms!]!",
+        "sms(query: String!, offset: Int!, limit: Int!): [Sms!]!",
         "smsCount(query: String!): Int!",
         "smsBoxCounts: SmsCounts!",
         "smsConversations(query: String!, offset: Int!, limit: Int!): [SmsConversation!]!",
@@ -213,7 +222,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "removeChatChannelMember(id: ID!, peerId: ID!): ChatChannel!",
         "acceptChatChannelInvite(id: ID!): Boolean!",
         "declineChatChannelInvite(id: ID!): Boolean!",
-        "peers(ids: [ID!]): [Peer!]!",
+        "peers: [Peer!]!",
         "sims: [Sim!]!",
         "pairDevice(input: PairingDeviceInput!): PairingState!",
         "cancelPairing(generation: String!): Boolean!",

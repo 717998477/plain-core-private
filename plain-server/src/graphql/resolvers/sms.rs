@@ -119,7 +119,6 @@ impl SmsQuery {
         query: String,
         offset: i32,
         limit: i32,
-        #[graphql(default)] include_trashed: bool,
     ) -> async_graphql::Result<Vec<Sms>> {
         if !public_gate::require_granted(ctx, &[READ]).await? {
             return Ok(Vec::new());
@@ -131,7 +130,7 @@ impl SmsQuery {
                 query,
                 offset,
                 limit,
-                include_trashed,
+                include_trashed: false,
             },
         )
         .await
@@ -142,12 +141,7 @@ impl SmsQuery {
             .unwrap_or_default())
     }
 
-    async fn sms_ids(
-        &self,
-        ctx: &Context<'_>,
-        query: String,
-        #[graphql(default)] include_trashed: bool,
-    ) -> async_graphql::Result<Vec<ID>> {
+    async fn sms_ids(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<Vec<ID>> {
         if !public_gate::require_granted(ctx, &[READ]).await? {
             return Ok(Vec::new());
         }
@@ -156,7 +150,7 @@ impl SmsQuery {
             ctx.data_unchecked::<Arc<Host>>(),
             sms_query::Request::Ids {
                 query,
-                include_trashed,
+                include_trashed: false,
             },
         )
         .await

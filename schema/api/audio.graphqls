@@ -145,10 +145,10 @@ extend type Query {
 	audioArtistPlayCounts: [AudioArtistPlayCount!]!
 	audioCount(query: String!): Int!
 	audioLyrics(mediaId: ID!): String
+	audioLyricsByPath(path: String!): String
 	audioMetadata(path: String!): AudioItem!
 	audioOverview: AudioOverview!
 	audioPlayHistory(query: String!, offset: Int!, limit: Int!): [AudioPlayHistory!]!
-	audioPlayHistoryCount: Int!
 	audioPlayback: AudioPlayback!
 	audioPlaylistCovers(ids: [ID!]!): [AudioPlaylistCovers!]!
 	audioPlaylistItemCount(id: ID!, query: String!): Int!
@@ -158,5 +158,4 @@ extend type Query {
 	audioQueueItems(query: String!, offset: Int!, limit: Int!): [AudioItem!]!
 	audioQueuedMediaIds: [ID!]!
 	audios(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Audio!]!
-	embeddedAudioLyrics(path: String!): String
 }

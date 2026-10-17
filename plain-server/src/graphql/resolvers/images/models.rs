@@ -42,35 +42,12 @@ impl TryFrom<crate::services::images::models::Snapshot> for ImageModelsState {
         })
     }
 }
-#[derive(SimpleObject)]
-struct SemanticImageMatch {
-    image_id: async_graphql::ID,
-    score: f32,
-}
 #[derive(Default)]
 pub struct ImageModelsQuery;
 #[Object]
 impl ImageModelsQuery {
     async fn image_models_state(&self, ctx: &Context<'_>) -> Result<ImageModelsState> {
         ctx.data::<Arc<Runtime>>()?.snapshot().try_into()
-    }
-    async fn semantic_image_search(
-        &self,
-        ctx: &Context<'_>,
-        text: String,
-        max_results: i32,
-    ) -> Result<Vec<SemanticImageMatch>> {
-        Ok(ctx
-            .data::<Arc<Runtime>>()?
-            .search(&text, usize::try_from(max_results)?)
-            .await
-            .map_err(async_graphql::Error::new)?
-            .into_iter()
-            .map(|row| SemanticImageMatch {
-                image_id: row.image_id.into(),
-                score: row.score,
-            })
-            .collect())
     }
 }
 #[derive(Default)]

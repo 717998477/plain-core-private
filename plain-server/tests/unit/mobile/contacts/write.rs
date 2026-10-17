@@ -109,3 +109,67 @@ fn oversized_and_malformed_contact_input_is_rejected() {
         .collect();
     assert!(validate_contact_input(&contact("SIM", json!({"addresses": many})), true).is_err());
 }
+
+#[tokio::test]
+async fn creation_resolves_the_account_before_any_provider_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let prefs = Prefs::load(&dir.path().join("prefs.json")).unwrap();
+    prefs
+        .set("api_permissions", json!(["WRITE_CONTACTS"]))
+        .unwrap();
+    let host = std::sync::Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = calls.clone();
+    let responder = host.clone();
+    let provider = tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            let method = request["method"].as_str().unwrap().to_owned();
+            seen.lock().unwrap().push(method.clone());
+            let value = match method.as_str() {
+                "systemContactSources" => {
+                    json!([{"name":"local","type":"first"},{"name":"local","type":"second"}])
+                }
+                "systemCreateContact" => {
+                    assert_eq!(request["params"]["accountType"], "first");
+                    json!("new-contact")
+                }
+                _ => panic!("unexpected operation {method}"),
+            };
+            responder
+                .reply(generation, json!({"id":request["id"],"result":value}))
+                .unwrap();
+        }
+    });
+    for (source, success) in [("local", true), ("unknown", false)] {
+        let result = execute(
+            &prefs,
+            &host,
+            Request {
+                action: Action::CreateContact,
+                id: None,
+                input: Some(contact(source, json!({"firstName":"Sample"}))),
+                name: None,
+                account_name: None,
+                account_type: None,
+            },
+        )
+        .await;
+        assert_eq!(result.is_ok(), success);
+        if success {
+            assert_eq!(result.unwrap()["id"], "new-contact");
+        } else {
+            assert_eq!(result.unwrap_err().to_string(), "Contact source not found");
+        }
+    }
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [
+            "systemContactSources",
+            "systemCreateContact",
+            "systemContactSources"
+        ]
+    );
+    provider.abort();
+    let _ = provider.await;
+}

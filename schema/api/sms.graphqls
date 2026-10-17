@@ -67,10 +67,10 @@ extend type Mutation {
 
 extend type Query {
 	archivedSmsConversations(query: String!, offset: Int!, limit: Int!): [SmsConversation!]!
-	sms(query: String!, offset: Int!, limit: Int!, includeTrashed: Boolean! = false): [Sms!]!
+	sms(query: String!, offset: Int!, limit: Int!): [Sms!]!
 	smsBoxCounts: SmsCounts!
 	smsConversationCount(query: String!): Int!
 	smsConversations(query: String!, offset: Int!, limit: Int!): [SmsConversation!]!
 	smsCount(query: String!): Int!
-	smsIds(query: String!, includeTrashed: Boolean! = false): [ID!]!
+	smsIds(query: String!): [ID!]!
 }

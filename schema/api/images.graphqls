@@ -74,11 +74,6 @@ enum ImageSearchStatusType {
 	ERROR
 }
 
-type SemanticImageMatch {
-	imageId: ID!
-	score: Float!
-}
-
 extend type Mutation {
 	broadcastImageEditorUpdate(id: ID!, update: String!): Boolean!
 	cancelImageIndex: Boolean!
@@ -103,7 +98,4 @@ extend type Query {
 	imageModelsState: ImageModelsState!
 	imageSearchStatus: ImageSearchStatus!
 	images(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!
-	searchImageCount(text: String!, query: String!): Int!
-	searchImages(text: String!, query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!
-	semanticImageSearch(text: String!, maxResults: Int!): [SemanticImageMatch!]!
 }

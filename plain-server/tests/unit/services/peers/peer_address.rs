@@ -22,7 +22,7 @@ async fn main_peer_records_and_file_urls_use_current_addresses_and_reject_stale_
     .unwrap();
     let (_generation, mut requests) = state.host.connect();
     let native = server.native_graphql().unwrap();
-    let response = native.execute(r#"{fixture:peers(ids:["fixture"]){ip address{bestIp name baseUrl apiUrl statusWsUrl}} peers(ids:["fixture"]){ip address{bestIp name baseUrl apiUrl statusWsUrl}}}"#.into()).await;
+    let response = native.execute(r#"{fixture:peers{ip address{bestIp name baseUrl apiUrl statusWsUrl}} peers{ip address{bestIp name baseUrl apiUrl statusWsUrl}}}"#.into()).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let rows = response.data.into_json().unwrap();
     let row = &rows["fixture"][0];

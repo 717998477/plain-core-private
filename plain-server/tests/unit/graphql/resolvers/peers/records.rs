@@ -33,7 +33,7 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
     channel.version = 5000000001;
     channels::save(&state.db, &[channel], SaveMode::Insert).unwrap();
     let native = server.native_graphql().unwrap();
-    let response=native.execute(Request::new(r#"{ peers(ids:["peer"]) { id key address { bestIp baseUrl apiUrl statusWsUrl } } absent: peers(ids:["absent"]) { id } chatChannelRecord(id:"channel") { key ownerId members { peerId status } version } }"#)).await;
+    let response=native.execute(Request::new(r#"{ peers { id key address { bestIp baseUrl apiUrl statusWsUrl } } chatChannelRecord(id:"channel") { key ownerId members { peerId status } version } }"#)).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
     assert_eq!(data["peers"][0]["key"], peer.key);
@@ -41,7 +41,7 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
         data["peers"][0]["address"]["baseUrl"],
         "https://127.0.0.1:8443"
     );
-    assert_eq!(data["absent"], json!([]));
+    assert_eq!(data["peers"].as_array().unwrap().len(), 1);
     assert_eq!(data["chatChannelRecord"]["version"], 5000000001_i64);
     assert_eq!(data["chatChannelRecord"]["key"], "channel-key");
     assert_eq!(data["chatChannelRecord"]["members"][0]["peerId"], "peer");
