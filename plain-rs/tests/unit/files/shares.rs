@@ -69,6 +69,46 @@ fn roots_traversal_and_files() {
     assert!(s.resolve(&row.id, "single.txt", true).unwrap().is_some());
 }
 #[test]
+fn file_roots_resolve_by_name_or_default_without_allowing_traversal() {
+    let (dir, s) = fixture();
+    let file = dir.path().join("single.txt");
+    std::fs::write(&file, b"text").unwrap();
+    std::fs::write(dir.path().join("outside.txt"), b"private").unwrap();
+    let row = create(&s, vec![file.clone()]);
+    let expected = std::fs::canonicalize(file).unwrap();
+    for path in ["", "/", "single.txt", "/single.txt", "single.txt/"] {
+        assert_eq!(
+            s.resolve(&row.id, path, true).unwrap().as_deref(),
+            expected.to_str(),
+            "{path}"
+        );
+    }
+    for path in [
+        "single.txt/.",
+        "single.txt/..",
+        "single.txt/../outside.txt",
+        "single.txt//../outside.txt",
+        "single.txt/child",
+    ] {
+        assert!(s.resolve(&row.id, path, true).unwrap().is_none(), "{path}");
+    }
+}
+#[cfg(unix)]
+#[test]
+fn replacing_a_file_root_with_a_symlink_cannot_escape_the_share() {
+    let (dir, s) = fixture();
+    let file = dir.path().join("single.txt");
+    let outside = dir.path().join("outside.txt");
+    std::fs::write(&file, b"text").unwrap();
+    std::fs::write(&outside, b"private").unwrap();
+    let row = create(&s, vec![file.clone()]);
+    std::fs::rename(&file, dir.path().join("old.txt")).unwrap();
+    std::os::unix::fs::symlink(&outside, &file).unwrap();
+    for path in ["", "/", "single.txt", "single.txt/"] {
+        assert!(s.resolve(&row.id, path, true).unwrap().is_none(), "{path}");
+    }
+}
+#[test]
 fn duplicate_names_are_rejected_without_persisting() {
     let (dir, s) = fixture();
     let a = dir.path().join("a/docs");
