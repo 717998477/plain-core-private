@@ -18,3 +18,6 @@ pub(crate) mod audio_catalog;
 
 #[cfg(feature = "core")]
 pub(crate) mod image_catalog;
+
+#[cfg(feature = "core")]
+pub(crate) mod disks;

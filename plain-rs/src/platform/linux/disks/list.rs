@@ -18,7 +18,13 @@ pub struct Disk {
 }
 
 pub fn read_disks() -> Result<Vec<Disk>, String> {
-    let devs = run_lsblk(&["NAME", "PATH", "TYPE", "MODEL", "SIZE", "RM"])
+    read_with(run_lsblk)
+}
+
+fn read_with(
+    read: impl FnOnce(&[&str]) -> anyhow::Result<Vec<LsblkDevice>>,
+) -> Result<Vec<Disk>, String> {
+    let devs = read(&["NAME", "PATH", "TYPE", "MODEL", "SIZE", "RM"])
         .map_err(|error| error.to_string())?;
     Ok(disks_from_lsblk(&devs))
 }

@@ -88,13 +88,16 @@ fn export_and_save_feed_entries() {
     );
     restore(&db, "ids:entry").unwrap();
     tags::add_relations(&db, &[(note_tag.id, "entry".into())]).unwrap();
-    assert_eq!(crate::feeds::delete_entries(&db, "ids:entry").unwrap(), 1);
-    assert_eq!(
-        tags::tags_for_key_of_kind(&db, "entry", DataType::Note.kind())
-            .unwrap()
-            .len(),
-        1
-    );
+    #[cfg(feature = "feeds")]
+    {
+        assert_eq!(crate::feeds::delete_entries(&db, "ids:entry").unwrap(), 1);
+        assert_eq!(
+            tags::tags_for_key_of_kind(&db, "entry", DataType::Note.kind())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }
 
 #[test]

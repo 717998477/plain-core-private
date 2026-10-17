@@ -1,21 +1,4 @@
 pub const SYSTEM_MOUNT_FACTS: &str = "systemMountFacts";
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiskFacts {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-    pub size_bytes: i64,
-    pub removable: bool,
-    pub model: Option<String>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct DisksFacts {
-    pub disks: Vec<DiskFacts>,
-}
-
-pub const SYSTEM_DISKS_FACTS: &str = "systemDisksFacts";
 
 pub const SYSTEM_SAMBA_SERVICE_FACTS: &str = "systemSambaServiceFacts";
 pub const SYSTEM_SAMBA_APPLY: &str = "systemSambaApply";

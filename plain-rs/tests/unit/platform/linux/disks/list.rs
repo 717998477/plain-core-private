@@ -80,3 +80,42 @@ fn empty_model_stays_none() {
     let disks = disks_from_lsblk(&[d]);
     assert_eq!(disks[0].model, None);
 }
+
+#[test]
+fn a_successful_empty_read_stays_empty() {
+    let disks = read_with(|columns| {
+        assert_eq!(columns, &["NAME", "PATH", "TYPE", "MODEL", "SIZE", "RM"]);
+        Ok(Vec::new())
+    })
+    .unwrap();
+    assert!(disks.is_empty());
+}
+
+#[test]
+fn a_failed_read_is_reported_without_empty_success() {
+    let error = read_with(|_| Err(anyhow::anyhow!("lsblk unavailable"))).unwrap_err();
+    assert_eq!(error, "lsblk unavailable");
+}
+
+#[test]
+fn a_disk_read_runs_one_collector_and_filters_its_rows() {
+    let calls = std::cell::Cell::new(0);
+    let disks = read_with(|_| {
+        calls.set(calls.get() + 1);
+        Ok(vec![
+            dev(
+                "definitely-not-real-disk",
+                "disk",
+                Some(serde_json::json!(true)),
+            ),
+            dev("definitely-not-real-part", "part", None),
+        ])
+    })
+    .unwrap();
+    assert_eq!(calls.get(), 1);
+    assert_eq!(disks.len(), 1);
+    assert_eq!(disks[0].id, "disk:definitely-not-real-disk");
+    assert_eq!(disks[0].path, "/dev/definitely-not-real-disk");
+    assert_eq!(disks[0].model.as_deref(), Some("Test Model"));
+    assert!(disks[0].removable);
+}

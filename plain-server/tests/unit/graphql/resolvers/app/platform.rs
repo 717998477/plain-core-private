@@ -235,3 +235,47 @@ fn hostname_sanitization_is_shared() {
     assert_eq!(plain_rs::platform_hostname("  Foo_. Bar-- "), "foo-bar");
     assert_eq!(plain_rs::platform_hostname("!.."), "");
 }
+
+#[tokio::test]
+async fn disk_queries_read_native_rust_after_one_capability_check() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let host = state.host.clone();
+    let (generation, mut requests) = host.connect();
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = calls.clone();
+    let provider = tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            let method = request["method"].as_str().unwrap().to_owned();
+            observed.lock().unwrap().push(method.clone());
+            let result = if method == "systemCapabilities" {
+                serde_json::json!(["DISK_MANAGER"])
+            } else {
+                serde_json::json!({"disks":[]})
+            };
+            host.reply(
+                generation,
+                serde_json::json!({"id":request["id"],"result":result}),
+            )
+            .unwrap();
+        }
+    });
+    let response = core
+        .native_graphql()
+        .unwrap()
+        .execute("{ disks { id name path sizeBytes removable model } }".into())
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    for disk in data["disks"].as_array().unwrap() {
+        assert!(!disk["id"].as_str().unwrap().is_empty());
+        assert!(!disk["path"].as_str().unwrap().is_empty());
+        assert!(disk["sizeBytes"].as_i64().unwrap() >= 0);
+    }
+    assert_eq!(*calls.lock().unwrap(), vec!["systemCapabilities"]);
+    assert!(state.db.audit_events(0, 10, None).unwrap().is_empty());
+    provider.abort();
+    let _ = provider.await;
+    core.stop_core().await;
+}

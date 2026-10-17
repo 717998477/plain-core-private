@@ -5,7 +5,6 @@ use crate::graphql::resolvers::app::capability_types::{
 };
 use crate::graphql::types::Long;
 use crate::host::bridge::Host;
-use crate::host::platform::{DisksFacts, SYSTEM_DISKS_FACTS};
 use crate::host::platform::{
     SYSTEM_SAMBA_APPLY, SYSTEM_SAMBA_PASSWORD, SYSTEM_SAMBA_SERVICE_FACTS, SambaApplyRequest,
     SambaPasswordRequest, SambaServiceFacts,
@@ -66,15 +65,11 @@ impl PlatformQuery {
 
     async fn disks(&self, ctx: &Context<'_>) -> Result<Vec<Disk>> {
         require_capability(ctx, "DISK_MANAGER").await?;
-        let value = ctx
-            .data::<Arc<Host>>()?
-            .call(SYSTEM_DISKS_FACTS, serde_json::json!({}))
+        let disks = tokio::task::spawn_blocking(crate::platform::disks::list)
             .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?
             .map_err(async_graphql::Error::new)?;
-        let facts: DisksFacts = serde_json::from_value(value)
-            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-        Ok(facts
-            .disks
+        Ok(disks
             .into_iter()
             .map(|disk| Disk {
                 id: disk.id.into(),

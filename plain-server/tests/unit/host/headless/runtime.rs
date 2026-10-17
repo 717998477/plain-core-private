@@ -51,6 +51,12 @@ async fn access_primitives_report_capabilities_and_grants_without_an_app_busines
             .await
             .is_err()
     );
+    assert!(
+        runtime
+            .dispatch("systemDisksFacts", serde_json::json!({}))
+            .await
+            .is_err()
+    );
     core.stop_core().await;
 }
 
