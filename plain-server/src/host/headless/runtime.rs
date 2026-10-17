@@ -31,11 +31,6 @@ impl Runtime {
             "systemCapabilities" => {
                 serde_json::to_value(&self.capabilities).map_err(|error| error.to_string())
             }
-            crate::host::platform::SYSTEM_MOUNT_FACTS => {
-                tokio::task::spawn_blocking(crate::services::files::mounts::facts)
-                    .await
-                    .map_err(|error| error.to_string())?
-            }
             "systemPermissionFacts" => {
                 crate::host::permission_facts::facts(&["WRITE_EXTERNAL_STORAGE".to_owned()], params)
             }

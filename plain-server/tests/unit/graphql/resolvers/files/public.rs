@@ -332,6 +332,10 @@ async fn mounts_and_favorites_need_no_storage_grant() {
         ]),
         other => panic!("unexpected host call {other}"),
     });
+    schema
+        .data::<Arc<crate::services::files::platform::FilePlatform>>()
+        .unwrap()
+        .use_sdk_for_test();
     let response = schema
         .execute(
             r#"query { mounts { id name mountPoint fsType totalBytes usedBytes freeBytes
@@ -877,4 +881,40 @@ async fn file_queries_resolve_shared_references_and_preserve_the_requested_path(
         assert_eq!(data["pathExists"], false);
         assert_eq!(data["pathKind"], Value::Null);
     }
+}
+
+#[tokio::test]
+async fn native_mounts_do_not_request_a_host_or_storage_permission() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    let (_dir, schema) = fixture_with("[]", move |_, _| {
+        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        json!([])
+    });
+    let response = schema
+        .execute("{ mounts { id path mountPoint totalBytes freeBytes } }")
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert!(response.data.into_json().unwrap()["mounts"].is_array());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[test]
+fn mount_projection_preserves_stable_ids_and_explicit_statistics() {
+    let partition = mount(&json!({"id":"part:disk:1", "path":null,"mountPoint":null,
+        "totalBytes":100,"usedBytes":null,"freeBytes":null}));
+    assert_eq!(partition.id.as_str(), "part:disk:1");
+    assert!(partition.path.is_empty());
+    assert!(partition.mount_point.is_empty());
+    let volume = mount(
+        &json!({"id":"fsuuid:volume", "path":"/volume", "mountPoint":"/mounted",
+        "totalBytes":100,"usedBytes":35,"freeBytes":60}),
+    );
+    assert_eq!(volume.id.as_str(), "fsuuid:volume");
+    assert_eq!(volume.mount_point, "/mounted");
+    assert_eq!(volume.used_bytes.0, 35);
+    let sdk = mount(&json!({"path":"/storage", "totalBytes":100,"freeBytes":60}));
+    assert_eq!(sdk.id.as_str(), "path:/storage");
+    assert_eq!(sdk.mount_point, "/storage");
+    assert_eq!(sdk.used_bytes.0, 40);
 }

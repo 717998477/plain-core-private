@@ -24,9 +24,6 @@ impl DriveType {
     }
 }
 
-/// A mounted volume. The phone reports one row per storage the platform
-/// knows about (internal, SD card, each USB disk, the app-private dir);
-/// the fields are all filled by the host, never derived here.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Mount {
     pub id: ID,

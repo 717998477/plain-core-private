@@ -42,7 +42,7 @@ pub mod media_watch;
 #[cfg(all(feature = "core", feature = "media"))]
 pub(crate) mod media_scan_policy;
 
-#[cfg(any(feature = "api", feature = "mounts"))]
+#[cfg(any(feature = "core", feature = "mounts"))]
 pub mod mounts;
 
 #[cfg(feature = "core")]

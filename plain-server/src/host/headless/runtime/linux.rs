@@ -11,7 +11,6 @@ pub(super) fn handles(method: &str) -> bool {
             | crate::host::platform::SYSTEM_SAMBA_SERVICE_FACTS
             | crate::host::platform::SYSTEM_SAMBA_APPLY
             | crate::host::platform::SYSTEM_SAMBA_PASSWORD
-            | crate::host::platform::SYSTEM_MOUNT_FACTS
     )
 }
 
@@ -93,18 +92,6 @@ pub(super) async fn dispatch(
             })
             .await
             .map_err(|error| error.to_string())?
-        }
-        crate::host::platform::SYSTEM_MOUNT_FACTS => {
-            let core = core.clone();
-            tokio::task::spawn_blocking(move || {
-                    let mounts = plain_rs::platform::linux::mounts::list::list_mounts(core.preferences()?);
-                    Ok(serde_json::Value::Array(mounts.into_iter().map(|mount| serde_json::json!({
-                        "id":mount.id,"name":mount.name,"path":mount.path,"mountPoint":mount.mount_point,
-                        "fsType":mount.fs_type,"totalBytes":mount.total_bytes,"usedBytes":mount.used_bytes,
-                        "freeBytes":mount.free_bytes,"remote":mount.remote,"alias":mount.alias,"driveType":mount.drive_type,
-                        "diskId":mount.disk_id,"partitionNum":mount.partition_num,"label":mount.label,"uuid":mount.uuid,
-                    })).collect()))
-                }).await.map_err(|error|error.to_string())?
         }
         _ => Err(format!("Unsupported Linux host method: {method}")),
     }

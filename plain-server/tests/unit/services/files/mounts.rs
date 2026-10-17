@@ -45,3 +45,26 @@ fn remote_filesystems_are_case_insensitive() {
     assert!(!is_remote_filesystem("apfs"));
     assert!(!is_remote_filesystem("ext4"));
 }
+
+#[cfg(all(feature = "core", target_os = "linux"))]
+#[test]
+fn linux_mount_conversion_retains_partition_identity_and_nullable_metadata() {
+    let facts = linux_facts(plain_rs::platform::linux::mounts::list::Mount {
+        id: "part:disk:2".into(),
+        name: "Partition".into(),
+        partition_num: Some(2),
+        label: Some("Data".into()),
+        uuid: Some("volume-uuid".into()),
+        disk_id: Some("disk".into()),
+        total_bytes: 100,
+        ..Default::default()
+    });
+    assert_eq!(facts["id"], "part:disk:2");
+    assert_eq!(facts["partitionNum"], 2);
+    assert_eq!(facts["label"], "Data");
+    assert_eq!(facts["uuid"], "volume-uuid");
+    assert_eq!(facts["diskId"], "disk");
+    assert!(facts["path"].is_null());
+    assert!(facts["mountPoint"].is_null());
+    assert!(facts["usedBytes"].is_null());
+}

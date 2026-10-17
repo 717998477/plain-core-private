@@ -141,10 +141,12 @@ impl FilesQuery {
             items: list(&page, "items", file),
         })
     }
-    /// Volumes the platform reports. The host builds these because drive
-    /// enumeration is platform state; there is nothing to gate.
     async fn mounts(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Mount>> {
-        let facts = host_call(ctx, crate::host::platform::SYSTEM_MOUNT_FACTS, json!({})).await?;
+        let facts = ctx
+            .data::<Arc<crate::services::files::platform::FilePlatform>>()?
+            .mounts(prefs(ctx).clone())
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         Ok(rows(&facts, mount))
     }
 
@@ -474,16 +476,30 @@ fn file(item: &Value) -> File {
 
 fn mount(item: &Value) -> Mount {
     Mount {
-        id: async_graphql::ID(format!("path:{}", text(item, "path"))),
+        id: async_graphql::ID(
+            item.get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("path:{}", text(item, "path"))),
+        ),
         name: text(item, "name"),
         path: text(item, "path"),
-        mount_point: text(item, "path"),
+        mount_point: item
+            .get("mountPoint")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| item.get("path").and_then(Value::as_str).unwrap_or_default())
+            .to_owned(),
         fs_type: text(item, "fsType"),
         total_bytes: Long(integer(item, "totalBytes")),
         used_bytes: Long(
-            integer(item, "totalBytes")
-                .saturating_sub(integer(item, "freeBytes"))
-                .max(0),
+            item.get("usedBytes")
+                .and_then(Value::as_i64)
+                .unwrap_or_else(|| {
+                    integer(item, "totalBytes")
+                        .saturating_sub(integer(item, "freeBytes"))
+                        .max(0)
+                }),
         ),
         free_bytes: Long(integer(item, "freeBytes")),
         remote: flag(item, "remote"),

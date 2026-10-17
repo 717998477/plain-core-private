@@ -140,11 +140,6 @@ enum MergeTaskStatus {
 	FAILED
 }
 
-"""
-A mounted volume. The phone reports one row per storage the platform
-knows about (internal, SD card, each USB disk, the app-private dir);
-the fields are all filled by the host, never derived here.
-"""
 type Mount {
 	id: ID!
 	name: String!
@@ -291,10 +286,6 @@ extend type Query {
 	client sees before it calls `mergeChunks`.
 	"""
 	mergeStatus(fileId: String!): MergeTask!
-	"""
-	Volumes the platform reports. The host builds these because drive
-	enumeration is platform state; there is nothing to gate.
-	"""
 	mounts: [Mount!]!
 	"""
 	A total predicate, never an error: a blank path, `"."`, a missing

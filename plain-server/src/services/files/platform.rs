@@ -59,6 +59,22 @@ impl FilePlatform {
         }
     }
 
+    pub(crate) async fn mounts(
+        &self,
+        prefs: Arc<plain_rs::prefs::Prefs>,
+    ) -> Result<serde_json::Value> {
+        if self.uses_sdk() {
+            return self
+                .host
+                .call(crate::host::platform::SYSTEM_MOUNT_FACTS, json!({}))
+                .await
+                .map_err(anyhow::Error::msg);
+        }
+        tokio::task::spawn_blocking(move || super::mounts::native_facts(&prefs))
+            .await?
+            .map_err(anyhow::Error::msg)
+    }
+
     pub(crate) fn resolve_reference(&self, path: &str) -> Result<String> {
         super::references::resolve(self.db.clone(), self.directory.clone(), path)
     }

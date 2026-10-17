@@ -49,8 +49,32 @@ pub fn list() -> Vec<MountFacts> {
         .collect()
 }
 
-pub fn facts() -> Result<serde_json::Value, String> {
-    serde_json::to_value(list()).map_err(|error| error.to_string())
+#[cfg(feature = "core")]
+pub(crate) fn native_facts(prefs: &plain_rs::prefs::Prefs) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        Ok(serde_json::Value::Array(
+            plain_rs::platform::linux::mounts::list::list_mounts(prefs)
+                .into_iter()
+                .map(linux_facts)
+                .collect(),
+        ))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = prefs;
+        serde_json::to_value(list()).map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(all(feature = "core", target_os = "linux"))]
+fn linux_facts(mount: plain_rs::platform::linux::mounts::list::Mount) -> serde_json::Value {
+    serde_json::json!({
+        "id":mount.id,"name":mount.name,"path":mount.path,"mountPoint":mount.mount_point,
+        "fsType":mount.fs_type,"totalBytes":mount.total_bytes,"usedBytes":mount.used_bytes,
+        "freeBytes":mount.free_bytes,"remote":mount.remote,"alias":mount.alias,"driveType":mount.drive_type,
+        "diskId":mount.disk_id,"partitionNum":mount.partition_num,"label":mount.label,"uuid":mount.uuid,
+    })
 }
 
 pub(crate) fn should_include_mount(mount_point: &str) -> bool {
