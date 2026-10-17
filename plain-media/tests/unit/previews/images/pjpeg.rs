@@ -11,7 +11,8 @@ fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(&p).unwrap_or_else(|_| panic!("missing fixture {}", p.display()))
 }
 
-/// Reference: jpeg-decoder decoding the same bytes at 1/8 scale.
+/// Reference: jpeg-decoder's platform-independent scalar decode at 1/8 scale.
+/// The dev-only feature avoids CPU-specific SIMD rounding without weakening parity.
 fn reference_1_8(data: &[u8]) -> Bitmap {
     let mut dec = jpeg_decoder::Decoder::new(std::io::Cursor::new(data));
     dec.read_info().unwrap();
@@ -40,7 +41,7 @@ fn assert_same(a: &Bitmap, b: &Bitmap, ctx: &str) {
     );
     let (da, _, _) = a.raw();
     let (db, _, _) = b.raw();
-    // The kernels mirror jpeg-decoder's integer math exactly; measured
+    // The kernels mirror jpeg-decoder's scalar integer math exactly; measured
     // byte-identical on all fixtures. Allow nothing.
     assert!(
         da == db,
