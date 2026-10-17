@@ -4,7 +4,7 @@ use crate::services::files::catalog::MediaCatalog;
 use crate::services::images::models::Runtime;
 
 use plain_rs::enums::DataType;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashSet;
 
 fn enabled(models: &Runtime, text: &str) -> bool {
@@ -33,6 +33,27 @@ async fn filename_rows(
         .await
 }
 
+async fn semantic_rows(
+    catalog: &MediaCatalog,
+    models: &Runtime,
+    text: &str,
+    query: &str,
+) -> Result<Vec<Value>, String> {
+    let ids = models
+        .search(text, 50)
+        .await?
+        .into_iter()
+        .map(|row| row.image_id)
+        .collect::<Vec<_>>();
+    let mut rows = catalog.image_search_matches(query, &ids).await?;
+    rows.sort_by_key(|row| {
+        ids.iter()
+            .position(|id| Some(id.as_str()) == row["id"].as_str())
+            .unwrap_or(usize::MAX)
+    });
+    Ok(rows)
+}
+
 pub(crate) async fn rows(
     catalog: &MediaCatalog,
     models: &Runtime,
@@ -49,7 +70,7 @@ pub(crate) async fn rows(
     if !enabled(models, text) {
         return filename_rows(catalog, query, offset, limit, sort).await;
     }
-    let semantic = models.search(text, 50).await?;
+    let semantic = semantic_rows(catalog, models, text, query).await?;
     let mut items = filename_rows(catalog, query, 0, i32::MAX, sort).await?;
     let ids = items
         .iter()
@@ -57,20 +78,9 @@ pub(crate) async fn rows(
         .collect::<HashSet<_>>();
     let extra = semantic
         .into_iter()
-        .map(|row| row.image_id)
-        .filter(|id| !ids.contains(id.as_str()))
+        .filter(|row| row["id"].as_str().is_some_and(|id| !ids.contains(id)))
         .collect::<Vec<_>>();
-    if !extra.is_empty() {
-        let query = format!("ids:{} trash:false", extra.join(","));
-        let mut found = filename_rows(catalog, &query, 0, extra.len() as i32, sort).await?;
-        found.sort_by_key(|row| {
-            extra
-                .iter()
-                .position(|id| Some(id.as_str()) == row["id"].as_str())
-                .unwrap_or(usize::MAX)
-        });
-        items.extend(found);
-    }
+    items.extend(extra);
     Ok(items
         .into_iter()
         .skip(offset as usize)
@@ -90,9 +100,14 @@ pub(crate) async fn count(
             .await
             .and_then(|count| i32::try_from(count).map_err(|error| error.to_string()));
     }
-    let semantic = models.search(text, 50).await?;
+    let semantic = semantic_rows(catalog, models, text, query).await?;
     let ids = catalog.ids(DataType::Image, query, false).await?;
     let mut ids = ids.into_iter().collect::<HashSet<_>>();
-    ids.extend(semantic.into_iter().map(|row| row.image_id));
+    ids.extend(
+        semantic
+            .iter()
+            .filter_map(|row| row["id"].as_str())
+            .map(str::to_owned),
+    );
     i32::try_from(ids.len()).map_err(|e| e.to_string())
 }

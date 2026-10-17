@@ -139,3 +139,70 @@ fn sampled_media_revisions_are_canonical_and_reject_malformed_volumes() {
         assert!(page.validate().is_err());
     }
 }
+
+#[tokio::test]
+async fn semantic_image_candidates_intersect_platform_ids_and_keep_non_text_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Db::open(&dir.path().join("data.db")).unwrap());
+    let tag = plain_rs::tags::create_tag(&db, DataType::Image.kind(), "selected").unwrap();
+    plain_rs::tags::add_relations(&db, &[(tag.id.clone(), "2".into())]).unwrap();
+    let host = Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    let replies = host.clone();
+    let worker = tokio::spawn(async move {
+        for _ in 0..2 {
+            let request = requests.recv().await.unwrap();
+            assert_eq!(request["method"], "systemMediaRows");
+            let params = &request["params"];
+            assert_eq!(params["dataType"], "IMAGE");
+            assert_eq!(params["sortBy"], "NAME_ASC");
+            assert_eq!(params["limit"], 1);
+            assert_eq!(params["offset"], 0);
+            assert!(params.get("query").is_none());
+            assert_eq!(params["plan"]["idsColumn"], "_id");
+            assert_eq!(params["plan"]["ids"], json!(["2"]));
+            assert_eq!(params["plan"]["trash"], true);
+            assert_eq!(
+                params["plan"]["clauses"],
+                json!(["bucket_id = ?", "_size > ?"])
+            );
+            assert_eq!(params["plan"]["args"], json!(["summer albums", "100"]));
+            replies
+                .reply(
+                    generation,
+                    json!({"id":request["id"],"result":[{"id":"2"}]}),
+                )
+                .unwrap();
+        }
+    });
+    let catalog = MediaCatalog::Platform { db, host };
+    let candidates = ["2", "3", "2"].map(str::to_owned);
+    for selection in ["ids:1,2".to_owned(), format!("tag_id:{}", tag.id)] {
+        let query = format!(
+            "text:\"red cats\" {selection} bucket_id:\"summer albums\" size:>100 trash:true"
+        );
+        assert_eq!(
+            catalog
+                .image_search_matches(&query, &candidates)
+                .await
+                .unwrap(),
+            vec![json!({"id":"2"})]
+        );
+    }
+    worker.await.unwrap();
+    for query in ["text:cat ids:", "text:cat ids:9", "text:cat tag_id:missing"] {
+        assert!(
+            catalog
+                .image_search_matches(query, &candidates)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(
+        catalog
+            .image_search_matches("text:cat unsupported:value", &candidates)
+            .await
+            .is_err()
+    );
+}

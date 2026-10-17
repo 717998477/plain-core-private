@@ -30,6 +30,14 @@ fn selection_with_trash(
         None,
         text.is_empty(),
     )?;
+    Ok(selection_from_plan(data_type, plan, from_trash))
+}
+
+fn selection_from_plan(
+    data_type: DataType,
+    plan: query::Plan,
+    from_trash: bool,
+) -> (String, Vec<Value>) {
     let mut args = vec![
         Value::Integer(i64::from(data_type.kind())),
         Value::Integer(i64::from(from_trash || plan.trash.unwrap_or(false))),
@@ -46,13 +54,13 @@ fn selection_with_trash(
         }
     }
     let sql = "WITH selected AS (SELECT *,id AS _id,path AS _data,file_name AS _display_name,size_bytes AS _size FROM media_items WHERE data_type=?)";
-    Ok((
+    (
         format!(
             "{sql} SELECT {{columns}} FROM selected WHERE {}",
             clauses.join(" AND ")
         ),
         args,
-    ))
+    )
 }
 
 pub(crate) fn rows(
@@ -63,7 +71,42 @@ pub(crate) fn rows(
     limit: u32,
     offset: u32,
 ) -> Result<Vec<MediaFileRow>> {
-    let (sql, mut args) = selection(db, data_type, query)?;
+    selected_rows(
+        db,
+        data_type,
+        selection(db, data_type, query)?,
+        sort,
+        limit,
+        offset,
+    )
+}
+
+pub(crate) fn rows_with_plan(
+    db: &Db,
+    data_type: DataType,
+    plan: query::Plan,
+    sort: FileSortBy,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<MediaFileRow>> {
+    selected_rows(
+        db,
+        data_type,
+        selection_from_plan(data_type, plan, false),
+        sort,
+        limit,
+        offset,
+    )
+}
+
+fn selected_rows(
+    db: &Db,
+    data_type: DataType,
+    (sql, mut args): (String, Vec<Value>),
+    sort: FileSortBy,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<MediaFileRow>> {
     let order = match sort {
         FileSortBy::DateAsc => "updated_at ASC,id",
         FileSortBy::DateDesc => "updated_at DESC,id",
