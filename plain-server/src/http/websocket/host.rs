@@ -212,7 +212,8 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
             },
             event = receiver.recv(), if registered => {
                 let event = match event { Ok(event) => event, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { let _ = socket.send(close(1013,"slow_client")).await; break; }, Err(_) => break };
-                if event.is_internal() || event.target_cid.as_ref().is_some_and(|cid| cid != &params.cid) { continue; }
+                if event.target_cid.as_ref().is_some_and(|cid| cid != &params.cid) { continue; }
+                let Some(event) = event.into_public() else { continue; };
                 if !enabled(&state) { break; }
                 // Same key the inbound frames used: the shell holds no session.
                 let Some(key) = crate::services::sessions::local_key(&state, &params.cid)

@@ -5,6 +5,7 @@ pub const HTTP_SERVER_STARTED: &str = "HTTP_SERVER_STARTED";
 pub const HTTP_SERVER_FAILED: &str = "HTTP_SERVER_FAILED";
 pub const MEDIA_SCAN_PROGRESS: &str = "MEDIA_SCAN_PROGRESS";
 pub const MEDIA_ACTION_FINISHED: &str = "MEDIA_ACTION_FINISHED";
+pub const WS_PAIRING_SUCCESS: &str = "PAIRING_SUCCESS";
 
 #[derive(Clone, Debug)]
 pub struct WsEvent {
@@ -46,6 +47,36 @@ pub const HOST_TEXT_TYPES: &[&str] = &[
 pub const HOST_BINARY_TYPES: &[&str] = &["SCREEN_MIRROR_VIDEO", "SCREEN_MIRROR_AUDIO"];
 
 impl WsEvent {
+    pub fn into_public(self) -> Option<Self> {
+        if self.is_internal() {
+            return None;
+        }
+        if self.event_type != WS_PAIRING_SUCCESS {
+            return Some(self);
+        }
+        #[cfg(feature = "chat")]
+        {
+            let mut event = self;
+            if event.binary_payload.is_some() {
+                return None;
+            }
+            #[derive(serde::Deserialize, serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
+            struct PublicPairingSuccess {
+                device_id: String,
+                device_name: String,
+                ip: String,
+            }
+            let payload: PublicPairingSuccess = serde_json::from_str(&event.payload).ok()?;
+            event.payload = serde_json::to_string(&payload).ok()?;
+            Some(event)
+        }
+        #[cfg(not(feature = "chat"))]
+        {
+            None
+        }
+    }
+
     pub fn is_internal(&self) -> bool {
         matches!(
             self.event_type,
@@ -134,3 +165,7 @@ pub const WS_BOOKMARK_UPDATED: &'static str = "BOOKMARK_UPDATED";
 pub const WS_POMODORO_ACTION: &'static str = "POMODORO_ACTION";
 
 pub const WS_IMAGE_EDITOR_UPDATE: &'static str = "IMAGE_EDITOR_UPDATE";
+
+#[cfg(test)]
+#[path = "../tests/unit/events.rs"]
+mod tests;

@@ -15,7 +15,7 @@ pub const WS_CHANNELS_UPDATED: &'static str = "CHANNELS_UPDATED";
 pub const WS_PEER_UPDATED: &'static str = "PEER_UPDATED";
 pub const WS_PEER_STATUS_UPDATED: &'static str = "PEER_STATUS_UPDATED";
 pub const WS_PAIRING_REQUEST_RECEIVED: &'static str = "PAIRING_REQUEST_RECEIVED";
-pub const WS_PAIRING_SUCCESS: &'static str = "PAIRING_SUCCESS";
+pub use crate::events::WS_PAIRING_SUCCESS;
 pub const WS_PAIRING_CANCELLED: &'static str = "PAIRING_CANCELED";
 pub const WS_PAIRING_STARTED: &'static str = "PAIRING_STARTED";
 pub const WS_PAIRING_FAILED: &'static str = "PAIRING_FAILED";

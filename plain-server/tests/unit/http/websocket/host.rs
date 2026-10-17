@@ -348,6 +348,117 @@ async fn native_event_socket_registers_without_a_session_and_encrypts_events_wit
     core.shutdown().await;
 }
 
+#[cfg(feature = "http_transport")]
+#[tokio::test]
+async fn pairing_success_keeps_native_credentials_out_of_every_network_event_socket() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+    let (_directory, core) = public_fixture();
+    let state = core.runtime_state();
+    let native = core.native_graphql().unwrap();
+    let mut native_events = native.subscribe_events();
+    let session =
+        crate::services::sessions::create(&state, "Pairing event fixture".into()).unwrap();
+    let clients = [
+        (session.client_id, plain_rs::base64_decode(&session.token)),
+        (
+            state.native_client_id().unwrap(),
+            plain_rs::base64_decode(&core.native_url_token().unwrap()),
+        ),
+    ];
+    let mut sockets = Vec::new();
+    for (id, key) in clients {
+        let mut events = state.events.subscribe();
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid={id}", core.port))
+                .await
+                .unwrap();
+        let frame = plain_rs::crypto::xchacha_encrypt_raw(
+            &key,
+            chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
+        )
+        .unwrap();
+        socket
+            .send(ClientMessage::Binary(frame.into()))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if events.recv().await.unwrap().event_type == "WEB_SOCKET_REGISTERED" {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(state.main_ws.snapshot().contains(&id));
+        sockets.push((socket, key));
+    }
+    let key = plain_rs::base64_encode(&[19; 32]);
+    crate::services::discovery::pairing_runtime::success(
+        &state,
+        &json!({"id":"paired-peer","name":"Device","key":key}),
+        "192.0.2.1",
+    );
+    let event = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let event = native_events.recv().await.unwrap();
+            if event.event_type == plain_rs::events::WS_PAIRING_SUCCESS {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&event.payload).unwrap()["key"],
+        key
+    );
+    for (socket, session_key) in &mut sockets {
+        let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let ClientMessage::Binary(frame) = message else {
+            panic!("Expected encrypted pairing event")
+        };
+        let (kind, payload) = plain_rs::protocols::websocket::decode(&frame, session_key).unwrap();
+        assert_eq!(kind, plain_rs::events::WS_PAIRING_SUCCESS);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&payload).unwrap(),
+            json!({"deviceId":"paired-peer","deviceName":"Device","ip":"192.0.2.1"})
+        );
+    }
+    for event in [
+        WsEvent::broadcast(plain_rs::events::WS_PAIRING_SUCCESS, "not json".into()),
+        WsEvent::broadcast_binary(plain_rs::events::WS_PAIRING_SUCCESS, key.into_bytes()),
+        WsEvent::broadcast("WEB_LOGIN_REQUESTED", "private".into()),
+        WsEvent::broadcast("CONTENT_CHANGED", json!({"probe":true}).to_string()),
+    ] {
+        state.events.send(event).unwrap();
+    }
+    for (mut socket, session_key) in sockets {
+        let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let ClientMessage::Binary(frame) = message else {
+            panic!("Expected encrypted content event")
+        };
+        let (kind, payload) = plain_rs::protocols::websocket::decode(&frame, &session_key).unwrap();
+        assert_eq!(kind, "CONTENT_CHANGED");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&payload).unwrap(),
+            json!({"probe":true})
+        );
+        socket.close(None).await.unwrap();
+    }
+    core.shutdown().await;
+}
+
 async fn confirm_login(
     server: &crate::assembly::server::ContentServer,
     id: &str,
