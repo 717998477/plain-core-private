@@ -228,10 +228,25 @@ impl Outgoing {
             "Identity changed"
         );
         let keypair = crate::services::peers::peer_wire::signing_keypair(&state.prefs)?;
+        let challenge = tokio::time::timeout(Duration::from_secs(10), async {
+            match socket.next().await {
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                    let value: serde_json::Value = serde_json::from_str(&text)?;
+                    let challenge = value
+                        .get("challenge")
+                        .and_then(|value| value.as_str())
+                        .ok_or_else(|| anyhow::anyhow!("Status challenge missing"))?;
+                    Ok::<_, anyhow::Error>(challenge.to_owned())
+                }
+                _ => Err(anyhow::anyhow!("Status challenge missing")),
+            }
+        })
+        .await??;
         let body = handshake(
             &plain_rs::utils::base64::base64_decode(&peer.key),
             &keypair,
             &actor,
+            &challenge,
         )?;
         tokio::time::timeout(
             Duration::from_secs(5),

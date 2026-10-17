@@ -78,8 +78,8 @@ fn signature_payload_for(
 pub fn signature_payload(timestamp: i64, channel_id: &str, content: &str) -> String {
     signature_payload_for(Purpose::Graphql, timestamp, channel_id, content)
 }
-pub(crate) fn status_signature_payload(timestamp: i64, client_id: &str) -> String {
-    signature_payload_for(Purpose::Status, timestamp, "", client_id)
+pub(crate) fn status_signature_payload(timestamp: i64, content: &str) -> String {
+    signature_payload_for(Purpose::Status, timestamp, "", content)
 }
 fn decrypt(
     key: &[u8],

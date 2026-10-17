@@ -43,30 +43,50 @@ async fn public_status_auth_scoped_connections_key_rotation_and_stop_use_rust_wi
         let state = server.runtime_state();
         state.peer_status.snapshot(&state.db)
     }
-    fn wire(key: &[u8], kp: &[u8], id: &str) -> Vec<u8> {
-        plain_rs::peers::status::handshake(key, kp, id).unwrap()
+    async fn wire(
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        key: &[u8],
+        kp: &[u8],
+        id: &str,
+    ) -> Vec<u8> {
+        let text = socket.next().await.unwrap().unwrap().into_text().unwrap();
+        let challenge: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let body = plain_rs::peers::status::handshake(
+            key,
+            kp,
+            id,
+            challenge["challenge"].as_str().unwrap(),
+        )
+        .unwrap();
+        socket
+            .send(Message::Binary(body.clone().into()))
+            .await
+            .unwrap();
+        body
     }
     let url = format!("ws://127.0.0.1:{http}/status?cid=peer");
     let (mut bad, _) = connect_async(&url).await.unwrap();
-    bad.send(Message::Binary(wire(&key, &kp, "other").into()))
-        .await
-        .unwrap();
+    wire(&mut bad, &key, &kp, "other").await;
     assert!(!matches!(bad.next().await,Some(Ok(Message::Text(t))) if t=="ok"));
     assert_eq!(snapshot(&server)["online"], json!([]));
     let (mut first, _) = connect_async(&url).await.unwrap();
-    first
-        .send(Message::Binary(wire(&key, &kp, "peer").into()))
-        .await
-        .unwrap();
+    let original = wire(&mut first, &key, &kp, "peer").await;
     assert_eq!(
         first.next().await.unwrap().unwrap().into_text().unwrap(),
         "ok"
     );
+    let (mut replay, _) = connect_async(&url).await.unwrap();
+    let challenge = replay.next().await.unwrap().unwrap().into_text().unwrap();
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&challenge).unwrap()["challenge"].is_string()
+    );
+    replay.send(Message::Binary(original.into())).await.unwrap();
+    assert!(!matches!(replay.next().await, Some(Ok(Message::Text(t))) if t == "ok"));
+    assert_eq!(snapshot(&server)["online"], json!(["peer"]));
     let (mut second, _) = connect_async(&url).await.unwrap();
-    second
-        .send(Message::Binary(wire(&key, &kp, "peer").into()))
-        .await
-        .unwrap();
+    wire(&mut second, &key, &kp, "peer").await;
     assert_eq!(
         second.next().await.unwrap().unwrap().into_text().unwrap(),
         "ok"
@@ -80,10 +100,7 @@ async fn public_status_auth_scoped_connections_key_rotation_and_stop_use_rust_wi
     peers::save(&db, &[peer], SaveMode::Update).unwrap();
     assert_eq!(snapshot(&server)["online"], json!([]));
     let (mut replacement, _) = connect_async(&url).await.unwrap();
-    replacement
-        .send(Message::Binary(wire(&new_key, &new_kp, "peer").into()))
-        .await
-        .unwrap();
+    wire(&mut replacement, &new_key, &new_kp, "peer").await;
     assert_eq!(
         replacement
             .next()

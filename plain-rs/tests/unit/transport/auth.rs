@@ -266,7 +266,8 @@ fn signed_context_rejects_reencrypted_cross_channel_direct_and_legacy_frames() {
 fn status_handshake_and_graphql_signatures_cannot_cross_protocols() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     let (peer, key, kp) = seed_paired_peer(&db);
-    let body = crate::peers::status::handshake(&key, &kp, &peer).unwrap();
+    let body = crate::peers::status::handshake(&key, &kp, &peer, &uuid::Uuid::new_v4().to_string())
+        .unwrap();
     assert!(authenticate_status(&db, &peer, &body).is_ok());
     assert!(matches!(
         authenticate(&db, &peer, "", &body),

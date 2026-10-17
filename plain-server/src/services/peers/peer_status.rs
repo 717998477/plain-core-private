@@ -102,10 +102,14 @@ async fn connected(
     let authenticated = tokio::select! {
         _=stop.changed()=>None,
         _=public_stop.changed()=>None,
-        frame=tokio::time::timeout(Duration::from_secs(10),socket.recv())=>match frame {
-            Ok(Some(Ok(Message::Binary(body))))=>state.peer_status.connections.open(&state.db,&id,&body).ok(),
-            _=>None,
-        }
+        authenticated=tokio::time::timeout(Duration::from_secs(10), async {
+            let challenge = uuid::Uuid::new_v4().to_string();
+            socket.send(Message::Text(json!({"challenge": challenge}).to_string().into())).await.ok()?;
+            match socket.recv().await {
+                Some(Ok(Message::Binary(body))) => state.peer_status.connections.open(&state.db, &id, &challenge, &body).ok(),
+                _ => None,
+            }
+        }) => authenticated.ok().flatten(),
     };
     let Some((lease, changed)) = authenticated else {
         let _ = socket.close().await;

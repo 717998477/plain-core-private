@@ -10,6 +10,13 @@ struct State {
     connections: HashMap<String, DPeer>,
     hints: HashMap<String, DPeer>,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Proof {
+    client_id: String,
+    challenge: String,
+}
+
 pub struct Connections {
     id: String,
     state: Mutex<State>,
@@ -27,11 +34,12 @@ impl Default for Connections {
     }
 }
 impl Connections {
-    pub fn open(&self, db: &Db, id: &str, body: &[u8]) -> Result<(String, bool)> {
+    pub fn open(&self, db: &Db, id: &str, challenge: &str, body: &[u8]) -> Result<(String, bool)> {
         let authenticated = peer_auth::authenticate_status(db, id, body)
             .map_err(|e| anyhow::anyhow!(e.reason()))?;
-        if authenticated.graphql_json != id {
-            bail!("Status identity does not match peer");
+        let proof: Proof = serde_json::from_str(&authenticated.graphql_json)?;
+        if proof.client_id != id || proof.challenge != challenge {
+            bail!("Status proof does not match connection");
         }
         self.admit(db, authenticated.peer)
     }
@@ -153,21 +161,27 @@ impl Connections {
     }
 }
 
-pub fn handshake(key: &[u8], keypair: &[u8], client_id: &str) -> Result<Vec<u8>> {
+pub fn handshake(key: &[u8], keypair: &[u8], client_id: &str, challenge: &str) -> Result<Vec<u8>> {
     if client_id.is_empty() {
         bail!("Missing client identity");
     }
+    uuid::Uuid::parse_str(challenge)?;
+    let content = serde_json::to_string(&Proof {
+        client_id: client_id.to_owned(),
+        challenge: challenge.to_owned(),
+    })?;
     let timestamp = chrono::Utc::now().timestamp_millis();
     let signature = crate::ed25519_sign(
         keypair,
-        peer_auth::status_signature_payload(timestamp, client_id).as_bytes(),
+        peer_auth::status_signature_payload(timestamp, &content).as_bytes(),
     );
     if signature.is_empty() {
         bail!("Invalid signing identity");
     }
-    crate::xchacha_encrypt_raw(
-        key,
-        format!("{signature}|{timestamp}|{client_id}").as_bytes(),
-    )
-    .ok_or_else(|| anyhow::anyhow!("Invalid peer key"))
+    crate::xchacha_encrypt_raw(key, format!("{signature}|{timestamp}|{content}").as_bytes())
+        .ok_or_else(|| anyhow::anyhow!("Invalid peer key"))
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/peers/status.rs"]
+mod tests;
