@@ -416,21 +416,6 @@ pub struct DeviceMutation;
 
 #[Object]
 impl DeviceMutation {
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn create_crash_report(
-        &self,
-        ctx: &Context<'_>,
-        report: String,
-    ) -> async_graphql::Result<String> {
-        crate::services::crash_reports::write(
-            ctx.data::<crate::assembly::services::Services>()?,
-            ctx.data::<Arc<Host>>()?,
-            report,
-        )
-        .await
-        .map_err(async_graphql::Error::new)
-    }
-
     async fn clear_app_logs(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
         ctx.data::<crate::assembly::services::Services>()?
             .logs
@@ -438,43 +423,6 @@ impl DeviceMutation {
             .await
             .map_err(async_graphql::Error::new)?;
         Ok(true)
-    }
-
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn stage_app_restore(
-        &self,
-        ctx: &Context<'_>,
-        path: String,
-    ) -> async_graphql::Result<bool> {
-        let state = ctx.data::<crate::assembly::server::ServerState>()?;
-        let services = ctx.data::<crate::assembly::services::Services>()?;
-        let path = services.file_platform.resolve_reference(&path)?;
-        crate::services::backups::restore::stage(
-            path,
-            state.directory.clone(),
-            state.cache.root().to_owned(),
-            services.resources.clone(),
-            state.stop.clone(),
-        )
-        .await
-        .map_err(async_graphql::Error::new)?;
-        Ok(true)
-    }
-
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn export_app_backup(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
-        let state = ctx.data::<crate::assembly::server::ServerState>()?;
-        let services = ctx.data::<crate::assembly::services::Services>()?;
-        crate::services::backups::export(
-            state.db.clone(),
-            state.prefs.clone(),
-            services.store.clone(),
-            state.directory.clone(),
-            state.cache.root().to_owned(),
-            state.stop.clone(),
-        )
-        .await
-        .map_err(async_graphql::Error::new)
     }
 
     async fn export_app_logs(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<String>> {

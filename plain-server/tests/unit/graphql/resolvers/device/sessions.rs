@@ -162,19 +162,15 @@ async fn only_the_local_owner_can_mint_custom_session_credentials() {
     )
     .await;
     assert_eq!(remote.errors.len(), 1);
-    assert_eq!(remote.errors[0].message, "no_permission");
+    assert!(remote.errors[0].message.contains("createSession"));
     assert_eq!(state.db.session_list().unwrap().len(), before);
-    let local = execute(
-        &state,
-        "native",
-        RequestOrigin::Local,
-        "mutation { createSession(name:\"Owned custom credential\") { clientId token } }",
-    )
-    .await;
-    assert!(local.errors.is_empty(), "{:?}", local.errors);
-    let value = local.data.into_json().unwrap();
-    let id = value["createSession"]["clientId"].as_str().unwrap();
-    let token = value["createSession"]["token"].as_str().unwrap();
+    let created = core
+        .native_management()
+        .unwrap()
+        .create_session("Owned custom credential".into())
+        .unwrap();
+    let id = created.client_id.as_str();
+    let token = created.token.as_str();
     assert_eq!(plain_rs::utils::base64::base64_decode(token).len(), 32);
     assert_eq!(state.db.session_get(id).unwrap().unwrap().token, token);
     assert_eq!(state.db.session_list().unwrap().len(), before + 1);

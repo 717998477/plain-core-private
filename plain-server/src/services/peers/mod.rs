@@ -47,3 +47,9 @@ pub(crate) mod shared_transfer;
 
 #[cfg(feature = "core")]
 pub(crate) mod aware;
+
+#[cfg(feature = "core")]
+pub(crate) mod management;
+
+#[cfg(feature = "core")]
+mod management_wire;

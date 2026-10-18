@@ -3,7 +3,26 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
 pub fn generate(root: &Path, output: &Path, required: bool) -> io::Result<()> {
+    generate_assets(root, output, required, None)
+}
+
+pub fn generate_with_icons(
+    root: &Path,
+    icons: &Path,
+    output: &Path,
+    required: bool,
+) -> io::Result<()> {
+    generate_assets(root, output, required, Some(icons))
+}
+
+fn generate_assets(
+    root: &Path,
+    output: &Path,
+    required: bool,
+    icons: Option<&Path>,
+) -> io::Result<()> {
     println!("cargo:rerun-if-changed={}", root.display());
     let mut files = Vec::new();
     match fs::symlink_metadata(root) {
@@ -23,6 +42,32 @@ pub fn generate(root: &Path, output: &Path, required: bool) -> io::Result<()> {
                 return Err(io::Error::other("Web bundle requires index.html"));
             }
         }
+    }
+    if let Some(icons) = icons {
+        if !fs::symlink_metadata(icons)?.file_type().is_dir() {
+            return Err(io::Error::other("File icons must be a regular directory"));
+        }
+        println!("cargo:rerun-if-changed={}", icons.display());
+        let mut canonical = Vec::new();
+        collect(icons, icons, &mut canonical)?;
+        if !["default.svg", "folder.svg"]
+            .iter()
+            .all(|required| canonical.iter().any(|(name, _)| name == required))
+        {
+            return Err(io::Error::other("Core file icons are incomplete"));
+        }
+        if canonical
+            .iter()
+            .any(|(name, _)| name.contains('/') || !name.ends_with(".svg"))
+        {
+            return Err(io::Error::other("File icons must be SVG files"));
+        }
+        files.retain(|(name, _)| !name.starts_with("ficons/"));
+        files.extend(
+            canonical
+                .into_iter()
+                .map(|(name, path)| (format!("ficons/{name}"), path)),
+        );
     }
     files.sort();
     let entries = files

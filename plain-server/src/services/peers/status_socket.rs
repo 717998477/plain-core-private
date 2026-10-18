@@ -64,10 +64,31 @@ pub(crate) async fn connect(
 ) -> anyhow::Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
 > {
-    let config = config()?;
     let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(64 * 1024))
         .max_frame_size(Some(64 * 1024));
+    connect_with_config(url, ws_config).await
+}
+
+pub(crate) async fn connect_management(
+    url: &str,
+) -> anyhow::Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+> {
+    connect_with_config(
+        url,
+        tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default(),
+    )
+    .await
+}
+
+async fn connect_with_config(
+    url: &str,
+    ws_config: tokio_tungstenite::tungstenite::protocol::WebSocketConfig,
+) -> anyhow::Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+> {
+    let config = config()?;
     Ok(tokio_tungstenite::connect_async_tls_with_config(
         url,
         Some(ws_config),

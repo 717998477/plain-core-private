@@ -1,135 +1,19 @@
-type AppUpdateDownload {
-	coreId: ID!
-	taskId: ID!
-	revision: Long!
-	status: AppUpdateDownloadStatus!
-	progress: Int!
-	filePath: String!
-	error: String!
-}
-
-enum AppUpdateDownloadStatus {
-	IDLE
-	DOWNLOADING
-	COMPLETED
-	FAILED
-	CANCELLED
-}
-
-enum AppUpdateStatus {
-	AVAILABLE
-	UP_TO_DATE
-	RATE_LIMITED
-	NOT_DUE
-}
-
-type HttpServerState {
-	revision: Long!
-	restarting: Boolean!
-	httpPort: Int!
-	httpsPort: Int!
-	error: String!
-}
-
-type SystemSettings {
-	password: String!
-	passwordType: Int!
-	authTwoFactor: Boolean!
-	rotateUrlTokenOnRestart: Boolean!
-	adbToken: String!
-	updateInfo: JSON!
-	urlToken: String!
-	apiPermissions: [String!]!
-	onboardingCompleted: Boolean!
-	clientId: ID!
-	mdnsHostname: String!
-	signaturePublicKey: String!
-	appUpdateAvailable: Boolean!
-}
-
-type UserSettings {
-	httpPort: Int!
-	httpsPort: Int!
-	darkTheme: Int!
-	amoledDarkTheme: Boolean!
-	pdfFollowDarkTheme: Boolean!
-	keepAwake: Boolean!
-	locale: String!
-	service: Boolean!
-	desktopAccess: Boolean!
-	dlna: Boolean!
-	developerMode: Boolean!
-	allowAnyHost: Boolean!
-	deviceName: String!
-	https: Boolean!
-	webAddressBarExpanded: Boolean!
-	screenMirrorQuality: JSON!
-	audioPlayMode: Int!
-	audioPlaybackSpeed: Float!
-	imageGridCellsPerRow: Int!
-	videoGridCellsPerRow: Int!
-	showHiddenFiles: Boolean!
-	feedAutoRefresh: Boolean!
-	"""
-	Feed polling interval in seconds.
-	"""
-	feedAutoRefreshIntervalSec: Int!
-	feedAutoRefreshOnlyWifi: Boolean!
-	feedFontScale: Int!
-	editorWrapContent: Boolean!
-	editorFontSize: Int!
-	editorStatusBar: Boolean!
-	lastFilePath: JSON!
-	scanHistory: JSON!
-	audioPlaylist: JSON!
-	chatInputText: String!
-	nearbyDiscoverable: Boolean!
-	aiImageSearchEnabled: Boolean!
-	notificationFilter: JSON!
-	pomodoroSettings: JSON!
-	videoPlaylist: JSON!
-	homeFeatures: String!
-	quickNoteDraft: String!
-	launcherShortcuts: String!
-	recentSearches: JSON!
-	recentSaveDirs: JSON!
-	audioSortBy: Int!
-	videoSortBy: Int!
-	imageSortBy: Int!
-	docSortBy: Int!
-	fileSortBy: Int!
-	packageSortBy: Int!
-}
-
 extend type Mutation {
-	cancelAppUpdateDownload: AppUpdateDownload!
-	checkAppUpdate(automatic: Boolean! = false): AppUpdateStatus!
 	clearNotificationFilterApps: ActionResult!
-	importTlsCertificatePem(certificatePem: String!, privateKeyPem: String!): [Int!]!
-	importTlsCertificatePkcs12(data: String!, password: String!): [Int!]!
 	recordRecentSaveDirectory(path: String!): ActionResult!
 	recordRecentSearch(query: String!): ActionResult!
-	regenerateTlsCertificate: [Int!]!
 	removeRecentSearch(query: String!): ActionResult!
 	removeSystemPref(key: String!): ActionResult!
 	removeUserPref(key: String!): Boolean!
 	resetAdbToken: Boolean!
 	resetPassword: Boolean!
 	resetUrlToken: Boolean!
-	restartHttpServer(httpPort: Int, httpsPort: Int): HttpServerState!
 	setNotificationFilterMode(mode: String!): ActionResult!
 	setSystemPref(key: String!, value: JSON!): ActionResult!
 	setUserPref(key: String!, value: JSON!): Boolean!
-	startAppUpdateDownload: AppUpdateDownload!
-	toggleNotificationApp(packageName: String!): ActionResult!
 }
 
 extend type Query {
-	httpServer: HttpServerState!
-	systemPrefs: JSON!
-	systemSettings: SystemSettings!
 	tlsCertificateSignature: [Int!]!
 	userPrefs: JSON!
-	userSettings: UserSettings!
-	verifyAdbToken(token: String!): Boolean!
 }

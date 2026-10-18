@@ -46,7 +46,9 @@ async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_auth
     let worker = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = socket.next().await {
             let request: Value = serde_json::from_str(&text).unwrap();
-            let reply = if denied.load(std::sync::atomic::Ordering::SeqCst) {
+            let reply = if request["method"] == "systemCapabilities" {
+                json!({"id":request["id"],"result":[]})
+            } else if denied.load(std::sync::atomic::Ordering::SeqCst) {
                 json!({"id":request["id"],"error":"synthetic permission revoked"})
             } else {
                 match request["method"].as_str().unwrap() {
@@ -221,6 +223,7 @@ async fn media_move_case(missing_destination: bool) {
             let params = &request["params"];
             let result = match request["method"].as_str().unwrap() {
                 "fileTaskScan" => json!(true),
+                "systemCapabilities" => json!([]),
                 "systemPermissionFacts" => json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}}),
                 "fileTaskMediaSnapshot" => {
                     let rows = params["paths"].as_array().unwrap().iter().filter_map(|path| {

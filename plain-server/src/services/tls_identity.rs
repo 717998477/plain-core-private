@@ -247,3 +247,25 @@ pub(crate) fn config(
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     Ok(config)
 }
+
+#[cfg(feature = "core")]
+pub(crate) async fn server_action(
+    state: &crate::assembly::server::ServerState,
+    command: serde_json::Value,
+) -> Result<Vec<u8>, String> {
+    let identity = state
+        .tls_identity
+        .read()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let value = tokio::task::spawn_blocking(move || identity.action(&command.to_string()))
+        .await
+        .map_err(|error| error.to_string())??;
+    #[derive(serde::Deserialize)]
+    struct Signature {
+        signature: Vec<u8>,
+    }
+    serde_json::from_str::<Signature>(&value)
+        .map(|value| value.signature)
+        .map_err(|error| error.to_string())
+}

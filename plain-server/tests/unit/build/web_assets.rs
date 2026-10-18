@@ -68,3 +68,33 @@ fn generator_rejects_symbolic_links_to_external_files_and_directories() {
     std::os::unix::fs::symlink(&root, &alias).unwrap();
     assert!(generate(&alias, &output, true).is_err());
 }
+
+#[test]
+fn canonical_icons_override_generated_copies_and_survive_missing_optional_web_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let web = dir.path().join("web_dist");
+    let icons = dir.path().join("assets/ficons");
+    fs::create_dir_all(web.join("ficons")).unwrap();
+    fs::create_dir_all(&icons).unwrap();
+    fs::write(web.join("index.html"), b"shell").unwrap();
+    fs::write(web.join("ficons/default.svg"), b"stale").unwrap();
+    for name in ["default.svg", "folder.svg"] {
+        fs::write(icons.join(name), format!("<svg>{name}</svg>")).unwrap();
+    }
+    let output = dir.path().join("generated.rs");
+    generate_with_icons(&web, &icons, &output, true).unwrap();
+    let generated = fs::read_to_string(&output).unwrap();
+    assert_eq!(generated.matches("(\"ficons/default.svg\"").count(), 1);
+    assert!(!generated.contains(web.join("ficons/default.svg").to_str().unwrap()));
+    assert!(generated.contains(icons.join("default.svg").to_str().unwrap()));
+    fs::remove_dir_all(&web).unwrap();
+    generate_with_icons(&web, &icons, &output, false).unwrap();
+    let generated = fs::read_to_string(&output).unwrap();
+    assert_eq!(generated.matches("include_bytes!").count(), 2);
+    assert_eq!(
+        fs::read(icons.join("default.svg")).unwrap(),
+        b"<svg>default.svg</svg>"
+    );
+    fs::remove_file(icons.join("folder.svg")).unwrap();
+    assert!(generate_with_icons(&web, &icons, &output, false).is_err());
+}

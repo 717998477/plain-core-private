@@ -252,13 +252,31 @@ async fn native_requests_reply_and_replacement_cancel_pending_calls() {
     let host = server.runtime_state().host.clone();
     let call_host = host.clone();
     let task = tokio::spawn(async move { call_host.call("fixture", json!({})).await });
-    let request = bridge.next_request().await.unwrap();
+    let request = loop {
+        let request = bridge.next_request().await.unwrap();
+        if request["method"] == "fixture" {
+            break request;
+        }
+        assert_eq!(request["method"], "systemCapabilities");
+        bridge
+            .reply(json!({"id":request["id"],"result":[]}))
+            .unwrap();
+    };
     bridge
         .reply(json!({"id":request["id"],"result":42}))
         .unwrap();
     assert_eq!(task.await.unwrap().unwrap(), json!(42));
     let task = tokio::spawn(async move { host.call("fixture", json!({})).await });
-    bridge.next_request().await.unwrap();
+    loop {
+        let request = bridge.next_request().await.unwrap();
+        if request["method"] == "fixture" {
+            break;
+        }
+        assert_eq!(request["method"], "systemCapabilities");
+        bridge
+            .reply(json!({"id":request["id"],"result":[]}))
+            .unwrap();
+    }
     let replacement = server.host_events();
     assert!(task.await.unwrap().unwrap_err().contains("replaced"));
     assert!(

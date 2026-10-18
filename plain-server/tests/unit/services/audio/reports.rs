@@ -14,8 +14,13 @@ async fn completion_fact_dispatches_once_and_never_rebroadcasts_the_platform_eve
     .unwrap();
     let state = server.runtime_state();
     state.db.restore_audio_current().unwrap();
-    let playback = playback::prepare_track(&state.db, &AudioTrack::from_path_stem("one")).unwrap();
     let (generation, mut requests) = state.host.connect();
+    state
+        .audio
+        .run_playback(|db, _| playback::snapshot(db))
+        .await
+        .unwrap();
+    let playback = playback::prepare_track(&state.db, &AudioTrack::from_path_stem("one")).unwrap();
     let host = state.host.clone();
     let responder = tokio::spawn(async move {
         let request = requests.recv().await.unwrap();

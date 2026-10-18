@@ -19,6 +19,7 @@ pub(crate) struct ServerState {
     pub(crate) cache_changes: Arc<tokio::sync::RwLock<()>>,
     pub(crate) remote_cache: Arc<crate::services::files::remote_cache::RemoteCache>,
     pub(crate) logs: Arc<crate::services::logs::Logs>,
+    pub(crate) device: Arc<crate::services::device::Status>,
     pub(crate) browser: Arc<crate::services::files::browser::Runtime>,
     pub(crate) file_platform: Arc<crate::services::files::platform::FilePlatform>,
     pub(crate) feeds: Arc<crate::services::feeds::SyncService>,
@@ -41,6 +42,7 @@ pub(crate) struct ServerState {
     pub(crate) public: crate::graphql::schemas::public::PublicSchema,
     pub(crate) aware: Arc<crate::services::peers::aware::Runtime>,
     pub(crate) peer_status: Arc<crate::services::peers::peer_status::Runtime>,
+    pub(crate) management: Arc<crate::services::peers::management::Runtime>,
     pub(crate) mdns: Arc<crate::services::discovery::mdns_runtime::Runtime>,
     pub(crate) guest_replay: Arc<crate::http::auth::replay::Replay>,
     pub(crate) main_replay: Arc<crate::http::auth::replay::Replay>,
@@ -171,6 +173,13 @@ impl ContentServer {
             .release_native_scope(scope)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    pub fn native_management(&self) -> Result<crate::native::management::NativeManagement, String> {
+        self.state.native_client_id()?;
+        Ok(crate::native::management::NativeManagement::new(
+            self.state.clone(),
+        ))
     }
 
     pub fn native_graphql(&self) -> Result<crate::native::graphql::NativeGraphqlExecutor, String> {
@@ -418,6 +427,7 @@ impl ContentServer {
             cache: data_directory.cache_paths().clone(),
             _data_directory: data_directory,
             logs: services.logs.clone(),
+            device: services.device.clone(),
             file_platform: services.file_platform.clone(),
             browser: services.browser.clone(),
             cache_changes: Arc::new(tokio::sync::RwLock::new(())),
@@ -441,6 +451,7 @@ impl ContentServer {
             thumbnails: Arc::new(crate::services::images::thumbnails::Thumbnails::default()),
             aware: Arc::new(crate::services::peers::aware::Runtime::default()),
             peer_status: Arc::new(crate::services::peers::peer_status::Runtime::default()),
+            management: Arc::new(crate::services::peers::management::Runtime::default()),
             mdns: Arc::new(crate::services::discovery::mdns_runtime::Runtime::default()),
             peer_schema: crate::graphql::schemas::peer::schema(),
             guest_replay: Arc::new(crate::http::auth::replay::Replay::default()),
@@ -506,6 +517,10 @@ impl ContentServer {
         crate::services::chat::download_queue::start(state.clone());
         crate::services::peers::shared_batch::start(state.clone());
         crate::services::peers::aware::start(state.clone());
+        state
+            .management
+            .start(state.clone())
+            .map_err(|error| error.to_string())?;
         crate::services::discovery::pairing_timeout::start(
             state.pairing.clone(),
             state.events.clone(),
@@ -767,6 +782,7 @@ impl ContentServer {
             }
         }
         let _ = self.stop.send(true);
+        self.state.management.shutdown().await;
         let pomodoro_task = self.state.pomodoro_task.lock().take();
         if let Some(task) = pomodoro_task {
             if let Err(error) = task.await {

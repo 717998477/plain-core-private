@@ -29,7 +29,6 @@ type MdnsService {
 }
 
 type MdnsState {
-	activity: [MdnsActivity!]!
 	runtimeId: String!
 	packetsIn: [MdnsPacket!]!
 	packetsOut: [MdnsPacket!]!
@@ -42,6 +41,7 @@ type MdnsState {
 	debugSessionCount: Int!
 	capturing: Boolean!
 	services: [MdnsService!]!
+	activity: [MdnsActivity!]!
 }
 
 type NearbyDevice {

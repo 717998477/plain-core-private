@@ -74,10 +74,7 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Query",
         "settings",
-        resolvers::settings::updates::AppUpdateQuery,
-        resolvers::settings::http_server::HttpServerQuery,
         resolvers::settings::tls::TlsQuery,
-        resolvers::settings::state::PreferencesQuery,
         resolvers::settings::public::PrefsQuery
     );
     group!(
@@ -217,9 +214,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Mutation",
         "settings",
-        resolvers::settings::http_server::HttpServerMutation,
-        resolvers::settings::updates::AppUpdateMutation,
-        resolvers::settings::tls::TlsMutation,
         resolvers::settings::state::PreferencesMutation,
         resolvers::settings::public::PrefsMutation
     );

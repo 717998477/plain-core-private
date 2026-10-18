@@ -55,13 +55,13 @@ async fn reads_come_from_the_rust_store() {
     prefs.set("device_name", "Pixel").unwrap();
     prefs.set_user("recent_search", json!(["a", "b"])).unwrap();
 
-    let response = schema.execute(r#"query { systemPrefs userPrefs }"#).await;
+    let response = schema.execute(r#"query { userPrefs }"#).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["systemPrefs"]["device_name"], "Pixel");
+    assert_eq!(prefs.get::<String>("device_name").unwrap().unwrap(), "Pixel");
     assert_eq!(data["userPrefs"]["recent_search"], json!(["a", "b"]));
     // The two snapshots are disjoint stores: a user pref is not a system one.
-    assert!(data["systemPrefs"].get("recent_search").is_none());
+    assert!(prefs.get::<serde_json::Value>("recent_search").unwrap().is_none());
     assert!(data["userPrefs"].get("device_name").is_none());
 }
 

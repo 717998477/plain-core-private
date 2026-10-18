@@ -10,7 +10,7 @@ fn request(report: &str) -> async_graphql::Request {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
-async fn main_report_uses_owned_cache_fixed_metadata_and_only_the_latest_200_log_lines() {
+async fn native_report_uses_owned_cache_fixed_metadata_and_only_the_latest_200_log_lines() {
     let directory = tempfile::tempdir().unwrap();
     let external_cache = tempfile::tempdir().unwrap();
     let core = ContentServer::open_with_cache(directory.path(), external_cache.path()).unwrap();
@@ -25,13 +25,14 @@ async fn main_report_uses_owned_cache_fixed_metadata_and_only_the_latest_200_log
     std::fs::write(&log, &lines).unwrap();
     state.logs.set_path(log).unwrap();
     let (_generation, mut requests) = state.host.connect();
-    let schema = core.native_graphql().unwrap();
+    let management = core.native_management().unwrap();
     for report in ["first report", "replacement report"] {
-        let response = schema.execute(request(report)).await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
-        let result = response.data.into_json().unwrap();
+        let path = management
+            .create_crash_report(report.to_owned())
+            .await
+            .unwrap();
         assert_eq!(
-            std::path::Path::new(result["createCrashReport"].as_str().unwrap()),
+            std::path::Path::new(&path),
             core.cache_paths().crash_report_export()
         );
         let bytes = std::fs::read_to_string(core.cache_paths().crash_report_export()).unwrap();
@@ -52,6 +53,9 @@ async fn main_report_uses_owned_cache_fixed_metadata_and_only_the_latest_200_log
         assert_eq!(
             std::fs::read_dir(core.cache_paths().root())
                 .unwrap()
+                .filter(
+                    |entry| entry.as_ref().unwrap().path() != core.cache_paths().shared_previews()
+                )
                 .count(),
             1
         );
@@ -88,12 +92,11 @@ async fn empty_logs_do_not_add_a_section_and_remote_requests_cannot_create_a_rep
     .await;
     assert!(!remote.errors.is_empty());
     assert!(!core.cache_paths().crash_report_export().exists());
-    let response = core
-        .native_graphql()
+    core.native_management()
         .unwrap()
-        .execute(request("Unicode αβγ"))
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
+        .create_crash_report("Unicode αβγ".into())
+        .await
+        .unwrap();
     let body = std::fs::read_to_string(core.cache_paths().crash_report_export()).unwrap();
     assert!(body.ends_with("Unicode αβγ"));
     assert!(!body.contains("--- App Logs ---"));
@@ -113,16 +116,18 @@ async fn publication_failure_is_reported_and_cleans_its_temporary_file() {
         .unwrap();
     let paths = plain_rs::data_paths::DataPaths::new(directory.path());
     std::fs::create_dir_all(core.cache_paths().crash_report_export()).unwrap();
-    let response = core
-        .native_graphql()
-        .unwrap()
-        .execute(request("cannot publish"))
-        .await;
-    assert!(!response.errors.is_empty());
+    assert!(
+        core.native_management()
+            .unwrap()
+            .create_crash_report("cannot publish".into())
+            .await
+            .is_err()
+    );
     assert!(core.cache_paths().crash_report_export().is_dir());
     assert_eq!(
         std::fs::read_dir(core.cache_paths().root())
             .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().path() != core.cache_paths().shared_previews())
             .count(),
         1
     );

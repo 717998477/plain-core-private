@@ -7,8 +7,9 @@ use plain_rs::{
 };
 use std::{sync::OnceLock, time::Duration};
 
-#[derive(async_graphql::Enum, Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AppUpdateStatus {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AppUpdateStatus {
     Available,
     UpToDate,
     RateLimited,

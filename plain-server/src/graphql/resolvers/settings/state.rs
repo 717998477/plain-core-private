@@ -1,4 +1,3 @@
-use super::models::{SystemSettings, UserSettings};
 use crate::graphql::types::ActionResult;
 use crate::services::settings::system_preferences::SystemPreferences;
 use crate::services::settings::user_preferences::UserPreferences;
@@ -19,24 +18,6 @@ fn notify(ctx: &Context<'_>, changed: bool) {
         if let Some(events) = events(ctx) {
             let _ = events.send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
         }
-    }
-}
-#[derive(Default)]
-pub struct PreferencesQuery;
-#[Object]
-impl PreferencesQuery {
-    async fn system_settings(&self, ctx: &Context<'_>) -> Result<SystemSettings> {
-        Ok(plain_rs::prefs::system::snapshot(prefs(ctx)?)?.try_into()?)
-    }
-    async fn user_settings(&self, ctx: &Context<'_>) -> Result<UserSettings> {
-        Ok(plain_rs::prefs::user::snapshot(prefs(ctx)?)?.into())
-    }
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn verify_adb_token(&self, ctx: &Context<'_>, token: String) -> Result<bool> {
-        Ok(plain_rs::prefs::system::verify_adb_token(
-            prefs(ctx)?,
-            &token,
-        )?)
     }
 }
 #[derive(Default)]
@@ -98,20 +79,6 @@ impl PreferencesMutation {
     ) -> Result<ActionResult> {
         let changed = user_preferences(ctx)?
             .action(plain_rs::prefs::user::Action::RecordSaveDirectory(path))
-            .await?;
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
-    }
-    async fn toggle_notification_app(
-        &self,
-        ctx: &Context<'_>,
-        package_name: String,
-    ) -> Result<ActionResult> {
-        let changed = user_preferences(ctx)?
-            .action(plain_rs::prefs::user::Action::ToggleNotificationApp(
-                package_name,
-            ))
             .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),

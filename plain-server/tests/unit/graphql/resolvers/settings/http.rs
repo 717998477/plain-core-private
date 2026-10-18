@@ -52,39 +52,25 @@ async fn remote_settings_authentication_device_isolation_and_disable_reply() {
     assert_eq!(status, StatusCode::OK);
     assert!(result.get("errors").is_none(), "{result}");
     assert_eq!(result["data"]["font"], true);
-    let (_, result) = call(
-        first.runtime_state(),
-        &headers,
-        "{userSettings{editorFontSize feedAutoRefreshIntervalSec}}",
-    )
-    .await;
-    assert_eq!(result["data"]["userSettings"]["editorFontSize"], 20);
+    let (_, result) = call(first.runtime_state(), &headers, "{userPrefs}").await;
+    assert_eq!(result["data"]["userPrefs"]["editor_font_size"], 20);
     assert_eq!(
-        result["data"]["userSettings"]["feedAutoRefreshIntervalSec"],
+        result["data"]["userPrefs"]["feed_auto_refresh_interval"],
         3600
     );
-    let (_, result) = call(
-        second.runtime_state(),
-        &other,
-        "{userSettings {editorFontSize}} ",
-    )
-    .await;
-    assert_eq!(result["data"]["userSettings"]["editorFontSize"], 14);
+    let (_, result) = call(second.runtime_state(), &other, "{userPrefs} ").await;
+    assert!(result["data"]["userPrefs"]["editor_font_size"].is_null());
     let (_, result) = call(first.runtime_state(), &headers, "{systemPrefs}").await;
     assert!(
-        result["data"]["systemPrefs"]
-            .get("signature_key_pair")
-            .is_none()
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown field")
     );
-    assert!(result["data"]["systemPrefs"].get("master_secret").is_none());
     assert_eq!(
-        call(
-            second.runtime_state(),
-            &headers,
-            "{userSettings {editorFontSize}}"
-        )
-        .await
-        .0,
+        call(second.runtime_state(), &headers, "{userPrefs}")
+            .await
+            .0,
         StatusCode::UNAUTHORIZED
     );
     let (_, result) = call(
@@ -95,23 +81,11 @@ async fn remote_settings_authentication_device_isolation_and_disable_reply() {
     .await;
     assert_eq!(result["data"]["setUserPref"], true);
     assert_eq!(
-        call(
-            first.runtime_state(),
-            &headers,
-            "{userSettings {editorFontSize}}"
-        )
-        .await
-        .0,
+        call(first.runtime_state(), &headers, "{userPrefs}").await.0,
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        call(
-            second.runtime_state(),
-            &other,
-            "{userSettings {editorFontSize}}"
-        )
-        .await
-        .0,
+        call(second.runtime_state(), &other, "{userPrefs}").await.0,
         StatusCode::OK
     );
     let local = reqwest::Client::new().post(format!("http://127.0.0.1:{}/graphql",first.port))
@@ -124,7 +98,7 @@ async fn remote_settings_authentication_device_isolation_and_disable_reply() {
         .post(format!("http://127.0.0.1:{}/graphql", first.port))
         .bearer_auth(plain_rs::base64_encode(&[3; 32]))
         .header("content-type", "application/json")
-        .body(json!({"query":"{systemPrefs userSettings {desktopAccess}}"}).to_string())
+        .body(json!({"query":"{userPrefs}"}).to_string())
         .send()
         .await
         .unwrap()
@@ -132,8 +106,15 @@ async fn remote_settings_authentication_device_isolation_and_disable_reply() {
         .await
         .unwrap();
     let snapshot: Value = serde_json::from_str(&snapshot).unwrap();
-    assert_eq!(snapshot["data"]["systemPrefs"]["sms_send_test"], "result");
-    assert_eq!(snapshot["data"]["userSettings"]["desktopAccess"], false);
+    assert_eq!(
+        first
+            .native_management()
+            .unwrap()
+            .system_preferences()
+            .unwrap()["sms_send_test"],
+        "result"
+    );
+    assert_eq!(snapshot["data"]["userPrefs"]["desktop_access"], false);
     first.shutdown().await;
     second.shutdown().await;
 }

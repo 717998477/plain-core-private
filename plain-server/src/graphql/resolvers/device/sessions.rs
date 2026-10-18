@@ -81,25 +81,6 @@ pub struct SessionsMutation;
 
 #[Object]
 impl SessionsMutation {
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn confirm_web_login(
-        &self,
-        ctx: &Context<'_>,
-        request_id: String,
-        allowed: bool,
-    ) -> Result<bool> {
-        crate::http::auth::ws_login::Confirmation::new(ctx.data::<ServerState>()?.clone())
-            .decide(&request_id, allowed)
-            .await
-            .map_err(async_graphql::Error::new)?;
-        Ok(true)
-    }
-
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn create_session(&self, ctx: &Context<'_>, name: String) -> Result<Session> {
-        caller(ctx)?;
-        crate::services::sessions::create(ctx.data::<ServerState>()?, name)?.try_into()
-    }
     async fn rename_session(
         &self,
         ctx: &Context<'_>,

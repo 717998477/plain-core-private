@@ -422,23 +422,6 @@ impl AudioMutation {
         Ok(item(track))
     }
 
-    async fn cycle_audio_play_mode(
-        &self,
-        ctx: &Context<'_>,
-    ) -> async_graphql::Result<MediaPlayMode> {
-        let prefs = prefs(ctx).clone();
-        let mode = audio(ctx)?
-            .run_playback(move |_, _| MediaPlayMode::cycle(&prefs))
-            .await?;
-        let _ = ctx
-            .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?
-            .send(plain_rs::events::WsEvent::broadcast(
-                "PREFS_UPDATED",
-                "{}".into(),
-            ));
-        Ok(mode)
-    }
-
     async fn update_audio_play_mode(
         &self,
         ctx: &Context<'_>,

@@ -7,7 +7,7 @@ struct Mutations(
 );
 fn fixture() -> (
     tempfile::TempDir,
-    Schema<PreferencesQuery, Mutations, EmptySubscription>,
+    Schema<crate::graphql::resolvers::settings::public::PrefsQuery, Mutations, EmptySubscription>,
     tokio::sync::broadcast::Receiver<WsEvent>,
 ) {
     let dir = tempfile::tempdir().unwrap();
@@ -15,7 +15,7 @@ fn fixture() -> (
     plain_rs::prefs::system::bootstrap(&prefs).unwrap();
     let (events, receiver) = broadcast::channel(32);
     let schema = Schema::build(
-        PreferencesQuery,
+        crate::graphql::resolvers::settings::public::PrefsQuery,
         Mutations(
             PreferencesMutation,
             crate::graphql::resolvers::settings::public::PrefsMutation,
@@ -53,57 +53,69 @@ async fn recent_searches_clear_through_the_boolean_preference_write_with_shared_
 }
 
 #[tokio::test]
-async fn adb_token_verification_requires_transport_injected_local_origin() {
+async fn adb_token_verification_uses_native_management_and_has_no_graphql_oracle() {
     use crate::graphql::executor::RequestOrigin;
-    let (_directory, schema, _) = fixture();
-    let prefs = schema.data::<Arc<Prefs>>().unwrap();
-    prefs.set("adb_token", "fixture-token").unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open_with_cache(
+        &directory.path().join("data"),
+        &directory.path().join("cache"),
+    )
+    .unwrap();
+    let state = core.runtime_state();
+    state.prefs.set("adb_token", "fixture-token").unwrap();
+    let management = core.native_management().unwrap();
     for (token, expected) in [("fixture-token", true), ("wrong", false), ("", false)] {
+        assert_eq!(
+            management.verify_adb_token(token.to_owned()).unwrap(),
+            expected
+        );
         let document = format!(
             "{{verifyAdbToken(token:{})}}",
             serde_json::to_string(token).unwrap()
         );
-        let local = schema
-            .execute(async_graphql::Request::new(&document).data(RequestOrigin::Local))
-            .await;
-        assert!(local.errors.is_empty(), "{:?}", local.errors);
-        assert_eq!(local.data.into_json().unwrap()["verifyAdbToken"], expected);
-        for origin in [None, Some(RequestOrigin::Remote)] {
+        for origin in [
+            None,
+            Some(RequestOrigin::Remote),
+            Some(RequestOrigin::Local),
+        ] {
             let mut request = async_graphql::Request::new(&document);
             if let Some(origin) = origin {
                 request = request.data(origin);
             }
-            let denied = schema.execute(request).await;
-            assert_eq!(denied.errors.len(), 1);
-            assert_eq!(denied.errors[0].message, "no_permission");
+            let denied = state.public.execute(request).await;
+            assert!(
+                denied
+                    .errors
+                    .iter()
+                    .any(|error| error.message.contains("Unknown field")
+                        && error.message.contains("verifyAdbToken"))
+            );
             assert!(!denied.data.to_string().contains("true"));
         }
     }
+    core.stop_core().await;
 }
 #[tokio::test]
-async fn main_user_settings_snapshot_preserves_every_native_snapshot_value_without_host_calls() {
-    let (_directory, schema, mut events) = fixture();
-    let prefs = schema.data::<Arc<Prefs>>().unwrap();
-    prefs
-        .set_user("editor_font_size", serde_json::json!(20))
+async fn native_user_settings_snapshot_preserves_defaults_and_json_values() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open_with_cache(
+        &directory.path().join("data"),
+        &directory.path().join("cache"),
+    )
+    .unwrap();
+    let state = core.runtime_state();
+    state.prefs.set_user("editor_font_size", 20).unwrap();
+    state
+        .prefs
+        .set_user("feed_auto_refresh_interval", 2345)
         .unwrap();
-    prefs
-        .set_user("feed_auto_refresh_interval", serde_json::json!(2345))
-        .unwrap();
-    let expected = serde_json::to_value(plain_rs::prefs::user::snapshot(prefs).unwrap()).unwrap();
-    let fields = expected
-        .as_object()
-        .unwrap()
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let response = schema
-        .execute(format!("{{ userSettings {{ {fields} }} }}"))
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["userSettings"], expected);
-    assert!(events.try_recv().is_err());
+    let expected =
+        serde_json::to_value(plain_rs::prefs::user::snapshot(&state.prefs).unwrap()).unwrap();
+    let actual =
+        serde_json::to_value(core.native_management().unwrap().user_settings().unwrap()).unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(actual["feedAutoRefreshIntervalSec"], 2345);
+    core.stop_core().await;
 }
 
 #[tokio::test]
@@ -115,20 +127,15 @@ async fn graphql_settings_are_isolated_between_devices() {
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(events.recv().await.unwrap().event_type, "PREFS_UPDATED");
-    let first = first
-        .execute("{userSettings {editorFontSize}} ")
-        .await
-        .data
-        .into_json()
-        .unwrap();
+    let first = first.execute("{userPrefs}").await.data.into_json().unwrap();
     let second = second
-        .execute("{userSettings {editorFontSize}} ")
+        .execute("{userPrefs}")
         .await
         .data
         .into_json()
         .unwrap();
-    assert_eq!(first["userSettings"]["editorFontSize"], 20);
-    assert_eq!(second["userSettings"]["editorFontSize"], 14);
+    assert_eq!(first["userPrefs"]["editor_font_size"], 20);
+    assert!(second["userPrefs"]["editor_font_size"].is_null());
 }
 #[tokio::test]
 async fn system_commands_validate_and_do_not_return_private_keys() {
@@ -141,17 +148,14 @@ async fn system_commands_validate_and_do_not_return_private_keys() {
         .execute("mutation {setSystemPref(key:\"auth_two_factor\",value:false){affectedCount}}")
         .await;
     assert!(updated.errors.is_empty(), "{:?}", updated.errors);
-    let result = schema
-        .execute("{systemSettings {authTwoFactor clientId signaturePublicKey}}")
-        .await;
-    assert!(result.errors.is_empty(), "{:?}", result.errors);
-    assert_eq!(
-        result.data.into_json().unwrap()["systemSettings"]["authTwoFactor"],
-        false
-    );
+    let prefs = schema.data::<Arc<Prefs>>().unwrap();
+    let snapshot = plain_rs::prefs::system::snapshot(prefs).unwrap();
+    assert!(!snapshot.auth_two_factor);
+    assert!(!snapshot.client_id.is_empty());
+    assert!(!snapshot.signature_public_key.is_empty());
     assert!(
         !schema
-            .execute("{systemSettings {masterSecret}}")
+            .execute("{systemSettings{password}}")
             .await
             .errors
             .is_empty()
@@ -186,7 +190,6 @@ async fn app_preference_actions_execute_through_the_main_mutations() {
         r#"recordRecentSearch(query:"quoted \"term\" αβγ")"#,
         r#"removeRecentSearch(query:"quoted \"term\" αβγ")"#,
         r#"recordRecentSaveDirectory(path:"/selected directory")"#,
-        r#"toggleNotificationApp(packageName:"example.app")"#,
         r#"setNotificationFilterMode(mode:"allowlist")"#,
         "clearNotificationFilterApps",
     ] {
@@ -220,18 +223,16 @@ async fn app_preference_actions_execute_through_the_main_mutations() {
             "one changed action publishes once; unchanged actions publish nothing"
         );
     }
-    let response = schema
-        .execute("{userSettings{recentSearches recentSaveDirs notificationFilter}}")
-        .await;
+    let response = schema.execute("{userPrefs}").await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let settings = response.data.into_json().unwrap()["userSettings"].clone();
-    assert_eq!(settings["recentSearches"], serde_json::json!([]));
+    let settings = response.data.into_json().unwrap()["userPrefs"].clone();
+    assert_eq!(settings["recent_searches"], serde_json::json!([]));
     assert_eq!(
-        settings["recentSaveDirs"],
+        settings["recent_save_dirs"],
         serde_json::json!(["/selected directory"])
     );
     assert_eq!(
-        settings["notificationFilter"],
+        settings["notification_filter"],
         serde_json::json!({"mode":"allowlist","apps":[]})
     );
 }
@@ -248,7 +249,7 @@ async fn result_only_user_patch_does_not_read_unselected_system_settings() {
         )
         .unwrap();
     let schema = Schema::build(
-        PreferencesQuery,
+        crate::graphql::resolvers::settings::public::PrefsQuery,
         Mutations(
             PreferencesMutation,
             crate::graphql::resolvers::settings::public::PrefsMutation,
@@ -271,7 +272,7 @@ async fn result_only_user_patch_does_not_read_unselected_system_settings() {
     let response = schema.execute("{systemSettings{clientId}}").await;
     assert!(
         !response.errors.is_empty(),
-        "Selected system settings must validate malformed data"
+        "Internal settings are absent from GraphQL"
     );
 }
 

@@ -47,45 +47,16 @@ async fn complete(runtime: &Runtime) -> HttpServerState {
 
 #[cfg(feature = "http_transport")]
 #[tokio::test]
-async fn main_schema_acknowledges_restart_without_waiting_for_the_shutdown_lock() {
+async fn restart_service_acknowledges_before_the_shutdown_lock_and_rejects_duplicates() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let lock = state.shutdown.lock().await;
     let (_generation, mut requests) = state.host.connect();
-    let response = core
-        .native_graphql()
-        .unwrap()
-        .execute(async_graphql::Request::new(
-            "mutation{restartHttpServer(httpPort:0,httpsPort:0){revision restarting error}}",
-        ))
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(
-        response.data.into_json().unwrap()["restartHttpServer"]["restarting"],
-        true
-    );
-    assert!(state.http_server.snapshot().restarting);
-    let duplicate = core
-        .native_graphql()
-        .unwrap()
-        .execute(async_graphql::Request::new(
-            "mutation{restartHttpServer{revision}}",
-        ))
-        .await;
-    assert!(!duplicate.errors.is_empty());
-    let status = core
-        .native_graphql()
-        .unwrap()
-        .execute(async_graphql::Request::new(
-            "{httpServer{revision restarting}}",
-        ))
-        .await;
-    assert!(status.errors.is_empty());
-    assert_eq!(
-        status.data.into_json().unwrap()["httpServer"]["revision"],
-        1
-    );
+    let receipt = restart(&state, Some(0), Some(0)).unwrap();
+    assert!(receipt.restarting);
+    assert_eq!(receipt.revision.0, 1);
+    assert!(restart(&state, None, None).is_err());
     assert!(requests.try_recv().is_err());
     drop(lock);
     let result = complete(&state.http_server).await;
@@ -97,34 +68,27 @@ async fn main_schema_acknowledges_restart_without_waiting_for_the_shutdown_lock(
 
 #[cfg(feature = "http_transport")]
 #[tokio::test]
-async fn http_restart_returns_its_acknowledgment_before_its_listener_drains() {
+async fn native_restart_returns_final_ports_and_the_public_health_endpoint_is_ready() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
-    let state = core.runtime_state();
-    let configured = core
-        .native_graphql()
-        .unwrap()
-        .execute(async_graphql::Request::new(
-            "mutation{http:setUserPref(key:\"http_port\",value:0) https:setUserPref(key:\"https_port\",value:0)}",
-        ))
-        .await;
-    assert!(configured.errors.is_empty(), "{:?}", configured.errors);
-    let (http, _) = core.start_configured_public().await.unwrap();
+    let management = core.native_management().unwrap();
+    let result = management
+        .restart_http_server(Some(0), Some(0))
+        .await
+        .unwrap();
+    assert!(!result.restarting);
+    assert!(result.error.is_empty(), "{}", result.error);
     let response = reqwest::Client::new()
-        .post(format!("http://127.0.0.1:{http}/graphql"))
-        .bearer_auth(state.token.as_ref())
+        .get(format!("http://127.0.0.1:{}/health", result.http_port))
         .timeout(std::time::Duration::from_secs(10))
-        .header("content-type", "application/json")
-        .body(serde_json::json!({"query":"mutation{restartHttpServer(httpPort:0,httpsPort:0){revision restarting}}"}).to_string())
-        .send().await.unwrap().text().await.unwrap();
-    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
-    assert!(response.get("errors").is_none(), "{response}");
-    assert_eq!(response["data"]["restartHttpServer"]["restarting"], true);
-    let completed = complete(&state.http_server).await;
-    assert!(completed.error.is_empty(), "{}", completed.error);
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(response.text().await.unwrap(), "OK");
     assert_eq!(
         core.http_ports().await,
-        Some((completed.http_port as u16, completed.https_port as u16))
+        Some((result.http_port as u16, result.https_port as u16))
     );
     core.stop_core().await;
 }
@@ -168,4 +132,23 @@ fn listener_started_notifications_are_internal_core_events() {
         plain_rs::events::WsEvent::host_text(plain_rs::events::HTTP_SERVER_STARTED, "{}".into())
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn native_restart_waiter_rejects_a_replaced_operation() {
+    let runtime = Runtime::default();
+    let first = runtime.begin().unwrap();
+    runtime.finish(first.revision, Ok((8080, 8443)));
+    let second = runtime.begin().unwrap();
+    assert!(
+        runtime
+            .wait_finished(first.revision)
+            .await
+            .err()
+            .unwrap()
+            .contains("superseded")
+    );
+    runtime.finish(second.revision, Ok((8180, 8543)));
+    let finished = runtime.wait_finished(second.revision).await.unwrap();
+    assert_eq!((finished.http_port, finished.https_port), (8180, 8543));
 }

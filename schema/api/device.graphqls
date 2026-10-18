@@ -193,10 +193,6 @@ type Temperature {
 
 extend type Mutation {
 	clearAppLogs: Boolean!
-	confirmWebLogin(requestId: String!, allowed: Boolean!): Boolean!
-	createCrashReport(report: String!): String!
-	createSession(name: String!): Session!
-	exportAppBackup: String!
 	exportAppLogs: String
 	logout: Boolean!
 	"""
@@ -207,7 +203,6 @@ extend type Mutation {
 	renameSession(clientId: String!, name: String!): Boolean!
 	revokeSession(clientId: String!): Boolean!
 	setTempValue(key: String!, value: String!): KeyValuePair!
-	stageAppRestore(path: String!): Boolean!
 	startDiscovery: Boolean!
 	stopDiscovery: Boolean!
 	"""

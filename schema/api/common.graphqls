@@ -2,28 +2,6 @@ type ActionResult {
 	affectedCount: Int!
 }
 
-"""
-Taggable data domains — the plain-app `DataType` wire enum
-(`shared/src/commonMain/kotlin/com/ismartcoding/plain/enums/DataType.kt`).
-GraphQL-arg and tag-column domain; `kind()` is the ordinal stored in
-the shared library db `type` column.
-"""
-enum DataType {
-	DEFAULT
-	AUDIO
-	VIDEO
-	IMAGE
-	SMS
-	CONTACT
-	NOTE
-	FEED_ENTRY
-	CALL
-	PACKAGE
-	FILE
-	APP_FILE
-	DOC
-}
-
 enum DeviceType {
 	COMPUTER
 	PHONE

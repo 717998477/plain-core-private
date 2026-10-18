@@ -447,10 +447,11 @@ async fn zip_items(
     let data_type: DataType = serde_json::from_value(Value::String(request.r#type.clone()))?;
     match data_type {
         DataType::AppFile => app_file_entries(state, &request.query),
-        DataType::Audio | DataType::Video | DataType::Image => {
+        DataType::Audio | DataType::Video | DataType::Image | DataType::Doc => {
             let name = match data_type {
                 DataType::Audio => "AUDIO",
                 DataType::Video => "VIDEO",
+                DataType::Doc => "DOC",
                 _ => "IMAGE",
             };
             media_entries(state, name, &request.query).await

@@ -247,7 +247,7 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
     b_peer.status = PeerStatus::Paired;
     peers::save(&a_db, &[b_peer], SaveMode::Update).unwrap();
     wait_online(&a, "b", true).await;
-    assert_eq!(control(&a, "STOP").await, Ok(true));
+    a.stop_public().await;
     wait_online(&a, "b", false).await;
     wait_online(&b, "a", false).await;
     tokio::time::sleep(Duration::from_millis(1100)).await;
@@ -258,12 +258,24 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
             .snapshot(&a.runtime_state().db)["online"],
         json!([])
     );
-    assert!(control(&a, "START").await.is_ok());
+    a.start_public(
+        0,
+        0,
+        cert.cert.pem().into_bytes(),
+        cert.key_pair.serialize_pem().into_bytes(),
+    )
+    .await
+    .unwrap();
     wait_online(&a, "b", true).await;
     a.stop_public().await;
-    assert!(
-        control(&a, "START").await.is_err(),
-        "a start without the public listener has nowhere to announce"
+    assert_eq!(control(&a, "RECONNECT").await, Ok(true));
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(
+        a.runtime_state()
+            .peer_status
+            .connections
+            .snapshot(&a.runtime_state().db)["online"],
+        json!([])
     );
     wait_online(&a, "b", false).await;
     a.shutdown().await;

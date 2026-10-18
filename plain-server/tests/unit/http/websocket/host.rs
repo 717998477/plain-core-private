@@ -464,14 +464,11 @@ async fn confirm_login(
     id: &str,
     allowed: bool,
 ) -> Result<(), String> {
-    let response = server.native_graphql()?.execute(
-        async_graphql::Request::new("mutation($id:String!,$allowed:Boolean!){confirmWebLogin(requestId:$id,allowed:$allowed)}")
-            .variables(async_graphql::Variables::from_json(serde_json::json!({"id":id,"allowed":allowed}))),
-    ).await;
-    if let Some(error) = response.errors.first() {
-        return Err(error.message.clone());
-    }
-    Ok(())
+    server
+        .native_management()?
+        .confirm_web_login(id.to_owned(), allowed)
+        .await
+        .map(|_| ())
 }
 
 #[tokio::test]

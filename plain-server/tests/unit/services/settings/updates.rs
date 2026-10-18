@@ -4,8 +4,8 @@ use async_graphql::Request;
 use serde_json::json;
 
 #[tokio::test]
-async fn main_update_check_uses_capabilities_and_skips_network_when_automatic_checks_are_disabled()
-{
+async fn native_update_check_uses_capabilities_and_skips_network_when_automatic_checks_are_disabled()
+ {
     for supported in [true, false] {
         let dir = tempfile::tempdir().unwrap();
         let core = ContentServer::open(dir.path()).unwrap();
@@ -20,22 +20,18 @@ async fn main_update_check_uses_capabilities_and_skips_network_when_automatic_ch
             requests
         });
         let response = core
-            .native_graphql()
+            .native_management()
             .unwrap()
-            .execute(Request::new("mutation { checkAppUpdate(automatic:true) }"))
+            .check_app_update(true)
             .await;
         if supported {
-            assert!(response.errors.is_empty(), "{:?}", response.errors);
-            assert_eq!(
-                response.data.into_json().unwrap()["checkAppUpdate"],
-                "NOT_DUE"
-            );
+            assert_eq!(response.unwrap(), AppUpdateStatus::NotDue);
         } else {
             assert!(
                 response
-                    .errors
-                    .iter()
-                    .any(|error| error.message.contains("unsupported capability APP_UPDATES"))
+                    .err()
+                    .unwrap()
+                    .contains("unsupported capability APP_UPDATES")
             );
         }
         assert!(worker.await.unwrap().try_recv().is_err());
@@ -58,16 +54,10 @@ async fn main_settings_derive_update_availability_from_current_version_and_skip(
     let (_generation, mut requests) = state.host.connect();
     for (skip, available) in [("", true), ("999.0.0", false)] {
         update(&state, json!({"newVersion":"999.0.0","skipVersion":skip})).unwrap();
-        let response = core
-            .native_graphql()
-            .unwrap()
-            .execute(Request::new("{ systemSettings { appUpdateAvailable } }"))
-            .await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
-        assert_eq!(
-            response.data.into_json().unwrap()["systemSettings"]["appUpdateAvailable"],
-            available
-        );
+        let value =
+            serde_json::to_value(core.native_management().unwrap().system_settings().unwrap())
+                .unwrap();
+        assert_eq!(value["appUpdateAvailable"], available);
     }
     assert!(requests.try_recv().is_err());
     core.stop_core().await;

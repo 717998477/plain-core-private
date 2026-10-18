@@ -368,13 +368,13 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
     channel.key = "channel-secret".into();
     channels::save(&state.db, &[channel], SaveMode::Insert).unwrap();
     let native = server.native_graphql().unwrap();
-    let query = r#"{ systemPrefs systemSettings { password urlToken adbToken } sessions { clientId token } peers { key token } chatChannels { key } }"#;
+    let query = r#"{ sessions { clientId token } peers { key token } chatChannels { key } }"#;
     let local = native.execute(query.into()).await;
     assert!(local.errors.is_empty(), "{:?}", local.errors);
     let local = local.data.into_json().unwrap();
-    assert_eq!(local["systemPrefs"]["password"], "secret");
-    assert_eq!(local["systemPrefs"]["url_token"], "resource-token");
-    assert_eq!(local["systemSettings"]["password"], "secret");
+    let settings = server.native_management().unwrap().system_preferences().unwrap();
+    assert_eq!(settings["password"], "secret");
+    assert_eq!(settings["url_token"], "resource-token");
     assert_eq!(local["peers"][0]["key"], "peer-secret");
     assert_eq!(local["chatChannels"][0]["key"], "channel-secret");
     assert_eq!(local["sessions"][0]["token"], session.token);
@@ -400,7 +400,7 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
         .unwrap()
     }
     let metadata = remote(&state, &headers,
-        r#"{ systemPrefs systemSettings { authTwoFactor clientId } sessions { clientId clientName } peers { id name } chatChannels { id name } app { urlToken } }"#).await;
+        r#"{ sessions { clientId clientName } peers { id name } chatChannels { id name } app { urlToken } }"#).await;
     assert!(metadata.get("errors").is_none(), "{metadata}");
     assert_eq!(metadata["data"]["app"]["urlToken"], "resource-token");
     assert_eq!(
@@ -408,20 +408,7 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
         session.client_id
     );
     assert_eq!(metadata["data"]["peers"][0]["id"], "peer");
-    for key in [
-        "password",
-        "url_token",
-        "adb_token",
-        "dev_token",
-        "signature_key_pair",
-        "master_secret",
-    ] {
-        assert!(metadata["data"]["systemPrefs"].get(key).is_none(), "{key}");
-    }
     for query in [
-        "{systemSettings{password}}",
-        "{systemSettings{urlToken}}",
-        "{systemSettings{adbToken}}",
         "{sessions{token}}",
         "{peers{key}}",
         "{peers{token}}",

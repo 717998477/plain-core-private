@@ -1,9 +1,9 @@
 use crate::{assembly::server::ServerState, graphql::types::Long};
-use async_graphql::SimpleObject;
 use std::sync::Mutex;
 
-#[derive(Clone, Default, SimpleObject)]
-pub(crate) struct HttpServerState {
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpServerState {
     pub revision: Long,
     pub restarting: bool,
     pub http_port: i32,
@@ -14,11 +14,26 @@ pub(crate) struct HttpServerState {
 #[derive(Default)]
 pub(crate) struct Runtime {
     state: Mutex<HttpServerState>,
-    #[cfg(test)]
     completion: tokio::sync::Notify,
 }
 
 impl Runtime {
+    pub(crate) async fn wait_finished(&self, revision: Long) -> Result<HttpServerState, String> {
+        loop {
+            let completed = self.completion.notified();
+            tokio::pin!(completed);
+            completed.as_mut().enable();
+            let state = self.snapshot();
+            if state.revision.0 != revision.0 {
+                return Err("Server configuration was superseded".into());
+            }
+            if !state.restarting {
+                return Ok(state);
+            }
+            completed.await;
+        }
+    }
+
     pub(crate) fn snapshot(&self) -> HttpServerState {
         self.state.lock().unwrap().clone()
     }
@@ -65,7 +80,6 @@ impl Runtime {
             Err(error) => state.error = error,
         }
         drop(state);
-        #[cfg(test)]
         self.completion.notify_waiters();
     }
 }

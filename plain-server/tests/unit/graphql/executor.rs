@@ -100,7 +100,7 @@ fn service_owned_media_notifications_are_not_repeated_by_aliases_or_fragments() 
 fn cache_only_and_task_owned_mutations_skip_the_generic_content_broadcast() {
     for query in [
         "mutation { preview: cacheSharedFile }",
-        "mutation { cacheRemoteFile cacheZipEntry cacheAudioCover exportAppLogs exportAppBackup stageAppRestore }",
+        "mutation { cacheRemoteFile cacheZipEntry cacheAudioCover exportAppLogs }",
         "mutation { ...Cache } fragment Cache on Mutation { cacheRemoteFile }",
         "mutation { ... on Mutation { copyFileToDirectory copyFile moveFile renameFile } }",
         "mutation { createFileTask }",
@@ -115,7 +115,7 @@ fn cache_only_and_task_owned_mutations_skip_the_generic_content_broadcast() {
 }
 
 #[tokio::test]
-async fn backup_uses_the_main_schema_and_rejects_remote_secret_export() {
+async fn backup_uses_native_management_and_has_no_remote_graphql_entry() {
     let directory = tempfile::tempdir().unwrap();
     let prefs = Arc::new(
         plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(directory.path())).unwrap(),
@@ -145,16 +145,17 @@ async fn backup_uses_the_main_schema_and_rejects_remote_secret_export() {
     assert!(
         std::fs::read_dir(state.cache.root())
             .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_file())
             .next()
             .is_none()
     );
-    let local = server
-        .graphql_executor()
-        .execute(Request::new("mutation { exportAppBackup }"))
-        .await;
-    assert!(local.errors.is_empty(), "{:?}", local.errors);
-    let json = local.data.into_json().unwrap();
-    assert!(std::path::Path::new(json["exportAppBackup"].as_str().unwrap()).exists());
+    let path = server
+        .native_management()
+        .unwrap()
+        .export_app_backup()
+        .await
+        .unwrap();
+    assert!(std::path::Path::new(&path).exists());
     server.shutdown().await;
 }
 
@@ -165,8 +166,7 @@ fn runtime_controls_and_viewer_exports_do_not_trigger_generic_content_refreshes(
         r#"mutation{acquireDiscovery(token:"token") releaseDiscovery(token:"token")}"#,
         r#"mutation{acquireMdnsDebugSession(token:"token"){debugSessionCount}}"#,
         "mutation{controlDlnaReceiver(input:{action:ACCEPT,remember:false})}",
-        r#"mutation{confirmWebLogin(requestId:"request",allowed:false)}"#,
-        r#"mutation{createCrashReport(report:"report") importPomodoroSound(source:"source")}"#,
+        r#"mutation{importPomodoroSound(source:"source")}"#,
         "mutation{...Control} fragment Control on Mutation{alias:controlPeerStatus(action:RECONNECT)}",
     ] {
         assert!(!content_changes(&Request::new(document)), "{document}");

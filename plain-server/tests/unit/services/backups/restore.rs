@@ -227,7 +227,7 @@ fn staged_symbolic_links_are_rejected_before_any_target_is_changed() {
 }
 
 #[tokio::test]
-async fn main_restore_stages_without_overwriting_the_running_database() {
+async fn native_restore_stages_without_overwriting_the_running_database() {
     let directory = tempfile::tempdir().unwrap();
     let archive_path = directory.path().join("selected-backup.zip");
     std::fs::write(&archive_path, archive()).unwrap();
@@ -239,17 +239,13 @@ async fn main_restore_stages_without_overwriting_the_running_database() {
         )
         .unwrap()
     });
-    let response = core
-        .graphql_executor()
-        .execute(
-            async_graphql::Request::new("mutation($path:String!){stageAppRestore(path:$path)}")
-                .variables(async_graphql::Variables::from_json(
-                    serde_json::json!({"path":"app://selected-backup.zip"}),
-                )),
-        )
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["stageAppRestore"], true);
+    assert!(
+        core.native_management()
+            .unwrap()
+            .stage_app_restore("app://selected-backup.zip".into())
+            .await
+            .unwrap()
+    );
     assert_eq!(
         state
             .db

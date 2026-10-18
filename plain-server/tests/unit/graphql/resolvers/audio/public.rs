@@ -1088,6 +1088,12 @@ async fn playlist_covers_use_the_shared_catalog_without_platform_requests() {
 #[tokio::test]
 async fn browser_selection_advances_in_rust_without_dispatching_the_server_player() {
     let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    schema
+        .data::<Arc<crate::services::audio::host::Audio>>()
+        .unwrap()
+        .run_playback(|db, _| plain_rs::media::audio::playback::snapshot(db))
+        .await
+        .unwrap();
     seed_queue(
         &schema,
         &[("/one.mp3", "One", "Artist"), ("/two.mp3", "Two", "Artist")],
@@ -1116,9 +1122,13 @@ async fn browser_selection_advances_in_rust_without_dispatching_the_server_playe
         domain::get_audio_current(database(&schema)).unwrap(),
         "/two.mp3"
     );
-    let mode = query(&schema, "mutation { cycleAudioPlayMode }").await;
+    let mode = query(
+        &schema,
+        "mutation { updateAudioPlayMode(mode: REPEAT_ONE) }",
+    )
+    .await;
     assert!(mode["errors"].is_null(), "{mode}");
-    assert_eq!(mode["data"]["cycleAudioPlayMode"], "REPEAT_ONE");
+    assert_eq!(mode["data"]["updateAudioPlayMode"], true);
 }
 
 #[tokio::test]
@@ -1130,6 +1140,12 @@ async fn playback_snapshot_reuses_identity_and_reads_sdk_playback_facts_once() {
         count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         json!({"isPlaying":true,"positionMs":123})
     });
+    schema
+        .data::<Arc<crate::services::audio::host::Audio>>()
+        .unwrap()
+        .run_playback(|db, _| plain_rs::media::audio::playback::snapshot(db))
+        .await
+        .unwrap();
     seed_queue(&schema, &[("/one.mp3", "One", "Artist")]);
     domain::save_audio_current(database(&schema), "/one.mp3").unwrap();
     let expected = plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap();
@@ -1245,6 +1261,12 @@ async fn native_album_tags_reach_playlist_covers_without_platform_catalog_calls(
 #[tokio::test]
 async fn browser_actual_start_and_progress_use_main_history_without_host_commands() {
     let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    schema
+        .data::<Arc<crate::services::audio::host::Audio>>()
+        .unwrap()
+        .run_playback(|db, _| plain_rs::media::audio::playback::snapshot(db))
+        .await
+        .unwrap();
     seed_queue(&schema, &[("/one.mp3", "One", "Artist")]);
     let db = database(&schema);
     let selected =

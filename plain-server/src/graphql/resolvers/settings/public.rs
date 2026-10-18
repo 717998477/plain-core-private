@@ -40,22 +40,6 @@ impl PrefsQuery {
             prefs(ctx).user_entries().into_iter().collect(),
         ))
     }
-
-    async fn system_prefs(&self, ctx: &Context<'_>) -> Json<Value> {
-        let mut entries = plain_rs::prefs::system::public_entries(prefs(ctx));
-        if !crate::http::auth::public_gate::is_local(ctx) {
-            use plain_rs::prefs::system::keys;
-            for key in [
-                keys::PASSWORD,
-                keys::URL_TOKEN,
-                keys::ADB_TOKEN,
-                keys::DEV_TOKEN,
-            ] {
-                entries.remove(key);
-            }
-        }
-        Json(Value::Object(entries))
-    }
 }
 
 #[derive(Default)]

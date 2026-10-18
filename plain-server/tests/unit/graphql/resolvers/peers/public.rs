@@ -241,29 +241,22 @@ async fn main_identity_rename_and_pairing_code_use_shared_preferences_and_refuse
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let executor = core.native_graphql().unwrap();
-    let identity = "{app{clientId deviceName} systemSettings{signaturePublicKey mdnsHostname}}";
+    let identity = "{app{clientId deviceName}}";
     let response = executor
         .execute(async_graphql::Request::new(identity))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let value = response.data.into_json().unwrap();
     assert_eq!(value["app"]["clientId"], executor.client_id());
+    let settings =
+        serde_json::to_value(core.native_management().unwrap().system_settings().unwrap()).unwrap();
     assert_eq!(
-        plain_rs::utils::base64::base64_decode(
-            value["systemSettings"]["signaturePublicKey"]
-                .as_str()
-                .unwrap()
-        )
-        .len(),
+        plain_rs::utils::base64::base64_decode(settings["signaturePublicKey"].as_str().unwrap())
+            .len(),
         32
     );
-    assert!(
-        !value["systemSettings"]["mdnsHostname"]
-            .as_str()
-            .unwrap()
-            .is_empty()
-    );
-    let public_key = value["systemSettings"]["signaturePublicKey"].clone();
+    assert!(!settings["mdnsHostname"].as_str().unwrap().is_empty());
+    let public_key = settings["signaturePublicKey"].clone();
     let changed = executor
         .execute(async_graphql::Request::new(
             r#"mutation{updateDeviceName(name:"Shared device")}"#,
@@ -275,7 +268,11 @@ async fn main_identity_rename_and_pairing_code_use_shared_preferences_and_refuse
         .await;
     let value = response.data.into_json().unwrap();
     assert_eq!(value["app"]["deviceName"], "Shared device");
-    assert_eq!(value["systemSettings"]["signaturePublicKey"], public_key);
+    assert_eq!(
+        serde_json::to_value(core.native_management().unwrap().system_settings().unwrap()).unwrap()
+            ["signaturePublicKey"],
+        public_key
+    );
     let code = executor
         .execute(async_graphql::Request::new("{pairingCode}"))
         .await;

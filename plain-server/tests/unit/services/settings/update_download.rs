@@ -307,7 +307,7 @@ async fn cancel_command_awaits_worker_cleanup_and_shutdown_rejects_later_command
 }
 
 #[tokio::test]
-async fn main_download_command_requires_current_capability_before_starting_network_work() {
+async fn native_download_command_requires_current_capability_before_starting_network_work() {
     let (_dir, core, state, _) = setup();
     let (generation, mut requests) = state.host.connect();
     let host = state.host.clone();
@@ -319,13 +319,16 @@ async fn main_download_command_requires_current_capability_before_starting_netwo
         requests
     });
     let response = core
-        .native_graphql()
+        .native_management()
         .unwrap()
-        .execute(async_graphql::Request::new(
-            "mutation { startAppUpdateDownload { status } }",
-        ))
+        .start_app_update_download()
         .await;
-    assert!(!response.errors.is_empty());
+    assert!(
+        response
+            .err()
+            .unwrap()
+            .contains("unsupported capability APP_UPDATES")
+    );
     let retired = core
         .native_graphql()
         .unwrap()

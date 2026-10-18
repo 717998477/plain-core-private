@@ -15,5 +15,11 @@ fn main() {
     );
     let output =
         std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("web_bundle.rs");
-    web_assets::generate(&root, &output, configured.is_some()).expect("Cannot embed Web assets");
+    web_assets::generate_with_icons(
+        &root,
+        &manifest.join("../assets/ficons"),
+        &output,
+        configured.is_some(),
+    )
+    .expect("Cannot embed Web assets");
 }

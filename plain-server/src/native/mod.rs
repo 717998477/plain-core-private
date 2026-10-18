@@ -1,5 +1,11 @@
 #[cfg(feature = "core")]
+pub mod assets;
+
+#[cfg(feature = "core")]
 pub mod graphql;
+
+#[cfg(feature = "core")]
+pub mod management;
 
 #[cfg(feature = "core")]
 pub mod resources;
@@ -11,7 +17,6 @@ pub mod resource_stream;
 pub mod uploads;
 
 #[cfg(feature = "core")]
-
 #[cfg(feature = "core")]
 pub mod media_catalog;
 

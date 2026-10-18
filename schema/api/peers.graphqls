@@ -58,7 +58,6 @@ type Sim {
 	subscriptionId: Int!
 }
 
-
 extend type Mutation {
 	cancelPairing(generation: String!): Boolean!
 	controlPeerStatus(action: PeerStatusAction!): Boolean!

@@ -1,14 +1,10 @@
-use crate::{assembly::services::Services, host::bridge::Host};
+use crate::assembly::server::ServerState;
 use std::{fmt::Write as _, io::Write as _};
 
-pub(crate) async fn write(
-    services: &Services,
-    host: &Host,
-    report: String,
-) -> Result<String, String> {
+pub(crate) async fn write(state: &ServerState, report: String) -> Result<String, String> {
     let info = super::device::info::collect(
-        host,
-        services.device.directory().to_path_buf(),
+        &state.host,
+        state.device.directory().to_path_buf(),
         [
             "name",
             "osName",
@@ -19,10 +15,11 @@ pub(crate) async fn write(
         .into_iter()
         .map(str::to_owned)
         .collect(),
-        services.device.fixed_info()?,
+        state.device.fixed_info()?,
     )
     .await?;
-    let channel = host
+    let channel = state
+        .host
         .startup_property("buildChannel")
         .and_then(serde_json::Value::as_str)
         .ok_or("Missing startup system property: buildChannel")?;
@@ -35,7 +32,7 @@ pub(crate) async fn write(
     write!(body, "App version: {version}\nOS: {} {}\nDevice: {}\nPlatform: {}\nBuild type: {}\n\n--- Crash Report ---\n{report}",
         info.os_name, info.os_version, info.name, format!("{:?}", info.platform).to_lowercase(), channel.to_lowercase())
         .map_err(|error| error.to_string())?;
-    match services.logs.read(String::new(), 0, 200).await {
+    match state.logs.read(String::new(), 0, 200).await {
         Ok(mut lines) if !lines.is_empty() => {
             lines.reverse();
             body.push_str("\n\n--- App Logs ---\n");
@@ -44,7 +41,7 @@ pub(crate) async fn write(
         Ok(_) => {}
         Err(error) => log::warn!("Unable to include app logs in crash report: {error}"),
     }
-    let path = services.cache.crash_report_export();
+    let path = state.cache.crash_report_export();
     tokio::task::spawn_blocking(move || {
         std::fs::create_dir_all(path.parent().ok_or("Invalid report directory")?)
             .map_err(|error| error.to_string())?;

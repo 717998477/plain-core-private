@@ -173,7 +173,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         assert!(!pairing_input.contains(obsolete));
     }
     assert!(sdl.contains("enum AudioCommandAction {"));
-    assert!(sdl.contains("enum MediaAction {"));
+    assert!(!sdl.contains("enum MediaAction {"));
     assert!(sdl.contains("TTY_TDD"));
     assert!(!sdl.contains("TTY_DDD"));
     for field in [

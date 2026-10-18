@@ -8,10 +8,7 @@ async fn runtime_controls_require_local_authority_and_do_not_emit_content_update
     let state = core.runtime_state();
     let (_generation, mut requests) = state.host.connect();
     let mut events = state.events.subscribe();
-    for document in [
-        "mutation{controlPeerStatus(action:RECONNECT)}",
-        r#"mutation{confirmWebLogin(requestId:"missing-request",allowed:true)}"#,
-    ] {
+    for document in ["mutation{controlPeerStatus(action:RECONNECT)}"] {
         let remote = execute_graphql(
             &state.public,
             async_graphql::Request::new(document),

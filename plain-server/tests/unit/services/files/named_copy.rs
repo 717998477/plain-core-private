@@ -49,7 +49,6 @@ async fn provider_failure_never_publishes_partial_output_and_releases_staging() 
             })
         };
         let request = resource_request(&state, generation, &mut requests).await;
-        assert_eq!(request["params"]["path"], "content://fixture/picked");
         let stream = state
             .bridge
             .attach_native(request["params"]["id"].as_str().unwrap(), generation)
@@ -58,6 +57,9 @@ async fn provider_failure_never_publishes_partial_output_and_releases_staging() 
             .host
             .reply(generation, json!({"id":request["id"],"result":true}))
             .unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(&stream.next_request().await.unwrap().unwrap()).unwrap();
+        assert_eq!(metadata["path"], "content://fixture/picked");
         stream.write(b"first".to_vec()).await.unwrap();
         if succeeds {
             stream.write(b" second".to_vec()).await.unwrap();

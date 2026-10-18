@@ -49,7 +49,6 @@ use std::sync::Arc;
 #[derive(MergedObject, Default)]
 pub struct Query(
     crate::graphql::resolvers::app::cache::CacheQuery,
-    crate::graphql::resolvers::settings::http_server::HttpServerQuery,
     crate::graphql::resolvers::casting::receiver::DlnaReceiverQuery,
     crate::graphql::resolvers::settings::tls::TlsQuery,
     crate::graphql::resolvers::peers::records::PeerRecordQuery,
@@ -67,7 +66,6 @@ pub struct Query(
     crate::graphql::resolvers::device::sessions::SessionsQuery,
     crate::graphql::resolvers::media::scan::MediaScanQuery,
     crate::graphql::resolvers::app::platform::PlatformQuery,
-    crate::graphql::resolvers::settings::state::PreferencesQuery,
     MobileQueryImpl,
     crate::graphql::resolvers::files::app_file::AppFileQuery,
     crate::graphql::resolvers::bookmarks::bookmark::BookmarkQuery,
@@ -98,10 +96,7 @@ pub struct Query(
 #[derive(MergedObject, Default)]
 pub struct Mutation(
     crate::graphql::resolvers::app::cache::CacheMutation,
-    crate::graphql::resolvers::settings::http_server::HttpServerMutation,
-    crate::graphql::resolvers::settings::updates::AppUpdateMutation,
     crate::graphql::resolvers::casting::receiver::DlnaReceiverMutation,
-    crate::graphql::resolvers::settings::tls::TlsMutation,
     crate::graphql::resolvers::peers::records::PeerRecordMutation,
     crate::graphql::resolvers::shares::queue::SharedDownloadMutation,
     crate::graphql::resolvers::downloads::queue::ChatDownloadMutation,

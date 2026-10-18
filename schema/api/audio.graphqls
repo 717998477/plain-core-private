@@ -119,7 +119,6 @@ extend type Mutation {
 	cacheAudioCover(path: String!): String
 	clearAudioQueue: Boolean!
 	createAudioPlaylist(name: String!): AudioPlaylist!
-	cycleAudioPlayMode: MediaPlayMode!
 	deleteAudioPlaylist(id: ID!): Boolean!
 	playAudio(mediaId: ID!): AudioItem!
 	removeAudioFromQueue(mediaId: ID!): Boolean!
