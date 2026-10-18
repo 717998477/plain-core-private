@@ -259,6 +259,45 @@ async fn sending_persists_and_emits_without_native_business_callbacks() {
 
 #[cfg(feature = "http_transport")]
 #[tokio::test]
+async fn bulk_delete_preserves_literal_id_boundaries_instead_of_retargeting_trimmed_ids() {
+    let (_directory, server) = chat_fixture();
+    let state = server.runtime_state();
+    for id in ["literal-id", " literal-id "] {
+        seed(
+            &state.db,
+            id,
+            "me",
+            "peer",
+            "",
+            r#"{"type":"TEXT","value":{"text":"owned fixture"}}"#,
+            T1,
+        );
+    }
+    let deleted = channel_query(
+        &state,
+        &format!(
+            "mutation {{ deleteChatItems(query: {}) {{ affectedCount }} }}",
+            serde_json::to_string(r"ids:=\ literal-id\ ").unwrap(),
+        ),
+    )
+    .await;
+    assert!(deleted["errors"].is_null(), "{deleted}");
+    assert_eq!(deleted["data"]["deleteChatItems"]["affectedCount"], 1);
+    assert!(
+        plain_rs::db::chat_store::messages::get(&state.db, "literal-id")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        plain_rs::db::chat_store::messages::get(&state.db, " literal-id ")
+            .unwrap()
+            .is_none()
+    );
+    server.shutdown().await;
+}
+
+#[cfg(feature = "http_transport")]
+#[tokio::test]
 async fn bulk_delete_counts_persisted_rows() {
     let (_dir, server) = chat_fixture();
     let state = server.runtime_state();
@@ -273,6 +312,15 @@ async fn bulk_delete_counts_persisted_rows() {
             T1,
         );
     }
+    seed(
+        &state.db,
+        "other-channel-message",
+        "me",
+        "",
+        "chan-2",
+        r#"{"type":"TEXT","value":{"text":"keep"}}"#,
+        T1,
+    );
     let deleted = channel_query(
         &state,
         r#"mutation { deleteChatItems(query: "channel:chan-1") { affectedCount } }"#,
@@ -286,6 +334,11 @@ async fn bulk_delete_counts_persisted_rows() {
         plain_rs::db::chat_store::messages::get(&state.db, "m1")
             .unwrap()
             .is_none()
+    );
+    assert!(
+        plain_rs::db::chat_store::messages::get(&state.db, "other-channel-message")
+            .unwrap()
+            .is_some()
     );
     server.shutdown().await;
 }

@@ -57,30 +57,6 @@ impl Logs {
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
     }
-    pub(crate) async fn clear_files(&self) -> Result<(), String> {
-        let path = self.path()?;
-        tokio::task::spawn_blocking(move || {
-            for file in log_files(&path)? {
-                let result = if file == path {
-                    std::fs::OpenOptions::new()
-                        .write(true)
-                        .open(&file)
-                        .and_then(|file| file.set_len(0))
-                } else {
-                    std::fs::remove_file(&file)
-                };
-                if let Err(error) = result {
-                    if error.kind() != io::ErrorKind::NotFound {
-                        return Err(error);
-                    }
-                }
-            }
-            Ok::<_, io::Error>(())
-        })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
-    }
     pub(crate) async fn export(
         &self,
         directory: &Path,

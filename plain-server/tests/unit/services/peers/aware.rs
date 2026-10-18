@@ -231,3 +231,63 @@ async fn host_replacement_resends_subscription_even_when_parameters_are_identica
     first_task.abort();
     second_task.abort();
 }
+
+#[tokio::test]
+async fn permission_events_retry_rejected_subscriptions_without_a_page_command() {
+    let (_directory, server, state) = server();
+    let host = state.host.clone();
+    let (generation, mut requests) = host.connect();
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut attempts = 0;
+        while let Some(request) = requests.recv().await {
+            assert!(matches!(
+                request["method"].as_str(),
+                Some("peerStartAware" | "peerStopAware")
+            ));
+            let result = request["method"] != "peerStartAware" || attempts > 0;
+            if request["method"] == "peerStartAware" {
+                attempts += 1;
+            }
+            host.reply(generation, json!({"id":request["id"],"result":result}))
+                .unwrap();
+            sent.send(request).unwrap();
+        }
+    });
+    assert!(!state.aware.subscribe(&state, "remote").await.unwrap());
+    let first = received.recv().await.unwrap();
+    for _ in 0..4 {
+        state.aware.refresh(&state).await.unwrap();
+    }
+    assert!(received.try_recv().is_err());
+    state
+        .events
+        .send(plain_rs::events::WsEvent::host_text("PERMISSIONS_UPDATED", "[]".into()).unwrap())
+        .unwrap();
+    let restored = tokio::time::timeout(std::time::Duration::from_secs(2), received.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored["method"], "peerStartAware");
+    assert_eq!(first["params"], restored["params"]);
+    state.aware.refresh(&state).await.unwrap();
+    assert!(received.try_recv().is_err());
+    server.shutdown().await;
+    task.abort();
+}
+
+#[tokio::test]
+async fn permission_refresh_does_not_start_an_inactive_runtime() {
+    let (_directory, server, state) = server();
+    let (messages, task) = host(&state);
+    let runtime = Runtime::default();
+    runtime.permissions_changed(&state).await.unwrap();
+    assert!(messages.lock().unwrap().is_empty());
+    runtime.ensure(&state).await.unwrap();
+    runtime.stop(&state).await.unwrap();
+    messages.lock().unwrap().clear();
+    runtime.permissions_changed(&state).await.unwrap();
+    assert!(messages.lock().unwrap().is_empty());
+    server.shutdown().await;
+    task.abort();
+}

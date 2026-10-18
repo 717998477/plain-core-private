@@ -1,4 +1,39 @@
 use super::*;
+
+#[tokio::test]
+async fn generation_bound_calls_never_enter_a_replacement_host_queue() {
+    let host = Arc::new(Host::default());
+    let (old, _) = host.connect();
+    let (current, mut incoming) = host.connect();
+    assert_eq!(
+        host.call_current(old, "bleScanRead", json!({}))
+            .await
+            .unwrap_err(),
+        "host connection replaced"
+    );
+    assert!(incoming.try_recv().is_err());
+    assert_eq!(host.state.lock().unwrap().next_id, 0);
+    assert!(host.state.lock().unwrap().pending.is_empty());
+    let active = host.clone();
+    let call = tokio::spawn(async move {
+        active
+            .call_current(current, "bleScanRead", json!({"scan":"owned"}))
+            .await
+    });
+    let request = incoming.recv().await.unwrap();
+    assert_eq!(request["params"], json!({"scan":"owned"}));
+    host.reply(current, json!({"id":request["id"],"result":true}))
+        .unwrap();
+    assert_eq!(call.await.unwrap().unwrap(), json!(true));
+    host.disconnect(current);
+    assert_eq!(
+        host.call_current(current, "bleScanRead", json!({}))
+            .await
+            .unwrap_err(),
+        "host connection replaced"
+    );
+    assert_eq!(host.state.lock().unwrap().next_id, 1);
+}
 #[tokio::test]
 async fn replies_are_correlated_and_replacement_cannot_complete_new_calls() {
     let host = Arc::new(Host::default());

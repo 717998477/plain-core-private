@@ -31,6 +31,11 @@ impl AppFilesMutation {
         mime_type: String,
         delete_source: bool,
     ) -> async_graphql::Result<AppFile> {
+        crate::http::auth::public_gate::require(
+            ctx,
+            ctx.data::<Arc<plain_rs::prefs::Prefs>>()?,
+            &["WRITE_EXTERNAL_STORAGE"],
+        )?;
         let store = ctx.data::<Arc<FileStore>>()?;
         let state = ctx.data::<crate::assembly::server::ServerState>()?;
         let file = crate::services::files::imports::import(
@@ -44,6 +49,7 @@ impl AppFilesMutation {
                 delete_source,
             },
             state.stop.clone(),
+            state.cache_changes.clone(),
         )
         .await
         .map_err(async_graphql::Error::new)?;

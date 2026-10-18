@@ -127,6 +127,19 @@ pub fn on_playing(
     })
 }
 pub fn enqueue(db: &Db, items: &[AudioTrack], play_next: bool) -> DomainResult<()> {
+    enqueue_with_selection(db, items, play_next, false)
+}
+
+pub fn enqueue_selecting_if_idle(db: &Db, items: &[AudioTrack]) -> DomainResult<()> {
+    enqueue_with_selection(db, items, false, true)
+}
+
+fn enqueue_with_selection(
+    db: &Db,
+    items: &[AudioTrack],
+    play_next: bool,
+    select_if_idle: bool,
+) -> DomainResult<()> {
     if items.is_empty() {
         return Ok(());
     }
@@ -136,8 +149,17 @@ pub fn enqueue(db: &Db, items: &[AudioTrack], play_next: bool) -> DomainResult<(
             return Err(DomainError::Other("empty audio path".into()));
         }
     }
-    transaction(db, |c, _| {
+    transaction(db, |c, state| {
         enqueue_conn(c, items, play_next)?;
+        if select_if_idle && state.playback.path.is_empty() {
+            for item in items {
+                if let Some(track) = io::audio_by_path(c, &item.path)? {
+                    io::save_current(c, &track.path, state)?;
+                    state.select(&track.path)?;
+                    break;
+                }
+            }
+        }
         Ok(())
     })
 }
@@ -708,4 +730,22 @@ pub fn track_by_path_conn(
     path: &str,
 ) -> rusqlite::Result<Option<AudioTrack>> {
     io::audio_by_path(conn, path)
+}
+
+pub fn selection_ids(query: &str) -> DomainResult<Option<Vec<String>>> {
+    let fields = crate::utils::search_dsl::parse(query);
+    if fields.len() != 1 || fields[0].name != "ids" || fields[0].op != "=" {
+        return Ok(None);
+    }
+    let ids = fields[0]
+        .value
+        .split(',')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if ids.iter().any(|id| id.trim().is_empty()) {
+        return Err(crate::error::DomainError::Other(
+            "media IDs required".into(),
+        ));
+    }
+    Ok(Some(ids))
 }

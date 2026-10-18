@@ -38,18 +38,29 @@ fn seed_chat(state: &ServerState, id: &str, size: usize) {
     row.id = id.into();
     state.db.insert_chat(&row);
 }
-async fn terminal(state: &ServerState, id: &str) -> Value {
+async fn terminal(state: &ServerState, id: &str) -> Option<Value> {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let row = state.downloads.snapshot()["tasks"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|r| r["id"] == id)
-                .unwrap()
-                .clone();
-            if matches!(row["status"].as_str(), Some("COMPLETED" | "FAILED")) {
+                .find(|row| row["id"] == id)
+                .cloned();
+            if row.as_ref().is_some_and(|row| row["status"] == "FAILED") {
                 return row;
+            }
+            if row.is_none() {
+                if let Some(chat) = plain_rs::db::chat_store::messages::get(&state.db, id).unwrap()
+                {
+                    let content: Value = serde_json::from_str(&chat.content).unwrap();
+                    if content["value"]["items"][0]["uri"]
+                        .as_str()
+                        .is_some_and(|uri| uri.starts_with("fid:"))
+                    {
+                        return None;
+                    }
+                }
             }
             tokio::task::yield_now().await;
         }
@@ -57,6 +68,7 @@ async fn terminal(state: &ServerState, id: &str) -> Value {
     .await
     .unwrap()
 }
+
 #[tokio::test]
 async fn root_ble_chunks_commit_exact_bytes_and_reject_short_and_overlong_reads() {
     let (dir, server, state) = fixture();
@@ -102,6 +114,7 @@ async fn root_ble_chunks_commit_exact_bytes_and_reject_short_and_overlong_reads(
         }
     });
     seed_chat(&state, "exact", payload.len());
+    let mut events = state.events.subscribe();
     let native = server.native_graphql().unwrap();
     let response = native
         .execute(async_graphql::Request::new(
@@ -114,9 +127,35 @@ async fn root_ble_chunks_commit_exact_bytes_and_reject_short_and_overlong_reads(
         true
     );
 
-    let row = terminal(&state, "exact").await;
-    assert_eq!(row["status"], "COMPLETED");
-    assert_eq!(row["downloaded"], payload.len());
+    assert!(terminal(&state, "exact").await.is_none());
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut updated = false;
+        let mut retired = false;
+        while !updated || !retired {
+            let event = events.recv().await.unwrap();
+            let payload: Value = serde_json::from_str(&event.payload).unwrap_or(Value::Null);
+            if event.event_type == plain_rs::chat::events::WS_MESSAGE_UPDATED
+                && payload[0]["id"] == "exact"
+            {
+                let content: Value =
+                    serde_json::from_str(payload[0]["content"].as_str().unwrap()).unwrap();
+                assert!(
+                    content["value"]["items"][0]["uri"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("fid:")
+                );
+                updated = true;
+            }
+            if event.event_type == plain_rs::chat::events::WS_DOWNLOAD_PROGRESS
+                && payload.as_array().is_some_and(|items| items.is_empty())
+            {
+                retired = true;
+            }
+        }
+    })
+    .await
+    .unwrap();
     let response = native.execute(async_graphql::Request::new("{ chatDownloadQueue { runtimeId revision tasks { id status downloaded file { id: fileId uri durationMs } peer { id createdAt updatedAt } } } }")).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let projected = response.data.into_json().unwrap();
@@ -124,13 +163,11 @@ async fn root_ble_chunks_commit_exact_bytes_and_reject_short_and_overlong_reads(
         projected["chatDownloadQueue"]["runtimeId"],
         state.downloads.snapshot()["runtimeId"]
     );
-    assert_eq!(
-        projected["chatDownloadQueue"]["tasks"][0]["status"],
-        "COMPLETED"
-    );
-    assert_eq!(
-        projected["chatDownloadQueue"]["tasks"][0]["downloaded"],
-        payload.len()
+    assert!(
+        projected["chatDownloadQueue"]["tasks"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 
     let chat = plain_rs::db::chat_store::messages::get(&state.db, "exact")
@@ -148,7 +185,7 @@ async fn root_ble_chunks_commit_exact_bytes_and_reject_short_and_overlong_reads(
     for (id, size) in [("short", 20), ("overlong", 3)] {
         seed_chat(&state, id, size);
         state.downloads.enqueue(id, id, "peer").unwrap();
-        let row = terminal(&state, id).await;
+        let row = terminal(&state, id).await.unwrap();
         assert_eq!(row["status"], "FAILED");
         assert!(
             !dir.path()

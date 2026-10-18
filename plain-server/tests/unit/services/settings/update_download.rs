@@ -94,15 +94,48 @@ async fn complete_stream_is_published_with_identity_and_restored_without_client_
         ContentServer::open_with_cache(&_dir.path().join("data"), &_dir.path().join("cache"))
             .unwrap();
     let state = core.runtime_state();
-    let snapshot = execute_owned(state.clone(), Command::Snapshot)
-        .await
-        .unwrap();
+    let bridge = Arc::new(core.host_events());
+    let (reported, mut reports) = tokio::sync::mpsc::unbounded_channel();
+    let serving = tokio::spawn(bridge.serve(
+        |method, _| async move {
+            if method == "systemCapabilities" {
+                Ok(json!(["APP_UPDATES"]))
+            } else {
+                Err(format!("Unexpected recovery platform request: {method}"))
+            }
+        },
+        move |event| reported.send(event).map_err(|error| error.to_string()),
+    ));
+    let snapshot = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = reports.recv().await.unwrap();
+            if event["type"] == "APP_UPDATE_DOWNLOAD_UPDATED" {
+                let snapshot: serde_json::Value =
+                    serde_json::from_str(event["payload"].as_str().unwrap()).unwrap();
+                if snapshot["status"] == "COMPLETED" {
+                    break snapshot;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(snapshot["filePath"], path);
+    let snapshot = state
+        .update_checks
+        .download
+        .state
+        .lock()
+        .unwrap()
+        .snapshot
+        .clone();
     assert_eq!(snapshot.status, AppUpdateDownloadStatus::Completed);
     assert_eq!(snapshot.file_path, path);
     let cancelled = execute_owned(state.clone(), Command::Cancel).await.unwrap();
     assert_eq!(cancelled.status, AppUpdateDownloadStatus::Idle);
     assert!(!Path::new(&path).exists());
     core.stop_core().await;
+    serving.await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -237,7 +270,7 @@ async fn changed_release_or_missing_artifact_cannot_be_reported_as_completed() {
         ContentServer::open_with_cache(&_dir.path().join("data"), &_dir.path().join("cache"))
             .unwrap();
     let state = core.runtime_state();
-    let snapshot = execute_owned(state.clone(), Command::Snapshot)
+    let snapshot = execute_owned(state.clone(), Command::Reconcile)
         .await
         .unwrap();
     assert_ne!(snapshot.status, AppUpdateDownloadStatus::Completed);
@@ -293,11 +326,19 @@ async fn main_download_command_requires_current_capability_before_starting_netwo
         ))
         .await;
     assert!(!response.errors.is_empty());
+    let retired = core
+        .native_graphql()
+        .unwrap()
+        .execute(async_graphql::Request::new(
+            "{ appUpdateDownload { status } }",
+        ))
+        .await;
+    assert!(!retired.errors.is_empty());
     assert!(reply.await.unwrap().try_recv().is_err());
     assert!(!state.cache.app_updates().exists());
     let remote = crate::graphql::executor::execute_graphql(
         &state.public,
-        async_graphql::Request::new("query { appUpdateDownload { status } }"),
+        async_graphql::Request::new("mutation { cancelAppUpdateDownload { status } }"),
         crate::graphql::executor::RequestContext::remote(Some(state.clone())),
     )
     .await;
@@ -362,7 +403,7 @@ async fn dropping_the_request_does_not_detach_worker_cleanup_from_the_serialized
     let _ = caller.await;
     assert!(!cleaned.load(Ordering::Acquire));
     release.send(()).unwrap();
-    let snapshot = execute_owned(state.clone(), Command::Snapshot)
+    let snapshot = execute_owned(state.clone(), Command::Reconcile)
         .await
         .unwrap();
     assert_eq!(snapshot.status, AppUpdateDownloadStatus::Idle);

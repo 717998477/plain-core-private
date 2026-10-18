@@ -64,13 +64,34 @@ async fn local_messages_edit_forward_and_clear_through_native_executor() {
     assert_eq!(rows["chatCount"], 2);
     assert_eq!(rows["chatRecords"].as_array().unwrap().len(), 2);
     assert_eq!(rows["chatConversations"][0]["id"], "local");
+    let unrelated = plain_rs::chat::messages::message_lifecycle::create(
+        &state.db,
+        "unrelated-peer",
+        "",
+        r#"{"type":"TEXT","value":{"text":"keep"}}"#,
+    )
+    .unwrap();
+    for query in ["", "  ", "unknown:value", "text:edited"] {
+        let result = execute(
+            &server,
+            format!(
+                "mutation {{ deleteChatItems(query:{}) {{affectedCount}} }}",
+                json!(query)
+            ),
+        )
+        .await;
+        assert_eq!(result["deleteChatItems"]["affectedCount"], 0);
+        assert_eq!(state.db.get_all_chats().len(), 3);
+    }
     let cleared = execute(
         &server,
-        r#"mutation { clearChatItems(target:"peer:local") {affectedCount} }"#.into(),
+        r#"mutation { deleteChatItems(query:"peer:=local") {affectedCount} }"#.into(),
     )
     .await;
-    assert_eq!(cleared["clearChatItems"]["affectedCount"], 2);
-    assert!(state.db.get_all_chats().is_empty());
+    assert_eq!(cleared["deleteChatItems"]["affectedCount"], 2);
+    let remaining = state.db.get_all_chats();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, unrelated.id);
     server.shutdown().await;
 }
 #[tokio::test]
@@ -122,7 +143,7 @@ async fn prepared_files_retain_metadata_and_message_owners_after_import_cleanup(
     assert_eq!(saved["value"]["items"][0]["durationMs"], 56);
     execute(
         &server,
-        r#"mutation { clearChatItems(target:"local") {affectedCount} }"#.into(),
+        r#"mutation { deleteChatItems(query:"peer:=local") {affectedCount} }"#.into(),
     )
     .await;
     assert!(state.db.app_file_get(&file.id).unwrap().is_none());

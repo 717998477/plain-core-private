@@ -24,6 +24,9 @@ impl CachePaths {
     pub fn video_cache(&self) -> PathBuf {
         self.root.join("video_cache")
     }
+    pub fn shared_previews(&self) -> PathBuf {
+        self.root.join("share_open")
+    }
     pub fn app_updates(&self) -> PathBuf {
         self.root.join("updates")
     }
@@ -55,6 +58,7 @@ impl CachePaths {
         for path in [
             self.image_cache(),
             self.video_cache(),
+            self.shared_previews(),
             self.web_assets(),
             self.app_updates(),
         ] {
@@ -64,6 +68,7 @@ impl CachePaths {
                 return Err(invalid("Invalid application cache directory"));
             }
         }
+        std::fs::create_dir_all(self.shared_previews())?;
         Ok(())
     }
 }

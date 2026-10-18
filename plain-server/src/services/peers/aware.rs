@@ -62,6 +62,12 @@ impl Runtime {
         self.reconcile(state, &mut work).await
     }
 
+    async fn permissions_changed(&self, state: &ServerState) -> Result<()> {
+        let mut work = self.work.lock().await;
+        work.rejected.clear();
+        self.reconcile(state, &mut work).await
+    }
+
     async fn reconcile(&self, state: &ServerState, work: &mut Work) -> Result<()> {
         let Some(generation) = state.host.generation() else {
             work.applied.clear();
@@ -169,21 +175,25 @@ pub(crate) fn start(state: ServerState) {
         }
         let mut retry = false;
         loop {
-            tokio::select! {
+            let permissions_changed = tokio::select! {
                 _ = stop.changed() => break,
-                changed = peers.changed() => if changed.is_err() { break; },
-                changed = connection.changed() => if changed.is_err() { break; },
+                changed = peers.changed() => { if changed.is_err() { break; } false },
+                changed = connection.changed() => { if changed.is_err() { break; } false },
                 event = events.recv() => match event {
-                    Ok(event) if event.event_type == "PREFS_UPDATED" => {},
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {},
+                    Ok(event) if event.event_type == "PERMISSIONS_UPDATED" => true,
+                    Ok(event) if event.event_type == "PREFS_UPDATED" => false,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     _ => continue,
                 },
-                _ = tokio::time::sleep(std::time::Duration::from_secs(5)), if retry => {},
-            }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)), if retry => false,
+            };
             let result = tokio::select! {
                 _ = stop.changed() => break,
-                result = state.aware.refresh(&state) => result,
+                result = async {
+                    if permissions_changed { state.aware.permissions_changed(&state).await }
+                    else { state.aware.refresh(&state).await }
+                } => result,
             };
             retry = result.is_err();
             if let Err(error) = result {

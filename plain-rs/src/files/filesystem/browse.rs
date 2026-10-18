@@ -10,8 +10,6 @@ use std::{fs, io, path::Path, time::SystemTime};
 pub struct Request {
     pub root: String,
     pub query: String,
-    pub text: Option<String>,
-    pub show_hidden: Option<bool>,
     pub sort_by: SortBy,
     pub offset: usize,
     pub limit: Option<usize>,
@@ -56,13 +54,12 @@ impl Request {
             .filter(|f| f.name == "file_size")
             .cloned()
             .collect();
-        let recursive = self.text.is_some() || !first("text").is_empty() || !sizes.is_empty();
+        let text = first("text");
+        let recursive = !text.is_empty() || !sizes.is_empty();
         Ok(Plan {
             root,
-            show_hidden: self
-                .show_hidden
-                .unwrap_or(first("show_hidden").eq_ignore_ascii_case("true")),
-            text: self.text.unwrap_or(first("text")).to_lowercase(),
+            show_hidden: first("show_hidden").eq_ignore_ascii_case("true"),
+            text: text.to_lowercase(),
             sizes,
             recursive,
             sort: self.sort_by,

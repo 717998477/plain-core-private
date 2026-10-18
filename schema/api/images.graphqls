@@ -42,18 +42,6 @@ type ImageEditorProjectSummary {
 	updatedAt: Instant!
 }
 
-type ImageModelsState {
-	version: Long!
-	status: ImageSearchStatusType!
-	downloadProgress: Int!
-	errorMessage: String!
-	modelSize: Long!
-	modelDir: String!
-	isIndexing: Boolean!
-	totalImages: Int!
-	indexedImages: Int!
-}
-
 type ImageSearchStatus {
 	status: ImageSearchStatusType!
 	downloadProgress: Int!
@@ -92,7 +80,6 @@ extend type Query {
 	imageCount(query: String!): Int!
 	imageEditorProject(id: ID!): ImageEditorProject
 	imageEditorProjects: [ImageEditorProjectSummary!]!
-	imageModelsState: ImageModelsState!
 	imageSearchStatus: ImageSearchStatus!
 	images(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!
 }

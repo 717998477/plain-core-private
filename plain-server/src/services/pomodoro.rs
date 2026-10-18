@@ -49,10 +49,6 @@ pub struct PomodoroToday {
     pub is_paused: bool,
     pub state: PomodoroState,
 }
-pub struct PomodoroTickResult {
-    pub today: PomodoroToday,
-    pub completed_state: Option<PomodoroState>,
-}
 #[derive(Clone)]
 struct Runtime {
     calendar_date: String,
@@ -179,11 +175,11 @@ impl Service {
         })
     }
     pub fn today(&self) -> anyhow::Result<PomodoroToday> {
-        Ok(self.tick_at(false, Utc::now())?.today)
+        self.tick_at(Utc::now())
     }
     pub fn command(&self, action: &str, duration: Option<i32>) -> anyhow::Result<PomodoroToday> {
         let now = Utc::now();
-        self.tick_at(false, now)?;
+        self.tick_at(now)?;
         self.command_at(action, duration, now)
     }
     fn command_at(
@@ -234,28 +230,20 @@ impl Service {
             .send_modify(|revision| *revision = revision.wrapping_add(1));
         Ok(today)
     }
-    fn tick_at(&self, skip: bool, now: DateTime<Utc>) -> anyhow::Result<PomodoroTickResult> {
-        self.advance_at(skip, now, false)
+    fn tick_at(&self, now: DateTime<Utc>) -> anyhow::Result<PomodoroToday> {
+        self.advance_at(now, false)
     }
-    fn advance_at(
-        &self,
-        skip: bool,
-        now: DateTime<Utc>,
-        progress: bool,
-    ) -> anyhow::Result<PomodoroTickResult> {
+    fn advance_at(&self, now: DateTime<Utc>, progress: bool) -> anyhow::Result<PomodoroToday> {
         let settings = self.settings()?;
         let mut runtime = self.runtime(&settings, now)?;
         let mut r = runtime.as_ref().unwrap().clone();
-        if !skip && !(r.deadline.is_some() && r.remaining(now) == 0) {
+        if !(r.deadline.is_some() && r.remaining(now) == 0) {
             let today = self.db.with_conn(|c| Self::snapshot(c, &r, now))?;
             *runtime = Some(r);
             if progress {
                 self.publish("progress", &today, None);
             }
-            return Ok(PomodoroTickResult {
-                today,
-                completed_state: None,
-            });
+            return Ok(today);
         }
         let result = self.db.with_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
@@ -265,28 +253,26 @@ impl Service {
                 [&r.calendar_date], |row| row.get(0),
             ).optional()?;
             let mut count = count.unwrap_or(0);
-            if !skip {
-                let work = if completed == PomodoroState::Work { r.total } else { 0 };
-                let rest = if completed != PomodoroState::Work { r.total } else { 0 };
-                let increment = i32::from(completed == PomodoroState::Work);
-                let existing: Option<String> = tx.query_row(
-                    "SELECT id FROM pomodoro_items WHERE date=?1",
-                    [&r.calendar_date], |row| row.get(0),
-                ).optional()?;
-                let timestamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-                if let Some(id) = existing {
-                    tx.execute(
-                        "UPDATE pomodoro_items SET completed_count=completed_count+?1,total_work_secs=total_work_secs+?2,total_break_secs=total_break_secs+?3,updated_at=?4 WHERE id=?5",
-                        params![increment, work, rest, timestamp, id],
-                    )?;
-                } else {
-                    tx.execute(
-                        "INSERT INTO pomodoro_items(id,date,completed_count,total_work_secs,total_break_secs,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",
-                        params![uuid::Uuid::new_v4().to_string(), r.calendar_date, increment, work, rest, timestamp],
-                    )?;
-                }
-                count += increment;
+            let work = if completed == PomodoroState::Work { r.total } else { 0 };
+            let rest = if completed != PomodoroState::Work { r.total } else { 0 };
+            let increment = i32::from(completed == PomodoroState::Work);
+            let existing: Option<String> = tx.query_row(
+                "SELECT id FROM pomodoro_items WHERE date=?1",
+                [&r.calendar_date], |row| row.get(0),
+            ).optional()?;
+            let timestamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            if let Some(id) = existing {
+                tx.execute(
+                    "UPDATE pomodoro_items SET completed_count=completed_count+?1,total_work_secs=total_work_secs+?2,total_break_secs=total_break_secs+?3,updated_at=?4 WHERE id=?5",
+                    params![increment, work, rest, timestamp, id],
+                )?;
+            } else {
+                tx.execute(
+                    "INSERT INTO pomodoro_items(id,date,completed_count,total_work_secs,total_break_secs,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",
+                    params![uuid::Uuid::new_v4().to_string(), r.calendar_date, increment, work, rest, timestamp],
+                )?;
             }
+            count += increment;
             r.state = match completed {
                 PomodoroState::Work if count > 0 && count % settings.pomodoros_before_long_break == 0 => PomodoroState::LongBreak,
                 PomodoroState::Work => PomodoroState::ShortBreak,
@@ -302,22 +288,14 @@ impl Service {
             r.settings_duration = r.total;
             let today = Self::snapshot(&tx, &r, now)?;
             tx.commit()?;
-            Ok::<_, anyhow::Error>(PomodoroTickResult { today, completed_state: Some(completed) })
+            Ok::<_, anyhow::Error>((today, completed))
         })?;
         *runtime = Some(r);
-        if result.completed_state.is_some() {
-            self.publish(
-                if skip { "skip" } else { "complete" },
-                &result.today,
-                if skip { None } else { result.completed_state },
-            );
-        }
-        if skip {
-            self.changed
-                .send_modify(|revision| *revision = revision.wrapping_add(1));
-        }
-        Ok(result)
+        let (today, completed) = result;
+        self.publish("complete", &today, Some(completed));
+        Ok(today)
     }
+
     pub fn follow(
         self: &Arc<Self>,
         mut stop: watch::Receiver<bool>,
@@ -333,8 +311,7 @@ impl Service {
                 }
                 let current = service.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    let result = current.advance_at(false, Utc::now(), initialized)?;
-                    Ok::<_, anyhow::Error>(result.today)
+                    current.advance_at(Utc::now(), initialized)
                 })
                 .await;
                 initialized = true;

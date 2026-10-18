@@ -1,4 +1,40 @@
 use super::*;
+
+#[test]
+fn destructive_path_validation_rejects_dot_targets_before_any_filesystem_operation() {
+    let directory = tempfile::tempdir().unwrap();
+    let preserved = directory.path().join("preserved.txt");
+    fs::write(&preserved, b"owned fixture").unwrap();
+    assert!(validate(&preserved).is_ok());
+    for suffix in [".", ".."] {
+        for trailing in ["", "/", "//"] {
+            let path = format!(
+                "{}{separator}{suffix}{trailing}",
+                directory.path().display(),
+                separator = std::path::MAIN_SEPARATOR
+            );
+            assert!(validate(Path::new(&path)).is_err(), "{path}");
+        }
+    }
+    assert_eq!(fs::read(preserved).unwrap(), b"owned fixture");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_backslash_and_mixed_separator_dot_targets_are_rejected() {
+    for path in [
+        r"C:\",
+        r"C:\owned\.",
+        r"C:\owned\..",
+        r"C:\owned\..\",
+        r"C:\owned/..\",
+        r"\\server\share\",
+        r"\\server\share\owned\..\",
+    ] {
+        assert!(validate(Path::new(path)).is_err(), "{path}");
+    }
+    assert!(validate(Path::new(r"C:\owned\file.txt")).is_ok());
+}
 #[test]
 fn receipts_include_only_physically_removed_nodes_without_following_symlinks() {
     let temp = tempfile::tempdir().unwrap();

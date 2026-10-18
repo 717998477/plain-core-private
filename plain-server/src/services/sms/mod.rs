@@ -10,3 +10,4 @@ pub(crate) mod send_runtime;
 pub(crate) mod addresses;
 
 mod parts;
+pub(crate) mod provider_events;

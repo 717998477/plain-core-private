@@ -74,16 +74,6 @@ impl SessionsQuery {
             .map(TryInto::try_into)
             .collect()
     }
-    async fn online_client_ids(&self, ctx: &Context<'_>) -> Result<Vec<async_graphql::ID>> {
-        caller(ctx)?;
-        Ok(ctx
-            .data::<ServerState>()?
-            .main_ws
-            .snapshot()
-            .into_iter()
-            .map(async_graphql::ID)
-            .collect())
-    }
 }
 
 #[derive(Default)]
@@ -105,6 +95,7 @@ impl SessionsMutation {
         Ok(true)
     }
 
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
     async fn create_session(&self, ctx: &Context<'_>, name: String) -> Result<Session> {
         caller(ctx)?;
         crate::services::sessions::create(ctx.data::<ServerState>()?, name)?.try_into()

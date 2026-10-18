@@ -1,7 +1,4 @@
 #[cfg(feature = "core")]
-pub mod actions;
-
-#[cfg(feature = "core")]
 pub mod public;
 
 #[cfg(feature = "core")]

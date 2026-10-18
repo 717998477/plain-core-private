@@ -1,7 +1,7 @@
-use crate::http::proxy::local::PeerResolver;
 use crate::http::proxy::local::utils::extract_proxy_params;
 use crate::http::proxy::local::utils::sha1;
 use crate::http::proxy::local::utils::ws_accept_key;
+use crate::http::proxy::local::{PeerResolver, ResolvedPeer};
 use std::sync::Arc;
 
 fn no_peers() -> PeerResolver {
@@ -278,7 +278,14 @@ async fn websocket_upgrade_relays_handshake_and_frames() {
 
     // The peer table resolves peer-1 to the mock device; _pt deliberately
     // points at an unroutable address to prove the resolution wins.
-    let peers: PeerResolver = Arc::new(move |_id: &str| Some(upstream_addr.to_string()));
+    let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = closed.clone();
+    let peers: PeerResolver = Arc::new(move |_id: &str| {
+        let observed = observed.clone();
+        Some(ResolvedPeer::new(upstream_addr.to_string(), move || {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }))
+    });
 
     let relay = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let relay_addr = relay.local_addr().unwrap();
@@ -286,7 +293,7 @@ async fn websocket_upgrade_relays_handshake_and_frames() {
     let (server_side, _) = relay.accept().await.unwrap();
 
     let client_http = reqwest::Client::new();
-    tokio::spawn(async move {
+    let connection = tokio::spawn(async move {
         crate::http::proxy::local::handle(server_side, client_http, peers).await;
     });
 
@@ -323,6 +330,7 @@ async fn websocket_upgrade_relays_handshake_and_frames() {
     client.read_exact(&mut echoed).await.unwrap();
     assert_eq!(&echoed, b"frame-bytes");
 
+    assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 0);
     let device_head = head_rx.await.unwrap();
     assert!(
         device_head.starts_with("GET /?cid=abc "),
@@ -336,6 +344,9 @@ async fn websocket_upgrade_relays_handshake_and_frames() {
         device_head.to_lowercase().contains("upgrade: websocket"),
         "got: {device_head}"
     );
+    drop(client);
+    connection.await.unwrap();
+    assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
     device.abort();
 }
 
@@ -407,14 +418,26 @@ async fn websocket_upgrade_unreachable_target_closes_cleanly() {
     let mut client = TcpStream::connect(relay_addr).await.unwrap();
     let (server_side, _) = relay.accept().await.unwrap();
 
+    let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = closed.clone();
+    let unavailable = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = unavailable.local_addr().unwrap().to_string();
+    drop(unavailable);
+    let peers: PeerResolver = Arc::new(move |id| {
+        assert_eq!(id, "peer-1");
+        let observed = observed.clone();
+        Some(ResolvedPeer::new(address.clone(), move || {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }))
+    });
     let client_http = reqwest::Client::new();
-    tokio::spawn(async move {
-        crate::http::proxy::local::handle(server_side, client_http, no_peers()).await;
+    let connection = tokio::spawn(async move {
+        crate::http::proxy::local::handle(server_side, client_http, peers).await;
     });
 
     // 127.0.0.1:1 refuses connections — the upstream dial fails.
     let request = format!(
-        "GET /?_pt=ws%3A%2F%2F127.0.0.1%3A1 HTTP/1.1\r\nhost: {relay_addr}\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\r\n"
+        "GET /?_pt=ws%3A%2F%2F127.0.0.1%3A1&_cid=peer-1 HTTP/1.1\r\nhost: {relay_addr}\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\r\n"
     );
     client.write_all(request.as_bytes()).await.unwrap();
 
@@ -428,6 +451,8 @@ async fn websocket_upgrade_unreachable_target_closes_cleanly() {
     );
     let tail = &response[response.len() - 4..];
     assert_eq!(tail, &[0x88, 0x02, 0x03, 0xEF], "close frame 1011 expected");
+    connection.await.unwrap();
+    assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

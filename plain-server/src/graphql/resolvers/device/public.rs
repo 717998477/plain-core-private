@@ -440,14 +440,6 @@ impl DeviceMutation {
         Ok(true)
     }
 
-    async fn clear_app_log_files(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        ctx.data::<crate::assembly::services::Services>()?
-            .logs
-            .clear_files()
-            .await
-            .map_err(async_graphql::Error::new)?;
-        Ok(true)
-    }
     #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
     async fn stage_app_restore(
         &self,

@@ -182,10 +182,10 @@ async fn supported_audio_duration_is_rust_owned_with_a_platform_catalog() {
     )
     .unwrap();
     let (_generation, mut requests) = runtime.host.connect();
-    let reading = runtime.milliseconds(path.to_str().unwrap());
+    let reading = runtime.probe_milliseconds(path.to_str().unwrap());
     tokio::pin!(reading);
     let duration = tokio::select! {
-        result = &mut reading => result.unwrap(),
+        result = &mut reading => result.unwrap().unwrap(),
         request = requests.recv() => panic!("Unexpected metadata request: {request:?}"),
     };
     assert_eq!(duration / 1000, 4);
@@ -210,7 +210,7 @@ async fn opaque_audio_duration_reads_only_the_descriptor_range_without_sdk_metad
     let (generation, mut requests) = runtime.host.connect();
     let reading = tokio::spawn({
         let runtime = runtime.clone();
-        async move { runtime.milliseconds("content://fixture/audio").await }
+        async move { runtime.probe_milliseconds("content://fixture/audio").await }
     });
     let request = requests.recv().await.unwrap();
     assert_eq!(request["method"], "fileResourceStream");
@@ -239,7 +239,7 @@ async fn opaque_audio_duration_reads_only_the_descriptor_range_without_sdk_metad
         )
         .await
         .unwrap();
-    assert_eq!(reading.await.unwrap().unwrap() / 1000, 4);
+    assert_eq!(reading.await.unwrap().unwrap().unwrap() / 1000, 4);
     assert!(requests.try_recv().is_err());
     assert!(!directory.path().join("cache").exists());
     runtime.shutdown().await;
@@ -266,10 +266,10 @@ async fn unknown_duration_never_requests_platform_metadata_or_caches_a_fabricate
     let (_generation, mut requests) = runtime.host.connect();
     assert_eq!(
         runtime
-            .milliseconds(row["path"].as_str().unwrap())
+            .probe_milliseconds(row["path"].as_str().unwrap())
             .await
             .unwrap(),
-        0
+        None
     );
     let mut rows = vec![row];
     runtime.enrich(DataType::Audio, &mut rows).await.unwrap();
@@ -291,7 +291,6 @@ async fn inaccessible_sources_fail_uniformly_without_initializing_duration_cache
                 .await
                 .is_err()
         );
-        assert!(runtime.milliseconds(path.to_str().unwrap()).await.is_err());
         assert!(runtime.cache.all().unwrap().is_empty());
         assert!(requests.try_recv().is_err());
         runtime.shutdown().await;

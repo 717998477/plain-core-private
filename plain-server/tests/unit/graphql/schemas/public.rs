@@ -47,6 +47,28 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "createChatItem(",
         "replaceChatFiles(",
         "publishMdns:",
+        "browseFiles(",
+        "type FilePage",
+        "enqueueAudios(",
+        "deletePlaylistVideos(",
+        "clearChatItems(",
+        "videoPlayProgress(",
+        "deleteVideoPlayProgress(",
+        "startMdnsReceiver:",
+        "dlnaReceiverRules:",
+        "prewarmPeerTransport(",
+        "type PeerPrewarmAdvertisement",
+        "imageModelsState:",
+        "onlineClientIds:",
+        "activePeerTransfers:",
+        "selectAudio(",
+        "mediaIds(",
+        "pauseSharedDownload(",
+        "resumeSharedDownload(",
+        "dlnaSenderState:",
+        "type ActivePeerTransfer",
+        "enum TransportType",
+        "type ImageModelsState",
         "input ClipboardRecordInput",
         "type ClipboardRecordResult",
         "playAudioByPath(",
@@ -119,7 +141,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         .unwrap();
     assert!(!image.contains("durationMs"));
     assert!(sdl.contains("audioLyricsByPath(path: String!): String"));
-    assert!(sdl.contains("smsIds(query: String!): [ID!]!"));
+    assert!(!sdl.contains("smsIds("));
     let playback = sdl
         .split("type AudioPlayback {")
         .nth(1)

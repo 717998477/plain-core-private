@@ -1,5 +1,81 @@
 use super::*;
 
+#[tokio::test(start_paused = true)]
+async fn receiver_starts_without_http_and_retries_when_platform_permissions_change() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    let _runtime = TEST_LOCK.lock().await;
+    let directory = tempfile::tempdir().unwrap();
+    let prefs =
+        Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    prefs.set("client_id", "fixture-resident-receiver").unwrap();
+    prefs
+        .set("mdns_hostname", "fixture-resident-receiver.local")
+        .unwrap();
+    let server = crate::assembly::server::ContentServer::start(
+        directory.path(),
+        &plain_rs::utils::base64::base64_encode(&[8; 32]),
+        prefs,
+    )
+    .unwrap();
+    let state = server.runtime_state();
+    let (generation, mut requests) = state.host.connect();
+    let supported = Arc::new(AtomicBool::new(false));
+    let granted = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let host = state.host.clone();
+    let capabilities = supported.clone();
+    let permission = granted.clone();
+    let sampled = calls.clone();
+    let responder = tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            let result = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => {
+                    sampled.fetch_add(1, Ordering::SeqCst);
+                    if capabilities.load(Ordering::SeqCst) {
+                        json!(["PEER_DISCOVERY"])
+                    } else {
+                        json!([])
+                    }
+                }
+                "mdnsMulticast" => json!(
+                    request["params"]["acquire"] == false || permission.load(Ordering::SeqCst)
+                ),
+                method => panic!("unexpected host method {method}"),
+            };
+            host.reply(generation, json!({"id":request["id"],"result":result}))
+                .unwrap();
+        }
+    });
+    Runtime::host_connected(state.clone(), generation.wrapping_sub(1)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    Runtime::host_connected(state.clone(), generation).await;
+    assert_eq!(state.mdns.snapshot()["receiver"], false);
+    supported.store(true, Ordering::SeqCst);
+    Runtime::host_connected(state.clone(), generation).await;
+    assert_eq!(state.mdns.snapshot()["receiver"], false);
+    granted.store(true, Ordering::SeqCst);
+    let mut events = state.events.subscribe();
+    state.mdns.permissions_changed(state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_millis(800)).await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while events.recv().await.unwrap().event_type != WS_MDNS_UPDATED {}
+    })
+    .await
+    .unwrap();
+    let snapshot = state.mdns.snapshot();
+    assert_eq!(snapshot["receiver"], true);
+    assert_eq!(snapshot["published"], false);
+    assert_eq!(snapshot["scanning"], false);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    state.mdns.permissions_changed(state.clone());
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    server.shutdown().await;
+    assert!(OWNER.lock().await.is_none());
+    responder.abort();
+}
+
 #[tokio::test]
 async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner() {
     let _runtime = crate::services::discovery::mdns_runtime::TEST_LOCK

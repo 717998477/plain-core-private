@@ -6,6 +6,19 @@ use plain_rs::transport::router::Ticket;
 use plain_rs::transport::router::TransportType;
 use serde_json::{Value, json};
 use std::time::Duration;
+pub(crate) fn snapshot_event(state: &ServerState) -> plain_rs::events::WsEvent {
+    let mut active: Vec<_> = state.transport.active().into_iter().collect();
+    active.sort_by(|left, right| left.0.cmp(&right.0));
+    let payload: Vec<_> = active
+        .into_iter()
+        .map(|(peer_id, transport)| {
+            json!({
+                "peerId": peer_id, "transport": transport,
+            })
+        })
+        .collect();
+    plain_rs::events::WsEvent::broadcast("PEER_TRANSPORT_UPDATED", json!(payload).to_string())
+}
 pub(crate) fn notify(state: &ServerState) {
     let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
         "PEER_TRANSPORT_UPDATED",

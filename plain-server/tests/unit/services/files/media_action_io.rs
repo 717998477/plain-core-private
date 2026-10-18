@@ -2,7 +2,7 @@ use super::*;
 
 #[cfg(feature = "media")]
 #[tokio::test]
-async fn media_delete_returns_actual_os_receipts_and_keeps_failed_selection() {
+async fn existing_media_delete_filters_trash_and_preserves_unselected_files() {
     let directory = tempfile::tempdir().unwrap();
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
@@ -48,15 +48,11 @@ async fn media_delete_returns_actual_os_receipts_and_keeps_failed_selection() {
         .unwrap();
     let ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
     let native = core.native_graphql().unwrap();
-    let response = native.execute(async_graphql::Request::new("mutation Delete($ids: [ID!]!) { mediaAction(type: DOC, action: DELETE, ids: $ids, fromTrash: false, destDir: \"\") { affectedCount failedIds } }")
-        .variables(async_graphql::Variables::from_json(serde_json::json!({"ids":ids})))).await;
+    let response = native.execute(async_graphql::Request::new("mutation Delete($query: String!) { deleteMediaItems(type: DOC, query: $query) { affectedCount } }")
+        .variables(async_graphql::Variables::from_json(serde_json::json!({"query":format!("ids:{} trash:false",ids.join(","))})))).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    assert_eq!(data["mediaAction"]["affectedCount"], 1);
-    assert_eq!(
-        data["mediaAction"]["failedIds"],
-        serde_json::json!([rows[1].id])
-    );
+    assert_eq!(data["deleteMediaItems"]["affectedCount"], 1);
     assert!(!paths[0].exists());
     assert!(paths[1].exists());
     assert!(
@@ -113,11 +109,11 @@ async fn image_delete_updates_index_before_any_parent_consumes_the_receipt() {
         .unwrap();
     let index = core.runtime_state().image_index.clone();
     let version = index.status().version;
-    let response = core.native_graphql().unwrap().execute(async_graphql::Request::new("mutation Delete($ids: [ID!]!) { mediaAction(type: IMAGE, action: DELETE, ids: $ids, fromTrash: false, destDir: \"\") { affectedCount failedIds } }")
-        .variables(async_graphql::Variables::from_json(serde_json::json!({"ids":[rows[0].id]})))).await;
+    let response = core.native_graphql().unwrap().execute(async_graphql::Request::new("mutation Delete($query: String!) { deleteMediaItems(type: IMAGE, query: $query) { affectedCount } }")
+        .variables(async_graphql::Variables::from_json(serde_json::json!({"query":format!("ids:{} trash:false",rows[0].id)})))).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
-        response.data.into_json().unwrap()["mediaAction"]["affectedCount"],
+        response.data.into_json().unwrap()["deleteMediaItems"]["affectedCount"],
         1
     );
     assert!(!path.exists());
@@ -307,7 +303,7 @@ async fn native_main_delete_has_no_host_exchange_and_publishes_each_event_once()
     let id = seed(&state.db, &source);
     let (_generation, mut requests) = state.host.connect();
     let mut events = state.events.subscribe();
-    let response = core.native_graphql().unwrap().execute(async_graphql::Request::new("mutation Delete($ids: [ID!]!) { mediaAction(type: DOC, action: DELETE, ids: $ids, fromTrash: false, destDir: \"\") { affectedCount failedIds } }").variables(async_graphql::Variables::from_json(serde_json::json!({"ids":[id]})))).await;
+    let response = core.native_graphql().unwrap().execute(async_graphql::Request::new("mutation Delete($query: String!) { deleteMediaItems(type: DOC, query: $query) { affectedCount } }").variables(async_graphql::Variables::from_json(serde_json::json!({"query":format!("ids:{id} trash:false")})))).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert!(requests.try_recv().is_err());
     let mut content = 0;
@@ -481,12 +477,14 @@ async fn partial_main_media_actions_invalidate_only_completed_duration_entries()
             .unwrap();
         let revision = state.duration_cache.revision();
         let response = core.native_graphql().unwrap().execute(async_graphql::Request::new(format!(
-            "mutation Delete($ids: [ID!]!) {{ mediaAction(type: {name}, action: DELETE, ids: $ids, fromTrash: false, destDir: \"\") {{ affectedCount failedIds }} }}"
-        )).variables(async_graphql::Variables::from_json(serde_json::json!({"ids":[good,bad]})))).await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
-        let data = response.data.into_json().unwrap();
-        assert_eq!(data["mediaAction"]["affectedCount"], 1);
-        assert_eq!(data["mediaAction"]["failedIds"], serde_json::json!([bad]));
+            "mutation Delete($query: String!) {{ deleteMediaItems(type: {name}, query: $query) {{ affectedCount }} }}"
+        )).variables(async_graphql::Variables::from_json(serde_json::json!({"query":format!("ids:{good},{bad} trash:false")})))).await;
+        assert_eq!(response.errors.len(), 1, "{:?}", response.errors);
+        assert!(
+            response.errors[0]
+                .message
+                .contains("1 media actions failed (1 completed)")
+        );
         assert!(!good_path.exists());
         assert!(blocked.is_file());
         let remaining = state.duration_cache.all().unwrap();

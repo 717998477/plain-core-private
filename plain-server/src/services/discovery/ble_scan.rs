@@ -86,13 +86,39 @@ pub(crate) async fn seen(state: &ServerState, id: &str, short_id: &str) -> anyho
 /// the device so the App list updates over `NEARBY_DEVICES_UPDATED` /
 /// `WS_NEARBY_DEVICE_FOUND`.
 async fn run(state: ServerState, pending: Pending) {
-    let result = state
-        .host
-        .call(
-            "bleScanRead",
-            json!({"shortId": pending.short_id, "scan": pending.scan}),
-        )
-        .await;
+    if *state.stop.borrow() {
+        return;
+    }
+    let Some(owner) =
+        state
+            .ble_scans
+            .pending_owner(&pending.scan, &pending.short_id, &pending.generation)
+    else {
+        return;
+    };
+    let result = async {
+        let body = plain_rs::discovery::nearby_wire::Message::Discover
+            .wire()
+            .map_err(|error| error.to_string())?;
+        let request = plain_rs::protocols::ble::message(&[], body.as_bytes())
+            .map_err(|error| error.to_string())?;
+        state
+            .host
+            .call_current(
+                owner,
+                "bleScanRead",
+                json!({
+                    "shortId": pending.short_id,
+                    "scan": pending.scan,
+                    "request": plain_rs::utils::base64::base64_encode(&request),
+                }),
+            )
+            .await
+    }
+    .await;
+    if *state.stop.borrow() || !state.host.is_current(owner) {
+        return;
+    }
     let payload = match result {
         Ok(value) => value
             .get("payload")
@@ -134,13 +160,30 @@ async fn run(state: ServerState, pending: Pending) {
 
 /// The single serial read worker. Started once at server bring-up.
 pub(crate) fn start(state: ServerState) {
-    tokio::spawn(async move {
-        loop {
-            let Some(pending) = state.ble_scan.take() else {
-                state.ble_scan.wake.notified().await;
-                continue;
-            };
-            run(state.clone(), pending).await;
-        }
-    });
+    tokio::spawn(work(state));
 }
+
+async fn work(state: ServerState) {
+    let mut stop = state.stop.clone();
+    loop {
+        if *stop.borrow() {
+            break;
+        }
+        let operation = async {
+            match state.ble_scan.take() {
+                Some(pending) => run(state.clone(), pending).await,
+                None => state.ble_scan.wake.notified().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = stop.changed() => break,
+            _ = operation => {},
+        }
+    }
+    state.ble_scan.queue.lock().unwrap().clear();
+}
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/discovery/ble_scan.rs"]
+mod tests;

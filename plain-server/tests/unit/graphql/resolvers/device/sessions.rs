@@ -40,7 +40,7 @@ async fn execute(
 }
 
 #[tokio::test]
-async fn authenticated_native_and_remote_clients_keep_the_full_session_management_contract() {
+async fn authenticated_native_and_remote_clients_can_list_session_metadata() {
     let (_directory, server) = fixture();
     let state = server.runtime_state();
     let remote = execute(
@@ -147,4 +147,36 @@ async fn management_requires_a_trusted_caller_identity() {
     let audit = state.db.audit_events(0, 10, None).unwrap();
     assert_eq!(audit[0].r#type, "revoke");
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn only_the_local_owner_can_mint_custom_session_credentials() {
+    let (_directory, core) = fixture();
+    let state = core.runtime_state();
+    let before = state.db.session_list().unwrap().len();
+    let remote = execute(
+        &state,
+        "first",
+        RequestOrigin::Remote,
+        "mutation { createSession(name:\"Rejected remote credential\") { clientId } }",
+    )
+    .await;
+    assert_eq!(remote.errors.len(), 1);
+    assert_eq!(remote.errors[0].message, "no_permission");
+    assert_eq!(state.db.session_list().unwrap().len(), before);
+    let local = execute(
+        &state,
+        "native",
+        RequestOrigin::Local,
+        "mutation { createSession(name:\"Owned custom credential\") { clientId token } }",
+    )
+    .await;
+    assert!(local.errors.is_empty(), "{:?}", local.errors);
+    let value = local.data.into_json().unwrap();
+    let id = value["createSession"]["clientId"].as_str().unwrap();
+    let token = value["createSession"]["token"].as_str().unwrap();
+    assert_eq!(plain_rs::utils::base64::base64_decode(token).len(), 32);
+    assert_eq!(state.db.session_get(id).unwrap().unwrap().token, token);
+    assert_eq!(state.db.session_list().unwrap().len(), before + 1);
+    core.stop_core().await;
 }

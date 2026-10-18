@@ -63,8 +63,8 @@ pub fn validate(root: &Path) -> io::Result<()> {
         || root.parent().is_none()
         || matches!(
             root.to_string_lossy()
-                .trim_end_matches('/')
-                .rsplit('/')
+                .trim_end_matches(std::path::is_separator)
+                .rsplit(std::path::is_separator)
                 .next(),
             Some("." | "..")
         )

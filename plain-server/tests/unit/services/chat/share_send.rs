@@ -175,3 +175,99 @@ async fn failed_remote_delivery_retains_share_and_successful_local_message() {
     );
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn folder_share_and_all_messages_roll_back_when_a_later_message_insert_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = server(directory.path());
+    let state = core.runtime_state();
+    let service = Service::new(state.db.clone(), state.prefs.clone());
+    let folder_path = directory.path().join("owned-folder");
+    std::fs::create_dir(&folder_path).unwrap();
+    std::fs::write(folder_path.join("owned.txt"), b"owned bytes").unwrap();
+    let existing = service
+        .create(
+            "Existing share".into(),
+            vec![folder_path.to_string_lossy().into_owned()],
+            true,
+            None,
+        )
+        .unwrap();
+    state.db.with_conn(|connection| connection.execute_batch(
+        "CREATE TRIGGER reject_second_share_message BEFORE INSERT ON chats WHEN (SELECT COUNT(*) FROM chats)>0 BEGIN SELECT RAISE(ABORT,'owned batch failure'); END;"
+    )).unwrap();
+    let mut events = state.events.subscribe();
+    let result = folder(
+        &state,
+        service,
+        vec!["local".into(), "peer:local".into()],
+        folder_path.to_string_lossy().into_owned(),
+        "Owned folder".into(),
+        None,
+    )
+    .await;
+    assert!(result.is_err());
+    let shares = state.db.share_list().unwrap();
+    assert_eq!(shares.len(), 1);
+    assert_eq!(shares[0].id, existing.id);
+    assert_eq!(
+        state
+            .db
+            .with_conn(|connection| connection
+                .query_row("SELECT COUNT(*) FROM chats", [], |row| row.get::<_, i64>(0)))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        std::fs::read(folder_path.join("owned.txt")).unwrap(),
+        b"owned bytes"
+    );
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event.event_type, "CONTENT_CHANGED");
+        assert_ne!(event.event_type, plain_rs::chat::events::WS_MESSAGE_CREATED);
+    }
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_committed_folder_share_survives_a_later_delivery_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = server(directory.path());
+    let state = core.runtime_state();
+    let service = Service::new(state.db.clone(), state.prefs.clone());
+    state
+        .prefs
+        .set(
+            plain_rs::prefs::system::keys::SIGNATURE_KEY_PAIR,
+            "invalid signing fixture",
+        )
+        .unwrap();
+    let folder_path = directory.path().join("owned-folder");
+    std::fs::create_dir(&folder_path).unwrap();
+    let result = folder(
+        &state,
+        service,
+        vec!["peer:remote".into()],
+        folder_path.to_string_lossy().into_owned(),
+        "Owned folder".into(),
+        None,
+    )
+    .await;
+    assert!(result.is_err());
+    let shares = state.db.share_list().unwrap();
+    assert_eq!(shares.len(), 1);
+    let content = state
+        .db
+        .with_conn(|connection| {
+            connection.query_row("SELECT content FROM chats", [], |row| {
+                row.get::<_, String>(0)
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&content).unwrap()["value"]["shareId"],
+        shares[0].id
+    );
+    assert!(folder_path.exists());
+    core.shutdown().await;
+}

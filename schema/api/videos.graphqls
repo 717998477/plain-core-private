@@ -22,7 +22,6 @@ type VideoPlayProgress {
 }
 
 extend type Mutation {
-	deleteVideoPlayProgress(mediaId: ID!): Boolean!
 	recordVideoPlay(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
 	saveVideoPlayProgress(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
 }
@@ -30,6 +29,5 @@ extend type Mutation {
 extend type Query {
 	recentVideoPlayProgress(since: Instant!): [VideoPlayProgress!]!
 	videoCount(query: String!): Int!
-	videoPlayProgress(mediaId: ID!): VideoPlayProgress
 	videos(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Video!]!
 }

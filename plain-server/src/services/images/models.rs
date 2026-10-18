@@ -23,6 +23,11 @@ pub(crate) struct Snapshot {
     #[serde(flatten)]
     pub status: ImageSearchStatus,
 }
+impl Snapshot {
+    pub(crate) fn event(&self) -> WsEvent {
+        WsEvent::broadcast("IMAGE_MODELS_UPDATED", serde_json::to_string(self).unwrap())
+    }
+}
 struct ModelState {
     version: u64,
     published_version: Option<u64>,
@@ -166,10 +171,7 @@ impl Runtime {
             return;
         }
         state.published_version = Some(snapshot.version);
-        let _ = self.events.send(WsEvent::broadcast(
-            "IMAGE_MODELS_UPDATED",
-            serde_json::to_string(&snapshot).unwrap(),
-        ));
+        let _ = self.events.send(snapshot.event());
         let _ = self.events.send(WsEvent::broadcast(
             "IMAGE_SEARCH_UPDATED",
             serde_json::to_string(&snapshot.status).unwrap(),

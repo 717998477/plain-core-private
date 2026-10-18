@@ -68,6 +68,13 @@ impl HostLibrary {
         Ok(())
     }
 
+    pub(crate) fn tracks_by_ids(&mut self, ids: &[String]) -> DomainResult<Vec<AudioTrack>> {
+        self.cache_ids(ids)?;
+        ids.iter()
+            .map(|id| plain_rs::media::audio::queue::track_by_id(&self.db, id))
+            .collect()
+    }
+
     pub fn cache_ids(&mut self, ids: &[String]) -> DomainResult<()> {
         if crate::platform::audio_catalog::uses_system_catalog() && !ids.is_empty() {
             let rows: Vec<AudioMedia> = self.resolve(ids, &[])?;

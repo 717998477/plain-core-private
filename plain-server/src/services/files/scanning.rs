@@ -15,7 +15,6 @@ pub(crate) enum State {
     Failed,
 }
 pub(crate) enum Command {
-    Start(String),
     Rebuild(String),
     Pause,
     Resume,
@@ -65,7 +64,7 @@ pub(crate) async fn execute(state: &ServerState, command: Command) -> Result<()>
     {
         let catalog = crate::native::media_catalog::NativeMediaCatalog::new(state.clone());
         match command {
-            Command::Start(root) | Command::Rebuild(root) => {
+            Command::Rebuild(root) => {
                 catalog
                     .start_source_scan(&root)
                     .map_err(anyhow::Error::msg)?;

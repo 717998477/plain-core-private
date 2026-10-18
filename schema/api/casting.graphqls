@@ -7,38 +7,18 @@ input DlnaMediaInput {
 	audio: Boolean! = false
 }
 
-enum DlnaPlaybackState {
-	NO_MEDIA_PRESENT
-	STOPPED
-	PLAYING
-	PAUSED_PLAYBACK
-	TRANSITIONING
-}
-
 enum DlnaReceiverAction {
-	START
-	STOP
 	RETRY
 	REMOVE_RULE
 	ACCEPT
 	REJECT
-	POSITION
-	SEEK_CONSUMED
-	PLAYBACK
-	STOPPED
-	SET_ENABLED
 }
 
 input DlnaReceiverInput {
 	action: DlnaReceiverAction!
-	port: Int
 	ip: String
 	allowed: Boolean
 	remember: Boolean
-	positionMs: Long
-	durationMs: Long
-	state: DlnaPlaybackState
-	enabled: Boolean
 }
 
 type DlnaRenderer {
@@ -98,7 +78,5 @@ extend type Mutation {
 
 extend type Query {
 	dlnaReceiver: JSON!
-	dlnaReceiverRules: JSON!
 	dlnaRenderers: [DlnaRenderer!]!
-	dlnaSenderState: DlnaSenderState!
 }

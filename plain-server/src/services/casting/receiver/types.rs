@@ -9,7 +9,7 @@ pub enum DlnaMediaType {
     UNKNOWN,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, async_graphql::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DlnaPlaybackState {
     NoMediaPresent,
     Stopped,

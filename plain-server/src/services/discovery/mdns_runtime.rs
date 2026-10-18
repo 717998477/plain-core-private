@@ -94,7 +94,6 @@ pub(crate) enum Request {
     Receiver {},
     Start {},
     Stop {},
-    Browse {},
     Restart {},
     Publish {},
     Update {},
@@ -474,7 +473,6 @@ impl Runtime {
                     )?;
                     session.manual_scanning = false;
                 }
-                Request::Browse {} => session.browser.send_ptr_query(),
                 Request::Restart {} => {
                     host_responder::restart_socket();
                     host_responder::ensure_ipv6_started();
@@ -548,7 +546,7 @@ impl Runtime {
     }
 
     pub(crate) async fn host_connected(state: ServerState, generation: u64) {
-        if state.mdns.session.lock().unwrap().is_none() {
+        if state.native_client_id().is_err() {
             return;
         }
         let mut stop = state.stop.clone();
@@ -566,23 +564,34 @@ impl Runtime {
                     tokio::select! { _ = stop.changed() => return, _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {} }
                 }
                 Err(error) => {
-                    log::warn!("mDNS multicast reacquire: {error}");
+                    log::warn!("mDNS receiver unavailable: {error}");
                     return;
                 }
             }
         }
     }
     pub(crate) fn network_changed(self: &Arc<Self>, state: ServerState) {
-        if self.session.lock().unwrap().is_none() {
+        if state.native_client_id().is_err() {
             return;
         }
         let runtime = self.clone();
         let stop = state.stop.clone();
         self.schedule_network_restart(stop, async move {
-            if let Err(error) = runtime.execute(&state, Request::Restart {}).await {
+            let request = if runtime.session.lock().unwrap().is_some() {
+                Request::Restart {}
+            } else {
+                Request::Receiver {}
+            };
+            if let Err(error) = runtime.execute(&state, request).await {
                 log::debug!("mDNS network refresh failed: {error}");
             }
         });
+    }
+    pub(crate) fn permissions_changed(self: &Arc<Self>, state: ServerState) {
+        if self.session.lock().unwrap().is_some() {
+            return;
+        }
+        self.network_changed(state);
     }
     fn schedule_network_restart<F>(
         &self,

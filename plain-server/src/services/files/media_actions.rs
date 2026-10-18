@@ -95,26 +95,6 @@ impl MediaActions {
         }
         Ok(affected)
     }
-    pub async fn run(
-        &self,
-        r#type: DataType,
-        action: Action,
-        requested: Vec<String>,
-        from_trash: bool,
-        dest_dir: String,
-    ) -> Result<Completed> {
-        let capabilities = super::media_action_io::capability_list(&self.host)
-            .await
-            .map_err(async_graphql::Error::new)?;
-        crate::services::capabilities::require_list(
-            &capabilities,
-            super::media_action_io::action_capability(action),
-        )
-        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-        self.run_batches(r#type, action, requested, from_trash, dest_dir)
-            .await
-    }
-
     async fn run_batches(
         &self,
         kind: DataType,

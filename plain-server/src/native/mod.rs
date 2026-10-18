@@ -11,7 +11,6 @@ pub mod resource_stream;
 pub mod uploads;
 
 #[cfg(feature = "core")]
-pub mod archives;
 
 #[cfg(feature = "core")]
 pub mod media_catalog;

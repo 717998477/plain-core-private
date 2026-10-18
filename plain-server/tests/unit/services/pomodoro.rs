@@ -46,16 +46,12 @@ fn completion_is_atomic_and_shared_phase_rules_match_the_app_baseline() {
     let fixture = fixture();
     let service = fixture.service;
     let now = noon(3);
+    let mut events = service.events.subscribe();
     service.command_at("start", Some(1), now).unwrap();
+    while events.try_recv().is_ok() {}
     let results = std::thread::scope(|scope| {
         let threads: Vec<_> = (0..16)
-            .map(|_| {
-                scope.spawn(|| {
-                    service
-                        .tick_at(false, now + chrono::Duration::seconds(1))
-                        .unwrap()
-                })
-            })
+            .map(|_| scope.spawn(|| service.tick_at(now + chrono::Duration::seconds(1)).unwrap()))
             .collect();
         threads
             .into_iter()
@@ -63,9 +59,11 @@ fn completion_is_atomic_and_shared_phase_rules_match_the_app_baseline() {
             .collect::<Vec<_>>()
     });
     assert_eq!(
-        results
-            .iter()
-            .filter(|result| result.completed_state.is_some())
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|event| {
+                let payload: Value = serde_json::from_str(&event.payload).unwrap();
+                payload["action"] == "complete" && payload["completedState"] == "WORK"
+            })
             .count(),
         1
     );
@@ -78,22 +76,17 @@ fn completion_is_atomic_and_shared_phase_rules_match_the_app_baseline() {
     assert!(
         results
             .iter()
-            .all(|result| result.today.state == PomodoroState::ShortBreak
-                && !result.today.is_running)
+            .all(|result| result.state == PomodoroState::ShortBreak && !result.is_running)
     );
     service.command_at("start", Some(1), now).unwrap();
-    let rest = service
-        .tick_at(false, now + chrono::Duration::seconds(1))
-        .unwrap();
-    assert_eq!(rest.today.state, PomodoroState::Work);
-    assert_eq!(rest.today.current_round, 2);
+    let rest = service.tick_at(now + chrono::Duration::seconds(1)).unwrap();
+    assert_eq!(rest.state, PomodoroState::Work);
+    assert_eq!(rest.current_round, 2);
     service.command_at("start", Some(1), now).unwrap();
-    let work = service
-        .tick_at(false, now + chrono::Duration::seconds(1))
-        .unwrap();
-    assert_eq!(work.today.state, PomodoroState::LongBreak);
-    assert_eq!(work.today.time_left_sec, 180);
-    service.tick_at(true, now).unwrap();
+    let work = service.tick_at(now + chrono::Duration::seconds(1)).unwrap();
+    assert_eq!(work.state, PomodoroState::LongBreak);
+    assert_eq!(work.time_left_sec, 180);
+    service.command_at("stop", None, now).unwrap();
     let row = service
         .db
         .pomodoro_get_by_date("2026-10-03")
@@ -124,10 +117,9 @@ fn progress_does_not_write_statistics_and_pause_adjust_and_settings_preserve_sta
         .unwrap();
     for second in 1..10 {
         let progress = service
-            .advance_at(false, now + chrono::Duration::seconds(second), true)
+            .advance_at(now + chrono::Duration::seconds(second), true)
             .unwrap();
-        assert_eq!(progress.today.time_left_sec, 30 - second as i32);
-        assert!(progress.completed_state.is_none());
+        assert_eq!(progress.time_left_sec, 30 - second as i32);
     }
     assert_eq!(
         service
@@ -143,25 +135,21 @@ fn progress_does_not_write_statistics_and_pause_adjust_and_settings_preserve_sta
     assert!(paused.is_paused && !paused.is_running);
     assert_eq!(
         service
-            .tick_at(false, now + chrono::Duration::hours(1))
+            .tick_at(now + chrono::Duration::hours(1))
             .unwrap()
-            .today
             .time_left_sec,
         20
     );
     service.command_at("stop", None, now).unwrap();
     service.command_at("adjust", Some(15), now).unwrap();
-    assert_eq!(service.tick_at(false, now).unwrap().today.time_left_sec, 15);
+    assert_eq!(service.tick_at(now).unwrap().time_left_sec, 15);
     let mut settings = serde_json::to_value(service.settings().unwrap()).unwrap();
     settings["workDurationMin"] = json!(3);
     service
         .prefs
         .set_user("pomodoro_settings", settings)
         .unwrap();
-    assert_eq!(
-        service.tick_at(false, now).unwrap().today.time_left_sec,
-        180
-    );
+    assert_eq!(service.tick_at(now).unwrap().time_left_sec, 180);
     assert!(service.command_at("adjust", Some(-1), now).is_err());
     assert!(service.command_at("adjust", Some(181), now).is_err());
 }
@@ -172,20 +160,19 @@ fn rust_rolls_over_calendar_days_without_client_configuration() {
     let service = fixture.service;
     let now = noon(3);
     service.command_at("start", Some(1), now).unwrap();
-    service
-        .tick_at(false, now + chrono::Duration::seconds(1))
-        .unwrap();
-    service.tick_at(true, now).unwrap();
-    assert_eq!(service.tick_at(false, now).unwrap().today.current_round, 2);
+    service.tick_at(now + chrono::Duration::seconds(1)).unwrap();
+    service.command_at("start", Some(1), now).unwrap();
+    service.tick_at(now + chrono::Duration::seconds(1)).unwrap();
+    assert_eq!(service.tick_at(now).unwrap().current_round, 2);
     let midnight = Service::initial_runtime(&service.settings().unwrap(), noon(4))
         .unwrap()
         .day_start;
     service
         .command_at("start", Some(1), midnight - chrono::Duration::seconds(1))
         .unwrap();
-    let next = service.tick_at(false, midnight).unwrap();
-    assert_eq!(next.today.current_round, 1);
-    assert_eq!(next.today.completed_count, 1);
+    let next = service.tick_at(midnight).unwrap();
+    assert_eq!(next.current_round, 1);
+    assert_eq!(next.completed_count, 1);
     assert_eq!(
         service
             .db
@@ -215,26 +202,20 @@ fn failed_completion_keeps_deadline_and_emits_no_success_until_commit() {
     service.command_at("start", Some(1), now).unwrap();
     while events.try_recv().is_ok() {}
     service.db.with_conn(|c| c.execute_batch("CREATE TRIGGER fail_pomodoro BEFORE INSERT ON pomodoro_items BEGIN SELECT RAISE(FAIL, 'test failure'); END")).unwrap();
-    assert!(
-        service
-            .tick_at(false, now + chrono::Duration::seconds(1))
-            .is_err()
-    );
+    assert!(service.tick_at(now + chrono::Duration::seconds(1)).is_err());
     assert!(events.try_recv().is_err());
     assert!(service.runtime.lock().as_ref().unwrap().deadline.is_some());
     service
         .db
         .with_conn(|c| c.execute_batch("DROP TRIGGER fail_pomodoro"))
         .unwrap();
-    let done = service
-        .tick_at(false, now + chrono::Duration::seconds(1))
-        .unwrap();
-    assert_eq!(done.completed_state, Some(PomodoroState::Work));
-    assert_eq!(done.today.completed_count, 1);
-    assert_eq!(
-        serde_json::from_str::<Value>(&events.try_recv().unwrap().payload).unwrap()["action"],
-        "complete"
-    );
+    let done = service.tick_at(now + chrono::Duration::seconds(1)).unwrap();
+    assert_eq!(done.completed_count, 1);
+    let event: Value = serde_json::from_str(&events.try_recv().unwrap().payload).unwrap();
+    assert_eq!(event["action"], "complete");
+    assert_eq!(event["completedState"], "WORK");
+    assert_eq!(event["today"]["completedCount"], 1);
+    assert!(events.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -270,6 +251,44 @@ async fn lifecycle_completes_without_any_client_tick_or_query_and_stops() {
     assert!(events.try_recv().is_err());
 }
 
+#[test]
+fn zero_remaining_without_a_running_deadline_does_not_complete_or_record_work() {
+    let fixture = fixture();
+    let service = fixture.service;
+    let now = noon(3);
+    let mut events = service.events.subscribe();
+    service.command_at("adjust", Some(0), now).unwrap();
+    while events.try_recv().is_ok() {}
+    for second in [0, 1, 3600] {
+        let today = service
+            .tick_at(now + chrono::Duration::seconds(second))
+            .unwrap();
+        assert_eq!(today.state, PomodoroState::Work);
+        assert_eq!(today.current_round, 1);
+        assert_eq!(today.completed_count, 0);
+        assert_eq!(today.time_left_sec, 0);
+        assert!(!today.is_running);
+    }
+    assert!(events.try_recv().is_err());
+    assert!(
+        service
+            .db
+            .pomodoro_get_by_date("2026-10-03")
+            .unwrap()
+            .is_none()
+    );
+    service.command_at("start", Some(1), now).unwrap();
+    while events.try_recv().is_ok() {}
+    let today = service.tick_at(now + chrono::Duration::seconds(1)).unwrap();
+    assert_eq!(today.state, PomodoroState::ShortBreak);
+    assert_eq!(today.completed_count, 1);
+    let event: Value = serde_json::from_str(&events.try_recv().unwrap().payload).unwrap();
+    assert_eq!(event["action"], "complete");
+    assert_eq!(event["completedState"], "WORK");
+    service.tick_at(now + chrono::Duration::seconds(2)).unwrap();
+    assert!(events.try_recv().is_err());
+}
+
 #[tokio::test]
 async fn stopped_lifecycle_performs_no_initial_work() {
     let fixture = fixture();
@@ -287,16 +306,14 @@ fn core_restart_restores_statistics_but_does_not_restart_a_timer() {
     let service = fixture.service;
     let now = noon(3);
     service.command_at("start", Some(1), now).unwrap();
-    service
-        .tick_at(false, now + chrono::Duration::seconds(1))
-        .unwrap();
+    service.tick_at(now + chrono::Duration::seconds(1)).unwrap();
     service.command_at("start", Some(30), now).unwrap();
     let next = Service::new(
         service.db.clone(),
         service.prefs.clone(),
         service.events.clone(),
     );
-    let today = next.tick_at(false, now).unwrap().today;
+    let today = next.tick_at(now).unwrap();
     assert_eq!(today.completed_count, 1);
     assert_eq!(today.state, PomodoroState::Work);
     assert!(!today.is_running && !today.is_paused);

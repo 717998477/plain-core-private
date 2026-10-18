@@ -267,7 +267,8 @@ async fn native_rename_and_delete_follow_actual_catalog_identities() {
 }
 
 #[tokio::test]
-async fn named_copy_main_creates_parents_overwrites_and_uses_the_request_owner_without_host() {
+async fn named_copy_creates_parents_and_explicit_copy_overwrite_keeps_the_request_owner_without_host()
+ {
     let directory = tempfile::tempdir().unwrap();
     let core = ContentServer::open(&directory.path().join("core")).unwrap();
     let state = core.runtime_state();
@@ -404,5 +405,74 @@ async fn main_batch_delete_validates_all_paths_before_effects_and_counts_actual_
     assert!(!second.exists());
     assert_eq!(state.files.delete_many(vec![]).await.unwrap(), 0);
     assert!(host_requests.try_recv().is_err());
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn named_copy_preserves_existing_files_and_returns_each_actual_collision_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(&directory.path().join("core")).unwrap();
+    let state = core.runtime_state();
+    let (_generation, mut requests) = state.host.connect();
+    let source = directory.path().join("source.txt");
+    let target = directory.path().join("exports");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(&source, b"new export").unwrap();
+    std::fs::write(target.join("saved.txt"), b"existing personal file").unwrap();
+    std::fs::write(target.join("saved (1).txt"), b"existing first copy").unwrap();
+    let native = core.native_graphql().unwrap();
+    for suffix in [2, 3] {
+        let response = native.execute(Request::new(
+            "mutation($src:String!,$directory:String!){copyFileToDirectory(src:$src,directory:$directory,name:\"saved.txt\")}",
+        ).variables(async_graphql::Variables::from_json(json!({"src":source,"directory":target})))).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let destination = target.join(format!("saved ({suffix}).txt"));
+        assert_eq!(
+            response.data.into_json().unwrap()["copyFileToDirectory"],
+            destination.to_string_lossy().as_ref()
+        );
+        assert_eq!(std::fs::read(destination).unwrap(), b"new export");
+        assert_eq!(
+            std::fs::read(target.join("saved.txt")).unwrap(),
+            b"existing personal file"
+        );
+        assert_eq!(
+            std::fs::read(target.join("saved (1).txt")).unwrap(),
+            b"existing first copy"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"new export");
+    }
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn named_copy_does_not_treat_an_existing_named_directory_as_the_destination_container() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(&directory.path().join("core")).unwrap();
+    let state = core.runtime_state();
+    let (_generation, mut requests) = state.host.connect();
+    let source = directory.path().join("source.bin");
+    let target = directory.path().join("exports");
+    let existing = target.join("saved.bin");
+    std::fs::create_dir_all(&existing).unwrap();
+    std::fs::write(&source, b"export").unwrap();
+    std::fs::write(existing.join("source.bin"), b"existing content").unwrap();
+    let response = core.native_graphql().unwrap().execute(Request::new(
+        "mutation($src:String!,$directory:String!){copyFileToDirectory(src:$src,directory:$directory,name:\"saved.bin\")}",
+    ).variables(async_graphql::Variables::from_json(json!({"src":source,"directory":target})))).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let actual = target.join("saved (1).bin");
+    assert_eq!(
+        response.data.into_json().unwrap()["copyFileToDirectory"],
+        actual.to_string_lossy().as_ref()
+    );
+    assert_eq!(std::fs::read(actual).unwrap(), b"export");
+    assert_eq!(
+        std::fs::read(existing.join("source.bin")).unwrap(),
+        b"existing content"
+    );
+    assert_eq!(std::fs::read_dir(existing).unwrap().count(), 1);
+    assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }

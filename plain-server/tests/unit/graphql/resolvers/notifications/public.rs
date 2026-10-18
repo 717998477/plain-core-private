@@ -184,3 +184,63 @@ fn reported_notifications_keep_permission_filtering_and_project_public_events() 
     assert!(publish(&prefs, &events, facts("MESSAGE_CREATED")).is_err());
     assert!(receiver.try_recv().is_err());
 }
+
+#[test]
+fn sms_refresh_hints_follow_notification_permissions_filters_and_event_kinds() {
+    let dir = tempfile::tempdir().unwrap();
+    let prefs = Prefs::load(&dir.path().join("prefs.json")).unwrap();
+    let (events, mut receiver) = tokio::sync::broadcast::channel(8);
+    let facts = |kind: &str, app: &str| {
+        serde_json::from_value(
+            json!({"type":kind,"notification":fact("notice",app,"2026-10-01T00:00:00.000Z")}),
+        )
+        .unwrap()
+    };
+    publish(
+        &prefs,
+        &events,
+        facts("NOTIFICATION_CREATED", "com.google.android.apps.messaging"),
+    )
+    .unwrap();
+    assert!(receiver.try_recv().is_err());
+    prefs
+        .set("api_permissions", json!(["NOTIFICATION_LISTENER"]))
+        .unwrap();
+    for kind in ["NOTIFICATION_CREATED", "NOTIFICATION_UPDATED"] {
+        publish(
+            &prefs,
+            &events,
+            facts(kind, "com.google.android.apps.messaging"),
+        )
+        .unwrap();
+        assert_eq!(receiver.try_recv().unwrap().event_type, kind);
+        let hint = receiver.try_recv().unwrap();
+        assert_eq!(hint.event_type, "SMS_PROVIDER_CHANGED");
+        assert_eq!(
+            serde_json::from_str::<Value>(&hint.payload).unwrap(),
+            json!({"uris":[]})
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+    prefs
+        .set_user("notification_filter", json!({"mode":"allowlist","apps":[]}))
+        .unwrap();
+    publish(
+        &prefs,
+        &events,
+        facts("NOTIFICATION_CREATED", "com.google.android.apps.messaging"),
+    )
+    .unwrap();
+    assert!(receiver.try_recv().is_err());
+    publish(
+        &prefs,
+        &events,
+        facts("NOTIFICATION_DELETED", "com.google.android.apps.messaging"),
+    )
+    .unwrap();
+    assert_eq!(
+        receiver.try_recv().unwrap().event_type,
+        "NOTIFICATION_DELETED"
+    );
+    assert!(receiver.try_recv().is_err());
+}

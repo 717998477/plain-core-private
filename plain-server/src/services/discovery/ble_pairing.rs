@@ -108,8 +108,12 @@ async fn host(
     }
 }
 async fn run(state: &ServerState, ticket: &Ticket, body: &str) -> Result<(), Cause> {
-    let facts = json!({"id":ticket.target.device_id,"generation":ticket.generation});
-    if host(state, ticket, "blePairConnect", facts.clone()).await? != Value::Bool(true) {
+    let facts = json!({"generation":ticket.generation});
+    let connect = json!({
+        "generation": ticket.generation,
+        "shortId": plain_rs::discovery::nearby_wire::short_id(&ticket.target.device_id),
+    });
+    if host(state, ticket, "blePairConnect", connect).await? != Value::Bool(true) {
         return Err(Cause::Failed("Connection failed".into()));
     }
     let mut send = facts.clone();

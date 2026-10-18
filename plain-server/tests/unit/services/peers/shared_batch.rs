@@ -187,7 +187,7 @@ async fn main_queue_downloads_exact_bytes_without_host_callbacks_and_rejects_inv
     tls.abort();
 }
 #[tokio::test]
-async fn pause_invalidates_the_generation_and_late_tls_bytes_cannot_commit_a_file() {
+async fn cancel_invalidates_the_generation_and_late_tls_bytes_cannot_commit_a_file() {
     let (directory, server, state) = fixture();
     let (port, tls, started, released) = tls().await;
     let target = directory.path().join("downloads");
@@ -203,19 +203,19 @@ async fn pause_invalidates_the_generation_and_late_tls_bytes_cannot_commit_a_fil
         .native_graphql()
         .unwrap()
         .execute(
-            Request::new("mutation($id: ID!) { pauseSharedDownload(id:$id) }")
+            Request::new("mutation($id: ID!) { cancelSharedDownload(id:$id) }")
                 .variables(Variables::from_json(json!({"id":id}))),
         )
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
-        response.data.into_json().unwrap()["pauseSharedDownload"],
+        response.data.into_json().unwrap()["cancelSharedDownload"],
         true
     );
     released.notify_waiters();
     assert_eq!(
         state.shared_batches.queue.snapshot()["tasks"][0]["status"],
-        "PAUSED"
+        "CANCELED"
     );
     assert!(
         !state

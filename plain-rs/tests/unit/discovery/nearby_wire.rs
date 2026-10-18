@@ -30,6 +30,7 @@ fn canonical_messages_round_trip_and_reject_unknown_or_malformed_payloads() {
 #[test]
 fn discover_identity_matches_advertised_short_id_before_becoming_a_peer() {
     let body=json!({"id":"peer","name":"Fixture","port":1234,"deviceType":"PHONE","version":"1","platform":"test"}).to_string();
+    assert_eq!(short_id("fixture"), "f16d05ec6b29248d");
     assert_eq!(short_id("peer"), "2ffc1d06387ef8bb");
     assert_eq!(discover_reply(&body, &short_id("peer")).unwrap().id, "peer");
     assert!(discover_reply(&body, &short_id("other")).is_err());

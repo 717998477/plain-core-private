@@ -1,8 +1,12 @@
 #[cfg(feature = "core")]
 pub mod control;
 pub mod http_router;
+#[cfg(feature = "core")]
+pub(crate) mod lifecycle;
 pub mod receiver_engine;
 pub mod renderer_state;
+#[cfg(feature = "core")]
+pub(crate) mod reports;
 pub mod soap_handler;
 pub mod ssdp_messages;
 pub mod types;

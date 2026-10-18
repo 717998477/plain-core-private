@@ -2,13 +2,17 @@ use crate::host::bridge::Host;
 use crate::services::audio::library::HostLibrary;
 use plain_rs::db::Db;
 use plain_rs::error::DomainResult;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use tokio::sync::{Mutex, Semaphore};
 
 pub struct Audio {
     db: Arc<Db>,
     host: Arc<Host>,
     lock: Arc<Mutex<()>>,
+    restored_host: Arc<AtomicU64>,
     capacity: Arc<Semaphore>,
     resources: Arc<crate::host::resources::NativeResources>,
     cache: std::path::PathBuf,
@@ -29,6 +33,7 @@ impl Audio {
             db,
             host,
             lock: Arc::new(Mutex::new(())),
+            restored_host: Arc::new(AtomicU64::new(0)),
             capacity: Arc::new(Semaphore::new(32)),
             resources,
             cache,
@@ -58,6 +63,17 @@ impl Audio {
         .await
     }
 
+    pub(crate) async fn playback_event(&self) -> plain_rs::events::WsEvent {
+        let snapshot = self
+            .run_playback(|db, _| plain_rs::media::audio::playback::snapshot(db))
+            .await;
+        let payload = match snapshot {
+            Ok(snapshot) => serde_json::to_value(snapshot).unwrap(),
+            Err(error) => serde_json::json!({"error":error.message}),
+        };
+        plain_rs::events::WsEvent::broadcast("AUDIO_PLAYBACK_UPDATED", payload.to_string())
+    }
+
     pub(crate) async fn cover(&self, path: &str) -> Result<Option<std::path::PathBuf>, String> {
         super::covers::cache(&self.resources, &self.cache, path).await
     }
@@ -80,13 +96,28 @@ impl Audio {
             self.resources.clone(),
             self.cache.clone(),
         );
+        let host = self.host.clone();
+        let restored_host = self.restored_host.clone();
         tokio::task::spawn_blocking(move || {
+            let generation = host.generation();
             let _permit = permit;
             let _guard = guard;
+            let uses_playback = !matches!(preparation, Preparation::None);
             match preparation {
                 Preparation::References => library.refresh()?,
                 Preparation::Current => library.restore_current()?,
                 Preparation::None => {}
+            }
+            if uses_playback && let Some(generation) = generation {
+                if !host.is_current(generation) {
+                    return Err(plain_rs::error::DomainError::Other(
+                        "host disconnected".into(),
+                    ));
+                }
+                if restored_host.load(Ordering::Acquire) != generation {
+                    plain_rs::media::audio::playback::invalidate(&db)?;
+                    restored_host.store(generation, Ordering::Release);
+                }
             }
             operation(&db, &mut library)
         })
@@ -95,3 +126,7 @@ impl Audio {
         .map_err(|e| async_graphql::Error::new(e.to_string()))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/audio/host.rs"]
+mod tests;

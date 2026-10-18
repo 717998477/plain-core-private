@@ -559,3 +559,138 @@ async fn encrypted_timed_controls_forward_exact_json_and_touch_inputs_once_and_r
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let insert = |id: &str, registered: bool| {
+        let (outgoing, _) = mpsc::channel(1);
+        let (closing, _) = tokio::sync::watch::channel(None);
+        state.main_ws.connections.lock().unwrap().insert(
+            id.into(),
+            Connection {
+                client_id: id.into(),
+                registered,
+                outgoing,
+                pending: None,
+                closing,
+            },
+        );
+    };
+    insert("owned-client", true);
+    insert("unregistered-client", false);
+    let bridge = core.host_events();
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "IMAGE_MODELS_UPDATED"
+    );
+    let initial = bridge.next_event().await.unwrap();
+    assert_eq!(initial["type"], "ONLINE_CLIENTS_UPDATED");
+    assert_eq!(
+        serde_json::from_str::<Value>(initial["payload"].as_str().unwrap()).unwrap(),
+        json!(["owned-client"])
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_TRANSPORT_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "DLNA_SENDER_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "APP_UPDATE_DOWNLOAD_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "AUDIO_PLAYBACK_UPDATED"
+    );
+
+    state
+        .events
+        .send(WsEvent::broadcast(
+            "ONLINE_CLIENTS_UPDATED",
+            json!(["stale-client"]).to_string(),
+        ))
+        .unwrap();
+    state
+        .main_ws
+        .connections
+        .lock()
+        .unwrap()
+        .remove("owned-client");
+    insert("current-client", true);
+    let current = bridge.next_event().await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(current["payload"].as_str().unwrap()).unwrap(),
+        json!(["current-client"])
+    );
+
+    for _ in 0..300 {
+        state
+            .events
+            .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
+            .unwrap();
+    }
+    assert_eq!(bridge.next_event().await.unwrap()["reconcile"], true);
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "IMAGE_MODELS_UPDATED"
+    );
+    let recovered = bridge.next_event().await.unwrap();
+    assert_eq!(recovered["type"], "ONLINE_CLIENTS_UPDATED");
+    assert_eq!(
+        serde_json::from_str::<Value>(recovered["payload"].as_str().unwrap()).unwrap(),
+        json!(["current-client"])
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_TRANSPORT_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "DLNA_SENDER_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "APP_UPDATE_DOWNLOAD_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "AUDIO_PLAYBACK_UPDATED"
+    );
+
+    let replacement = core.host_events();
+    assert!(bridge.next_event().await.is_none());
+    assert_eq!(
+        replacement.next_event().await.unwrap()["type"],
+        "IMAGE_MODELS_UPDATED"
+    );
+    let restored = replacement.next_event().await.unwrap();
+    assert_eq!(restored["type"], "ONLINE_CLIENTS_UPDATED");
+    assert_eq!(
+        serde_json::from_str::<Value>(restored["payload"].as_str().unwrap()).unwrap(),
+        json!(["current-client"])
+    );
+    assert_eq!(
+        replacement.next_event().await.unwrap()["type"],
+        "PEER_TRANSPORT_UPDATED"
+    );
+    assert_eq!(
+        replacement.next_event().await.unwrap()["type"],
+        "DLNA_SENDER_UPDATED"
+    );
+    assert_eq!(
+        replacement.next_event().await.unwrap()["type"],
+        "APP_UPDATE_DOWNLOAD_UPDATED"
+    );
+    assert_eq!(
+        replacement.next_event().await.unwrap()["type"],
+        "AUDIO_PLAYBACK_UPDATED"
+    );
+    core.stop_core().await;
+    assert!(replacement.next_event().await.is_none());
+}

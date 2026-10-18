@@ -41,6 +41,7 @@ pub struct ChatChannelActions {
 }
 
 #[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
 pub struct ChatChannel {
     pub actions: ChatChannelActions,
     pub id: async_graphql::ID,
@@ -56,6 +57,21 @@ pub struct ChatChannel {
     pub created_at: Instant,
     #[graphql(name = "updatedAt")]
     pub updated_at: Instant,
+}
+
+#[async_graphql::ComplexObject]
+impl ChatChannel {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn key(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
+        let db = db(ctx)?.clone();
+        let id = self.id.clone();
+        let row =
+            tokio::task::spawn_blocking(move || plain_rs::db::chat_store::channels::get(&db, &id))
+                .await??;
+        Ok(row
+            .ok_or_else(|| async_graphql::Error::new("Chat channel no longer exists"))?
+            .key)
+    }
 }
 
 #[derive(SimpleObject, Clone, Debug)]
@@ -106,11 +122,11 @@ impl ChatQuery {
         limit: i32,
     ) -> async_graphql::Result<Vec<ChatItem>> {
         let text = text_of(&query);
-        Ok(db(ctx)?
-            .get_chats_page(&target, &text, offset, limit)
-            .iter()
-            .map(item)
-            .collect())
+        let rows = db(ctx)?.get_chats_page(&target, &text, offset, limit);
+        if let Some(state) = ctx.data_opt::<crate::assembly::server::ServerState>() {
+            crate::services::chat::prewarm::prepare_page(state, &target, &text, offset, limit);
+        }
+        Ok(rows.iter().map(item).collect())
     }
 
     async fn chat_item(

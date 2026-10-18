@@ -202,6 +202,7 @@ async fn fetch(state: &ServerState) -> Result<AppUpdateStatus> {
         patch["downloadedApkPath"] = serde_json::json!("");
     }
     update(state, patch)?;
+    super::update_download::Runtime::schedule_reconcile(state);
     if !available {
         return Ok(AppUpdateStatus::UpToDate);
     }
@@ -227,6 +228,9 @@ pub(crate) async fn apply_settings(
             patch: serde_json::from_value(serde_json::json!({"downloadedApkPath":""}))?,
         }
         .apply(&state.prefs)?;
+    }
+    if changed {
+        super::update_download::Runtime::schedule_reconcile(state);
     }
     Ok(changed)
 }

@@ -84,10 +84,6 @@ impl Runtime {
             provider_catalog: cfg!(any(target_os = "android", target_os = "ios")),
         })
     }
-    pub(crate) async fn milliseconds(&self, path: &str) -> Result<i64, String> {
-        Ok(self.probe_milliseconds(path).await?.unwrap_or_default())
-    }
-
     pub(crate) async fn probe_milliseconds(&self, path: &str) -> Result<Option<i64>, String> {
         let mut core_stop = self.stop.subscribe();
         if *core_stop.borrow() {

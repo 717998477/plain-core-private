@@ -32,7 +32,8 @@ struct MdnsService {
     complete: bool,
 }
 
-#[derive(SimpleObject, Deserialize)]
+#[derive(Default, SimpleObject, Deserialize)]
+#[graphql(complex)]
 #[serde(rename_all = "camelCase")]
 struct MdnsState {
     runtime_id: String,
@@ -55,44 +56,24 @@ struct MdnsActivity {
     event: String,
     detail: String,
 }
-#[derive(SimpleObject)]
-struct MdnsDebug {
-    services: Vec<MdnsService>,
-    activity: Vec<MdnsActivity>,
-}
-
-#[derive(SimpleObject, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PeerPrewarmAdvertisement {
-    short_id: String,
-    aware_supported: bool,
-    aware_running: bool,
-}
-
-#[derive(SimpleObject, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DiscoveryReply {
-    id: async_graphql::ID,
-    name: String,
-    port: i32,
-    device_type: String,
-    version: String,
-    platform: String,
-    ips: Vec<String>,
-    aware_supported: bool,
-    aware_running: bool,
-}
-
-async fn advertisement(
-    ctx: &Context<'_>,
-    request: crate::services::discovery::discovery_advertisement::Request,
-) -> async_graphql::Result<serde_json::Value> {
-    crate::services::discovery::discovery_advertisement::execute(
-        ctx.data::<ServerState>()?,
-        request,
-    )
-    .await
-    .map_err(|error| async_graphql::Error::new(error.to_string()))
+#[async_graphql::ComplexObject]
+impl MdnsState {
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
+    async fn activity(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<MdnsActivity>> {
+        let runtime = &ctx.data::<ServerState>()?.mdns;
+        let activity = runtime
+            .browser_activity()
+            .into_iter()
+            .map(|entry| {
+                Ok(MdnsActivity {
+                    time: Long(i64::try_from(entry.time)?),
+                    event: entry.event,
+                    detail: entry.detail,
+                })
+            })
+            .collect::<async_graphql::Result<Vec<_>>>()?;
+        Ok(activity)
+    }
 }
 
 async fn control(ctx: &Context<'_>, request: Request) -> async_graphql::Result<MdnsState> {
@@ -105,45 +86,26 @@ async fn control(ctx: &Context<'_>, request: Request) -> async_graphql::Result<M
 pub struct MdnsQuery;
 #[Object]
 impl MdnsQuery {
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn mdns_debug(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsDebug> {
-        let runtime = &ctx.data::<ServerState>()?.mdns;
-        let services = serde_json::from_value(serde_json::to_value(runtime.browser_snapshot())?)?;
-        let activity = runtime
-            .browser_activity()
-            .into_iter()
-            .map(|entry| {
-                Ok(MdnsActivity {
-                    time: Long(i64::try_from(entry.time)?),
-                    event: entry.event,
-                    detail: entry.detail,
-                })
-            })
-            .collect::<async_graphql::Result<Vec<_>>>()?;
-        Ok(MdnsDebug { services, activity })
-    }
-    async fn discovery_reply(&self, ctx: &Context<'_>) -> async_graphql::Result<DiscoveryReply> {
-        Ok(serde_json::from_value(
-            advertisement(
-                ctx,
-                crate::services::discovery::discovery_advertisement::Request::Reply {},
-            )
-            .await?,
-        )?)
-    }
-    async fn discovery_ble_advertisement(
-        &self,
-        ctx: &Context<'_>,
-    ) -> async_graphql::Result<String> {
-        Ok(serde_json::from_value(
-            advertisement(
-                ctx,
-                crate::services::discovery::discovery_advertisement::Request::Ble {},
-            )
-            .await?,
-        )?)
-    }
     async fn mdns_state(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
+        let state = ctx.data::<ServerState>()?;
+        if *state.stop.borrow() {
+            return Err("Server stopped".into());
+        }
+        if ctx
+            .field()
+            .selection_set()
+            .all(|field| matches!(field.name(), "services" | "activity" | "__typename"))
+        {
+            let services = if ctx.look_ahead().field("services").exists() {
+                serde_json::from_value(serde_json::to_value(state.mdns.browser_snapshot())?)?
+            } else {
+                Vec::new()
+            };
+            return Ok(MdnsState {
+                services,
+                ..Default::default()
+            });
+        }
         control(ctx, Request::Snapshot {}).await
     }
 }
@@ -182,25 +144,6 @@ impl MdnsMutation {
         Ok(true)
     }
 
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn begin_ble_scan(&self, ctx: &Context<'_>) -> async_graphql::Result<async_graphql::ID> {
-        Ok(ctx.data::<ServerState>()?.ble_scans.begin()?.into())
-    }
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn end_ble_scan(
-        &self,
-        ctx: &Context<'_>,
-        scan_id: async_graphql::ID,
-    ) -> async_graphql::Result<bool> {
-        ctx.data::<ServerState>()?.ble_scans.end(&scan_id);
-        Ok(true)
-    }
-    async fn start_mdns_receiver(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::Receiver {}).await
-    }
-    async fn browse_mdns(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::Browse {}).await
-    }
     async fn acquire_mdns_debug_session(
         &self,
         ctx: &Context<'_>,
@@ -214,18 +157,6 @@ impl MdnsMutation {
         token: String,
     ) -> async_graphql::Result<MdnsState> {
         control(ctx, Request::DebugStop { token }).await
-    }
-    async fn prewarm_peer_transport(
-        &self,
-        ctx: &Context<'_>,
-        id: async_graphql::ID,
-    ) -> async_graphql::Result<Option<PeerPrewarmAdvertisement>> {
-        let result = crate::services::chat::prewarm::execute(ctx.data::<ServerState>()?, &id)
-            .await
-            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-        result
-            .map(|value| serde_json::from_value(serde_json::to_value(value)?).map_err(Into::into))
-            .transpose()
     }
 }
 

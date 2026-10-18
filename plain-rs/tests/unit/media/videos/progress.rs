@@ -27,9 +27,6 @@ fn restart_exact_milliseconds_validation_and_recent_boundary() {
         db.video_progress_get("video").unwrap().unwrap().position_ms,
         0
     );
-    delete(&db, "video").unwrap();
-    delete(&db, "video").unwrap();
-    assert!(db.video_progress_get("video").unwrap().is_none());
 }
 #[test]
 fn failed_save_preserves_existing_position() {

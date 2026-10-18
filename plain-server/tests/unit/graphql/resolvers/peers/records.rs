@@ -33,7 +33,7 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
     channel.version = 5000000001;
     channels::save(&state.db, &[channel], SaveMode::Insert).unwrap();
     let native = server.native_graphql().unwrap();
-    let response=native.execute(Request::new(r#"{ peers { id key address { bestIp baseUrl apiUrl statusWsUrl } } chatChannelRecord(id:"channel") { key ownerId members { peerId status } version } }"#)).await;
+    let response=native.execute(Request::new(r#"{ peers { id key address { bestIp baseUrl apiUrl statusWsUrl } } chatChannels { key ownerId members { peerId status } version } }"#)).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
     assert_eq!(data["peers"][0]["key"], peer.key);
@@ -42,9 +42,9 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
         "https://127.0.0.1:8443"
     );
     assert_eq!(data["peers"].as_array().unwrap().len(), 1);
-    assert_eq!(data["chatChannelRecord"]["version"], 5000000001_i64);
-    assert_eq!(data["chatChannelRecord"]["key"], "channel-key");
-    assert_eq!(data["chatChannelRecord"]["members"][0]["peerId"], "peer");
+    assert_eq!(data["chatChannels"][0]["version"], 5000000001_i64);
+    assert_eq!(data["chatChannels"][0]["key"], "channel-key");
+    assert_eq!(data["chatChannels"][0]["members"][0]["peerId"], "peer");
     let input = json!({"id":peer.id,"name":peer.name,"ip":peer.ip,"key":peer.key,"publicKey":peer.public_key,"status":"PAIRED","port":peer.port,"deviceType":"PHONE","token":peer.token,"createdAt":peer.created_at,"updatedAt":peer.updated_at});
     let request = || {
         Request::new("query($expected: PeerRecordInput!) { peerFileUrl(id: \"peer\", expected:$expected, fileId: \"a +?#%\") }").variables(Variables::from_json(json!({"expected":input.clone()})))
@@ -74,9 +74,7 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
         .with_conn(|conn| conn.execute_batch("DROP TABLE chat_channels;"))
         .unwrap();
     let response = native
-        .execute(Request::new(
-            r#"{ chatChannelRecord(id:"channel") { id } }"#,
-        ))
+        .execute(Request::new(r#"{ chatChannels { id } }"#))
         .await;
     assert!(!response.errors.is_empty());
     server.shutdown().await;
@@ -88,7 +86,8 @@ async fn main_login_logout_and_rename_preserve_pairing_and_live_proxy_addresses(
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let executor = core.native_graphql().unwrap();
-    let resolve = core.peer_proxy_resolver();
+    let resolver = core.peer_proxy_resolver();
+    let resolve = |id: &str| resolver(id).map(|peer| peer.address().to_owned());
     assert_eq!(resolve("peer-a"), None);
     state
         .db

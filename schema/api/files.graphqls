@@ -50,11 +50,6 @@ type FileInfo {
 	data: MediaFileInfo
 }
 
-type FilePage {
-	count: Long!
-	items: [File!]!
-}
-
 type FileTask {
 	id: ID!
 	clientId: String!
@@ -243,7 +238,6 @@ extend type Mutation {
 	"""
 	moveMediaItems(type: MediaDataType!, query: String!, destDir: String!): ActionResult!
 	releaseAppFile(fileId: String!): Boolean!
-	removeFileTask(id: ID!): Boolean!
 	renameFile(path: String!, name: String!): String
 	restoreFiles(paths: [String!]!): ActionResult!
 	restoreMediaItems(type: MediaDataType!, query: String!): ActionResult!
@@ -255,7 +249,6 @@ extend type Mutation {
 extend type Query {
 	appFileCount(query: String!): Int!
 	appFiles(query: String!, offset: Int!, limit: Int!): [AppFile!]!
-	browseFiles(root: String!, query: String!, text: String, showHidden: Boolean, sortBy: FileSortBy!, offset: Int!, limit: Int!, countOnly: Boolean! = false): FilePage!
 	"""
 	Total matches for the same query, ignoring paging.
 	"""
@@ -271,7 +264,6 @@ extend type Query {
 	files(root: String!, query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [File!]!
 	indexedFileCount(query: String!): Long!
 	indexedFiles(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [File!]!
-	mediaDurationMs(path: String!): Long!
 	"""
 	`NONE` when no merge was ever started for this id, which is what a
 	client sees before it calls `mergeChunks`.

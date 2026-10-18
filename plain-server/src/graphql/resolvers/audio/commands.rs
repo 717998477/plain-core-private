@@ -163,43 +163,4 @@ impl AudioCommandsMutation {
             .await?
             .into())
     }
-    async fn invalidate_audio_engine(&self, ctx: &Context<'_>) -> Result<AudioPlaybackState> {
-        Ok(ctx
-            .data::<Arc<Audio>>()?
-            .run_playback(|db, _| playback::invalidate(db))
-            .await?
-            .into())
-    }
-    async fn enqueue_audios(&self, ctx: &Context<'_>, media_ids: Vec<ID>) -> Result<bool> {
-        ctx.data::<Arc<Audio>>()?
-            .run(move |db, engine| {
-                let ids = media_ids
-                    .into_iter()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<_>>();
-                engine.cache_ids(&ids)?;
-                let tracks = ids
-                    .iter()
-                    .map(|id| queue::track_by_id(db, id))
-                    .collect::<plain_rs::error::DomainResult<Vec<_>>>()?;
-                queue::enqueue(db, &tracks, false)
-            })
-            .await?;
-        Ok(true)
-    }
-    async fn select_audio(&self, ctx: &Context<'_>, media_id: Option<ID>) -> Result<bool> {
-        ctx.data::<Arc<Audio>>()?
-            .run(move |db, engine| {
-                let path = match media_id {
-                    Some(id) => {
-                        engine.cache_ids(&[id.to_string()])?;
-                        queue::track_by_id(db, id.as_str())?.path
-                    }
-                    None => String::new(),
-                };
-                queue::save_audio_current(db, &path)
-            })
-            .await?;
-        Ok(true)
-    }
 }

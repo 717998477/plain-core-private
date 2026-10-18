@@ -180,26 +180,6 @@ impl Service {
         });
         Ok(task)
     }
-    pub fn remove(&self, client_id: &str, id: &str) -> Result<bool> {
-        if client_id.is_empty() {
-            bail!("unauthorized");
-        }
-        let mut tasks = self
-            .tasks
-            .lock()
-            .map_err(|_| anyhow!("file task state poisoned"))?;
-        let Some(task) = tasks.get(id).filter(|task| task.client_id == client_id) else {
-            return Ok(false);
-        };
-        if matches!(
-            task.status,
-            FileTaskStatus::Queued | FileTaskStatus::Running
-        ) {
-            bail!("file task still active");
-        }
-        tasks.remove(id);
-        Ok(true)
-    }
     pub fn get(&self, id: &str) -> Result<Option<FileTask>> {
         Ok(self
             .tasks

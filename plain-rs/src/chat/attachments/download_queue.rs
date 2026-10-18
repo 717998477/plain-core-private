@@ -330,9 +330,7 @@ impl Queue {
         task.snapshot.speed = 0;
         match committed {
             Ok(_) => {
-                task.snapshot.status = Status::Completed;
-                task.snapshot.downloaded = task.snapshot.total;
-                task.snapshot.error.clear();
+                s.tasks.remove(id);
             }
             Err(error) => {
                 task.snapshot.status = Status::Failed;

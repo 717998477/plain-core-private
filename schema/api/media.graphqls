@@ -1,15 +1,3 @@
-enum MediaAction {
-	TRASH
-	RESTORE
-	DELETE
-	MOVE
-}
-
-type MediaActionOutcome {
-	affectedCount: Int!
-	failedIds: [ID!]!
-}
-
 type MediaBucket {
 	size: Long!
 	id: ID!
@@ -39,18 +27,15 @@ enum ScanState {
 }
 
 extend type Mutation {
-	mediaAction(type: DataType!, action: MediaAction!, ids: [ID!]!, fromTrash: Boolean!, destDir: String!): MediaActionOutcome!
 	pauseMediaScan: Boolean!
 	rebuildMediaIndex(root: String!): Boolean!
 	resumeMediaScan: Boolean!
 	setMediaSourceDirs(dirs: [String!]!): Boolean!
-	startMediaScan(root: String!): Boolean!
 	stopMediaScan: Boolean!
 }
 
 extend type Query {
 	mediaBuckets(type: MediaDataType!): [MediaBucket!]!
-	mediaIds(type: MediaDataType!, query: String!, fromTrash: Boolean! = false): [ID!]!
 	mediaSourceDirs: [String!]!
 	scanProgress: ScanProgress!
 }

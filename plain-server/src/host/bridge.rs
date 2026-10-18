@@ -209,6 +209,15 @@ impl Host {
     pub(crate) async fn call_wait(&self, method: &str, params: Value) -> Reply {
         self.call_inner(method, params, None).await
     }
+    pub(crate) async fn call_current(&self, generation: u64, method: &str, params: Value) -> Reply {
+        self.request_inner(
+            method,
+            params,
+            Some(Duration::from_secs(25)),
+            Some(generation),
+        )
+        .await
+    }
     async fn call_inner(&self, method: &str, params: Value, timeout: Option<Duration>) -> Reply {
         if method == "systemProperties" {
             let names = params["names"]
@@ -252,6 +261,15 @@ impl Host {
         self.request(method, params, timeout).await
     }
     async fn request(&self, method: &str, params: Value, timeout: Option<Duration>) -> Reply {
+        self.request_inner(method, params, timeout, None).await
+    }
+    async fn request_inner(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Option<Duration>,
+        generation: Option<u64>,
+    ) -> Reply {
         let _permit = self
             .capacity
             .try_acquire()
@@ -263,6 +281,11 @@ impl Host {
             notified.as_mut().enable();
             let request = {
                 let mut state = self.state.lock().unwrap();
+                if generation.is_some_and(|generation| {
+                    state.generation != generation || state.sender.is_none()
+                }) {
+                    return Err("host connection replaced".into());
+                }
                 if let Some(sender) = state.sender.clone() {
                     if method == "peerTransportSocketOpen" {
                         state.peer_sockets = true;

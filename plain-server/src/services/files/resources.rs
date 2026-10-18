@@ -14,7 +14,15 @@ pub(crate) async fn read(
     ) {
         return Err(format!("Unsupported resource primitive: {operation}"));
     }
-    if operation == "mime" && !path.starts_with("content://") {
+    if operation == "mime" {
+        if path.starts_with("content://") {
+            return host
+                .call(
+                    "systemFileResource",
+                    json!({"operation":operation,"path":path,"params":params}),
+                )
+                .await;
+        }
         return Ok(Value::String(
             plain_rs::utils::mime::mime_from_ext(path).into(),
         ));
@@ -72,9 +80,6 @@ pub(crate) async fn write(host: &Host, source: &Path, destination: &str) -> Resu
 
 async fn native(operation: &str, path: &str, params: Value) -> Result<Value, String> {
     match operation {
-        "mime" => Ok(Value::String(
-            plain_rs::utils::mime::mime_from_ext(path).into(),
-        )),
         "decodePng" => {
             let mime = plain_rs::utils::mime::mime_from_ext(path);
             if !mime.starts_with("image/")

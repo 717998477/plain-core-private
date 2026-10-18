@@ -211,10 +211,19 @@ impl FileOpsMutation {
         name: String,
     ) -> async_graphql::Result<Option<String>> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        Ok(ctx
-            .data::<Arc<crate::services::files::file_tasks::FileTasks>>()?
-            .copy_to_directory(&super::tasks::caller(ctx)?, src, directory, name)
-            .await?)
+        if (src.starts_with("content://") || src.starts_with("ph://"))
+            && !public_gate::is_local(ctx)
+        {
+            return Err(async_graphql::Error::new("no_permission"));
+        }
+        Ok(crate::services::files::named_copy::copy(
+            ctx.data::<crate::assembly::server::ServerState>()?,
+            super::tasks::caller(ctx)?,
+            src,
+            directory,
+            name,
+        )
+        .await?)
     }
 
     async fn copy_file(

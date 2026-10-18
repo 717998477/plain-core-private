@@ -16,6 +16,49 @@ fn id3() -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn playback_lyrics_choose_sidecars_in_rust_without_platform_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("song+name.mp3");
+    let sidecar = directory.path().join("song+name.lrc");
+    std::fs::write(&path, id3()).unwrap();
+    let host = Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    let resources = NativeResources::new(host.clone());
+    let (stop, stopped) = watch::channel(false);
+    for value in [None, Some(""), Some("[00:01]sidecar"), Some("   ")] {
+        if let Some(value) = value {
+            std::fs::write(&sidecar, value).unwrap();
+        }
+        let expected = value.filter(|value| !value.is_empty()).unwrap_or("lyrics");
+        let file_uri = format!("file://{}", path.display()).replace('+', "%2B");
+        assert_eq!(
+            read_for_playback(file_uri, Some((&resources, stopped.clone())))
+                .await
+                .unwrap(),
+            expected,
+        );
+        assert_eq!(
+            read(path.to_string_lossy().into_owned(), None)
+                .await
+                .unwrap(),
+            "lyrics"
+        );
+    }
+    assert!(requests.try_recv().is_err());
+    stop.send(true).unwrap();
+    assert_eq!(
+        read_for_playback(
+            path.to_string_lossy().into_owned(),
+            Some((&resources, stopped))
+        )
+        .await
+        .unwrap_err(),
+        "Server stopped",
+    );
+    host.disconnect(generation);
+}
+
+#[tokio::test]
 async fn ordinary_files_and_file_uris_use_the_shared_parser_without_resources() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("song+name.mp3");
@@ -52,7 +95,7 @@ async fn sdk_bytes_cross_one_resource_stream_and_use_the_same_parser() {
     let task = {
         let resources = resources.clone();
         tokio::spawn(async move {
-            read(
+            read_for_playback(
                 "content://fixture/audio".into(),
                 Some((resources.as_ref(), stopped)),
             )

@@ -3,13 +3,47 @@ fn request(root: &Path, query: &str) -> Request {
     Request {
         root: root.to_string_lossy().into_owned(),
         query: query.into(),
-        text: None,
-        show_hidden: None,
         sort_by: SortBy::NameAsc,
         offset: 0,
         limit: None,
         count_only: false,
     }
+}
+
+#[test]
+fn literal_name_queries_preserve_text_without_injecting_filters() {
+    let root = tempfile::tempdir().unwrap();
+    for (text, query) in [
+        ("white space", r"text:=white\ space"),
+        ("field:colon", "text:=field:colon"),
+        ("quote\"single'", r#"text:=quote\"single\'"#),
+        (r"back\slash", r"text:=back\\slash"),
+        (">greater", "text:=>greater"),
+        ("=equal", "text:==equal"),
+        ("  ", r"text:=\ \ "),
+        (
+            "needle parent:/ignored show_hidden:true",
+            r"text:=needle\ parent:/ignored\ show_hidden:true",
+        ),
+    ] {
+        let plan = request(root.path(), &format!("{query} show_hidden:false"))
+            .plan()
+            .unwrap();
+        assert_eq!(plan.text, text.to_lowercase(), "{query}");
+        assert_eq!(Path::new(&plan.root), root.path(), "{query}");
+        assert!(!plan.show_hidden, "{query}");
+        assert!(plan.recursive, "{query}");
+    }
+    fs::create_dir(root.path().join("nested")).unwrap();
+    fs::write(root.path().join("nested/white space 中文.txt"), b"owned").unwrap();
+    fs::write(root.path().join("nested/unrelated.txt"), b"owned").unwrap();
+    let page = request(root.path(), r"text:=white\ space")
+        .plan()
+        .unwrap()
+        .execute()
+        .unwrap();
+    assert_eq!(page.count, 1);
+    assert_eq!(page.items[0].name, "white space 中文.txt");
 }
 #[test]
 fn browse_owns_recursive_filters_hidden_counts_order_and_pages() {

@@ -121,14 +121,11 @@ extend type Mutation {
 	createAudioPlaylist(name: String!): AudioPlaylist!
 	cycleAudioPlayMode: MediaPlayMode!
 	deleteAudioPlaylist(id: ID!): Boolean!
-	enqueueAudios(mediaIds: [ID!]!): Boolean!
-	invalidateAudioEngine: AudioPlaybackState!
 	playAudio(mediaId: ID!): AudioItem!
 	removeAudioFromQueue(mediaId: ID!): Boolean!
 	removeAudioPlaylistItem(id: ID!, query: String!): ActionResult!
 	reorderAudioQueue(mediaIds: [ID!]!): Boolean!
 	reportAudioPlayback(path: String!, revision: Long!, positionMs: Long!, started: Boolean!): Boolean!
-	selectAudio(mediaId: ID): Boolean!
 	updateAudioPlayMode(mode: MediaPlayMode!): Boolean!
 	updateAudioPlaylist(id: ID!, name: String!): AudioPlaylist!
 }

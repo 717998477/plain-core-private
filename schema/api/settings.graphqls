@@ -105,8 +105,6 @@ extend type Mutation {
 	cancelAppUpdateDownload: AppUpdateDownload!
 	checkAppUpdate(automatic: Boolean! = false): AppUpdateStatus!
 	clearNotificationFilterApps: ActionResult!
-	clearRecentSearches: ActionResult!
-	deletePlaylistVideos(paths: [String!]!): ActionResult!
 	importTlsCertificatePem(certificatePem: String!, privateKeyPem: String!): [Int!]!
 	importTlsCertificatePkcs12(data: String!, password: String!): [Int!]!
 	recordRecentSaveDirectory(path: String!): ActionResult!
@@ -127,7 +125,6 @@ extend type Mutation {
 }
 
 extend type Query {
-	appUpdateDownload: AppUpdateDownload!
 	httpServer: HttpServerState!
 	systemPrefs: JSON!
 	systemSettings: SystemSettings!

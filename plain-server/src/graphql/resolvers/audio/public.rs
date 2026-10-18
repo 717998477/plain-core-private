@@ -230,7 +230,13 @@ impl AudioQuery {
         path: String,
     ) -> async_graphql::Result<Option<String>> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        let lyrics = read_lyrics(ctx, path).await?;
+        let state = ctx.data_opt::<crate::assembly::server::ServerState>();
+        let lyrics = crate::services::audio::lyrics::read_for_playback(
+            path,
+            state.map(|state| (state.bridge.as_ref(), state.stop.clone())),
+        )
+        .await
+        .map_err(async_graphql::Error::new)?;
         Ok(Some(lyrics).filter(|value| !value.trim().is_empty()))
     }
     async fn audio_lyrics(
@@ -492,6 +498,16 @@ impl AudioMutation {
         ctx: &Context<'_>,
         query: String,
     ) -> async_graphql::Result<bool> {
+        if let Some(ids) = domain::selection_ids(&query)? {
+            audio(ctx)?
+                .run(move |db, library| {
+                    let tracks = library.tracks_by_ids(&ids)?;
+                    domain::enqueue_selecting_if_idle(db, &tracks)
+                })
+                .await?;
+            notify_playback(ctx)?;
+            return Ok(true);
+        }
         let tracks = search_tracks(ctx, &query).await?;
         audio(ctx)?
             .run(move |db, lib| {
@@ -501,7 +517,7 @@ impl AudioMutation {
                         .filter_map(|track| track.media_id.clone())
                         .collect::<Vec<_>>(),
                 )?;
-                domain::enqueue(db, &tracks, false)
+                domain::enqueue_selecting_if_idle(db, &tracks)
             })
             .await?;
         notify_playback(ctx)?;
@@ -583,23 +599,10 @@ impl AudioMutation {
         id: async_graphql::ID,
         query: String,
     ) -> async_graphql::Result<bool> {
-        let fields = plain_rs::utils::search_dsl::parse(&query);
-        if fields.len() == 1 && fields[0].name == "ids" && fields[0].op == "=" {
-            let ids = fields[0]
-                .value
-                .split(',')
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            if ids.iter().any(|id| id.trim().is_empty()) {
-                return Err(async_graphql::Error::new("media IDs required"));
-            }
+        if let Some(ids) = domain::selection_ids(&query)? {
             audio(ctx)?
                 .run(move |db, library| {
-                    library.cache_ids(&ids)?;
-                    let tracks = ids
-                        .iter()
-                        .map(|id| domain::track_by_id(db, id))
-                        .collect::<plain_rs::error::DomainResult<Vec<_>>>()?;
+                    let tracks = library.tracks_by_ids(&ids)?;
                     domain::add_playlist_items(db, id.as_str(), &tracks)
                 })
                 .await?;

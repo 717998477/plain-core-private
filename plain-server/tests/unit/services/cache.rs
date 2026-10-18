@@ -36,14 +36,14 @@ async fn native_cache_accounting_and_clear_preserve_application_data_without_hos
     let host = crate::host::bridge::Host::default();
     let (_generation, mut requests) = host.connect();
     assert_eq!(size(&cache).unwrap(), 25);
-    clear(&cache, &host).await.unwrap();
+    clear(&cache, &host, None).await.unwrap();
     assert_eq!(size(&cache).unwrap(), 0);
     assert!(cache.root().is_dir());
     for path in persistent {
         assert_eq!(std::fs::read(path).unwrap(), b"keep");
     }
     assert!(requests.try_recv().is_err());
-    clear(&cache, &host).await.unwrap();
+    clear(&cache, &host, None).await.unwrap();
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn portable_file_cleanup_leaves_sdk_indexes_to_their_owner() {
         std::fs::write(path.join("journal"), b"index").unwrap();
     }
     std::fs::write(cache.root().join("scratch"), b"remove").unwrap();
-    clear_files(&cache).unwrap();
+    clear_files(&cache, None).unwrap();
     assert_eq!(size(&cache).unwrap(), 10);
     assert!(!cache.root().join("scratch").exists());
 }
@@ -74,7 +74,7 @@ async fn cache_links_never_count_or_delete_external_files() {
     std::os::unix::fs::symlink(external.path(), cache.root().join("linked-dir")).unwrap();
     std::os::unix::fs::symlink(&external_file, cache.root().join("linked-file")).unwrap();
     assert_eq!(size(&cache).unwrap(), 0);
-    clear(&cache, &crate::host::bridge::Host::default())
+    clear(&cache, &crate::host::bridge::Host::default(), None)
         .await
         .unwrap();
     assert_eq!(std::fs::read(&external_file).unwrap(), b"keep");
@@ -83,7 +83,7 @@ async fn cache_links_never_count_or_delete_external_files() {
     std::os::unix::fs::symlink(external.path(), cache.root()).unwrap();
     assert!(size(&cache).is_err());
     assert!(
-        clear(&cache, &crate::host::bridge::Host::default())
+        clear(&cache, &crate::host::bridge::Host::default(), None)
             .await
             .is_err()
     );
@@ -95,10 +95,10 @@ fn absent_cache_is_empty_and_existing_invalid_roots_fail() {
     let directory = tempfile::tempdir().unwrap();
     let cache = CachePaths::new(&directory.path().join("cache"));
     assert_eq!(size(&cache).unwrap(), 0);
-    clear_files(&cache).unwrap();
+    clear_files(&cache, None).unwrap();
     std::fs::write(cache.root(), b"invalid").unwrap();
     assert!(size(&cache).is_err());
-    assert!(clear_files(&cache).is_err());
+    assert!(clear_files(&cache, None).is_err());
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -157,7 +157,7 @@ async fn simultaneous_cache_clears_are_idempotent() {
         std::fs::write(path.join("cached"), b"data").unwrap();
     }
     let host = crate::host::bridge::Host::default();
-    let (first, second) = tokio::join!(clear(&cache, &host), clear(&cache, &host));
+    let (first, second) = tokio::join!(clear(&cache, &host, None), clear(&cache, &host, None));
     first.unwrap();
     second.unwrap();
     assert_eq!(size(&cache).unwrap(), 0);
@@ -174,4 +174,54 @@ fn cache_byte_counts_preserve_64_bit_width_without_reading_contents() {
     let bytes = 3 * 1024 * 1024 * 1024;
     file.set_len(bytes).unwrap();
     assert_eq!(size(&cache).unwrap(), bytes);
+}
+
+#[test]
+fn portable_cache_clear_retains_only_the_active_tree_and_its_ancestors() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = CachePaths::new(&dir.path().join("cache"));
+    let active = cache.web_assets().join("active");
+    fs_create_cache_file(&active.join("assets/app.js"), b"keep");
+    let unrelated = [
+        cache.web_assets().join("inactive/index.html"),
+        cache.web_assets().join(".extract-stale/index.html"),
+        cache.root().join("scratch"),
+    ];
+    for path in &unrelated {
+        fs_create_cache_file(path, b"remove");
+    }
+    clear_files(&cache, Some(&active)).unwrap();
+    assert_eq!(
+        std::fs::read(active.join("assets/app.js")).unwrap(),
+        b"keep"
+    );
+    assert!(unrelated.iter().all(|path| !path.exists()));
+    clear_files(&cache, Some(&active)).unwrap();
+    assert_eq!(size(&cache).unwrap(), 4);
+    clear_files(&cache, None).unwrap();
+    assert_eq!(size(&cache).unwrap(), 0);
+}
+
+fn fs_create_cache_file(path: &std::path::Path, bytes: &[u8]) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_asset_cleanup_unlinks_sibling_links_without_traversing_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let cache = CachePaths::new(&dir.path().join("cache"));
+    let active = cache.web_assets().join("active");
+    fs_create_cache_file(&active.join("index.html"), b"active");
+    fs_create_cache_file(&external.path().join("index.html"), b"external");
+    std::os::unix::fs::symlink(external.path(), cache.web_assets().join("linked")).unwrap();
+    clear_files(&cache, Some(&active)).unwrap();
+    assert_eq!(
+        std::fs::read(external.path().join("index.html")).unwrap(),
+        b"external"
+    );
+    assert_eq!(std::fs::read(active.join("index.html")).unwrap(), b"active");
+    assert!(!cache.web_assets().join("linked").exists());
 }

@@ -147,14 +147,10 @@ async fn aware_config_uses_current_pairing_identity_and_rejects_corrupt_keys() {
         plain_rs::utils::base64::base64_encode(&[7; 32])
     );
     let native = server.native_graphql().unwrap();
-    let response = native
-        .execute(async_graphql::Request::new(
-            "{ activePeerTransfers { peerId transport } }",
-        ))
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let data = response.data.into_json().unwrap();
-    assert_eq!(data["activePeerTransfers"], json!([]));
+    assert_eq!(
+        serde_json::from_str::<Value>(&snapshot_event(&state).payload).unwrap(),
+        json!([])
+    );
     let removed = native
         .execute(async_graphql::Request::new(
             "{ __type(name: \"PeerAwareConfig\") { name } }",
@@ -174,4 +170,89 @@ async fn aware_config_uses_current_pairing_identity_and_rejects_corrupt_keys() {
         aware_config_for_peer(&state, &peers::get(&state.db, "fixture").unwrap().unwrap()).is_err()
     );
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_transport_snapshots_follow_current_routes_without_graphql_reads() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let mut first = peer();
+    first.id = "b-peer".into();
+    let ticket = state
+        .transport
+        .begin(&first, &[TransportType::Ble])
+        .unwrap()
+        .ticket
+        .unwrap();
+    let mut second = first.clone();
+    second.id = "a-peer".into();
+    state
+        .transport
+        .begin(&second, &[TransportType::Aware])
+        .unwrap();
+    let bridge = core.host_events();
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "IMAGE_MODELS_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "ONLINE_CLIENTS_UPDATED"
+    );
+    let initial = bridge.next_event().await.unwrap();
+    assert_eq!(initial["type"], "PEER_TRANSPORT_UPDATED");
+    assert_eq!(
+        serde_json::from_str::<Value>(initial["payload"].as_str().unwrap()).unwrap(),
+        json!([
+            {"peerId":"a-peer","transport":"AWARE"}, {"peerId":"b-peer","transport":"BLE"},
+        ])
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "DLNA_SENDER_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "APP_UPDATE_DOWNLOAD_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "AUDIO_PLAYBACK_UPDATED"
+    );
+    notify(&state);
+    state.transport.abort(&ticket);
+    let current = bridge.next_event().await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(current["payload"].as_str().unwrap()).unwrap(),
+        json!([
+            {"peerId":"a-peer","transport":"AWARE"},
+        ])
+    );
+    state.transport.forget("a-peer");
+    for _ in 0..300 {
+        state
+            .events
+            .send(plain_rs::events::WsEvent::broadcast(
+                "CONTENT_CHANGED",
+                "{}".into(),
+            ))
+            .unwrap();
+    }
+    assert_eq!(bridge.next_event().await.unwrap()["reconcile"], true);
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "IMAGE_MODELS_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "ONLINE_CLIENTS_UPDATED"
+    );
+    let restored = bridge.next_event().await.unwrap();
+    assert_eq!(restored["type"], "PEER_TRANSPORT_UPDATED");
+    assert_eq!(
+        serde_json::from_str::<Value>(restored["payload"].as_str().unwrap()).unwrap(),
+        json!([])
+    );
+    core.stop_core().await;
 }

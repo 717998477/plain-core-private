@@ -130,7 +130,17 @@ async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_auth
         format!("mutation {{ removeFileTask(id:{}) }}", json!(id)),
     )
     .await;
-    assert_eq!(removed["data"]["removeFileTask"], true);
+    assert!(removed.get("errors").is_some());
+    assert_eq!(
+        server
+            .runtime_state()
+            .files
+            .list(server.runtime_state().native_client_id().unwrap())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     worker.abort();
     let _ = worker.await;
     server.shutdown().await;
@@ -492,6 +502,14 @@ async fn destructive_path_batches_validate_every_target_before_touching_any_file
     std::fs::write(&path, b"preserve me").unwrap();
     for invalid in ["", " \t\n", "/", "."] {
         let paths = vec![path.to_string_lossy().into_owned(), invalid.into()];
+        assert!(state.files.trash_paths(paths.clone()).await.is_err());
+        assert!(state.files.delete_many(paths).await.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"preserve me");
+        assert!(requests.try_recv().is_err());
+    }
+    for suffix in [".", ".."] {
+        let invalid = directory.path().join(suffix).to_string_lossy().into_owned();
+        let paths = vec![path.to_string_lossy().into_owned(), invalid];
         assert!(state.files.trash_paths(paths.clone()).await.is_err());
         assert!(state.files.delete_many(paths).await.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"preserve me");

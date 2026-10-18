@@ -26,10 +26,7 @@ impl Controller {
 #[derive(async_graphql::Enum, Clone, Copy, PartialEq, Eq, Debug)]
 #[graphql(name = "PeerStatusAction")]
 pub enum Action {
-    Start,
-    Stop,
     Reconnect,
-    EnsureAware,
 }
 
 fn emit(state: &ServerState, id: &str, online: bool) {
@@ -47,30 +44,8 @@ fn emit(state: &ServerState, id: &str, online: bool) {
 }
 
 async fn execute(state: &ServerState, request: Action) -> Result<(), String> {
-    if matches!(request, Action::EnsureAware) {
-        status_outgoing::ensure_aware(state)
-            .await
-            .map_err(|e| e.to_string())?;
-        return Ok(());
-    }
     let _control = state.peer_status.control.lock().await;
     match request {
-        Action::Start => {
-            if state
-                .peer_status
-                .public_active
-                .load(std::sync::atomic::Ordering::SeqCst)
-            {
-                state.peer_status.outgoing.start(state.clone());
-                Ok(())
-            } else {
-                Err("Public server inactive".to_string())
-            }
-        }
-        Action::Stop => {
-            stop(state).await;
-            Ok(())
-        }
         Action::Reconnect => {
             state
                 .peer_status
@@ -79,7 +54,6 @@ async fn execute(state: &ServerState, request: Action) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             Ok(())
         }
-        Action::EnsureAware => unreachable!(),
     }
 }
 

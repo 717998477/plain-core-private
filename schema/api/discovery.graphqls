@@ -1,24 +1,7 @@
-type DiscoveryReply {
-	id: ID!
-	name: String!
-	port: Int!
-	deviceType: String!
-	version: String!
-	platform: String!
-	ips: [String!]!
-	awareSupported: Boolean!
-	awareRunning: Boolean!
-}
-
 type MdnsActivity {
 	time: Long!
 	event: String!
 	detail: String!
-}
-
-type MdnsDebug {
-	services: [MdnsService!]!
-	activity: [MdnsActivity!]!
 }
 
 type MdnsPacket {
@@ -46,6 +29,7 @@ type MdnsService {
 }
 
 type MdnsState {
+	activity: [MdnsActivity!]!
 	runtimeId: String!
 	packetsIn: [MdnsPacket!]!
 	packetsOut: [MdnsPacket!]!
@@ -74,28 +58,14 @@ type NearbyDevice {
 	status: String!
 }
 
-type PeerPrewarmAdvertisement {
-	shortId: String!
-	awareSupported: Boolean!
-	awareRunning: Boolean!
-}
-
 extend type Mutation {
 	acquireDiscovery(token: ID!): Boolean!
 	acquireMdnsDebugSession(token: String!): MdnsState!
-	beginBleScan: ID!
-	browseMdns: MdnsState!
-	endBleScan(scanId: ID!): Boolean!
-	prewarmPeerTransport(id: ID!): PeerPrewarmAdvertisement
 	releaseDiscovery(token: ID!): Boolean!
 	releaseMdnsDebugSession(token: String!): MdnsState!
-	startMdnsReceiver: MdnsState!
 }
 
 extend type Query {
-	discoveryBleAdvertisement: String!
-	discoveryReply: DiscoveryReply!
-	mdnsDebug: MdnsDebug!
 	mdnsState: MdnsState!
 	nearbyDevices: [NearbyDevice!]!
 	parsePairingCode(code: String!): NearbyDevice

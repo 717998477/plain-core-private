@@ -16,38 +16,47 @@ pub(crate) async fn import(
     cache: &std::path::Path,
     request: Import,
     stop: watch::Receiver<bool>,
+    cache_changes: Arc<tokio::sync::RwLock<()>>,
 ) -> Result<DAppFile, String> {
     if *stop.borrow() {
         return Err("File import cancelled".into());
     }
-    if !request.source.starts_with("content://") && !request.source.starts_with("ph://") {
-        let source =
-            super::references::resolve(store.db.clone(), store.directory.clone(), &request.source)
-                .map_err(|error| error.to_string())?;
-        return store
-            .import(
-                source.into(),
-                request.name,
-                request.mime,
-                request.delete_source,
-            )
-            .await;
-    }
-    if request.delete_source {
+    let platform = request.source.starts_with("content://") || request.source.starts_with("ph://");
+    if platform && request.delete_source {
         return Err("Deleting an imported platform resource requires its platform adapter".into());
     }
-    let temporary = super::source_files::stage(
-        &request.source,
-        store.db.clone(),
-        &store.directory,
-        resources,
-        cache,
-        stop,
-    )
-    .await?;
+    let cache_guard = cache_changes.read_owned().await;
+    if *stop.borrow() {
+        return Err("File import cancelled".into());
+    }
+    let temporary = if platform {
+        Some(
+            super::source_files::stage(
+                &request.source,
+                store.db.clone(),
+                &store.directory,
+                resources,
+                cache,
+                stop,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let source = match temporary.as_ref() {
+        Some(file) => file.path().to_owned(),
+        None => {
+            super::references::resolve(store.db.clone(), store.directory.clone(), &request.source)
+                .map_err(|error| error.to_string())?
+                .into()
+        }
+    };
     let store = store.clone();
     tokio::task::spawn_blocking(move || {
-        store.import_file(temporary.path(), &request.name, &request.mime, false)
+        let _cache = cache_guard;
+        let _temporary = temporary;
+        store.import_file(&source, &request.name, &request.mime, request.delete_source)
     })
     .await
     .map_err(|error| error.to_string())?

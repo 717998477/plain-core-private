@@ -1,20 +1,14 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
-/// A user-settings command that is more than a field write: it enforces
-/// limits, de-duplication and cross-field rules, so it stays an action rather
-/// than a patch. Tagged so a non-GraphQL caller (the App's native bridge) can
-/// dispatch it without a hand-written match.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", content = "value", rename_all = "camelCase")]
 pub enum Action {
     RecordSearch(String),
     RemoveSearch(String),
-    ClearSearches,
     RecordSaveDirectory(String),
     ToggleNotificationApp(String),
     SetNotificationMode(String),
-    DeleteVideos(Vec<String>),
     ClearNotificationApps,
 }
 impl Action {
@@ -49,7 +43,6 @@ impl Action {
                         serde_json::to_value(items).map_err(PrefsError::Encode)?,
                     )
                 }
-                Self::ClearSearches => (keys::RECENT_SEARCHES, serde_json::json!([])),
                 Self::RecordSaveDirectory(path) => {
                     let mut items: Vec<String> = serde_json::from_value(
                         entries
@@ -93,17 +86,6 @@ impl Action {
                         .unwrap_or(defaults.notification_filter);
                     filter["apps"] = serde_json::json!([]);
                     (keys::NOTIFICATION_FILTER, filter)
-                }
-                Self::DeleteVideos(paths) => {
-                    let mut videos: Vec<Value> = serde_json::from_value(
-                        entries
-                            .get(keys::VIDEO_PLAYLIST)
-                            .cloned()
-                            .unwrap_or(defaults.video_playlist),
-                    )
-                    .map_err(PrefsError::Decode)?;
-                    videos.retain(|v| !paths.iter().any(|p| v["path"].as_str() == Some(p)));
-                    (keys::VIDEO_PLAYLIST, Value::Array(videos))
                 }
             };
             if entries.get(key) != Some(&value) {

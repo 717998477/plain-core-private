@@ -8,6 +8,12 @@ async fn file_import_dedupe_release_and_restart_use_core_storage() {
     let token = plain_rs::utils::base64::base64_encode(&[14; 32]);
     let prefs =
         Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system_prefs.json")).unwrap());
+    prefs
+        .set(
+            "api_permissions",
+            serde_json::json!(["WRITE_EXTERNAL_STORAGE"]),
+        )
+        .unwrap();
     let path = dir.path().join("plain.db");
     let server = ContentServer::start(path.parent().unwrap(), &token, prefs.clone()).unwrap();
     let source = dir.path().join("upload");
@@ -100,6 +106,57 @@ async fn file_import_dedupe_release_and_restart_use_core_storage() {
     assert!(!source.exists());
     assert!(dir.path().join(relative).exists());
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn remote_import_requires_storage_authorization_before_reading_or_deleting_a_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(&directory.path().join("core")).unwrap();
+    let state = core.runtime_state();
+    state
+        .prefs
+        .set("api_permissions", serde_json::json!([]))
+        .unwrap();
+    let (_generation, mut requests) = state.host.connect();
+    let source = directory.path().join("preserved-source.txt");
+    std::fs::write(&source, b"owned source bytes").unwrap();
+    for delete_source in [false, true] {
+        for path in [
+            source.to_string_lossy().into_owned(),
+            "content://fixture/denied".into(),
+        ] {
+            let response = state.public.execute(
+                async_graphql::Request::new(
+                    "mutation($path:String!,$delete:Boolean!){importAppFile(source:$path,fileName:\"owned.txt\",mimeType:\"text/plain\",deleteSource:$delete){id}}",
+                ).variables(async_graphql::Variables::from_json(serde_json::json!({"path":path,"delete":delete_source})))
+                    .data(crate::graphql::executor::RequestOrigin::Remote)
+                    .data(state.clone()),
+            ).await;
+            assert_eq!(response.errors.len(), 1);
+            assert_eq!(response.errors[0].message, "no_permission");
+            assert_eq!(std::fs::read(&source).unwrap(), b"owned source bytes");
+            assert_eq!(state.db.app_file_count("").unwrap(), 0);
+            assert!(requests.try_recv().is_err());
+        }
+    }
+    state
+        .prefs
+        .set(
+            "api_permissions",
+            serde_json::json!(["WRITE_EXTERNAL_STORAGE"]),
+        )
+        .unwrap();
+    let response = state.public.execute(
+        async_graphql::Request::new("mutation($path:String!){importAppFile(source:$path,fileName:\"owned.txt\",mimeType:\"text/plain\",deleteSource:false){id}}")
+            .variables(async_graphql::Variables::from_json(serde_json::json!({"path":source.to_string_lossy()})))
+            .data(crate::graphql::executor::RequestOrigin::Remote)
+            .data(state.clone()),
+    ).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(state.db.app_file_count("").unwrap(), 1);
+    assert_eq!(std::fs::read(&source).unwrap(), b"owned source bytes");
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
 }
 
 #[tokio::test]

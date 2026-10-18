@@ -13,11 +13,6 @@ extend type Mutation {
 }
 
 extend type Query {
-	"""
-	`null` when the id is unknown — the web client treats that as "gone"
-	and drops the tag from its list.
-	"""
-	tag(id: ID!): Tag
 	tagKeys(id: ID!): [String!]!
 	tagRelations(type: DataType!, keys: [String!]!): [TagRelation!]!
 	tags(type: DataType!): [Tag!]!

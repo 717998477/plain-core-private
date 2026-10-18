@@ -290,6 +290,25 @@ async fn main_identity_rename_and_pairing_code_use_shared_preferences_and_refuse
     )
     .await;
     assert_eq!(remote.errors[0].message, "no_permission");
+    let current = executor
+        .execute(async_graphql::Request::new(
+            r#"{ isPairingRequestCurrent(id:"absent",signature:"stale") }"#,
+        ))
+        .await;
+    assert!(current.errors.is_empty());
+    assert_eq!(
+        current.data.into_json().unwrap()["isPairingRequestCurrent"],
+        false
+    );
+    let remote = crate::graphql::executor::execute_graphql(
+        &state.public,
+        async_graphql::Request::new(
+            r#"{ isPairingRequestCurrent(id:"absent",signature:"stale") }"#,
+        ),
+        crate::graphql::executor::RequestContext::remote(Some(state.clone())),
+    )
+    .await;
+    assert_eq!(remote.errors[0].message, "no_permission");
     core.stop_core().await;
     for document in [
         identity,

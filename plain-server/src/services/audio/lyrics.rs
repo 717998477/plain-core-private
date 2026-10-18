@@ -38,6 +38,35 @@ impl Read for Reader {
         }
     }
 }
+pub(crate) async fn read_for_playback(
+    path: String,
+    resources: Option<(&NativeResources, watch::Receiver<bool>)>,
+) -> Result<String, String> {
+    if path.starts_with("content://") || path.starts_with("ph://") {
+        return read(path, resources).await;
+    }
+    let path = plain_rs::utils::file_uri::local_path(&path)?;
+    let task = async {
+        tokio::task::spawn_blocking(move || {
+            plain_rs::media::audio::lyrics::read_with_sidecar(&path)
+        })
+        .await
+        .map_err(|error| error.to_string())
+    };
+    if let Some((_, mut stopped)) = resources {
+        if *stopped.borrow() {
+            return Err("Server stopped".into());
+        }
+        tokio::select! {
+            biased;
+            _ = stopped.changed() => Err("Server stopped".into()),
+            result = task => result,
+        }
+    } else {
+        task.await
+    }
+}
+
 pub(crate) async fn read(
     path: String,
     resources: Option<(&NativeResources, watch::Receiver<bool>)>,

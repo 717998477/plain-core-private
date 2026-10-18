@@ -6,7 +6,11 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::watch;
 
+mod registry;
+pub use registry::{NativeResource, NativeResourceRegistry, ResourceAccessError};
+
 pub const MAX_RESOURCE_READ_BYTES: usize = 64 * 1024;
+pub const MAX_RESOURCE_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +39,11 @@ pub struct NativeFileResources {
 }
 
 impl NativeFileResources {
+    fn is_open(&self, id: &str) -> bool {
+        let state = self.state.lock().unwrap();
+        !state.closed && state.resources.contains_key(id)
+    }
+
     pub async fn open(&self, path: &Path) -> Result<ResourceInfo, String> {
         if self.state.lock().unwrap().closed {
             return Err("resource owner closed".into());

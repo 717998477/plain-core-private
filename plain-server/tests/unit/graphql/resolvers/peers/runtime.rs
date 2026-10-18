@@ -9,7 +9,7 @@ async fn runtime_controls_require_local_authority_and_do_not_emit_content_update
     let (_generation, mut requests) = state.host.connect();
     let mut events = state.events.subscribe();
     for document in [
-        "mutation{controlPeerStatus(action:STOP)}",
+        "mutation{controlPeerStatus(action:RECONNECT)}",
         r#"mutation{confirmWebLogin(requestId:"missing-request",allowed:true)}"#,
     ] {
         let remote = execute_graphql(
@@ -24,7 +24,7 @@ async fn runtime_controls_require_local_authority_and_do_not_emit_content_update
     let schema = core.native_graphql().unwrap();
     let response = schema
         .execute(async_graphql::Request::new(
-            "mutation{controlPeerStatus(action:STOP)}",
+            "mutation{controlPeerStatus(action:RECONNECT)}",
         ))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
@@ -32,7 +32,7 @@ async fn runtime_controls_require_local_authority_and_do_not_emit_content_update
         response.data.into_json().unwrap()["controlPeerStatus"],
         true
     );
-    for action in ["START", "NOPE", "SNAPSHOT"] {
+    for action in ["START", "STOP", "ENSURE_AWARE", "NOPE", "SNAPSHOT"] {
         let response = schema
             .execute(async_graphql::Request::new(format!(
                 "mutation{{controlPeerStatus(action:{action})}}"

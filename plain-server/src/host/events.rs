@@ -1,6 +1,7 @@
 use crate::assembly::server::ServerState;
 use plain_rs::events::{HOST_BINARY_TYPES, HOST_TEXT_TYPES, WsEvent};
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 pub struct HostEvents {
@@ -8,11 +9,19 @@ pub struct HostEvents {
     generation: u64,
     requests: Mutex<mpsc::Receiver<Value>>,
     events: Mutex<broadcast::Receiver<WsEvent>>,
+    image_snapshot_pending: AtomicBool,
+    online_snapshot_pending: AtomicBool,
+    transport_snapshot_pending: AtomicBool,
+    cast_snapshot_pending: AtomicBool,
+    update_snapshot_pending: AtomicBool,
+    audio_snapshot_pending: AtomicBool,
 }
 struct ServingSession<'a>(&'a HostEvents);
 
 impl Drop for ServingSession<'_> {
     fn drop(&mut self) {
+        self.0.state.ble_advertising.close(self.0.generation);
+        self.0.state.ble_scans.close_owner(self.0.generation);
         self.0.state.host.disconnect(self.0.generation);
     }
 }
@@ -21,17 +30,32 @@ impl HostEvents {
     pub(crate) fn new(state: ServerState) -> Self {
         let events = state.events.subscribe();
         let (generation, requests) = state.host.connect();
-        tokio::spawn(
-            crate::services::discovery::mdns_runtime::Runtime::host_connected(
-                state.clone(),
-                generation,
-            ),
-        );
+        state.ble_scans.set_owner(generation);
+        state.ble_advertising.connect(generation);
+        crate::services::settings::update_download::Runtime::schedule_reconcile(&state);
+        let connected = state.clone();
+        tokio::spawn(async move {
+            tokio::join!(
+                crate::services::discovery::mdns_runtime::Runtime::host_connected(
+                    connected.clone(),
+                    generation
+                ),
+                crate::services::casting::receiver::lifecycle::host_connected(
+                    connected, generation
+                ),
+            );
+        });
         Self {
             state,
             generation,
             requests: Mutex::new(requests),
             events: Mutex::new(events),
+            image_snapshot_pending: AtomicBool::new(true),
+            online_snapshot_pending: AtomicBool::new(true),
+            transport_snapshot_pending: AtomicBool::new(true),
+            cast_snapshot_pending: AtomicBool::new(true),
+            update_snapshot_pending: AtomicBool::new(true),
+            audio_snapshot_pending: AtomicBool::new(true),
         }
     }
     pub fn capabilities(&self) -> Value {
@@ -58,6 +82,40 @@ impl HostEvents {
     }
     pub async fn next_event(&self) -> Option<Value> {
         let mut events = self.events.lock().await;
+        if *self.state.stop.borrow() || !self.state.host.is_current(self.generation) {
+            return None;
+        }
+        if self.image_snapshot_pending.swap(false, Ordering::AcqRel) {
+            let event = self.state.image_models.snapshot().event();
+            return Some(json!({"type":event.event_type,"payload":event.payload}));
+        }
+        if self.online_snapshot_pending.swap(false, Ordering::AcqRel) {
+            let event = self.state.main_ws.snapshot_event();
+            return Some(json!({"type":event.event_type,"payload":event.payload}));
+        }
+        if self
+            .transport_snapshot_pending
+            .swap(false, Ordering::AcqRel)
+        {
+            let event = crate::services::peers::peer_transport::snapshot_event(&self.state);
+            return Some(json!({"type":event.event_type,"payload":event.payload}));
+        }
+        if self.cast_snapshot_pending.swap(false, Ordering::AcqRel) {
+            let event = self.state.cast.snapshot().event();
+            return Some(json!({"type":event.event_type,"payload":event.payload}));
+        }
+        if self.update_snapshot_pending.swap(false, Ordering::AcqRel) {
+            let event = self.state.update_checks.download.snapshot_event();
+            return Some(json!({"type":event.event_type,"payload":event.payload}));
+        }
+        if self.audio_snapshot_pending.load(Ordering::Acquire) {
+            let event = self.state.audio.playback_event().await;
+            if *self.state.stop.borrow() || !self.state.host.is_current(self.generation) {
+                return None;
+            }
+            self.audio_snapshot_pending.store(false, Ordering::Release);
+            return Some(json!({"type":event.event_type,"payload":event.payload}));
+        }
         loop {
             let event = tokio::select! {
                 biased;
@@ -67,8 +125,26 @@ impl HostEvents {
             match event {
                 Ok(event) if event.is_host_event() => continue,
                 Ok(event) if event.binary_payload.is_some() => continue,
-                Ok(event) => return Some(json!({"type":event.event_type,"payload":event.payload})),
+                Ok(event) => {
+                    let event = if event.event_type == "ONLINE_CLIENTS_UPDATED" {
+                        self.state.main_ws.snapshot_event()
+                    } else if event.event_type == "PEER_TRANSPORT_UPDATED" {
+                        crate::services::peers::peer_transport::snapshot_event(&self.state)
+                    } else if event.event_type == "APP_UPDATE_DOWNLOAD_UPDATED" {
+                        self.state.update_checks.download.snapshot_event()
+                    } else {
+                        event
+                    };
+                    return Some(json!({"type":event.event_type,"payload":event.payload}));
+                }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
+                    self.image_snapshot_pending.store(true, Ordering::Release);
+                    self.online_snapshot_pending.store(true, Ordering::Release);
+                    self.transport_snapshot_pending
+                        .store(true, Ordering::Release);
+                    self.cast_snapshot_pending.store(true, Ordering::Release);
+                    self.update_snapshot_pending.store(true, Ordering::Release);
+                    self.audio_snapshot_pending.store(true, Ordering::Release);
                     #[cfg(feature = "http_transport")]
                     if let Some(failure) = self.state.http_failure.lock().unwrap().as_ref() {
                         return Some(
@@ -199,6 +275,31 @@ impl HostEvents {
                 serde_json::from_str(&payload).map_err(|error| error.to_string())?,
             );
         }
+        if kind == "BLE_ADVERTISING_FACTS_REPORTED" {
+            let facts = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+            return self
+                .state
+                .ble_advertising
+                .report(&self.state, self.generation, facts)
+                .await
+                .map_err(|error| error.to_string());
+        }
+        if kind == "BLE_SCAN_STATE_REPORTED" {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct ScanState {
+                scan_id: String,
+                active: bool,
+            }
+            let value: ScanState =
+                serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+            let id = uuid::Uuid::parse_str(&value.scan_id).map_err(|error| error.to_string())?;
+            return self
+                .state
+                .ble_scans
+                .report_state(self.generation, id, value.active)
+                .map_err(|error| error.to_string());
+        }
         if kind == "BLE_ADVERTISEMENT_REPORTED" {
             #[derive(serde::Deserialize)]
             #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -233,10 +334,31 @@ impl HostEvents {
             ));
             return Ok(());
         }
+        if crate::services::casting::receiver::reports::accept(
+            &self.state,
+            self.generation,
+            kind,
+            &payload,
+        )
+        .await?
+        {
+            return Ok(());
+        }
         if kind == "IMAGE_CATALOG_CHANGED" {
             serde_json::from_str::<()>(&payload).map_err(|error| error.to_string())?;
             self.state.image_models.catalog_changed();
             return Ok(());
+        }
+        if kind == "PERMISSIONS_UPDATED" {
+            self.state.mdns.permissions_changed(self.state.clone());
+            if let Err(error) = self
+                .state
+                .ble_advertising
+                .reconcile(&self.state, self.generation)
+                .await
+            {
+                log::warn!("BLE advertising permission recovery failed: {error}");
+            }
         }
         if kind == "MEDIA_CATALOG_CHANGED" {
             return crate::services::files::catalog_events::report(&self.state.events, &payload);
@@ -262,6 +384,8 @@ impl HostEvents {
 }
 impl Drop for HostEvents {
     fn drop(&mut self) {
+        self.state.ble_advertising.close(self.generation);
+        self.state.ble_scans.close_owner(self.generation);
         self.state.host.disconnect(self.generation);
     }
 }

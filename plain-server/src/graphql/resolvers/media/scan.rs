@@ -48,9 +48,6 @@ async fn command(ctx: &Context<'_>, action: Command) -> Result<bool> {
 pub struct MediaScanMutation;
 #[Object]
 impl MediaScanMutation {
-    async fn start_media_scan(&self, ctx: &Context<'_>, root: String) -> Result<bool> {
-        command(ctx, Command::Start(root)).await
-    }
     async fn rebuild_media_index(&self, ctx: &Context<'_>, root: String) -> Result<bool> {
         command(ctx, Command::Rebuild(root)).await
     }

@@ -4,6 +4,7 @@ enum ChannelMemberStatus {
 }
 
 type ChatChannel {
+	key: String!
 	actions: ChatChannelActions!
 	id: ID!
 	ownerId: ID!
@@ -30,19 +31,6 @@ type ChatChannelActions {
 type ChatChannelMember {
 	peerId: ID!
 	status: ChannelMemberStatus!
-}
-
-type ChatChannelRecord {
-	actions: ChatChannelActions!
-	id: ID!
-	name: String!
-	key: String!
-	ownerId: ID!
-	members: [ChatChannelMember!]!
-	version: Long!
-	status: String!
-	createdAt: Instant!
-	updatedAt: Instant!
 }
 
 enum ChatChannelStatus {
@@ -104,7 +92,6 @@ type ChatTextEdit {
 extend type Mutation {
 	acceptChatChannelInvite(id: ID!): Boolean!
 	addChatChannelMember(id: ID!, peerId: ID!): ChatChannel!
-	clearChatItems(target: String!): ActionResult!
 	createChatChannel(name: String!): ChatChannel!
 	declineChatChannelInvite(id: ID!): Boolean!
 	deleteChatChannel(id: ID!): Boolean!
@@ -135,11 +122,9 @@ extend type Mutation {
 }
 
 extend type Query {
-	chatChannelRecord(id: ID!): ChatChannelRecord
 	chatChannels: [ChatChannel!]!
 	chatConversations: [ChatConversation!]!
 	chatCount(query: String!): Int!
-	chatIds(query: String!): [ID!]!
 	chatItem(id: ID!): ChatItem
 	"""
 	Latest-first page of one conversation, returned oldest-to-newest so

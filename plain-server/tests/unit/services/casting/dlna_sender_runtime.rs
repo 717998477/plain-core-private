@@ -240,3 +240,61 @@ async fn sender_controls_use_soap_and_release_the_original_subscription() {
     server.shutdown().await;
     renderer.abort();
 }
+
+#[tokio::test]
+async fn multicast_lease_is_reused_only_within_the_same_host_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let (generation, mut requests) = state.host.connect();
+    let acquiring = {
+        let state = state.clone();
+        tokio::spawn(async move { acquire_permission(&state, &state.cast.receiver_lease).await })
+    };
+    let first = requests.recv().await.unwrap();
+    assert_eq!(first["method"], "mdnsMulticast");
+    assert_eq!(first["params"]["acquire"], true);
+    state
+        .host
+        .reply(generation, json!({"id":first["id"],"result":true}))
+        .unwrap();
+    acquiring.await.unwrap().unwrap();
+    acquire_permission(&state, &state.cast.receiver_lease)
+        .await
+        .unwrap();
+    assert!(requests.try_recv().is_err());
+
+    let (generation, mut requests) = state.host.connect();
+    let acquiring = {
+        let state = state.clone();
+        tokio::spawn(async move { acquire_permission(&state, &state.cast.receiver_lease).await })
+    };
+    let release = requests.recv().await.unwrap();
+    assert_eq!(release["params"]["lease"], first["params"]["lease"]);
+    assert_eq!(release["params"]["acquire"], false);
+    state
+        .host
+        .reply(generation, json!({"id":release["id"],"result":false}))
+        .unwrap();
+    let second = requests.recv().await.unwrap();
+    assert_eq!(second["params"]["acquire"], true);
+    assert_ne!(second["params"]["lease"], first["params"]["lease"]);
+    state
+        .host
+        .reply(generation, json!({"id":second["id"],"result":true}))
+        .unwrap();
+    acquiring.await.unwrap().unwrap();
+    assert_eq!(
+        state
+            .cast
+            .receiver_lease
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .generation,
+        Some(generation)
+    );
+    state.cast.receiver_lease.lock().unwrap().take();
+    core.stop_core().await;
+}

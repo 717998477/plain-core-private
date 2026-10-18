@@ -106,7 +106,7 @@ fn bytes_are_monotonic_and_sql_failure_never_completes() {
         .unwrap();
     std::fs::write(&ticket.path, b"abc").unwrap();
     q.finish("0", &new.generation, None).unwrap();
-    assert_eq!(status(&q, "0"), "COMPLETED");
+    assert!(q.snapshot()["tasks"].as_array().unwrap().is_empty());
     assert!(!q.control("0", "pause").unwrap());
     assert!(!q.finish("0", &new.generation, None).unwrap());
 }
@@ -258,4 +258,34 @@ fn recreated_queue_has_distinct_runtime_identity_and_starts_at_revision_zero() {
     );
     assert_eq!(restarted.snapshot()["revision"], 0);
     assert_eq!(restarted.snapshot()["tasks"], json!([]));
+}
+
+#[test]
+fn committed_downloads_release_all_queue_capacity_without_client_remove_requests() {
+    let (dir, db, queue) = fixture(129);
+    for id in 0..129 {
+        let id = id.to_string();
+        assert!(queue.enqueue("message", &id, "peer").unwrap());
+        let (task, ticket) = start(&queue);
+        std::fs::write(&ticket.path, b"abc").unwrap();
+        assert!(queue.finish(&id, &task.generation, None).unwrap());
+        assert!(queue.snapshot()["tasks"].as_array().unwrap().is_empty());
+        assert_eq!(queue.public_progress(), "[]");
+        assert!(!queue.progress(&id, &task.generation, 3).unwrap());
+        assert!(!queue.finish(&id, &task.generation, None).unwrap());
+    }
+    let chat = messages::get(&db, "message").unwrap().unwrap();
+    let content: Value = serde_json::from_str(&chat.content).unwrap();
+    let items = content["value"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 129);
+    for item in items {
+        let uri = item["uri"].as_str().unwrap();
+        assert!(uri.starts_with("fid:"));
+        let id = uri[4..].split('.').next().unwrap();
+        let file = db.app_file_get(id).unwrap().unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join(file.real_path)).unwrap(),
+            b"abc"
+        );
+    }
 }

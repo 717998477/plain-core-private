@@ -69,7 +69,6 @@ struct TaskReceipt {
     downloaded: Long,
     total: Long,
     speed: Long,
-    generation: String,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,7 +88,6 @@ struct ChatDownloadTask {
     downloaded: Long,
     total: Long,
     speed: Long,
-    generation: String,
 }
 #[derive(SimpleObject)]
 struct ChatDownloadQueue {
@@ -123,7 +121,6 @@ fn snapshot(
                     downloaded: task.downloaded,
                     total: task.total,
                     speed: task.speed,
-                    generation: task.generation,
                 })
             })
             .collect::<async_graphql::Result<Vec<_>>>()?,

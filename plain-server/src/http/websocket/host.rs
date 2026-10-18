@@ -41,11 +41,11 @@ impl Runtime {
         ids.dedup();
         ids
     }
+    pub(crate) fn snapshot_event(&self) -> WsEvent {
+        WsEvent::broadcast("ONLINE_CLIENTS_UPDATED", json!(self.snapshot()).to_string())
+    }
     fn changed(&self, state: &ServerState) {
-        let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-            "ONLINE_CLIENTS_UPDATED",
-            json!(self.snapshot()).to_string(),
-        ));
+        let _ = state.events.send(self.snapshot_event());
     }
     pub(crate) fn close_client(&self, state: &ServerState, client_id: Option<&str>) {
         let connections = self.connections.lock().unwrap();

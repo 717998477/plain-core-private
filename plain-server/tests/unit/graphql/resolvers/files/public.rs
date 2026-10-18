@@ -847,7 +847,7 @@ async fn file_queries_resolve_shared_references_and_preserve_the_requested_path(
     ];
     for reference in references {
         let response = schema.execute(async_graphql::Request::new(
-            "query($path:String!){fileInfo(path:$path){path size data{... on VideoFileInfo{width height}}} pathExists(path:$path) pathKind(path:$path) mediaDurationMs(path:$path)}"
+            "query($path:String!){fileInfo(path:$path){path size data{... on VideoFileInfo{width height durationMs}}} pathExists(path:$path) pathKind(path:$path)}"
         ).variables(async_graphql::Variables::from_json(json!({"path":reference})))).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
         let data = response.data.into_json().unwrap();
@@ -860,7 +860,7 @@ async fn file_queries_resolve_shared_references_and_preserve_the_requested_path(
         assert_eq!(data["fileInfo"]["data"]["height"], 240);
         assert_eq!(data["pathExists"], true);
         assert_eq!(data["pathKind"], "FILE");
-        assert_eq!(data["mediaDurationMs"], 6000);
+        assert_eq!(data["fileInfo"]["data"]["durationMs"], 6000);
     }
     for reference in [
         "",
@@ -917,4 +917,84 @@ fn mount_projection_preserves_stable_ids_and_explicit_statistics() {
     assert_eq!(sdk.id.as_str(), "path:/storage");
     assert_eq!(sdk.mount_point, "/storage");
     assert_eq!(sdk.used_bytes.0, 40);
+}
+
+#[tokio::test]
+async fn audio_duration_selection_probes_unknown_file_names_without_sdk_metadata() {
+    let (directory, schema) = fixture(GRANTED);
+    for (fixture_name, expected) in [("audio-untagged.mp3", 4), ("video-h264-baseline.mp4", 6)] {
+        let path = directory.path().join(fixture_name.replace('.', "-"));
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../plain-rs/testdata")
+                .join(fixture_name),
+            &path,
+        )
+        .unwrap();
+        let response = schema.execute(async_graphql::Request::new(
+            "query($path:String!){fileInfo(path:$path,fileName:\"audio.mp3\"){data{... on AudioFileInfo{durationMs}}}}"
+        ).variables(async_graphql::Variables::from_json(json!({"path":path})))
+            .data(crate::services::files::info::Info::sdk(schema_host(&schema))))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(
+            response.data.into_json().unwrap()["fileInfo"]["data"]["durationMs"]
+                .as_i64()
+                .unwrap()
+                / 1000,
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn audio_duration_selection_keeps_null_for_missing_invalid_and_unknown_sources() {
+    let (directory, schema) = fixture(GRANTED);
+    let unsupported = directory.path().join("unsupported");
+    fs::write(&unsupported, b"unsupported media bytes").unwrap();
+    for path in [
+        unsupported.to_string_lossy().into_owned(),
+        directory
+            .path()
+            .join("missing")
+            .to_string_lossy()
+            .into_owned(),
+        String::new(),
+        "app://../outside".to_owned(),
+    ] {
+        let response = schema.execute(async_graphql::Request::new(
+            "query($path:String!){fileInfo(path:$path,fileName:\"audio.mp3\"){data{... on AudioFileInfo{durationMs}}}}"
+        ).variables(async_graphql::Variables::from_json(json!({"path":path})))
+            .data(crate::services::files::info::Info::sdk(schema_host(&schema))))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert!(response.data.into_json().unwrap()["fileInfo"]["data"].is_null());
+    }
+}
+
+#[tokio::test]
+async fn audio_duration_selection_preserves_permission_and_probe_errors() {
+    let (_directory, schema) = fixture("[]");
+    let response = schema.execute(
+        "{fileInfo(path:\"missing\",fileName:\"audio.mp3\"){data{... on AudioFileInfo{durationMs}}}}"
+    ).await;
+    assert_eq!(response.errors.len(), 1);
+    assert_eq!(response.errors[0].message, "no_permission");
+    let (directory, schema) = fixture(GRANTED);
+    let path = directory.path().join("audio");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../plain-rs/testdata/audio-untagged.mp3"),
+        &path,
+    )
+    .unwrap();
+    schema
+        .data::<Arc<crate::services::files::duration_updates::Runtime>>()
+        .unwrap()
+        .shutdown()
+        .await;
+    let response = schema.execute(async_graphql::Request::new(
+        "query($path:String!){fileInfo(path:$path,fileName:\"audio.mp3\"){data{... on AudioFileInfo{durationMs}}}}"
+    ).variables(async_graphql::Variables::from_json(json!({"path":path})))).await;
+    assert_eq!(response.errors.len(), 1);
+    assert_eq!(response.errors[0].message, "Media duration runtime stopped");
 }

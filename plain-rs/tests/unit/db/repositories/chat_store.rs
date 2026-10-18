@@ -89,6 +89,12 @@ fn checked_chat_storage_is_atomic_literal_and_preserves_unrelated_conversations_
         vec!["group"]
     );
     assert!(messages::ids(&db, "text:unknown").unwrap().is_empty());
+    assert_eq!(
+        messages::ids(&db, r"ids:=one\ peer:other").unwrap(),
+        vec!["one peer:other"]
+    );
+    assert_eq!(messages::ids(&db, r#"ids:" one ""#).unwrap(), vec![" one "]);
+    assert!(messages::ids(&db, r#"ids:" ,  ,""#).unwrap().is_empty());
     assert_eq!(messages::delete(&db, &[]).unwrap(), 0);
     messages::status(&db, "one", ChatStatus::Partial, Some(r#"{"results":[]}"#)).unwrap();
     assert_eq!(

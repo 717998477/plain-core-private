@@ -48,6 +48,11 @@ pub(crate) struct Snapshot {
     pub active: bool,
     pub sid: String,
 }
+impl Snapshot {
+    pub(crate) fn event(&self) -> plain_rs::events::WsEvent {
+        plain_rs::events::WsEvent::broadcast(EVENT_UPDATED, serde_json::to_string(self).unwrap())
+    }
+}
 #[derive(Default)]
 pub(crate) struct Runtime {
     pub snapshot: Mutex<Snapshot>,
@@ -55,27 +60,30 @@ pub(crate) struct Runtime {
     pub scan: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub polling: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub renewal: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    pub scan_lease: Mutex<Option<String>>,
-    pub receiver_lease: Mutex<Option<String>>,
+    pub scan_lease: Mutex<Option<MulticastLease>>,
+    pub receiver_lease: Mutex<Option<MulticastLease>>,
     pub subscription_device: Mutex<Option<DiscoveredDevice>>,
     pub subscription_renew_after: Mutex<std::time::Duration>,
     pub callback_sequence: Mutex<Option<u32>>,
     pub receiver_operations: tokio::sync::Mutex<()>,
     pub operations: tokio::sync::Mutex<()>,
 }
+
+pub(crate) struct MulticastLease {
+    id: String,
+    generation: Option<u64>,
+}
 impl Runtime {
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().unwrap().clone()
     }
     pub fn publish(&self, state: &ServerState) {
-        let payload = {
+        let event = {
             let mut snapshot = self.snapshot.lock().unwrap();
             snapshot.version = snapshot.version.saturating_add(1);
-            serde_json::to_string(&*snapshot).unwrap()
+            snapshot.event()
         };
-        let _ = state
-            .events
-            .send(plain_rs::events::WsEvent::broadcast(EVENT_UPDATED, payload));
+        let _ = state.events.send(event);
     }
     pub fn stop_tasks(&self) {
         for slot in [&self.scan, &self.polling, &self.renewal] {
@@ -263,11 +271,18 @@ pub(crate) async fn execute(
 
 pub(crate) async fn acquire_permission(
     state: &ServerState,
-    slot: &Mutex<Option<String>>,
+    slot: &Mutex<Option<MulticastLease>>,
 ) -> Result<(), String> {
-    if slot.lock().unwrap().is_some() {
+    let generation = state.host.generation();
+    if slot
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|lease| lease.generation == generation)
+    {
         return Ok(());
     }
+    release_permission(state, slot).await;
     let lease = uuid::Uuid::new_v4().to_string();
     if state
         .host
@@ -278,15 +293,21 @@ pub(crate) async fn acquire_permission(
     {
         return Err("Multicast permission unavailable".into());
     }
-    *slot.lock().unwrap() = Some(lease);
+    if state.host.generation() != generation {
+        return Err("Host replaced while acquiring multicast permission".into());
+    }
+    *slot.lock().unwrap() = Some(MulticastLease {
+        id: lease,
+        generation,
+    });
     Ok(())
 }
-pub(crate) async fn release_permission(state: &ServerState, slot: &Mutex<Option<String>>) {
+pub(crate) async fn release_permission(state: &ServerState, slot: &Mutex<Option<MulticastLease>>) {
     let lease = slot.lock().unwrap().take();
     if let Some(lease) = lease {
         let _ = state
             .host
-            .call("mdnsMulticast", json!({"lease":lease,"acquire":false}))
+            .call("mdnsMulticast", json!({"lease":lease.id,"acquire":false}))
             .await;
     }
 }

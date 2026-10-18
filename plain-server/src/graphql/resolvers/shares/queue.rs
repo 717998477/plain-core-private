@@ -126,24 +126,6 @@ impl SharedDownloadMutation {
             .map(async_graphql::ID)
             .map_err(|error| async_graphql::Error::new(error.to_string()))
     }
-    async fn pause_shared_download(
-        &self,
-        ctx: &Context<'_>,
-        id: async_graphql::ID,
-    ) -> async_graphql::Result<bool> {
-        crate::services::peers::shared_batch::control(ctx.data::<ServerState>()?, &id, "pause")
-            .await
-            .map_err(|error| async_graphql::Error::new(error.to_string()))
-    }
-    async fn resume_shared_download(
-        &self,
-        ctx: &Context<'_>,
-        id: async_graphql::ID,
-    ) -> async_graphql::Result<bool> {
-        crate::services::peers::shared_batch::control(ctx.data::<ServerState>()?, &id, "resume")
-            .await
-            .map_err(|error| async_graphql::Error::new(error.to_string()))
-    }
     async fn retry_shared_download(
         &self,
         ctx: &Context<'_>,

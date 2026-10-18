@@ -161,12 +161,7 @@ pub(crate) async fn stop_locked(state: &ServerState, guard: &mut Option<PublicSe
     let _cast_guard = state.cast.operations.lock().await;
     crate::services::casting::dlna_sender_playback::end(state, true).await;
     let _receiver_guard = state.cast.receiver_operations.lock().await;
-    state.dlna.stop().await;
-    crate::services::casting::dlna_sender_runtime::release_permission(
-        state,
-        &state.cast.receiver_lease,
-    )
-    .await;
+    crate::services::casting::receiver::lifecycle::stop_locked(state).await;
     state.cast.stop_tasks();
     crate::services::casting::dlna_sender_runtime::release_permission(
         state,

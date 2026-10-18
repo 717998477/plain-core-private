@@ -54,6 +54,65 @@ fn zip_files_requests_default_every_field() {
     assert!(request.name.is_empty());
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn encrypted_media_download_resolves_selection_and_preserves_each_basename_and_byte() {
+    let directory = tempfile::tempdir().unwrap();
+    let core =
+        crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
+    let state = core.runtime_state();
+    let (_generation, mut requests) = state.host.connect();
+    let rows = (0..3)
+        .map(|index| {
+            let path = directory.path().join(format!("source-{index}.txt"));
+            std::fs::write(&path, format!("bytes-{index}")).unwrap();
+            plain_rs::db::MediaFileMetadata {
+                data_type: DataType::Doc,
+                path: path.to_string_lossy().into_owned(),
+                title: format!("display title {index}"),
+                artist: String::new(),
+                album: String::new(),
+                album_artist: String::new(),
+                bucket_id: "fixture".into(),
+                size_bytes: 7,
+                duration_ms: 0,
+                cover_image_id: None,
+                width: 0,
+                height: 0,
+                rotation: 0,
+                taken_at: None,
+                created_at: "2026-01-01T00:00:00.000Z".into(),
+                updated_at: "2026-01-01T00:00:00.000Z".into(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let recorded = state.db.record_media_files(&rows).unwrap();
+    let payload = json!({"type":"DOC","query":format!("ids:{},{}",recorded[0].id,recorded[2].id),"name":"selected.zip"}).to_string();
+    let token = plain_rs::prefs::ensure_url_token(&state.prefs);
+    let id = plain_rs::utils::base64::base64_encode_url_safe(
+        &plain_rs::crypto::xchacha_encrypt(&token, payload.as_bytes()).unwrap(),
+    );
+    let response = files(State(state.clone()), Query(Params { id, sid: None })).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    assert_eq!(archive.len(), 2);
+    for index in [0, 2] {
+        let mut bytes = String::new();
+        archive
+            .by_name(&format!("source-{index}.txt"))
+            .unwrap()
+            .read_to_string(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, format!("bytes-{index}"));
+    }
+    assert!(archive.by_name("source-1.txt").is_err());
+    assert!(requests.try_recv().is_err());
+    core.stop_core().await;
+}
+
 fn write_archive(path: &Path, files: &[(&str, &[u8])]) {
     let mut writer = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
     let options = zip::write::SimpleFileOptions::default()

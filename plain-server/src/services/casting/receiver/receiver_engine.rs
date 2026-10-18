@@ -78,39 +78,20 @@ impl DlnaEngine {
         state.clone()
     }
 
-    /// The player reports its own position so `GetPositionInfo` answers with
-    /// real numbers instead of zeros.
-    pub async fn set_position(&self, position_ms: i64, duration_ms: i64) {
-        let mut s = self.state.write().await;
-        s.current_position_ms = position_ms.max(0);
-        s.duration_ms = duration_ms.max(0);
-    }
-
-    /// The player has applied `seek_target_ms`; stop re-reporting it.
-    pub async fn clear_seek_target(&self) {
-        self.state.write().await.seek_target_ms = None;
-        let _ = self.changes.send(());
-    }
-
-    /// The player reports what it is actually doing, so `GetTransportInfo`
-    /// answers with the renderer's real state rather than the last command.
-    pub async fn set_playback_state(&self, playback: DlnaPlaybackState) {
-        self.state.write().await.playback_state = playback;
-        let _ = self.changes.send(());
-    }
-
-    /// The player exited: drop the media and go back to no-media-present,
-    /// which is what the `Stop` command does.
-    pub async fn clear_media(&self) {
-        let mut s = self.state.write().await;
-        s.media_uri.clear();
-        s.media_title.clear();
-        s.media_album_art_uri.clear();
-        s.media_type = crate::services::casting::receiver::types::DlnaMediaType::UNKNOWN;
-        s.playback_state = DlnaPlaybackState::NoMediaPresent;
-        s.seek_target_ms = None;
-        drop(s);
-        let _ = self.changes.send(());
+    pub(crate) async fn apply_report(
+        &self,
+        notify: bool,
+        update: impl FnOnce(&mut DlnaRendererState) -> bool + Send,
+    ) -> bool {
+        let mut state = self.state.write().await;
+        if !update(&mut state) {
+            return false;
+        }
+        drop(state);
+        if notify {
+            let _ = self.changes.send(());
+        }
+        true
     }
 
     pub async fn set_retrying(&self, retrying: bool) {

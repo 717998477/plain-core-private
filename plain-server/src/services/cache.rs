@@ -1,5 +1,5 @@
 use plain_rs::cache_paths::CachePaths;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn cache(paths: &CachePaths) -> std::io::Result<Option<PathBuf>> {
     let root = paths.root().to_owned();
@@ -46,26 +46,40 @@ pub(crate) fn size(paths: &CachePaths) -> std::io::Result<u64> {
     Ok(size)
 }
 
-pub(crate) fn clear_files(paths: &CachePaths) -> std::io::Result<()> {
+pub(crate) fn clear_files(paths: &CachePaths, retained: Option<&Path>) -> std::io::Result<()> {
     let Some(root) = cache(paths)? else {
         return Ok(());
     };
     let media_caches = [paths.image_cache(), paths.video_cache()];
-    for entry in std::fs::read_dir(root)? {
+    clear_directory(&root, retained, &media_caches)?;
+    Ok(())
+}
+
+fn clear_directory(
+    directory: &Path,
+    retained: Option<&Path>,
+    media_caches: &[PathBuf],
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),
         };
-        if media_caches.contains(&path) && metadata.is_dir() {
+        if retained.is_some_and(|retained| retained == directory || retained == path)
+            || (media_caches.contains(&path) && metadata.is_dir())
+        {
             continue;
         }
-        let result = if metadata.is_dir() {
-            std::fs::remove_dir_all(path)
-        } else {
-            std::fs::remove_file(path)
-        };
+        let result =
+            if metadata.is_dir() && retained.is_some_and(|retained| retained.starts_with(&path)) {
+                clear_directory(&path, retained, media_caches)
+            } else if metadata.is_dir() {
+                std::fs::remove_dir_all(path)
+            } else {
+                std::fs::remove_file(path)
+            };
         match result {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             result => result?,
@@ -77,6 +91,7 @@ pub(crate) fn clear_files(paths: &CachePaths) -> std::io::Result<()> {
 pub(crate) async fn clear(
     paths: &CachePaths,
     host: &crate::host::bridge::Host,
+    retained: Option<PathBuf>,
 ) -> Result<(), String> {
     let root = paths.clone();
     tokio::task::spawn_blocking(move || cache(&root))
@@ -85,7 +100,7 @@ pub(crate) async fn clear(
         .map_err(|error| error.to_string())?;
     crate::platform::media_cache::clear(paths, host).await?;
     let paths = paths.clone();
-    tokio::task::spawn_blocking(move || clear_files(&paths))
+    tokio::task::spawn_blocking(move || clear_files(&paths, retained.as_deref()))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
@@ -96,13 +111,13 @@ pub(crate) async fn clear_application(
 ) -> Result<(), String> {
     let state = state.clone();
     tokio::spawn(async move {
+        let _cache = state.cache_changes.write().await;
         let download = state.update_checks.download.clone();
         let _downloads = download.lock_for_cache_clear().await;
         download
             .reset_after_cache_clear(&state)
             .map_err(|error| error.to_string())?;
-        clear(&state.cache, &state.host).await?;
-        crate::services::web_assets::restore(&state).await
+        crate::services::web_assets::clear_cache(&state).await
     })
     .await
     .map_err(|error| error.to_string())?

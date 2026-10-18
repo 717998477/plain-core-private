@@ -26,7 +26,7 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
     tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
             let result = match request["method"].as_str().unwrap() {
-                "systemCapabilities" => json!([]),
+                "systemCapabilities" => json!(["LAN_SHARE"]),
                 "mdnsMulticast" => json!(true),
                 "systemCastAddressFacts" => {
                     json!({"ip":"127.0.0.1","defaultDeviceName":"Test Phone"})
@@ -208,10 +208,9 @@ async fn a_forged_c_ip_header_cannot_impersonate_an_allowed_sender() {
 
 #[cfg(feature = "http_transport")]
 #[tokio::test]
-async fn native_control_surfaces_lifecycle_and_cast_prompt_without_public_http() {
-    let (dir, server, _) = public_fixture().await;
-    server.stop_public().await;
-    let controller = MainDlnaClient(server.native_graphql().unwrap());
+async fn native_control_uses_shared_http_lifecycle_and_cast_prompt() {
+    let (dir, server, port) = public_fixture().await;
+    let controller = MainDlnaClient(server.native_graphql().unwrap(), server.runtime_state());
     let state = server.runtime_state();
     let post = |body: Value| {
         let controller = &controller;
@@ -235,11 +234,11 @@ async fn native_control_surfaces_lifecycle_and_cast_prompt_without_public_http()
             .await
             .is_err()
     );
-    let (status, body) = post(json!({"action": "start", "port": 7878})).await;
+    let (status, body) = post(json!({"action": "setEnabled", "enabled": true})).await;
     assert_eq!(status, 200);
     let row: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(row["result"]["isRunning"], json!(true), "{row}");
-    assert_eq!(row["result"]["port"], json!(7878));
+    assert_eq!(row["result"]["port"], json!(port));
 
     // Seed a pending request, then let the host accept it and remember the
     // sender — the same two-step the cast dialog performs.
@@ -329,10 +328,11 @@ async fn native_control_surfaces_lifecycle_and_cast_prompt_without_public_http()
     )
     .unwrap();
     assert_eq!(snapshot["mediaUri"], "");
-    post(json!({"action":"retry","port":7878})).await;
-    let (_, body) = post(json!({"action": "stop"})).await;
+    post(json!({"action":"retry"})).await;
+    let (_, body) = post(json!({"action": "setEnabled", "enabled": false})).await;
     let row: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(row["result"]["isRunning"], json!(false));
+    server.shutdown().await;
     drop(dir);
 }
 
@@ -342,7 +342,8 @@ async fn public_dlna_reads_the_native_players_reported_position() {
     let state = server.runtime_state();
     state.prefs.set_user("service", true).unwrap();
     state.prefs.set_user("dlna", true).unwrap();
-    let controller = MainDlnaClient(server.native_graphql().unwrap());
+    state.dlna.state.write().await.media_uri = "http://example.test/owned.mp4".into();
+    let controller = MainDlnaClient(server.native_graphql().unwrap(), server.runtime_state());
     controller
         .execute_json(r#"{"action":"position","positionMs":15000,"durationMs":120000}"#)
         .await
@@ -462,14 +463,66 @@ async fn receiver_name_uses_the_native_default_and_current_core_setting_without_
     server.shutdown().await;
 }
 
-struct MainDlnaClient(crate::native::graphql::NativeGraphqlExecutor);
+struct MainDlnaClient(
+    crate::native::graphql::NativeGraphqlExecutor,
+    crate::assembly::server::ServerState,
+);
 impl MainDlnaClient {
     async fn execute_json(&self, command: &str) -> Result<String, String> {
         let mut input: Value = serde_json::from_str(command).map_err(|error| error.to_string())?;
         let action = input["action"].as_str().ok_or("Missing action")?.to_owned();
+        if action == "setEnabled" {
+            let enabled = input["enabled"].as_bool().ok_or("Missing enabled")?;
+            let response = self
+                .0
+                .execute(
+                    async_graphql::Request::new(
+                        "mutation($value:JSON!){setUserPref(key:\"dlna\",value:$value)}",
+                    )
+                    .variables(async_graphql::Variables::from_json(
+                        json!({"value":enabled}),
+                    )),
+                )
+                .await;
+            if let Some(error) = response.errors.first() {
+                return Err(error.message.clone());
+            }
+            let mut value = crate::services::casting::receiver::control::snapshot(
+                &self.1.dlna.snapshot().await,
+            );
+            value["enabled"] = json!(plain_rs::prefs::dlna::enabled(&self.1.prefs));
+            return serde_json::to_string(&value).map_err(|error| error.to_string());
+        }
+        let report_kind = match action.as_str() {
+            "position" => Some("DLNA_POSITION_REPORTED"),
+            "playback" => Some("DLNA_PLAYBACK_REPORTED"),
+            "seekConsumed" => Some("DLNA_SEEK_CONSUMED_REPORTED"),
+            "stopped" => Some("DLNA_STOPPED_REPORTED"),
+            _ => None,
+        };
+        if let Some(kind) = report_kind {
+            input.as_object_mut().unwrap().remove("action");
+            let renderer = self.1.dlna.state.read().await;
+            input["mediaUri"] = json!(renderer.media_uri);
+            if kind == "DLNA_SEEK_CONSUMED_REPORTED" {
+                input["positionMs"] = json!(renderer.seek_target_ms.unwrap());
+            }
+            drop(renderer);
+            crate::services::casting::receiver::reports::accept(
+                &self.1,
+                self.1.host.generation().unwrap(),
+                kind,
+                &input.to_string(),
+            )
+            .await?;
+            return serde_json::to_string(&crate::services::casting::receiver::control::snapshot(
+                &self.1.dlna.snapshot().await,
+            ))
+            .map_err(|error| error.to_string());
+        }
         let field = match action.as_str() {
             "snapshot" if input.as_object().unwrap().len() == 1 => "dlnaReceiver",
-            "rules" if input.as_object().unwrap().len() == 1 => "dlnaReceiverRules",
+            "rules" if input.as_object().unwrap().len() == 1 => "dlnaReceiver",
             _ => "controlDlnaReceiver",
         };
         let request = if field == "controlDlnaReceiver" {
@@ -496,7 +549,12 @@ impl MainDlnaClient {
         if let Some(error) = result.errors.first() {
             return Err(error.message.clone());
         }
-        serde_json::to_string(&result.data.into_json().map_err(|error| error.to_string())?[field])
-            .map_err(|error| error.to_string())
+        let result = result.data.into_json().map_err(|error| error.to_string())?;
+        let value = if action == "rules" {
+            &result[field]["rules"]
+        } else {
+            &result[field]
+        };
+        serde_json::to_string(value).map_err(|error| error.to_string())
     }
 }

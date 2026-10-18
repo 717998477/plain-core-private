@@ -346,15 +346,6 @@ impl Db {
         })
     }
 
-    pub fn video_progress_delete(&self, media_id: &str) -> rusqlite::Result<usize> {
-        self.with_conn(|c| {
-            c.execute(
-                "DELETE FROM media_play_history WHERE media_type=2 AND media_id=?1",
-                [media_id],
-            )
-        })
-    }
-
     pub fn embedding_list(&self) -> rusqlite::Result<Vec<ImageEmbeddingRow>> {
         self.with_conn(|c| {
             let mut stmt =

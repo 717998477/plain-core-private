@@ -72,5 +72,4 @@ extend type Query {
 	smsConversationCount(query: String!): Int!
 	smsConversations(query: String!, offset: Int!, limit: Int!): [SmsConversation!]!
 	smsCount(query: String!): Int!
-	smsIds(query: String!): [ID!]!
 }

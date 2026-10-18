@@ -64,6 +64,32 @@ fn nested_sources_are_scanned_once_and_missing_explicit_sources_fail() {
     assert!(choose_directories(&[], &[directory.path().join("missing")], None, &[]).is_err());
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn cloud_sources_stay_independent_without_duplicate_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    let cloud = directory
+        .path()
+        .join("Library/Mobile Documents/com~apple~CloudDocs");
+    std::fs::create_dir_all(&cloud).unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let cloud = cloud.canonicalize().unwrap();
+    let selected = choose_directories(
+        &[],
+        &[cloud.clone(), root.clone(), cloud.clone()],
+        None,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        selected,
+        vec![
+            root.to_string_lossy().into_owned(),
+            cloud.to_string_lossy().into_owned()
+        ]
+    );
+}
+
 #[test]
 fn ordinary_startup_never_requires_mount_privileges() {
     validate_automount(false).unwrap();

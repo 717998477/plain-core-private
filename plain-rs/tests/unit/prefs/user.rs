@@ -73,7 +73,9 @@ fn recent_lists_deduplicate_and_enforce_their_limits() {
             .len(),
         5
     );
-    Action::ClearSearches.apply(&prefs).unwrap();
+    set_entry(&prefs, keys::RECENT_SEARCHES, serde_json::json!([]))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         snapshot(&prefs).unwrap().recent_searches,
         serde_json::json!([])
@@ -177,7 +179,9 @@ fn structured_values_reject_unusable_shapes_without_writing() {
 fn recent_searches_keep_simple_unicode_case_matching() {
     let (_dir, prefs) = fixture();
     for (first, second) in [("İ", "i"), ("ς", "σ"), ("ß", "ẞ")] {
-        Action::ClearSearches.apply(&prefs).unwrap();
+        set_entry(&prefs, keys::RECENT_SEARCHES, serde_json::json!([]))
+            .unwrap()
+            .unwrap();
         Action::RecordSearch(first.into()).apply(&prefs).unwrap();
         Action::RecordSearch(second.into()).apply(&prefs).unwrap();
         assert_eq!(
@@ -185,7 +189,9 @@ fn recent_searches_keep_simple_unicode_case_matching() {
             serde_json::json!([second])
         );
     }
-    Action::ClearSearches.apply(&prefs).unwrap();
+    set_entry(&prefs, keys::RECENT_SEARCHES, serde_json::json!([]))
+        .unwrap()
+        .unwrap();
     Action::RecordSearch("ß".into()).apply(&prefs).unwrap();
     Action::RecordSearch("s".into()).apply(&prefs).unwrap();
     assert_eq!(

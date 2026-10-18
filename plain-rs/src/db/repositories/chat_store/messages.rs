@@ -133,8 +133,7 @@ pub fn ids(db: &Db, query: &str) -> Result<Vec<String>> {
         return Ok(field
             .value
             .split(',')
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
+            .filter(|value| !value.trim().is_empty())
             .map(str::to_owned)
             .collect());
     }

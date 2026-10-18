@@ -425,6 +425,38 @@ async fn graphql_failed_merge_keeps_error_and_no_value() {
     assert_eq!(status["value"], Value::Null);
     assert!(chunks.exists());
 }
+
+#[tokio::test]
+async fn file_uri_exports_replace_complete_bytes_and_preserve_existing_files_on_failed_merge() {
+    for complete in [true, false] {
+        let (directory, schema, base) = upload_fixture();
+        let target = directory.path().join("feed export + \u{6d4b}\u{8bd5}.opml");
+        let neighbor = directory.path().join("unselected.opml");
+        std::fs::write(&target, b"previous export").unwrap();
+        std::fs::write(&neighbor, b"unselected bytes").unwrap();
+        let uri = reqwest::Url::from_file_path(&target).unwrap().to_string();
+        assert!(uri.contains("%20"));
+        let chunks = base.join("export");
+        std::fs::create_dir_all(&chunks).unwrap();
+        std::fs::write(chunks.join("chunk_0"), b"<opml>").unwrap();
+        if complete {
+            std::fs::write(chunks.join("chunk_1"), b"</opml>").unwrap();
+        }
+        let response = schema.execute(async_graphql::Request::new(
+            "mutation($path:String!){mergeChunks(fileId:\"export\",totalChunks:2,path:$path,replace:true,totalSize:13){status}}",
+        ).variables(async_graphql::Variables::from_json(json!({"path":uri})))).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let result = wait_merge(&schema, "export").await;
+        if complete {
+            assert_eq!(result["status"], "DONE");
+            assert_eq!(std::fs::read(&target).unwrap(), b"<opml></opml>");
+        } else {
+            assert_eq!(result["status"], "FAILED");
+            assert_eq!(std::fs::read(&target).unwrap(), b"previous export");
+        }
+        assert_eq!(std::fs::read(neighbor).unwrap(), b"unselected bytes");
+    }
+}
 #[tokio::test]
 async fn graphql_app_file_merge_imports_into_the_rust_store() {
     let (_temp, schema, base) = upload_fixture();
@@ -616,26 +648,21 @@ async fn main_upload_resume_query_observes_only_completed_native_byte_streams() 
 }
 
 #[tokio::test]
-async fn explicit_media_selection_uses_shared_batches_and_rejects_invalid_late_ids_before_effects()
-{
+async fn existing_media_delete_uses_shared_batches_and_refuses_blank_queries_before_effects() {
     let (_directory, schema) = fixture(GRANTED);
     let rows = seed_media(&schema, plain_rs::enums::DataType::Video, 501, false, "mp4");
     let ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
-    let document = r#"mutation($ids:[ID!]!){mediaAction(type:VIDEO,action:DELETE,ids:$ids,fromTrash:false,destDir:""){affectedCount failedIds}}"#;
-    let mut invalid = ids.clone();
-    invalid.push(String::new());
-    let response = schema
-        .execute(
-            async_graphql::Request::new(document)
-                .variables(async_graphql::Variables::from_json(json!({"ids":invalid}))),
-        )
-        .await;
-    assert_eq!(response.errors.len(), 1);
-    assert!(
-        response.errors[0]
-            .message
-            .contains("invalid media selection")
-    );
+    let document =
+        r#"mutation($query:String!){deleteMediaItems(type:VIDEO,query:$query){affectedCount}}"#;
+    for query in ["", " ", "\n\t"] {
+        let response = schema
+            .execute(
+                async_graphql::Request::new(document)
+                    .variables(async_graphql::Variables::from_json(json!({"query":query}))),
+            )
+            .await;
+        assert_eq!(response.errors.len(), 1, "blank query must be rejected");
+    }
     assert!(
         rows.iter()
             .all(|row| std::path::Path::new(&row.path).exists())
@@ -647,15 +674,16 @@ async fn explicit_media_selection_uses_shared_batches_and_rejects_invalid_late_i
     requested.push(ids[0].clone());
     let response = schema
         .execute(async_graphql::Request::new(document).variables(
-            async_graphql::Variables::from_json(json!({"ids":requested})),
+            async_graphql::Variables::from_json(
+                json!({"query":format!("ids:{} trash:false",requested.join(","))}),
+            ),
         ))
         .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let result = response.data.into_json().unwrap();
-    assert_eq!(result["mediaAction"]["affectedCount"], 499);
-    assert_eq!(
-        result["mediaAction"]["failedIds"],
-        json!([ids[6], ids[500]])
+    assert_eq!(response.errors.len(), 1, "{:?}", response.errors);
+    assert!(
+        response.errors[0]
+            .message
+            .contains("2 media actions failed (499 completed)")
     );
     let db = database(&schema);
     let remaining = db
@@ -672,4 +700,20 @@ async fn explicit_media_selection_uses_shared_batches_and_rejects_invalid_late_i
         rows.iter()
             .all(|row| !std::path::Path::new(&row.path).exists())
     );
+}
+
+#[test]
+fn media_id_selection_preserves_opaque_values_without_adding_filters() {
+    let fields = plain_rs::utils::search_dsl::parse(
+        r#"ids:==opaque,17\ all:true,\"quoted\"\\path,媒体：42 trash:false"#,
+    );
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].name, "ids");
+    assert_eq!(fields[0].op, "=");
+    assert_eq!(
+        fields[0].value,
+        "=opaque,17 all:true,\"quoted\"\\path,媒体：42"
+    );
+    assert_eq!(fields[1].name, "trash");
+    assert_eq!(fields[1].value, "false");
 }

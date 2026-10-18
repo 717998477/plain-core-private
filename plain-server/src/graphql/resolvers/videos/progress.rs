@@ -22,16 +22,6 @@ fn record(row: VideoPlayProgressRow) -> async_graphql::Result<VideoPlayProgress>
 pub struct VideoProgressQuery;
 #[Object]
 impl VideoProgressQuery {
-    async fn video_play_progress(
-        &self,
-        ctx: &Context<'_>,
-        media_id: ID,
-    ) -> async_graphql::Result<Option<VideoPlayProgress>> {
-        ctx.data::<Arc<Db>>()?
-            .video_progress_get(media_id.as_str())?
-            .map(record)
-            .transpose()
-    }
     async fn recent_video_play_progress(
         &self,
         ctx: &Context<'_>,
@@ -70,13 +60,5 @@ impl VideoProgressMutation {
             media_id.as_str(),
             position_ms.0,
         )?)
-    }
-    async fn delete_video_play_progress(
-        &self,
-        ctx: &Context<'_>,
-        media_id: ID,
-    ) -> async_graphql::Result<bool> {
-        plain_rs::media::videos::progress::delete(ctx.data::<Arc<Db>>()?, media_id.as_str())?;
-        Ok(true)
     }
 }

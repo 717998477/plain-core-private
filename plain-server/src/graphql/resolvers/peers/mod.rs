@@ -8,8 +8,6 @@ pub mod query;
 pub mod actions;
 
 #[cfg(feature = "core")]
-pub mod transport;
-
 #[cfg(feature = "core")]
 pub mod records;
 

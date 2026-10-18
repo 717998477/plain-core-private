@@ -78,20 +78,9 @@ fn choose_directories(
         .filter(|path| path.is_dir())
         .map(|path| path.canonicalize())
         .collect::<std::io::Result<Vec<_>>>()?;
-    roots.sort_by(|left, right| {
-        left.components()
-            .count()
-            .cmp(&right.components().count())
-            .then_with(|| left.cmp(right))
+    let unique = plain_rs::files::filesystem::roots::prune_nested(roots, |root| {
+        cfg!(target_os = "macos") && root.ends_with("Library/Mobile Documents/com~apple~CloudDocs")
     });
-    let mut unique: Vec<PathBuf> = Vec::new();
-    for root in roots {
-        let cloud = cfg!(target_os = "macos")
-            && root.ends_with("Library/Mobile Documents/com~apple~CloudDocs");
-        if cloud || !unique.iter().any(|parent| root.starts_with(parent)) {
-            unique.push(root);
-        }
-    }
     Ok(unique
         .into_iter()
         .map(|path| path.to_string_lossy().into_owned())

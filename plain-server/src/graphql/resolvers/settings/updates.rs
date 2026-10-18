@@ -6,16 +6,6 @@ use crate::{
 use async_graphql::{Context, Object, Result};
 
 #[derive(Default)]
-pub struct AppUpdateQuery;
-#[Object]
-impl AppUpdateQuery {
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn app_update_download(&self, ctx: &Context<'_>) -> Result<AppUpdateDownload> {
-        Ok(update_download::execute(ctx.data::<ServerState>()?, Command::Snapshot).await?)
-    }
-}
-
-#[derive(Default)]
 pub struct AppUpdateMutation;
 #[Object]
 impl AppUpdateMutation {

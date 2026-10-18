@@ -35,8 +35,8 @@ fn c_buffer_reports_error_and_is_released() {
 }
 
 #[test]
-fn removed_gateway_actions_cannot_be_called_through_native_codecs() {
-    for action in 5..=8 {
+fn removed_gateway_and_nearby_actions_cannot_be_called_through_native_codecs() {
+    for action in [5, 6, 7, 8, 10, 11, 12] {
         for data in [
             &[][..],
             br#"{"clientId":"peer","token":"key","body":"{}"}"#.as_slice(),
@@ -71,35 +71,4 @@ fn discovery_codec_uses_shared_bytes_and_rejects_invalid_inputs() {
         );
     }
     assert!(call(9, 0, 0, 0, 0, false, &[0; 1651]).is_err());
-    assert_eq!(
-        call(10, 0, 0, 0, 0, false, b"fixture").unwrap().unwrap(),
-        b"f16d05ec6b29248d"
-    );
-    for value in [vec![], vec![b'a'; 1025], vec![255]] {
-        assert!(call(10, 0, 0, 0, 0, false, &value).is_err());
-    }
-}
-
-#[test]
-fn nearby_codec_roundtrips_shared_wire_without_a_runtime() {
-    let discover = br#"{"kind":"DISCOVER"}"#;
-    assert_eq!(
-        call(11, 0, 0, 0, 0, false, discover).unwrap().unwrap(),
-        b"DISCOVER:"
-    );
-    let input = br#"{"kind":"PAIR_CANCEL","payload":{"fromId":"sender","toId":"receiver","requestSignature":"request","signaturePublicKey":"public","timestamp":1,"signature":"proof"}}"#;
-    let wire = call(11, 0, 0, 0, 0, false, input).unwrap().unwrap();
-    let output = call(12, 0, 0, 0, 0, false, &wire).unwrap().unwrap();
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
-        serde_json::from_slice::<serde_json::Value>(input).unwrap()
-    );
-    assert!(call(11, 0, 0, 0, 0, false, br#"{"kind":"INVALID"}"#).is_err());
-    for bytes in [
-        b"missing-prefix".to_vec(),
-        b"UNKNOWN:{}".to_vec(),
-        vec![255],
-    ] {
-        assert!(call(12, 0, 0, 0, 0, false, &bytes).is_err());
-    }
 }

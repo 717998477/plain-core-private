@@ -32,6 +32,7 @@ async fn file_uri_import_uses_rust_without_host_or_staging() {
         &store.directory.join("cache"),
         request(&format!("FILE://{}", source.display())),
         stopped,
+        Arc::new(tokio::sync::RwLock::new(())),
     )
     .await
     .unwrap();
@@ -52,9 +53,11 @@ async fn platform_stream_imports_exact_bytes_and_cleans_staging_on_success_or_fa
         let (generation, mut requests) = host.connect();
         let resources = Arc::new(NativeResources::new(host.clone()));
         let (stop, stopped) = watch::channel(false);
+        let cache_changes = Arc::new(tokio::sync::RwLock::new(()));
         let task = {
             let resources = resources.clone();
             let store = store.clone();
+            let cache_changes = cache_changes.clone();
             tokio::spawn(async move {
                 import(
                     &store,
@@ -62,6 +65,7 @@ async fn platform_stream_imports_exact_bytes_and_cleans_staging_on_success_or_fa
                     &store.directory.join("cache"),
                     request("content://fixture/picked"),
                     stopped,
+                    cache_changes,
                 )
                 .await
             })
@@ -74,6 +78,7 @@ async fn platform_stream_imports_exact_bytes_and_cleans_staging_on_success_or_fa
         host.reply(generation, json!({"id":call["id"],"result":true}))
             .unwrap();
         stream.write(b"first".to_vec()).await.unwrap();
+        assert!(cache_changes.try_write().is_err());
         stream.write(b" second".to_vec()).await.unwrap();
         match outcome {
             "finish" => stream.finish().await.unwrap(),
@@ -83,6 +88,7 @@ async fn platform_stream_imports_exact_bytes_and_cleans_staging_on_success_or_fa
             }
         }
         let result = task.await.unwrap();
+        assert!(cache_changes.try_write().is_ok());
         if outcome == "finish" {
             let file = result.unwrap();
             assert_eq!(
@@ -118,7 +124,8 @@ async fn destructive_platform_requests_and_stopped_imports_fail_before_opening_a
             &resources,
             &store.directory.join("cache"),
             destructive,
-            stopped.clone()
+            stopped.clone(),
+            Arc::new(tokio::sync::RwLock::new(())),
         )
         .await
         .is_err()
@@ -130,11 +137,71 @@ async fn destructive_platform_requests_and_stopped_imports_fail_before_opening_a
             &resources,
             &store.directory.join("cache"),
             request("ph://fixture/picked"),
-            stopped
+            stopped,
+            Arc::new(tokio::sync::RwLock::new(())),
         )
         .await
         .is_err()
     );
     assert!(!directory.path().join("cache").exists());
     assert!(requests.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn main_import_keeps_its_staged_source_until_the_database_commit_before_cache_clear() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Arc::new(
+        crate::assembly::server::ContentServer::open(&directory.path().join("data")).unwrap(),
+    );
+    let state = core.runtime_state();
+    let (generation, mut requests) = state.host.connect();
+    let importing = {
+        let core = core.clone();
+        tokio::spawn(async move {
+            core.native_graphql().unwrap().execute(async_graphql::Request::new(
+            "mutation {importAppFile(source:\"content://fixture/picked\",fileName:\"picked.txt\",mimeType:\"text/plain\",deleteSource:false){id}}",
+        )).await
+        })
+    };
+    let request = loop {
+        let request = requests.recv().await.unwrap();
+        if request["method"] == "systemCapabilities" {
+            state
+                .host
+                .reply(generation, json!({"id":request["id"],"result":[]}))
+                .unwrap();
+        } else {
+            break request;
+        }
+    };
+    assert_eq!(request["method"], "fileResourceStream");
+    let stream = state
+        .bridge
+        .attach_native(request["params"]["id"].as_str().unwrap(), generation)
+        .unwrap();
+    state
+        .host
+        .reply(generation, json!({"id":request["id"],"result":true}))
+        .unwrap();
+    stream.write(b"before".to_vec()).await.unwrap();
+    assert!(state.cache_changes.try_write().is_err());
+    let mut clearing = Box::pin(crate::services::cache::clear_application(&state));
+    assert!(futures_util::poll!(&mut clearing).is_pending());
+    stream.write(b" clear".to_vec()).await.unwrap();
+    stream.finish().await.unwrap();
+    let response = importing.await.unwrap();
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let row = state
+        .db
+        .app_file_get(data["importAppFile"]["id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    clearing.await.unwrap();
+    assert_eq!(
+        std::fs::read(state.directory.join(row.real_path)).unwrap(),
+        b"before clear"
+    );
+    assert!(state.cache_changes.try_write().is_ok());
+    core.stop_core().await;
 }

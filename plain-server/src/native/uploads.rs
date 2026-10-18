@@ -2,6 +2,9 @@ use crate::services::files::upload_chunks::{UploadChunk, UploadChunks};
 use std::sync::Arc;
 use tokio::sync::watch;
 
+mod writers;
+pub use writers::UploadWriters;
+
 pub const MAX_NATIVE_UPLOAD_CHUNK_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]

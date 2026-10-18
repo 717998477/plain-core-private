@@ -4,6 +4,26 @@ mod fixtures;
 use fixtures::*;
 
 #[test]
+fn explicit_id_selection_preserves_order_and_rejects_empty_members() {
+    assert_eq!(
+        selection_ids("ids:b,a,b").unwrap(),
+        Some(vec!["b".into(), "a".into(), "b".into()])
+    );
+    for query in ["ids:", "ids:a,", "ids:,a", "ids:a,,b"] {
+        assert!(selection_ids(query).is_err(), "{query}");
+    }
+    for query in [
+        "",
+        "text:music",
+        "ids:a artist:singer",
+        "NOT ids:a",
+        "ids:>a",
+    ] {
+        assert_eq!(selection_ids(query).unwrap(), None, "{query}");
+    }
+}
+
+#[test]
 fn owned_queue_rows_keep_their_string_allocations_when_projected() {
     let row = QueueItem {
         media_id: "synthetic-audio".into(),
@@ -569,4 +589,64 @@ fn file_cleanup_clears_a_selected_uri_alias_even_when_it_is_not_queued() {
         .unwrap();
     assert_eq!(get_audio_current(&db).unwrap(), "");
     assert_eq!(db.audio_current_media_id(), None);
+}
+
+#[test]
+fn adding_to_an_idle_queue_selects_the_first_indexed_input_without_starting_playback() {
+    let db = test_db("queue-initial-selection");
+    let tracks = [audio("/b.mp3", "B", 1000), audio("/a.mp3", "A", 2000)];
+    register_audio_tracks(&db, &tracks);
+    enqueue_selecting_if_idle(&db, &tracks).unwrap();
+    assert_eq!(get_audio_current(&db).unwrap(), "/b.mp3");
+    assert_eq!(
+        queue_page(&db, 0, 10, "")
+            .unwrap()
+            .iter()
+            .map(|track| track.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/b.mp3", "/a.mp3"]
+    );
+    assert!(history_page(&db, 0, 10, "").unwrap().is_empty());
+    let before = crate::media::audio::playback::snapshot(&db).unwrap();
+    enqueue_selecting_if_idle(&db, &tracks[1..]).unwrap();
+    assert_eq!(
+        crate::media::audio::playback::snapshot(&db).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn initial_queue_selection_is_unchanged_on_invalid_inputs_and_sql_failure() {
+    let db = test_db("queue-selection-atomic");
+    let tracks = [audio("/b.mp3", "B", 1000), audio("/a.mp3", "A", 2000)];
+    register_audio_tracks(&db, &tracks);
+    let before = crate::media::audio::playback::snapshot(&db).unwrap();
+    let mut invalid = tracks[1].clone();
+    invalid.duration_ms = -1;
+    assert!(enqueue_selecting_if_idle(&db, &[tracks[0].clone(), invalid]).is_err());
+    assert!(queue_page(&db, 0, 10, "").unwrap().is_empty());
+    assert_eq!(
+        crate::media::audio::playback::snapshot(&db).unwrap(),
+        before
+    );
+    db.with_conn(|connection| connection.execute_batch("CREATE TRIGGER reject_second_queue_insert BEFORE INSERT ON audio_queue_items WHEN NEW.media_id='test:/a.mp3' BEGIN SELECT RAISE(ABORT,'owned queue failure'); END;")).unwrap();
+    assert!(enqueue_selecting_if_idle(&db, &tracks).is_err());
+    assert!(queue_page(&db, 0, 10, "").unwrap().is_empty());
+    assert_eq!(
+        crate::media::audio::playback::snapshot(&db).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn ordinary_enqueue_keeps_its_existing_selection_behavior() {
+    let db = test_db("ordinary-queue-selection");
+    let tracks = [audio("/one.mp3", "One", 1000)];
+    register_audio_tracks(&db, &tracks);
+    enqueue(&db, &tracks, false).unwrap();
+    assert_eq!(get_audio_current(&db).unwrap(), "");
+    enqueue_selecting_if_idle(&db, &[]).unwrap();
+    assert_eq!(get_audio_current(&db).unwrap(), "");
+    enqueue_selecting_if_idle(&db, &[audio("/unindexed.mp3", "Missing", 1000)]).unwrap();
+    assert_eq!(get_audio_current(&db).unwrap(), "");
 }

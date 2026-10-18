@@ -14,6 +14,8 @@ use plain_rs::protocols::ble::Request;
 use serde::Deserialize;
 use std::time::Duration;
 
+mod nearby;
+
 #[derive(Default)]
 pub(crate) struct Runtime;
 impl Runtime {
@@ -79,11 +81,11 @@ pub(crate) async fn incoming(
             let Message::Text(text) = first else { anyhow::bail!("Missing BLE connection facts"); };
             ensure!(text.len() <= 4096, "BLE facts exceed limit");
             let facts: Incoming = serde_json::from_str(&text)?;
-            ensure!(!facts.remote_host.is_empty() && facts.characteristic_uuid.eq_ignore_ascii_case(ble::HTTP_CHAR_UUID), "Invalid BLE connection facts");
+            ensure!(!facts.remote_host.is_empty() && matches_characteristic(&facts.characteristic_uuid), "Invalid BLE connection facts");
             let bytes = receive(&mut socket, Duration::from_secs(15)).await?;
             let mut stop = state.stop.clone();
             let response = tokio::select! {
-                result = dispatch(state, facts.remote_host, &bytes) => result?,
+                result = dispatch_incoming(state, facts, &bytes) => result?,
                 _ = socket.recv() => anyhow::bail!("BLE channel closed or received an unexpected frame"),
                 _ = stop.changed() => anyhow::bail!("BLE core stopped"),
             };
@@ -92,6 +94,28 @@ pub(crate) async fn incoming(
         }).await;
     })
 }
+fn matches_characteristic(value: &str) -> bool {
+    value.eq_ignore_ascii_case(ble::HTTP_CHAR_UUID)
+        || value.eq_ignore_ascii_case(ble::NEARBY_CHAR_UUID)
+}
+
+async fn dispatch_incoming(state: ServerState, facts: Incoming, bytes: &[u8]) -> Result<Vec<u8>> {
+    if facts
+        .characteristic_uuid
+        .eq_ignore_ascii_case(ble::NEARBY_CHAR_UUID)
+    {
+        nearby::dispatch(&state, facts.remote_host, bytes).await
+    } else {
+        ensure!(
+            facts
+                .characteristic_uuid
+                .eq_ignore_ascii_case(ble::HTTP_CHAR_UUID),
+            "Invalid BLE characteristic"
+        );
+        dispatch(state, facts.remote_host, bytes).await
+    }
+}
+
 async fn receive(socket: &mut WebSocket, timeout: Duration) -> Result<Vec<u8>> {
     let frame = tokio::time::timeout(timeout, socket.recv())
         .await?

@@ -42,14 +42,6 @@ pub fn recent(
     Ok(db.video_progress_recent(&since.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))?)
 }
 
-pub fn delete(db: &Db, media_id: &str) -> crate::error::DomainResult<()> {
-    if media_id.trim().is_empty() {
-        return Err(crate::error::DomainError::Other("invalid media ID".into()));
-    }
-    db.video_progress_delete(media_id)?;
-    Ok(())
-}
-
 #[cfg(test)]
 #[path = "../../../tests/unit/media/videos/progress.rs"]
 mod tests;

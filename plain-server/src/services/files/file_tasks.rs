@@ -125,25 +125,21 @@ impl FileTasks {
         directory: String,
         name: String,
     ) -> Result<Option<String>> {
-        if name.is_empty()
-            || matches!(name.as_str(), "." | "..")
-            || name.contains(['/', '\\', '\0'])
-        {
-            bail!("invalid file name");
-        }
-        let directory = PathBuf::from(directory);
-        if !directory.is_absolute() {
-            bail!("absolute destination directory required");
-        }
+        let directory = named_directory(&directory, &name)?;
         let src = plain_rs::utils::file_uri::local_path(&src).map_err(anyhow::Error::msg)?;
+        let destination = directory.join(name);
+        let destination = tokio::task::spawn_blocking(move || {
+            plain_rs::utils::unique_path::unique_sibling(&destination)
+        })
+        .await??;
         let task = self
             .execute(
                 client_id,
                 FileTaskType::Copy,
                 vec![FileTaskOp {
                     src,
-                    dst: directory.join(name).to_string_lossy().into_owned(),
-                    overwrite: true,
+                    dst: destination.to_string_lossy().into_owned(),
+                    overwrite: false,
                 }],
             )
             .await?;
@@ -155,15 +151,22 @@ impl FileTasks {
             None
         })
     }
-    pub async fn remove(&self, client_id: String, id: String) -> Result<bool> {
-        let service = self.service()?;
-        tokio::task::spawn_blocking(move || service.remove(&client_id, &id)).await?
-    }
     pub async fn list(&self, client_id: String) -> Result<Vec<FileTask>> {
         let service = self.service()?;
         tokio::task::spawn_blocking(move || service.list(&client_id)).await?
     }
 }
+pub(crate) fn named_directory(directory: &str, name: &str) -> Result<PathBuf> {
+    if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\\', '\0']) {
+        bail!("invalid file name");
+    }
+    let directory = PathBuf::from(directory);
+    if !directory.is_absolute() {
+        bail!("absolute destination directory required");
+    }
+    Ok(directory)
+}
+
 async fn wait_for_completion<T>(
     completion: &tokio::sync::Notify,
     mut read: impl FnMut() -> Result<Option<T>>,

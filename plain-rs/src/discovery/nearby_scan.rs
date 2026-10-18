@@ -22,17 +22,49 @@ struct Entry {
     touched: Instant,
 }
 #[derive(Default)]
-pub struct Scans(Mutex<HashMap<String, HashMap<String, Entry>>>);
+struct State {
+    latest_owner: u64,
+    owner: Option<u64>,
+    scans: HashMap<String, HashMap<String, Entry>>,
+}
+#[derive(Default)]
+pub struct Scans(Mutex<State>);
 impl Scans {
-    pub fn begin(&self) -> Result<String> {
-        let mut scans = self.0.lock().unwrap();
-        ensure!(scans.len() < 16, "BLE scan capacity exceeded");
-        let id = uuid::Uuid::new_v4().to_string();
-        scans.insert(id.clone(), HashMap::new());
-        Ok(id)
+    pub fn set_owner(&self, owner: u64) {
+        let mut state = self.0.lock().unwrap();
+        if owner > state.latest_owner {
+            state.latest_owner = owner;
+            state.owner = Some(owner);
+            state.scans.clear();
+        }
     }
-    pub fn end(&self, id: &str) {
-        self.0.lock().unwrap().remove(id);
+    pub fn report_state(&self, owner: u64, id: uuid::Uuid, active: bool) -> Result<()> {
+        let mut state = self.0.lock().unwrap();
+        ensure!(state.owner == Some(owner), "Stale BLE scan host");
+        let id = id.to_string();
+        if !active {
+            state.scans.remove(&id);
+        } else if !state.scans.contains_key(&id) {
+            ensure!(state.scans.len() < 16, "BLE scan capacity exceeded");
+            state.scans.insert(id, HashMap::new());
+        }
+        Ok(())
+    }
+    pub fn close_owner(&self, owner: u64) {
+        let mut state = self.0.lock().unwrap();
+        if state.owner == Some(owner) {
+            state.owner = None;
+            state.scans.clear();
+        }
+    }
+    pub fn pending_owner(&self, id: &str, short_id: &str, generation: &str) -> Option<u64> {
+        let state = self.0.lock().unwrap();
+        let entry = state.scans.get(id)?.get(short_id)?;
+        if entry.generation == generation && entry.reply.is_none() {
+            state.owner
+        } else {
+            None
+        }
     }
     pub fn seen(&self, id: &str, short_id: &str) -> Result<Step> {
         self.seen_at(id, short_id, Instant::now())
@@ -45,8 +77,9 @@ impl Scans {
         {
             return Ok(Step::Wait);
         }
-        let mut scans = self.0.lock().unwrap();
-        let entries = scans
+        let mut state = self.0.lock().unwrap();
+        let entries = state
+            .scans
             .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("Unknown BLE scan"))?;
         if let Some(entry) = entries.get_mut(short_id) {
@@ -93,8 +126,8 @@ impl Scans {
         generation: &str,
         payload: Option<&str>,
     ) -> Result<Option<DiscoverReply>> {
-        let mut scans = self.0.lock().unwrap();
-        let Some(entries) = scans.get_mut(id) else {
+        let mut state = self.0.lock().unwrap();
+        let Some(entries) = state.scans.get_mut(id) else {
             return Ok(None);
         };
         let Some(entry) = entries.get_mut(short_id) else {

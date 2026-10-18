@@ -25,7 +25,6 @@ type ChatDownloadTask {
 	downloaded: Long!
 	total: Long!
 	speed: Long!
-	generation: String!
 }
 
 enum DownloadStatus {

@@ -13,8 +13,11 @@ use tokio::{
 };
 #[derive(Clone)]
 pub(crate) struct ServerState {
+    pub(crate) ble_advertising: Arc<crate::services::discovery::ble_advertising::Runtime>,
     _data_directory: Arc<crate::assembly::data_directory::DataDirectory>,
     pub(crate) cache: plain_rs::cache_paths::CachePaths,
+    pub(crate) cache_changes: Arc<tokio::sync::RwLock<()>>,
+    pub(crate) remote_cache: Arc<crate::services::files::remote_cache::RemoteCache>,
     pub(crate) logs: Arc<crate::services::logs::Logs>,
     pub(crate) browser: Arc<crate::services::files::browser::Runtime>,
     pub(crate) file_platform: Arc<crate::services::files::platform::FilePlatform>,
@@ -31,6 +34,7 @@ pub(crate) struct ServerState {
         Arc<std::sync::Mutex<Option<crate::assembly::lifecycle::HttpServerFailure>>>,
     pub(crate) http_server: Arc<crate::services::http_server::Runtime>,
     pub(crate) build_debug: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) web_asset_changes: Arc<tokio::sync::Mutex<()>>,
     pub(crate) web_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
     pub(crate) web_source: Arc<std::sync::RwLock<Option<crate::services::web_assets::Source>>>,
     pub(crate) web_bundle:
@@ -189,15 +193,6 @@ impl ContentServer {
         ))
     }
 
-    pub fn native_archives(&self) -> Result<crate::native::archives::NativeArchives, String> {
-        self.state.native_client_id()?;
-        Ok(crate::native::archives::NativeArchives::new(
-            self.state.archives.clone(),
-            self.state.file_platform.clone(),
-            self.state.stop.clone(),
-        ))
-    }
-
     pub fn graphql_executor(&self) -> crate::graphql::executor::GraphqlExecutor {
         crate::graphql::executor::GraphqlExecutor::new(self.state.clone())
     }
@@ -225,7 +220,14 @@ impl ContentServer {
                 return None;
             }
             match crate::services::peers::peer_address::proxy_address(&state.db, id) {
-                Ok(address) => address,
+                Ok(address) => address.map(|address| {
+                    let state = state.clone();
+                    crate::http::proxy::local::ResolvedPeer::new(address, move || {
+                        if state.native_client_id().is_ok() {
+                            state.mdns.browse_resident();
+                        }
+                    })
+                }),
                 Err(error) => {
                     log::warn!("Peer proxy address lookup failed: {error}");
                     None
@@ -412,11 +414,16 @@ impl ContentServer {
         ));
         let dlna = Arc::new(crate::services::casting::receiver::receiver_engine::DlnaEngine::new());
         let state = ServerState {
+            ble_advertising: Arc::new(
+                crate::services::discovery::ble_advertising::Runtime::default(),
+            ),
             cache: data_directory.cache_paths().clone(),
             _data_directory: data_directory,
             logs: services.logs.clone(),
             file_platform: services.file_platform.clone(),
             browser: services.browser.clone(),
+            cache_changes: Arc::new(tokio::sync::RwLock::new(())),
+            remote_cache: services.remote_cache.clone(),
             feeds: services.feeds.clone(),
             pomodoro_task: Arc::new(parking_lot::Mutex::new(None)),
             update_checks: Arc::new(crate::services::settings::updates::Runtime::default()),
@@ -477,6 +484,7 @@ impl ContentServer {
             directory: directory.clone(),
             http_server: Arc::new(crate::services::http_server::Runtime::default()),
             build_debug: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            web_asset_changes: Arc::new(tokio::sync::Mutex::new(())),
             web_root: Arc::new(std::sync::RwLock::new(None)),
             web_source: Arc::new(std::sync::RwLock::new(None)),
             web_bundle: Arc::new(std::sync::RwLock::new(None)),

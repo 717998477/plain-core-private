@@ -78,6 +78,23 @@ pub(crate) struct Runtime {
     closed: AtomicBool,
 }
 impl Runtime {
+    pub(crate) fn snapshot_event(&self) -> WsEvent {
+        let snapshot = self.state.lock().unwrap().snapshot.clone();
+        WsEvent::broadcast(
+            "APP_UPDATE_DOWNLOAD_UPDATED",
+            serde_json::to_string(&snapshot).unwrap(),
+        )
+    }
+    pub(crate) fn schedule_reconcile(state: &ServerState) {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(error) = reconcile(&state).await {
+                if !*state.stop.borrow() {
+                    log::debug!("Update download recovery failed: {error}");
+                }
+            }
+        });
+    }
     fn publish(&self, state: &ServerState, mut snapshot: AppUpdateDownload) -> AppUpdateDownload {
         let mut current = self.state.lock().unwrap();
         snapshot.core_id = current.snapshot.core_id.clone();
@@ -122,9 +139,21 @@ async fn stop(task: &mut Option<Task>) {
 
 #[derive(Clone, Copy)]
 pub(crate) enum Command {
-    Snapshot,
+    Reconcile,
     Start,
     Cancel,
+}
+
+pub(crate) async fn reconcile(state: &ServerState) -> Result<()> {
+    ensure!(!*state.stop.borrow(), "Rust core stopped");
+    let capabilities = crate::services::capabilities::snapshot(&state.host).await?;
+    if capabilities
+        .iter()
+        .any(|capability| capability == "APP_UPDATES")
+    {
+        execute_owned(state.clone(), Command::Reconcile).await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn execute(state: &ServerState, command: Command) -> Result<AppUpdateDownload> {
@@ -139,7 +168,7 @@ async fn execute_owned(state: ServerState, command: Command) -> Result<AppUpdate
         !runtime.closed.load(Ordering::Acquire) && !*state.stop.borrow(),
         "Rust core stopped"
     );
-    if !matches!(command, Command::Snapshot) {
+    if !matches!(command, Command::Reconcile) {
         stop(&mut task).await;
     }
     let _settings = state.update_checks.cache.lock().await;
@@ -182,12 +211,28 @@ async fn execute_owned(state: ServerState, command: Command) -> Result<AppUpdate
             runtime.state.lock().unwrap().cancel = None;
             Ok(runtime.publish(&state, AppUpdateDownload::default()))
         }
-        Command::Snapshot => {
+        Command::Reconcile => {
             let snapshot = runtime.state.lock().unwrap().snapshot.clone();
             if snapshot.status == AppUpdateDownloadStatus::Downloading {
                 return Ok(snapshot);
             }
-            if let Some(path) = restored(&state, &info)? {
+            let restored = match restored(&state, &info) {
+                Ok(restored) => restored,
+                Err(error) => {
+                    if !*state.stop.borrow() {
+                        runtime.publish(
+                            &state,
+                            AppUpdateDownload {
+                                status: AppUpdateDownloadStatus::Failed,
+                                error: error.to_string(),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    return Err(error);
+                }
+            };
+            if let Some(path) = restored {
                 if snapshot.status == AppUpdateDownloadStatus::Completed
                     && snapshot.file_path == path
                 {

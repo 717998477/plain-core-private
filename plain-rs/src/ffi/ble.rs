@@ -118,25 +118,6 @@ fn call(
                 .map(Some)
                 .map_err(Into::into)
         }
-        10 => {
-            let id = std::str::from_utf8(data).map_err(|e| e.to_string())?;
-            if id.is_empty() || id.len() > 1024 {
-                return Err("Invalid peer identity".into());
-            }
-            return Ok(Some(
-                crate::discovery::nearby_wire::short_id(id).into_bytes(),
-            ));
-        }
-        11 => {
-            let message: crate::discovery::nearby_wire::Message =
-                serde_json::from_slice(data).map_err(|e| e.to_string())?;
-            message.wire().map(|body| Some(body.into_bytes()))
-        }
-        12 => {
-            let body = std::str::from_utf8(data).map_err(|e| e.to_string())?;
-            crate::discovery::nearby_wire::Message::parse(body)
-                .and_then(|message| Ok(Some(serde_json::to_vec(&message)?)))
-        }
         _ => return Err("Invalid BLE codec action".into()),
     };
     result.map_err(|e| e.to_string())

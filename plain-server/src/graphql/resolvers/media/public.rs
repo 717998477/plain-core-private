@@ -47,25 +47,6 @@ pub struct MediaQuery;
 
 #[Object]
 impl MediaQuery {
-    async fn media_ids(
-        &self,
-        ctx: &Context<'_>,
-        r#type: MediaDataType,
-        query: String,
-        #[graphql(default)] from_trash: bool,
-    ) -> async_graphql::Result<Vec<async_graphql::ID>> {
-        if !public_gate::require_granted(ctx, &[STORAGE]).await? {
-            return Ok(Vec::new());
-        }
-        Ok(catalog(ctx)
-            .ids(r#type.data_type(), &query, from_trash)
-            .await
-            .map_err(async_graphql::Error::new)?
-            .into_iter()
-            .map(async_graphql::ID::from)
-            .collect())
-    }
-
     async fn media_buckets(
         &self,
         ctx: &Context<'_>,

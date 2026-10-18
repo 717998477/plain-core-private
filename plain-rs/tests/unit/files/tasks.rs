@@ -191,9 +191,12 @@ async fn completed_operations_keep_resolved_collision_paths_when_native_scan_fai
         std::fs::read(&task.completed_ops[0].dst).unwrap(),
         b"synthetic"
     );
-    assert!(!service.remove("foreign", &task.id).unwrap());
-    assert!(service.remove("owner", &task.id).unwrap());
-    assert!(service.list("owner").unwrap().is_empty());
+    assert!(service.list("foreign").unwrap().is_empty());
+    let retained = service.list("owner").unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].id, task.id);
+    assert_eq!(retained[0].completed_ops.len(), task.completed_ops.len());
+    assert_eq!(retained[0].completed_ops[0].dst, task.completed_ops[0].dst);
 }
 struct RevokedBeforeOperation(std::sync::atomic::AtomicUsize);
 impl Hooks for RevokedBeforeOperation {
@@ -294,7 +297,6 @@ async fn tasks_are_lost_when_the_service_is_recreated_and_failures_are_not_retri
         failed.error
     );
     assert!(service.list("foreign").unwrap().is_empty());
-    assert!(!service.remove("foreign", &queued.id).unwrap());
     drop(service);
     let restarted = Service::new(Arc::new(Recorder::default()));
     assert!(restarted.list("owner").unwrap().is_empty());

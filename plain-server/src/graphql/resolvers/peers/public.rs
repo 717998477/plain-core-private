@@ -164,6 +164,7 @@ impl PeersQuery {
         .await?;
         Ok(serde_json::from_value(value)?)
     }
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
     async fn is_pairing_request_current(
         &self,
         ctx: &Context<'_>,

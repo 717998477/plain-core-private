@@ -1,5 +1,34 @@
 use super::*;
 
+#[test]
+fn sidecar_selection_uses_the_filename_extension_and_bounded_lossy_utf8() {
+    for (name, sidecar) in [
+        ("song.mp3", "song.lrc"),
+        ("song", "song.lrc"),
+        ("song.with.dots.mp3", "song.with.dots.lrc"),
+        (".song", ".song.lrc"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let album = directory.path().join("album.v1");
+        std::fs::create_dir(&album).unwrap();
+        let path = album.join(name);
+        let sidecar = album.join(sidecar);
+        assert!(read_sidecar(path.to_str().unwrap()).is_none());
+        std::fs::write(&sidecar, b"[00:01]lyrics\xff").unwrap();
+        assert_eq!(
+            read_sidecar(path.to_str().unwrap()).unwrap(),
+            "[00:01]lyrics\u{fffd}"
+        );
+        std::fs::write(&sidecar, []).unwrap();
+        assert!(read_sidecar(path.to_str().unwrap()).is_none());
+        std::fs::File::create(&sidecar)
+            .unwrap()
+            .set_len(MAX_TAG_BYTES as u64 + 1)
+            .unwrap();
+        assert!(read_sidecar(path.to_str().unwrap()).is_none());
+    }
+}
+
 fn extract_bytes(data: &[u8]) -> String {
     let mut cursor = std::io::Cursor::new(data.to_vec());
     extract(&mut cursor)

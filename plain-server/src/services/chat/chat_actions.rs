@@ -35,14 +35,21 @@ pub(crate) async fn send_many(
     targets: Vec<String>,
     content: String,
 ) -> Result<Vec<DChat>> {
-    let targets = validate_targets(&targets)?;
+    let rows = prepare_send_many(state, &targets, &content)?;
+    deliver_many(state, rows).await
+}
+
+pub(super) fn prepare_send_many(
+    state: &ServerState,
+    targets: &[String],
+    content: &str,
+) -> Result<Vec<DChat>> {
+    let targets = validate_targets(targets)?;
     if targets.is_empty() {
         return Ok(vec![]);
     }
-    let (content, _imports) = prepare_content(state, &content)?;
-    let rows =
-        plain_rs::chat::messages::message_lifecycle::create_many(&state.db, &targets, &content)?;
-    deliver_many(state, rows).await
+    let (content, _imports) = prepare_content(state, content)?;
+    plain_rs::chat::messages::message_lifecycle::create_many(&state.db, &targets, &content)
 }
 
 pub(crate) async fn forward_many(
@@ -55,7 +62,7 @@ pub(crate) async fn forward_many(
     deliver_many(state, rows).await
 }
 
-async fn deliver_many(state: &ServerState, rows: Vec<DChat>) -> Result<Vec<DChat>> {
+pub(super) async fn deliver_many(state: &ServerState, rows: Vec<DChat>) -> Result<Vec<DChat>> {
     for row in &rows {
         committed(state, row, events::WS_MESSAGE_CREATED);
     }

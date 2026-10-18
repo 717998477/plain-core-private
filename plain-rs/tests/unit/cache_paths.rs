@@ -10,6 +10,8 @@ fn cache_layout_is_independent_of_the_persistent_root() {
     assert!(std::ptr::eq(cache.root(), cache.clone().root()));
     assert_eq!(cache.image_cache(), cache.root().join("image_cache"));
     assert_eq!(cache.video_cache(), cache.root().join("video_cache"));
+    assert_eq!(cache.shared_previews(), cache.root().join("share_open"));
+    assert!(cache.shared_previews().is_dir());
     assert_eq!(cache.app_updates(), cache.root().join("updates"));
     assert_eq!(cache.web_assets(), cache.root().join("web_assets"));
     assert_eq!(cache.pdf_previews(), cache.root().join("preview_pdf"));
@@ -18,6 +20,21 @@ fn cache_layout_is_independent_of_the_persistent_root() {
         cache.root().join("crash_report.txt")
     );
     assert!(!data.join("cache").exists());
+}
+
+#[test]
+fn shared_preview_initialization_preserves_an_existing_file_and_rejects_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let data = directory.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let cache = CachePaths::new(&directory.path().join("cache"));
+    std::fs::create_dir(cache.root()).unwrap();
+    std::fs::write(cache.shared_previews(), b"existing bytes").unwrap();
+    assert!(cache.initialize(&data).is_err());
+    assert_eq!(
+        std::fs::read(cache.shared_previews()).unwrap(),
+        b"existing bytes"
+    );
 }
 
 #[test]
@@ -48,7 +65,13 @@ fn cache_overlap_and_sdk_links_are_rejected_after_path_resolution() {
             .initialize(&alias)
             .is_err()
     );
-    for child in ["image_cache", "video_cache", "web_assets", "updates"] {
+    for child in [
+        "image_cache",
+        "video_cache",
+        "share_open",
+        "web_assets",
+        "updates",
+    ] {
         let cache_root = directory.path().join(child);
         std::fs::create_dir(&cache_root).unwrap();
         std::os::unix::fs::symlink(&data, cache_root.join(child)).unwrap();

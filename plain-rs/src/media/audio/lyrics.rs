@@ -1,13 +1,28 @@
-//! Embedded-lyrics extraction — 1:1 port of plain-app `EmbeddedLyrics.kt`.
-//!
-//! Reads the source strictly forward. Supported containers: ID3v2 USLT/ULT
-//! (mp3), Vorbis comments `LYRICS`/`UNSYNCEDLYRICS` (flac) and the MP4 `©lyr`
-//! atom (m4a). Anything else yields an empty string.
-
 use std::io::Read;
 
 const MAX_TAG_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MOOV_BYTES: usize = 16 * 1024 * 1024;
+
+pub fn read_with_sidecar(path: &str) -> String {
+    read_sidecar(path).unwrap_or_else(|| extract_lyrics_from_path(path))
+}
+
+fn read_sidecar(path: &str) -> Option<String> {
+    let sidecar = std::path::Path::new(path).with_extension("lrc");
+    let metadata = std::fs::metadata(&sidecar).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_TAG_BYTES as u64 {
+        return None;
+    }
+    let file = std::fs::File::open(sidecar).ok()?;
+    let mut bytes = Vec::new();
+    file.take(MAX_TAG_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.is_empty() || bytes.len() > MAX_TAG_BYTES {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
 
 /// Extract the embedded lyrics from an audio file.
 pub fn extract_lyrics_from_path(path: &str) -> String {

@@ -193,5 +193,11 @@ pub(crate) fn publish(
     let payload = serde_json::to_string(&notification(&facts.notification))
         .map_err(|error| error.to_string())?;
     let _ = events.send(plain_rs::events::WsEvent::broadcast(kind, payload));
+    if kind != "NOTIFICATION_DELETED" {
+        crate::services::sms::provider_events::notification_changed(
+            events,
+            facts.notification["appId"].as_str().unwrap_or_default(),
+        );
+    }
     Ok(())
 }

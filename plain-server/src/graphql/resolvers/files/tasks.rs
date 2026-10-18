@@ -95,13 +95,6 @@ impl FileTaskQuery {
 pub struct FileTaskMutation;
 #[Object]
 impl FileTaskMutation {
-    async fn remove_file_task(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
-        let client_id = caller(ctx)?;
-        Ok(ctx
-            .data::<Arc<FileTasks>>()?
-            .remove(client_id, id.to_string())
-            .await?)
-    }
     async fn create_file_task(
         &self,
         ctx: &Context<'_>,

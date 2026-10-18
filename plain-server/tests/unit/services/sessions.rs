@@ -368,7 +368,7 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
     channel.key = "channel-secret".into();
     channels::save(&state.db, &[channel], SaveMode::Insert).unwrap();
     let native = server.native_graphql().unwrap();
-    let query = r#"{ systemPrefs systemSettings { password urlToken adbToken } sessions { clientId token } peers { key token } chatChannelRecord(id:"channel") { key } }"#;
+    let query = r#"{ systemPrefs systemSettings { password urlToken adbToken } sessions { clientId token } peers { key token } chatChannels { key } }"#;
     let local = native.execute(query.into()).await;
     assert!(local.errors.is_empty(), "{:?}", local.errors);
     let local = local.data.into_json().unwrap();
@@ -376,7 +376,7 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
     assert_eq!(local["systemPrefs"]["url_token"], "resource-token");
     assert_eq!(local["systemSettings"]["password"], "secret");
     assert_eq!(local["peers"][0]["key"], "peer-secret");
-    assert_eq!(local["chatChannelRecord"]["key"], "channel-secret");
+    assert_eq!(local["chatChannels"][0]["key"], "channel-secret");
     assert_eq!(local["sessions"][0]["token"], session.token);
     let mut headers = HeaderMap::new();
     headers.insert("c-id", session.client_id.parse().unwrap());
@@ -400,7 +400,7 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
         .unwrap()
     }
     let metadata = remote(&state, &headers,
-        r#"{ systemPrefs systemSettings { authTwoFactor clientId } sessions { clientId clientName } peers { id name } chatChannelRecord(id:"channel") { id name } app { urlToken } }"#).await;
+        r#"{ systemPrefs systemSettings { authTwoFactor clientId } sessions { clientId clientName } peers { id name } chatChannels { id name } app { urlToken } }"#).await;
     assert!(metadata.get("errors").is_none(), "{metadata}");
     assert_eq!(metadata["data"]["app"]["urlToken"], "resource-token");
     assert_eq!(
@@ -426,7 +426,7 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
         "{peers{key}}",
         "{peers{token}}",
         "{peers{key}}",
-        "{chatChannelRecord(id:\"channel\"){key}}",
+        "{chatChannels{key}}",
     ] {
         let denied = remote(&state, &headers, query).await;
         assert_eq!(

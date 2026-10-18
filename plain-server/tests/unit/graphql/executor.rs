@@ -72,15 +72,15 @@ async fn local_and_remote_execute_the_same_envelope_and_preserve_errors() {
 #[test]
 fn service_owned_media_notifications_are_not_repeated_by_aliases_or_fragments() {
     for query in [
-        "mutation { renamed: mediaAction { affectedCount } }",
+        "mutation { renamed: deleteMediaItems { affectedCount } }",
         "mutation { ... on Mutation { deleteMediaItems { affectedCount } } }",
-        "mutation { ...One ...One } fragment One on Mutation { mediaAction { affectedCount } }",
+        "mutation { ...One ...One } fragment One on Mutation { deleteMediaItems { affectedCount } }",
         "mutation { ...One } fragment One on Mutation { ...Two } fragment Two on Mutation { moveMediaItems { affectedCount } }",
     ] {
         assert!(!content_changes(&Request::new(query)), "{query}");
     }
     assert!(content_changes(&Request::new(
-        "mutation { mediaAction { affectedCount } createNote { id } }"
+        "mutation { deleteMediaItems { affectedCount } createNote { id } }"
     )));
     assert!(content_changes(&Request::new(
         "mutation { ...One } fragment One on Mutation { createNote { id } }"
@@ -90,7 +90,7 @@ fn service_owned_media_notifications_are_not_repeated_by_aliases_or_fragments() 
     )));
     assert!(!content_changes(
         &Request::new(
-            "mutation Media { mediaAction { affectedCount } } mutation Other { createNote { id } }"
+            "mutation Media { deleteMediaItems { affectedCount } } mutation Other { createNote { id } }"
         )
         .operation_name("Media")
     ));
@@ -111,9 +111,7 @@ fn cache_only_and_task_owned_mutations_skip_the_generic_content_broadcast() {
         "mutation { cacheRemoteFile createNote }"
     )));
     assert!(content_changes(&Request::new("mutation { clearAppLogs }")));
-    assert!(content_changes(&Request::new(
-        "mutation { clearAppLogFiles }"
-    )));
+    assert!(content_changes(&Request::new("mutation { clearAppLogs }")));
 }
 
 #[tokio::test]
@@ -163,10 +161,10 @@ async fn backup_uses_the_main_schema_and_rejects_remote_secret_export() {
 #[test]
 fn runtime_controls_and_viewer_exports_do_not_trigger_generic_content_refreshes() {
     for document in [
-        "mutation{controlPeerStatus(action:STOP)}",
+        "mutation{controlPeerStatus(action:RECONNECT)}",
         r#"mutation{acquireDiscovery(token:"token") releaseDiscovery(token:"token")}"#,
-        r#"mutation{browseMdns{revision} acquireMdnsDebugSession(token:"token"){debugSessionCount}}"#,
-        "mutation{controlDlnaReceiver(input:{action:POSITION,positionMs:1,durationMs:2})}",
+        r#"mutation{acquireMdnsDebugSession(token:"token"){debugSessionCount}}"#,
+        "mutation{controlDlnaReceiver(input:{action:ACCEPT,remember:false})}",
         r#"mutation{confirmWebLogin(requestId:"request",allowed:false)}"#,
         r#"mutation{createCrashReport(report:"report") importPomodoroSound(source:"source")}"#,
         "mutation{...Control} fragment Control on Mutation{alias:controlPeerStatus(action:RECONNECT)}",
@@ -174,7 +172,7 @@ fn runtime_controls_and_viewer_exports_do_not_trigger_generic_content_refreshes(
         assert!(!content_changes(&Request::new(document)), "{document}");
     }
     assert!(content_changes(&Request::new(
-        "mutation{controlPeerStatus(action:STOP) createNote}"
+        "mutation{controlPeerStatus(action:RECONNECT) createNote}"
     )));
 }
 

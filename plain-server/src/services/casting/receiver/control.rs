@@ -24,8 +24,6 @@ pub(crate) fn snapshot(state: &DlnaRendererState) -> Value {
     })
 }
 
-/// Pushes the renderer state *in the event*, so the app renders it directly
-/// instead of being told to go and fetch it over HTTP.
 pub(crate) fn emit(state: &ServerState, renderer: &DlnaRendererState) {
     let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
         EVENT_UPDATED,
@@ -36,39 +34,12 @@ pub(crate) fn emit(state: &ServerState, renderer: &DlnaRendererState) {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Request {
-    SetEnabled {
-        enabled: bool,
-    },
-    Start {
-        port: u16,
-    },
-    Stop {},
-    Retry {
-        port: u16,
-    },
+    Retry {},
     Snapshot {},
     Rules {},
-    RemoveRule {
-        ip: String,
-        allowed: bool,
-    },
-    Accept {
-        remember: bool,
-    },
-    Reject {
-        remember: bool,
-    },
-    Position {
-        #[serde(rename = "positionMs")]
-        position_ms: i64,
-        #[serde(rename = "durationMs")]
-        duration_ms: i64,
-    },
-    SeekConsumed {},
-    Playback {
-        state: crate::services::casting::receiver::types::DlnaPlaybackState,
-    },
-    Stopped {},
+    RemoveRule { ip: String, allowed: bool },
+    Accept { remember: bool },
+    Reject { remember: bool },
 }
 
 pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Value, String> {
@@ -76,27 +47,9 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
     if *stopped.borrow_and_update() {
         return Err("Core stopped".into());
     }
-    let request = if let Request::SetEnabled { enabled } = request {
-        plain_rs::prefs::dlna::set_enabled(&state.prefs, enabled)
-            .map_err(|error| error.to_string())?;
-        if enabled {
-            Request::Start {
-                port: state
-                    .public_ports()
-                    .await
-                    .ok_or("Public HTTP server is not running")?
-                    .0,
-            }
-        } else {
-            Request::Stop {}
-        }
-    } else {
-        request
-    };
     let _guard = state.cast.receiver_operations.lock().await;
     let engine = &state.dlna;
     match request {
-        Request::SetEnabled { .. } => unreachable!(),
         Request::Rules {} => Ok(rules(state)),
         Request::RemoveRule { ip, allowed } => {
             plain_rs::prefs::dlna::remove_sender(
@@ -110,55 +63,8 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
             );
             Ok(rules(state))
         }
-        Request::Start { port } => {
-            crate::services::casting::dlna_sender_runtime::acquire_permission(
-                state,
-                &state.cast.receiver_lease,
-            )
-            .await?;
-            engine.start(port).await;
-            if !engine.snapshot().await.is_running {
-                crate::services::casting::dlna_sender_runtime::release_permission(
-                    state,
-                    &state.cast.receiver_lease,
-                )
-                .await;
-            }
-            Ok(snapshot(&engine.snapshot().await))
-        }
-        Request::Stop {} => {
-            engine.stop().await;
-            crate::services::casting::dlna_sender_runtime::release_permission(
-                state,
-                &state.cast.receiver_lease,
-            )
-            .await;
-            Ok(snapshot(&engine.snapshot().await))
-        }
-        Request::Retry { port } => {
-            // Restarting from the engine's own scope would self-cancel: the
-            // stop path aborts the tasks this command is running on.
-            engine.set_retrying(true).await;
-            engine.stop().await;
-            crate::services::casting::dlna_sender_runtime::release_permission(
-                state,
-                &state.cast.receiver_lease,
-            )
-            .await;
-            crate::services::casting::dlna_sender_runtime::acquire_permission(
-                state,
-                &state.cast.receiver_lease,
-            )
-            .await?;
-            engine.start(port).await;
-            if !engine.snapshot().await.is_running {
-                crate::services::casting::dlna_sender_runtime::release_permission(
-                    state,
-                    &state.cast.receiver_lease,
-                )
-                .await;
-            }
-            engine.set_retrying(false).await;
+        Request::Retry {} => {
+            super::lifecycle::retry_locked(state).await?;
             Ok(snapshot(&engine.snapshot().await))
         }
         Request::Snapshot {} => Ok(snapshot(&engine.snapshot().await)),
@@ -179,25 +85,6 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
                 emit(state, &after);
             }
             Ok(snapshot(&after))
-        }
-        Request::Position {
-            position_ms,
-            duration_ms,
-        } => {
-            engine.set_position(position_ms, duration_ms).await;
-            Ok(snapshot(&engine.snapshot().await))
-        }
-        Request::SeekConsumed {} => {
-            engine.clear_seek_target().await;
-            Ok(snapshot(&engine.snapshot().await))
-        }
-        Request::Playback { state } => {
-            engine.set_playback_state(state).await;
-            Ok(snapshot(&engine.snapshot().await))
-        }
-        Request::Stopped {} => {
-            engine.clear_media().await;
-            Ok(snapshot(&engine.snapshot().await))
         }
     }
 }

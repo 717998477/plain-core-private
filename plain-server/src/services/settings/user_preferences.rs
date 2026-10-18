@@ -62,6 +62,11 @@ impl<'a> UserPreferences<'a> {
             if before.desktop_access && !after.desktop_access {
                 state.main_ws.close_client(state, None);
             }
+            if before.dlna != after.dlna {
+                crate::services::casting::receiver::lifecycle::reconcile(state)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+            }
             if before.device_name != after.device_name {
                 state.mdns.update_hostname(state).await?;
             }

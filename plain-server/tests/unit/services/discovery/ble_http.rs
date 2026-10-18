@@ -163,3 +163,299 @@ async fn local_channels_reject_bad_auth_and_wrong_frame_type() {
     ));
     server.shutdown().await;
 }
+
+async fn incoming_exchange(
+    port: u16,
+    characteristic: &str,
+    address: &str,
+    bytes: Vec<u8>,
+) -> Option<Vec<u8>> {
+    let (mut socket, _) = connect_async(socket_request(
+        port,
+        "/chat/ble-incoming",
+        &plain_rs::utils::base64::base64_encode(&[3; 32]),
+    ))
+    .await
+    .unwrap();
+    socket
+        .send(WsMessage::Text(
+            serde_json::json!({
+                "remoteHost": address,
+                "characteristicUuid": characteristic,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let _ = socket.send(WsMessage::Binary(bytes.into())).await;
+    match tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+    {
+        Some(Ok(WsMessage::Binary(bytes))) => Some(bytes.to_vec()),
+        None | Some(Err(_)) | Some(Ok(WsMessage::Close(_))) => None,
+        frame => panic!("Unexpected BLE response: {frame:?}"),
+    }
+}
+
+#[tokio::test]
+async fn nearby_discovery_uses_the_existing_raw_channel_and_shared_identity() {
+    let (_dir, server) = fixture();
+    let state = server.runtime_state();
+    state.prefs.set_user("device_name", "BLE fixture").unwrap();
+    let bytes = incoming_exchange(
+        server.port,
+        ble::NEARBY_CHAR_UUID,
+        "radio-source",
+        ble::message(&[], b"DISCOVER:").unwrap(),
+    )
+    .await
+    .unwrap();
+    let (metadata, body) = ble::parts(&bytes).unwrap();
+    assert!(metadata.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+    assert_eq!(value["id"], "actor");
+    assert_eq!(value["name"], "BLE fixture");
+    assert_eq!(value["deviceType"], "COMPUTER");
+    assert_eq!(value["port"], 0);
+    assert!(!state.host.connected());
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn incoming_characteristics_are_allowlisted_and_cannot_cross_protocols() {
+    let (_dir, server) = fixture();
+    let discover = ble::message(&[], b"DISCOVER:").unwrap();
+    assert!(
+        incoming_exchange(
+            server.port,
+            "not-a-characteristic",
+            "radio-source",
+            discover.clone()
+        )
+        .await
+        .is_none()
+    );
+    assert!(
+        incoming_exchange(server.port, ble::HTTP_CHAR_UUID, "radio-source", discover)
+            .await
+            .is_none()
+    );
+    let request = Request::FileChunk {
+        client_id: "actor".into(),
+        file_id: "fixture".into(),
+        offset: 0,
+        length: 1,
+    }
+    .encode()
+    .unwrap();
+    assert!(
+        incoming_exchange(server.port, ble::NEARBY_CHAR_UUID, "radio-source", request)
+            .await
+            .is_none()
+    );
+    for body in ["UNKNOWN:{}", "PAIR_REQUEST:{}", "DISCOVER_REPLY:{}"] {
+        let bytes = incoming_exchange(
+            server.port,
+            ble::NEARBY_CHAR_UUID,
+            "radio-source",
+            ble::message(&[], body.as_bytes()).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bytes, ble::message(&[], &[]).unwrap());
+    }
+    server.shutdown().await;
+}
+
+fn signed_nearby_request() -> (plain_rs::peers::pairing::protocol::PairingRequest, [u8; 64]) {
+    let (key, public) = plain_rs::crypto::ed25519_generate();
+    let mut request = plain_rs::peers::pairing::protocol::PairingRequest {
+        from_id: "nearby-peer".into(),
+        from_name: "Nearby fixture".into(),
+        port: 2443,
+        device_type: "PHONE".into(),
+        ecdh_public_key: plain_rs::utils::base64::base64_encode(
+            &plain_rs::crypto::EcdhSession::generate().public_key_bytes,
+        ),
+        signature_public_key: plain_rs::utils::base64::base64_encode(&public),
+        timestamp: plain_rs::peers::pairing::now_ms(),
+        ips: vec![],
+        signature: String::new(),
+        aware_supported: false,
+        from_ip: String::new(),
+    };
+    request.signature = plain_rs::crypto::ed25519_sign(&key, request.signature_data().as_bytes());
+    (request, key)
+}
+
+#[tokio::test]
+async fn nearby_pairing_preserves_signatures_and_the_actual_radio_return_address() {
+    use crate::services::discovery::{pairing, pairing_runtime};
+    use plain_rs::discovery::nearby_wire::Message;
+    let (_dir, server) = fixture();
+    let state = server.runtime_state();
+    let (local_key, _) = plain_rs::crypto::ed25519_generate();
+    state
+        .prefs
+        .set(
+            "signature_key_pair",
+            plain_rs::utils::base64::base64_encode(&local_key),
+        )
+        .unwrap();
+    let (request, _) = signed_nearby_request();
+    let mut invalid = request.clone();
+    invalid.from_name.push_str("tampered");
+    let mut events = state.events.subscribe();
+    let body = Message::PairRequest(invalid).wire().unwrap();
+    let ack = incoming_exchange(
+        server.port,
+        ble::NEARBY_CHAR_UUID,
+        "untrusted-route",
+        ble::message(&[], body.as_bytes()).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ble::nearby_body(&ack).unwrap(), b"1");
+    assert!(
+        state
+            .pairing
+            .incoming_target(&request.from_id, &request.signature)
+            .is_none()
+    );
+    assert!(events.try_recv().is_err());
+    let body = Message::PairRequest(request.clone()).wire().unwrap();
+    let ack = incoming_exchange(
+        server.port,
+        ble::NEARBY_CHAR_UUID,
+        "actual-radio-source",
+        ble::message(&[], body.as_bytes()).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ble::nearby_body(&ack).unwrap(), b"1");
+    let event = events.try_recv().unwrap();
+    assert_eq!(event.event_type, "PAIRING_REQUEST_RECEIVED");
+    let delivered: plain_rs::peers::pairing::protocol::PairingRequest =
+        serde_json::from_str(&event.payload).unwrap();
+    assert_eq!(delivered.signature, request.signature);
+    assert_eq!(delivered.from_ip, "");
+    assert!(plain_rs::peers::pairing::security::verify_request(
+        &delivered
+    ));
+    let (generation, mut calls) = state.host.connect();
+    let responding = state.clone();
+    let expected_signature = request.signature.clone();
+    let task = tokio::spawn(async move {
+        pairing_runtime::execute(
+            &responding,
+            pairing_runtime::Request::Respond {
+                request,
+                accepted: false,
+                device: pairing::Device {
+                    name: "Local fixture".into(),
+                    port: 2443,
+                    device_type: "COMPUTER".into(),
+                    ips: vec![],
+                    aware_supported: false,
+                },
+            },
+        )
+        .await
+        .unwrap()
+    });
+    let call = tokio::time::timeout(Duration::from_secs(2), calls.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(call["method"], "pairingNotification");
+    assert_eq!(call["params"]["address"], "actual-radio-source");
+    let Message::PairResponse(response) =
+        Message::parse(call["params"]["body"].as_str().unwrap()).unwrap()
+    else {
+        panic!("Expected pairing response")
+    };
+    assert_eq!(response.request_signature, expected_signature);
+    assert!(!response.accepted);
+    assert!(plain_rs::peers::pairing::security::verify_response(
+        &response,
+        "nearby-peer",
+        "actor"
+    ));
+    state
+        .host
+        .reply(
+            generation,
+            serde_json::json!({"id":call["id"],"result":true}),
+        )
+        .unwrap();
+    assert!(
+        !task.await.unwrap()["response"]["accepted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        plain_rs::db::chat_store::peers::get(&state.db, "nearby-peer")
+            .unwrap()
+            .is_none()
+    );
+    state.host.disconnect(generation);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn nearby_cancel_requires_the_matching_signed_request() {
+    use plain_rs::discovery::nearby_wire::Message;
+    use plain_rs::peers::pairing::protocol::PairingCancel;
+    let (_dir, server) = fixture();
+    let state = server.runtime_state();
+    let (request, key) = signed_nearby_request();
+    let body = Message::PairRequest(request.clone()).wire().unwrap();
+    let ack = incoming_exchange(
+        server.port,
+        ble::NEARBY_CHAR_UUID,
+        "radio-source",
+        ble::message(&[], body.as_bytes()).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ble::nearby_body(&ack).unwrap(), b"1");
+    let mut cancel = PairingCancel {
+        from_id: request.from_id.clone(),
+        to_id: "actor".into(),
+        request_signature: "another-request".into(),
+        signature_public_key: request.signature_public_key.clone(),
+        timestamp: plain_rs::peers::pairing::now_ms(),
+        signature: String::new(),
+    };
+    for matching in [false, true] {
+        if matching {
+            cancel.request_signature = request.signature.clone();
+        }
+        cancel.signature = plain_rs::crypto::ed25519_sign(&key, cancel.signature_data().as_bytes());
+        let body = Message::PairCancel(cancel.clone()).wire().unwrap();
+        let ack = incoming_exchange(
+            server.port,
+            ble::NEARBY_CHAR_UUID,
+            "radio-source",
+            ble::message(&[], body.as_bytes()).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ble::nearby_body(&ack).unwrap(), b"1");
+        assert_eq!(
+            state
+                .pairing
+                .incoming_target(&request.from_id, &request.signature)
+                .is_none(),
+            matching
+        );
+    }
+    assert!(
+        plain_rs::db::chat_store::peers::get(&state.db, "nearby-peer")
+            .unwrap()
+            .is_none()
+    );
+    server.shutdown().await;
+}

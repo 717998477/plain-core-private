@@ -96,13 +96,11 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
         "Query",
         "peers",
         resolvers::peers::records::PeerRecordQuery,
-        resolvers::peers::transport::PeerTransportQuery,
         resolvers::peers::public::PeersQuery
     );
     group!(
         "Query",
         "chat",
-        resolvers::chat::records::ChatChannelRecordQuery,
         resolvers::chat::host::ChatHostQuery,
         resolvers::chat::public::ChatQuery
     );
@@ -136,7 +134,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Query",
         "images",
-        resolvers::images::models::ImageModelsQuery,
         resolvers::images::image_editor_project::ImageEditorProjectQuery,
         resolvers::images::public_index::ImageIndexQuery,
         resolvers::images::public::ImagesQuery
@@ -293,7 +290,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Mutation",
         "media",
-        resolvers::media::actions::MediaActionMutation,
         resolvers::media::scan::MediaScanMutation
     );
     group!(

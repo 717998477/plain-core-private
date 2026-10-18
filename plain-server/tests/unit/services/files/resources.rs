@@ -65,3 +65,26 @@ async fn ordinary_mime_queries_are_portable_and_do_not_request_sdk_metadata() {
     );
     assert!(requests.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn opaque_mime_queries_use_the_existing_resource_primitive_on_every_platform() {
+    let host = Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    let lookup = {
+        let host = host.clone();
+        tokio::spawn(async move { read(&host, "mime", "content://fixture/123", json!({})).await })
+    };
+    let request = requests.recv().await.unwrap();
+    assert_eq!(request["method"], "systemFileResource");
+    assert_eq!(
+        request["params"],
+        json!({"operation":"mime","path":"content://fixture/123","params":{}})
+    );
+    host.reply(
+        generation,
+        json!({"id":request["id"],"result":"video/3gpp"}),
+    )
+    .unwrap();
+    assert_eq!(lookup.await.unwrap().unwrap(), json!("video/3gpp"));
+    assert!(requests.try_recv().is_err());
+}

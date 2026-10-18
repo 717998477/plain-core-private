@@ -34,3 +34,6 @@ pub(crate) mod pairing_attempts;
 
 #[cfg(feature = "core")]
 mod pairing_login;
+
+#[cfg(feature = "core")]
+pub(crate) mod ble_advertising;

@@ -1,5 +1,5 @@
+use crate::assembly::server::ServerState;
 use crate::services::casting::receiver::control::{self, Request};
-use crate::{assembly::server::ServerState, graphql::types::Long};
 use async_graphql::{Context, Enum, InputObject, Json, Object};
 use serde::Serialize;
 use serde_json::Value;
@@ -7,17 +7,10 @@ use serde_json::Value;
 #[derive(Enum, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DlnaReceiverAction {
-    Start,
-    Stop,
     Retry,
     RemoveRule,
     Accept,
     Reject,
-    Position,
-    SeekConsumed,
-    Playback,
-    Stopped,
-    SetEnabled,
 }
 
 #[derive(InputObject, Serialize)]
@@ -25,21 +18,11 @@ pub enum DlnaReceiverAction {
 pub struct DlnaReceiverInput {
     action: DlnaReceiverAction,
     #[serde(skip_serializing_if = "Option::is_none")]
-    port: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     ip: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     allowed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     remember: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    position_ms: Option<Long>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    duration_ms: Option<Long>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    state: Option<crate::services::casting::receiver::types::DlnaPlaybackState>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    enabled: Option<bool>,
 }
 
 async fn execute(state: &ServerState, request: Request) -> async_graphql::Result<Json<Value>> {
@@ -63,11 +46,8 @@ impl DlnaReceiverQuery {
         let state = ctx.data::<ServerState>()?;
         let mut snapshot = execute(state, Request::Snapshot {}).await?;
         snapshot.0["enabled"] = Value::Bool(plain_rs::prefs::dlna::enabled(&state.prefs));
+        snapshot.0["rules"] = execute(state, Request::Rules {}).await?.0;
         Ok(snapshot)
-    }
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn dlna_receiver_rules(&self, ctx: &Context<'_>) -> async_graphql::Result<Json<Value>> {
-        execute(ctx.data::<ServerState>()?, Request::Rules {}).await
     }
 }
 

@@ -47,10 +47,11 @@ fn prepare_with(
             directory.is_absolute(),
             "Absolute web asset directory required"
         );
-        return Ok(directory
-            .join("index.html")
-            .is_file()
-            .then(|| directory.to_owned()));
+        return if directory.join("index.html").is_file() {
+            Ok(Some(directory.canonicalize()?))
+        } else {
+            Ok(None)
+        };
     }
     if source.archives.is_empty() {
         ensure!(source.prefix.is_empty(), "Web asset archive required");
@@ -202,6 +203,19 @@ pub(crate) async fn configure(
     state: &crate::assembly::server::ServerState,
     source: Source,
 ) -> Result<(), String> {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let _changes = state.web_asset_changes.lock().await;
+        configure_locked(&state, source).await
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+async fn configure_locked(
+    state: &crate::assembly::server::ServerState,
+    source: Source,
+) -> Result<(), String> {
     let cache = state.cache.clone();
     let preparation_source = source.clone();
     let root = tokio::task::spawn_blocking(move || prepare(&cache, &preparation_source))
@@ -215,14 +229,30 @@ pub(crate) async fn configure(
         .map_err(|error| error.to_string())? = Some(source);
     Ok(())
 }
-pub(crate) async fn restore(state: &crate::assembly::server::ServerState) -> Result<(), String> {
-    let source = state
-        .web_source
+pub(crate) async fn clear_cache(
+    state: &crate::assembly::server::ServerState,
+) -> Result<(), String> {
+    let _changes = state.web_asset_changes.lock().await;
+    let root = state
+        .web_root
         .read()
         .map_err(|error| error.to_string())?
         .clone();
-    if let Some(source) = source {
-        configure(state, source).await?;
+    crate::services::cache::clear(&state.cache, &state.host, root.clone()).await?;
+    let active = tokio::task::spawn_blocking(move || {
+        root.is_some_and(|root| regular(&root.join("index.html")))
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    if !active {
+        let source = state
+            .web_source
+            .read()
+            .map_err(|error| error.to_string())?
+            .clone();
+        if let Some(source) = source {
+            configure_locked(state, source).await?;
+        }
     }
     Ok(())
 }

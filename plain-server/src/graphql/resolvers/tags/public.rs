@@ -40,20 +40,6 @@ impl TagsQuery {
             .collect())
     }
 
-    /// `null` when the id is unknown — the web client treats that as "gone"
-    /// and drops the tag from its list.
-    async fn tag(
-        &self,
-        ctx: &Context<'_>,
-        id: async_graphql::ID,
-    ) -> async_graphql::Result<Option<Tag>> {
-        let db = db(ctx);
-        Ok(tags::tag_by_id(db, id.as_str())
-            .map_err(failed)?
-            .as_ref()
-            .map(tag))
-    }
-
     async fn tag_keys(
         &self,
         ctx: &Context<'_>,

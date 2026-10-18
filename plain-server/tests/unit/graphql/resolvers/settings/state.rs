@@ -27,6 +27,85 @@ fn fixture() -> (
     .finish();
     (dir, schema, receiver)
 }
+
+#[tokio::test]
+async fn recent_searches_clear_through_the_boolean_preference_write_with_shared_events() {
+    let (_directory, schema, mut events) = fixture();
+    let prefs = schema.data::<Arc<Prefs>>().unwrap();
+    prefs
+        .set_user("recent_searches", serde_json::json!(["first", "second"]))
+        .unwrap();
+    for changed in [true, false] {
+        let response = schema
+            .execute("mutation{setUserPref(key:\"recent_searches\",value:[])}")
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.into_json().unwrap()["setUserPref"], true);
+        assert_eq!(
+            plain_rs::prefs::user::snapshot(prefs)
+                .unwrap()
+                .recent_searches,
+            serde_json::json!([])
+        );
+        assert_eq!(events.try_recv().is_ok(), changed);
+        assert!(events.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
+async fn adb_token_verification_requires_transport_injected_local_origin() {
+    use crate::graphql::executor::RequestOrigin;
+    let (_directory, schema, _) = fixture();
+    let prefs = schema.data::<Arc<Prefs>>().unwrap();
+    prefs.set("adb_token", "fixture-token").unwrap();
+    for (token, expected) in [("fixture-token", true), ("wrong", false), ("", false)] {
+        let document = format!(
+            "{{verifyAdbToken(token:{})}}",
+            serde_json::to_string(token).unwrap()
+        );
+        let local = schema
+            .execute(async_graphql::Request::new(&document).data(RequestOrigin::Local))
+            .await;
+        assert!(local.errors.is_empty(), "{:?}", local.errors);
+        assert_eq!(local.data.into_json().unwrap()["verifyAdbToken"], expected);
+        for origin in [None, Some(RequestOrigin::Remote)] {
+            let mut request = async_graphql::Request::new(&document);
+            if let Some(origin) = origin {
+                request = request.data(origin);
+            }
+            let denied = schema.execute(request).await;
+            assert_eq!(denied.errors.len(), 1);
+            assert_eq!(denied.errors[0].message, "no_permission");
+            assert!(!denied.data.to_string().contains("true"));
+        }
+    }
+}
+#[tokio::test]
+async fn main_user_settings_snapshot_preserves_every_native_snapshot_value_without_host_calls() {
+    let (_directory, schema, mut events) = fixture();
+    let prefs = schema.data::<Arc<Prefs>>().unwrap();
+    prefs
+        .set_user("editor_font_size", serde_json::json!(20))
+        .unwrap();
+    prefs
+        .set_user("feed_auto_refresh_interval", serde_json::json!(2345))
+        .unwrap();
+    let expected = serde_json::to_value(plain_rs::prefs::user::snapshot(prefs).unwrap()).unwrap();
+    let fields = expected
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let response = schema
+        .execute(format!("{{ userSettings {{ {fields} }} }}"))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["userSettings"], expected);
+    assert!(events.try_recv().is_err());
+}
+
 #[tokio::test]
 async fn graphql_settings_are_isolated_between_devices() {
     let (_a, first, mut events) = fixture();
@@ -106,12 +185,10 @@ async fn app_preference_actions_execute_through_the_main_mutations() {
     for selection in [
         r#"recordRecentSearch(query:"quoted \"term\" αβγ")"#,
         r#"removeRecentSearch(query:"quoted \"term\" αβγ")"#,
-        "clearRecentSearches",
         r#"recordRecentSaveDirectory(path:"/selected directory")"#,
         r#"toggleNotificationApp(packageName:"example.app")"#,
         r#"setNotificationFilterMode(mode:"allowlist")"#,
         "clearNotificationFilterApps",
-        "deletePlaylistVideos(paths:[])",
     ] {
         let response = schema
             .execute(format!("mutation {{ {selection} {{ affectedCount }} }}"))

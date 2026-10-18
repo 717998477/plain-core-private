@@ -31,28 +31,30 @@ impl UploadChunks {
         ensure_running(&stop)?;
         let destination = plain_rs::files::uploads::chunk_path(self.directory(), id, index)
             .map_err(|error| error.to_string())?;
-        let parent = destination.parent().ok_or("upload directory unavailable")?;
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|error| error.to_string())?;
-        let temporary = parent.join(format!(".upload_chunk_{}", uuid::Uuid::new_v4()));
-        let file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .await
-            .map_err(|error| error.to_string())?;
-        let chunk = UploadChunk {
-            file: Some(file),
-            temporary,
-            destination,
-            size,
-            written: 0,
-            failed: false,
-            stop,
-        };
-        ensure_running(&chunk.stop)?;
-        Ok(chunk)
+        tokio::task::spawn_blocking(move || {
+            ensure_running(&stop)?;
+            let parent = destination.parent().ok_or("upload directory unavailable")?;
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            let temporary = parent.join(format!(".upload_chunk_{}", uuid::Uuid::new_v4()));
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|error| error.to_string())?;
+            let chunk = UploadChunk {
+                file: Some(File::from_std(file)),
+                temporary,
+                destination,
+                size,
+                written: 0,
+                failed: false,
+                stop,
+            };
+            ensure_running(&chunk.stop)?;
+            Ok(chunk)
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
 }
 

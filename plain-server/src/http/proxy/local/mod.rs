@@ -33,6 +33,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 #[cfg(test)]
+#[path = "../../../../tests/unit/http/proxy/local/mod.rs"]
 mod tests;
 #[cfg(feature = "core")]
 pub mod utils;
@@ -43,7 +44,30 @@ use utils::{extract_proxy_params, ws_accept_key};
 // ─── Public state ─────────────────────────────────────────────────────────────
 
 /// Resolves a peer client id to its current `ip:port` (blocking — SQLite read).
-pub type PeerResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+pub type PeerResolver = Arc<dyn Fn(&str) -> Option<ResolvedPeer> + Send + Sync>;
+
+pub struct ResolvedPeer {
+    address: String,
+    disconnected: Option<Box<dyn FnOnce() + Send>>,
+}
+impl ResolvedPeer {
+    pub(crate) fn address(&self) -> &str {
+        &self.address
+    }
+    pub(crate) fn new(address: String, disconnected: impl FnOnce() + Send + 'static) -> Self {
+        Self {
+            address,
+            disconnected: Some(Box::new(disconnected)),
+        }
+    }
+}
+impl Drop for ResolvedPeer {
+    fn drop(&mut self) {
+        if let Some(disconnected) = self.disconnected.take() {
+            disconnected();
+        }
+    }
+}
 
 pub struct HttpProxyState {
     pub port: u16,
@@ -361,14 +385,16 @@ async fn relay_websocket(
     // device that changed address reconnects on its fresh host even when the
     // URL was built from a stale login session.
     let mut base = target_base;
-    if !cid.is_empty() {
-        let resolved = tokio::task::spawn_blocking(move || peers(&cid))
+    let connection = if cid.is_empty() {
+        None
+    } else {
+        tokio::task::spawn_blocking(move || peers(&cid))
             .await
             .ok()
-            .flatten();
-        if let Some(host) = resolved {
-            base = replace_authority(&base, &host);
-        }
+            .flatten()
+    };
+    if let Some(peer) = &connection {
+        base = replace_authority(&base, peer.address());
     }
 
     // reqwest speaks http(s) only; ws/wss map onto it for the upgrade dial.

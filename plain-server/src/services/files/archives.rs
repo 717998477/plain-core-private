@@ -154,6 +154,30 @@ fn build_archive(
     items: Vec<(PathBuf, String)>,
 ) -> anyhow::Result<(std::fs::File, StagedFile)> {
     anyhow::ensure!(!items.is_empty(), "nothing to zip");
+    let items = items
+        .into_iter()
+        .map(|(source, name)| {
+            let name = if name.is_empty() {
+                source
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| anyhow::anyhow!("Invalid archive entry name"))?
+                    .to_owned()
+            } else {
+                name
+            };
+            anyhow::ensure!(
+                !name.is_empty()
+                    && !name.contains(['\\', '\0', ':'])
+                    && name.split('/').all(|part| !matches!(part, "." | ".."))
+                    && Path::new(&name)
+                        .components()
+                        .all(|part| matches!(part, std::path::Component::Normal(_))),
+                "Invalid archive entry name"
+            );
+            Ok((source, name))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     std::fs::create_dir_all(directory)?;
     let path = directory.join(format!("archive-{}.tmp", uuid::Uuid::new_v4()));
     let staging = StagedFile(path.clone());
@@ -185,3 +209,7 @@ fn build_archive(
     file.seek(SeekFrom::Start(0))?;
     Ok((file, staging))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/files/archives.rs"]
+mod tests;

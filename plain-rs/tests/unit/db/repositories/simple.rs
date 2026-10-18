@@ -235,7 +235,6 @@ fn video_progress_cache() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(db.video_progress_delete("42").unwrap(), 1);
 }
 
 #[test]

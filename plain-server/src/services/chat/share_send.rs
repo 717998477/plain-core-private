@@ -3,6 +3,20 @@ use anyhow::{Result, ensure};
 use plain_rs::{db::DChat, files::shares::Service};
 use std::sync::Arc;
 
+struct PendingShare {
+    db: Arc<plain_rs::db::Db>,
+    id: Option<String>,
+}
+impl Drop for PendingShare {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            if let Err(error) = self.db.share_delete(&id) {
+                log::error!("Unable to roll back unbound folder share: {error}");
+            }
+        }
+    }
+}
+
 pub(crate) async fn existing(
     state: &ServerState,
     service: Arc<Service>,
@@ -42,16 +56,25 @@ pub(crate) async fn folder(
         .authorize_metadata_paths(std::slice::from_ref(&path))
         .await?;
     let create = service.clone();
-    let share = tokio::task::spawn_blocking(move || -> Result<_> {
+    let db = state.db.clone();
+    let (share, mut pending) = tokio::task::spawn_blocking(move || -> Result<_> {
         ensure!(std::fs::metadata(&path)?.is_dir(), "Share folder required");
-        create.create(name, vec![path], true, expires_at)
+        let share = create.create(name, vec![path], true, expires_at)?;
+        let pending = PendingShare {
+            db,
+            id: Some(share.id.clone()),
+        };
+        Ok((share, pending))
     })
     .await??;
+    let content = super::share_card::content(state, service, share.id).await?;
+    let rows = super::chat_actions::prepare_send_many(state, &targets, &content)?;
+    pending.id = None;
     let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
         "CONTENT_CHANGED",
         "{}".into(),
     ));
-    existing(state, service, targets, share.id).await
+    super::chat_actions::deliver_many(state, rows).await
 }
 
 #[cfg(test)]

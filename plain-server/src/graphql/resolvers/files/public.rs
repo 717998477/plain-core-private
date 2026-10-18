@@ -57,23 +57,6 @@ impl FilesQuery {
         ))
     }
 
-    async fn media_duration_ms(
-        &self,
-        ctx: &Context<'_>,
-        path: String,
-    ) -> async_graphql::Result<Long> {
-        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        let platform = ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?;
-        let path = platform.resolve_reference(&path)?;
-        platform.authorize(&path, false).await?;
-        let duration = ctx
-            .data::<Arc<crate::services::files::duration_updates::Runtime>>()?
-            .milliseconds(&path)
-            .await
-            .map_err(async_graphql::Error::new)?;
-        Ok(Long(duration))
-    }
-
     async fn indexed_files(
         &self,
         ctx: &Context<'_>,
@@ -108,39 +91,6 @@ impl FilesQuery {
         Ok(Long(count.as_i64().ok_or("invalid indexed file count")?))
     }
 
-    async fn browse_files(
-        &self,
-        ctx: &Context<'_>,
-        root: String,
-        query: String,
-        text: Option<String>,
-        show_hidden: Option<bool>,
-        sort_by: FileSortBy,
-        offset: i32,
-        limit: i32,
-        #[graphql(default)] count_only: bool,
-    ) -> async_graphql::Result<FilePage> {
-        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        let page = file_reads::execute(
-            ctx.data::<Arc<crate::services::files::platform::FilePlatform>>()?,
-            Request {
-                root,
-                query,
-                text,
-                show_hidden,
-                sort_by: sort_by.into(),
-                offset: usize::try_from(offset)?,
-                limit: Some(usize::try_from(limit)?),
-                count_only,
-            },
-        )
-        .await
-        .map_err(async_graphql::Error::new)?;
-        Ok(FilePage {
-            count: Long(page["count"].as_i64().ok_or("invalid file count")?),
-            items: list(&page, "items", file),
-        })
-    }
     async fn mounts(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Mount>> {
         let facts = ctx
             .data::<Arc<crate::services::files::platform::FilePlatform>>()?
@@ -179,8 +129,6 @@ impl FilesQuery {
             Request {
                 root,
                 query,
-                text: None,
-                show_hidden: None,
                 sort_by: sort_by.into(),
                 offset: offset.max(0) as usize,
                 limit: Some(limit.max(0) as usize),
@@ -205,8 +153,6 @@ impl FilesQuery {
             Request {
                 root,
                 query,
-                text: None,
-                show_hidden: None,
                 sort_by: SortBy::NameAsc,
                 offset: 0,
                 limit: None,
@@ -539,9 +485,3 @@ async fn host_call(ctx: &Context<'_>, method: &str, params: Value) -> async_grap
 #[cfg(test)]
 #[path = "../../../../tests/unit/graphql/resolvers/files/public.rs"]
 mod tests;
-
-#[derive(async_graphql::SimpleObject)]
-struct FilePage {
-    count: Long,
-    items: Vec<File>,
-}

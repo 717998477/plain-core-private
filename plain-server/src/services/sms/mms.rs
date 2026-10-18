@@ -105,15 +105,15 @@ impl Runtime {
                 self.resources.lock().unwrap().clone().ok_or_else(|| {
                     anyhow::anyhow!("Native attachment resources are unavailable")
                 })?;
-            let facts = self
-                .host
-                .call("systemResourceMimeType", json!({"path": path}))
-                .await
-                .map_err(anyhow::Error::msg)?;
-            let mime = facts
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Invalid resource MIME type"))?
-                .trim();
+            let facts =
+                crate::services::files::resources::read(&self.host, "mime", path, json!({}))
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+            let mime = match &facts {
+                Value::Null => "",
+                Value::String(mime) => mime.trim(),
+                _ => anyhow::bail!("Invalid resource MIME type"),
+            };
             let mime = if mime.is_empty() {
                 "application/octet-stream"
             } else {

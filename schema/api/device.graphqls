@@ -192,7 +192,6 @@ type Temperature {
 }
 
 extend type Mutation {
-	clearAppLogFiles: Boolean!
 	clearAppLogs: Boolean!
 	confirmWebLogin(requestId: String!, allowed: Boolean!): Boolean!
 	createCrashReport(report: String!): String!
@@ -240,6 +239,5 @@ extend type Query {
 	than a snapshot the caller would have to re-read.
 	"""
 	isDiscovering: Boolean!
-	onlineClientIds: [ID!]!
 	sessions: [Session!]!
 }

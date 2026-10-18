@@ -19,6 +19,7 @@ impl ServerState {
         let listeners =
             crate::http::listeners::HttpListeners::start(router, http, https, cert, key).await?;
         let ports = (listeners.http_port, listeners.https_port);
+        self.http_server.started(ports);
         {
             let _control = self.peer_status.control.lock().await;
             self.peer_status
@@ -38,7 +39,10 @@ impl ServerState {
             generation,
         });
         crate::assembly::lifecycle::monitor(self.clone(), failure, receiver, generation);
-        self.http_server.started(ports);
+        drop(guard);
+        if let Err(error) = crate::services::casting::receiver::lifecycle::reconcile(self).await {
+            log::warn!("DLNA receiver startup: {error}");
+        }
         let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
             plain_rs::events::HTTP_SERVER_STARTED,
             serde_json::json!({"generation":generation,"httpPort":ports.0,"httpsPort":ports.1})
@@ -68,20 +72,12 @@ impl ServerState {
         let _core = self.shutdown.lock().await;
         self.native_client_id()?;
         let (http, https, cert, key) = self.configured_public_identity().await?;
-        let receiver_running = self.dlna.is_running();
         {
             let mut server = self.public_server.lock().await.take();
             crate::assembly::lifecycle::stop_locked(self, &mut server).await;
             self.http_server.stopped();
         }
         let ports = self.start_public_locked(http, https, cert, key).await?;
-        if receiver_running {
-            crate::services::casting::receiver::control::execute(
-                self,
-                crate::services::casting::receiver::control::Request::Start { port: ports.0 },
-            )
-            .await?;
-        }
         self.mdns
             .update_hostname(self)
             .await

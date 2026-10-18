@@ -166,9 +166,7 @@ extend type Mutation {
 	createShare(name: String!, realPaths: [String!]!, readOnly: Boolean!, expiresAt: Instant): ShareRecord!
 	deleteShare(id: ID!): Boolean!
 	enqueueSharedDownload(input: SharedDownloadInput!): ID!
-	pauseSharedDownload(id: ID!): Boolean!
 	removeSharedDownload(id: ID!): Boolean!
-	resumeSharedDownload(id: ID!): Boolean!
 	retrySharedDownload(id: ID!): Boolean!
 	updateShare(id: ID!, name: String!, expiresAt: Instant, realPaths: [String!]): ShareRecord!
 }

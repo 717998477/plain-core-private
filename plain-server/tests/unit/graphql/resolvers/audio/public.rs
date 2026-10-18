@@ -362,6 +362,24 @@ async fn an_idle_player_reports_a_null_current_path() {
 }
 
 #[tokio::test]
+async fn path_lyrics_reject_missing_storage_permission_before_reading_a_sidecar() {
+    let (directory, schema) =
+        fixture_with("[]", |method, _| panic!("unexpected host call {method}"));
+    let track = directory.path().join("private.mp3");
+    std::fs::write(directory.path().join("private.lrc"), "owned sidecar lyrics").unwrap();
+    let response = query(
+        &schema,
+        &format!(
+            "query {{ audioLyricsByPath(path: {}) }}",
+            serde_json::to_string(&track.to_string_lossy()).unwrap()
+        ),
+    )
+    .await;
+    assert_eq!(response["errors"][0]["message"], "no_permission");
+    assert!(!response.to_string().contains("owned sidecar lyrics"));
+}
+
+#[tokio::test]
 async fn lyrics_use_embedded_tags_and_missing_tags_are_null() {
     let (dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
     let track = dir.path().join("a.mp3");
@@ -398,6 +416,16 @@ async fn lyrics_use_embedded_tags_and_missing_tags_are_null() {
     )
     .await;
     assert_eq!(some["data"]["audioLyrics"], "la la la", "{some}");
+    let sidecar = query(
+        &schema,
+        &format!(
+            "query {{ audioLyricsByPath(path: {}) }}",
+            serde_json::to_string(&track).unwrap()
+        ),
+    )
+    .await;
+    assert!(sidecar["errors"].is_null(), "{sidecar}");
+    assert_eq!(sidecar["data"]["audioLyricsByPath"], "different sidecar");
 }
 
 #[tokio::test]
@@ -1273,4 +1301,51 @@ async fn browser_playback_report_requires_storage_authorization() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn queue_query_id_selection_keeps_order_and_rejects_missing_ids_before_insertion() {
+    let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    seed_queue(
+        &schema,
+        &[
+            ("/music/a.mp3", "A", "Artist"),
+            ("/music/b.mp3", "B", "Artist"),
+        ],
+    );
+    let db = database(&schema);
+    domain::clear_queue(db).unwrap();
+    let response = query(&schema, r#"mutation {addAudioToQueue(query:"ids:test:/music/b.mp3,test:/music/a.mp3,test:/music/b.mp3")}"#).await;
+    assert_eq!(response["data"]["addAudioToQueue"], true, "{response}");
+    let rows = domain::queue_page(db, 0, 10, "").unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(),
+        ["/music/b.mp3", "/music/a.mp3"]
+    );
+    assert_eq!(domain::get_audio_current(db).unwrap(), "/music/b.mp3");
+    let selected = plain_rs::media::audio::playback::snapshot(db).unwrap();
+    let response = query(
+        &schema,
+        r#"mutation {addAudioToQueue(query:"ids:test:/music/a.mp3")}"#,
+    )
+    .await;
+    assert_eq!(response["data"]["addAudioToQueue"], true);
+    assert_eq!(
+        plain_rs::media::audio::playback::snapshot(db).unwrap(),
+        selected
+    );
+    for selection in [
+        "ids:test:/music/b.mp3,test:/missing",
+        "ids:",
+        "ids:test:/music/a.mp3,",
+    ] {
+        domain::clear_queue(db).unwrap();
+        let response = query(
+            &schema,
+            &format!("mutation {{addAudioToQueue(query:{})}}", json!(selection)),
+        )
+        .await;
+        assert!(response.get("errors").is_some(), "{response}");
+        assert!(domain::queue_page(db, 0, 10, "").unwrap().is_empty());
+    }
 }

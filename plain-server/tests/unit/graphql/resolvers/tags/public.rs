@@ -120,11 +120,11 @@ async fn a_created_tag_reads_back_with_its_kind_implied_not_stored() {
 }
 
 #[tokio::test]
-async fn an_unknown_tag_id_is_null_rather_than_an_error() {
+async fn an_absent_tag_is_omitted_from_the_existing_typed_list() {
     let (_dir, schema) = fixture();
-    let response = schema.execute(r#"query { tag(id:"nope") { id } }"#).await;
+    let response = schema.execute("{tags(type:IMAGE){id}}").await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["tag"], Value::Null);
+    assert_eq!(response.data.into_json().unwrap()["tags"], json!([]));
 }
 
 #[tokio::test]

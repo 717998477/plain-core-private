@@ -39,9 +39,13 @@ async fn native_main_schema_reads_and_stops_idle_mdns_without_initializing_the_h
     let stopped = response.data.into_json().unwrap();
     assert_eq!(stopped["mdnsState"]["runtimeId"], state["runtimeId"]);
     assert_eq!(stopped["mdnsState"]["receiver"], false);
-    let response = native.execute(async_graphql::Request::new("mutation { prewarmPeerTransport(id: \"unknown-peer\") { shortId awareSupported awareRunning } }")).await;
+    let response = native
+        .execute(async_graphql::Request::new(
+            "{ chatRecords(query: \"peer:unknown-peer\", offset: 0, limit: 20) { id } }",
+        ))
+        .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert!(response.data.into_json().unwrap()["prewarmPeerTransport"].is_null());
+    assert_eq!(response.data.into_json().unwrap()["chatRecords"], json!([]));
     server.shutdown().await;
 }
 
@@ -58,37 +62,7 @@ fn mdns_snapshot_projection_keeps_packet_timestamps_and_ipv6_without_loss() {
 }
 
 #[tokio::test]
-async fn main_discovery_advertisements_use_shared_identity_without_a_host_round_trip() {
-    let directory = tempfile::tempdir().unwrap();
-    let prefs =
-        Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
-    prefs.set("client_id", "discovery-fixture").unwrap();
-    prefs.set_user("device_name", "Shared device").unwrap();
-    let server = ContentServer::start(
-        directory.path(),
-        &plain_rs::utils::base64::base64_encode(&[3; 32]),
-        prefs,
-    )
-    .unwrap();
-    let state = server.runtime_state();
-    let (generation, mut requests) = state.host.connect();
-    let response = server.native_graphql().unwrap().execute(async_graphql::Request::new("{ discoveryReply { id name port deviceType version platform ips awareSupported awareRunning } discoveryBleAdvertisement }")).await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let data = response.data.into_json().unwrap();
-    assert_eq!(data["discoveryReply"]["id"], "discovery-fixture");
-    assert_eq!(data["discoveryReply"]["name"], "Shared device");
-    assert_eq!(data["discoveryReply"]["deviceType"], "COMPUTER");
-    assert_eq!(
-        plain_rs::utils::base64::base64_decode(data["discoveryBleAdvertisement"].as_str().unwrap()),
-        plain_rs::discovery::advertisement::ble("discovery-fixture", false, false).unwrap()
-    );
-    assert!(requests.try_recv().is_err());
-    state.host.disconnect(generation);
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn native_ble_scan_session_is_owned_and_retired_by_the_shared_runtime() {
+async fn native_schema_does_not_expose_platform_scan_lifecycle() {
     let directory = tempfile::tempdir().unwrap();
     let prefs =
         Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
@@ -99,30 +73,22 @@ async fn native_ble_scan_session_is_owned_and_retired_by_the_shared_runtime() {
     )
     .unwrap();
     let native = server.native_graphql().unwrap();
-    let response = native
-        .execute(async_graphql::Request::new("mutation { beginBleScan }"))
+    let retired = native
+        .execute(async_graphql::Request::new(
+            "{ mdnsDebug { services { hostname } } }",
+        ))
         .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let data = response.data.into_json().unwrap();
-    let scan = data["beginBleScan"].as_str().unwrap();
-    let response = native
-        .execute(
-            async_graphql::Request::new(
-                "mutation EndScan($scanId: ID!) { endBleScan(scanId: $scanId) }",
-            )
-            .variables(async_graphql::Variables::from_json(
-                serde_json::json!({"scanId":scan}),
-            )),
-        )
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert!(
-        server
-            .runtime_state()
-            .ble_scans
-            .seen(scan, "0001020304050607")
-            .is_err()
-    );
+    assert!(!retired.errors.is_empty());
+    for request in [
+        "{ discoveryReply { id } }",
+        "{ discoveryBleAdvertisement }",
+        "mutation { beginBleScan }",
+        "mutation { browseMdns { revision } }",
+        "mutation { endBleScan(scanId: \"retired\") }",
+    ] {
+        let response = native.execute(async_graphql::Request::new(request)).await;
+        assert!(!response.errors.is_empty());
+    }
     server.shutdown().await;
 }
 
@@ -148,14 +114,14 @@ async fn main_schema_hostname_and_debug_reads_reuse_owned_idle_state() {
     );
     let response = executor
         .execute(async_graphql::Request::new(
-            "{mdnsState{receiver} mdnsDebug{services{hostname} activity{time event detail}}}",
+            "{mdnsState{receiver services{hostname} activity{time event detail}}}",
         ))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let value = response.data.into_json().unwrap();
     assert_eq!(value["mdnsState"]["receiver"], false);
-    assert_eq!(value["mdnsDebug"]["services"], json!([]));
-    assert_eq!(value["mdnsDebug"]["activity"], json!([]));
+    assert_eq!(value["mdnsState"]["services"], json!([]));
+    assert_eq!(value["mdnsState"]["activity"], json!([]));
     let invalid = executor.execute(async_graphql::Request::new(r#"mutation{setSystemPref(key:"mdns_hostname",value:"invalid.example"){affectedCount}}"#)).await;
     assert!(!invalid.errors.is_empty());
     assert_eq!(
@@ -166,7 +132,7 @@ async fn main_schema_hostname_and_debug_reads_reuse_owned_idle_state() {
     );
     let remote = crate::graphql::executor::execute_graphql(
         &state.public,
-        async_graphql::Request::new("{mdnsDebug{activity{event}}}"),
+        async_graphql::Request::new("{mdnsState{activity{event}}}"),
         crate::graphql::executor::RequestContext::remote(Some(state.clone())),
     )
     .await;
@@ -175,7 +141,8 @@ async fn main_schema_hostname_and_debug_reads_reuse_owned_idle_state() {
     core.stop_core().await;
     for document in [
         "{mdnsState{receiver}}",
-        "mutation{browseMdns{revision}}",
+        "{mdnsState{services{hostname} activity{event}}}",
+        r#"mutation{acquireMdnsDebugSession(token:"00000000-0000-0000-0000-000000000001"){revision}}"#,
         "{systemSettings{mdnsHostname}}",
     ] {
         assert!(
@@ -194,11 +161,13 @@ async fn lightweight_browser_query_does_not_collect_full_packet_capture_snapshot
     let core = ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let executor = core.native_graphql().unwrap();
-    for _ in 0..2 {
+    for document in [
+        "{mdnsState{services{hostname} activity{event}}}",
+        "query { state:mdnsState { ...Snapshot } } fragment Snapshot on MdnsState { services{hostname} activity{event} }",
+        "{mdnsState{activity{event}}}",
+    ] {
         let response = executor
-            .execute(async_graphql::Request::new(
-                "{mdnsDebug{services{hostname} activity{event}}}",
-            ))
+            .execute(async_graphql::Request::new(document))
             .await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
     }

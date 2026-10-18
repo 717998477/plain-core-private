@@ -370,7 +370,17 @@ fn explicit_media_type_classifies_history_without_a_loaded_audio_catalog() {
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].id, "audio");
     assert_eq!(db.audio_reference_ids().unwrap(), vec!["audio"]);
-    crate::media::videos::progress::delete(&db, "audio").unwrap();
+    crate::media::actions::cleanup(
+        &db,
+        DataType::Video,
+        crate::media::actions::Action::Delete,
+        &[crate::media::actions::Item {
+            id: "audio".into(),
+            path: "/owned/video.mp4".into(),
+            destination_path: String::new(),
+        }],
+    )
+    .unwrap();
     assert_eq!(
         db.media_play_history_get(DataType::Audio, "audio").unwrap(),
         Some(audio)

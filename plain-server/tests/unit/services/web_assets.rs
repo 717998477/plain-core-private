@@ -163,7 +163,7 @@ fn packaged_directories_are_used_directly_without_cache_writes_or_archive_reads(
         |_| panic!("directory source cannot open archives"),
     );
     fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(result.unwrap(), Some(root));
+    assert_eq!(result.unwrap(), Some(root.canonicalize().unwrap()));
     assert!(!cache.root().exists());
 }
 
@@ -190,4 +190,178 @@ fn extraction_rejects_archive_links_and_cache_directory_links() {
     archive(&apk, &[("assets/web/index.html", b"shell")]);
     assert!(prepare(&cache, &source(&[&apk])).is_err());
     assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn application_cache_clear_keeps_served_assets_and_prunes_inactive_versions_without_reopening_archives()
+ {
+    let dir = tempfile::tempdir().unwrap();
+    let apk = dir.path().join("base.apk");
+    archive(&apk, &[("assets/web/index.html", b"first")]);
+    let server = crate::assembly::server::ContentServer::open_with_cache(
+        &dir.path().join("data"),
+        &dir.path().join("cache"),
+    )
+    .unwrap();
+    server.set_web_assets(source(&[&apk])).await.unwrap();
+    let state = server.runtime_state();
+    let first = state.web_root.read().unwrap().clone().unwrap();
+    archive(
+        &apk,
+        &[
+            ("assets/web/index.html", b"replacement shell"),
+            ("assets/web/assets/app.js", b"current script"),
+        ],
+    );
+    server.set_web_assets(source(&[&apk])).await.unwrap();
+    let active = state.web_root.read().unwrap().clone().unwrap();
+    assert_ne!(first, active);
+    let marker = fs::read(active.join(".complete")).unwrap();
+    fs::write(state.cache.root().join("scratch"), b"remove").unwrap();
+    fs::remove_file(&apk).unwrap();
+    crate::services::cache::clear_application(&state)
+        .await
+        .unwrap();
+    assert!(!first.exists());
+    assert!(!state.cache.root().join("scratch").exists());
+    assert_eq!(fs::read(active.join(".complete")).unwrap(), marker);
+    assert_eq!(*state.web_root.read().unwrap(), Some(active.clone()));
+    let response = crate::http::routes::static_host::fallback(
+        axum::extract::State(state.clone()),
+        axum::http::Request::builder()
+            .uri("/assets/app.js")
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap()
+            .as_ref(),
+        b"current script"
+    );
+    crate::services::cache::clear_application(&state)
+        .await
+        .unwrap();
+    assert_eq!(
+        fs::read(active.join("index.html")).unwrap(),
+        b"replacement shell"
+    );
+    server.shutdown().await;
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn application_cache_clear_recovers_a_missing_active_extraction() {
+    let dir = tempfile::tempdir().unwrap();
+    let apk = dir.path().join("base.apk");
+    archive(&apk, &[("assets/web/index.html", b"restore")]);
+    let server = crate::assembly::server::ContentServer::open_with_cache(
+        &dir.path().join("data"),
+        &dir.path().join("cache"),
+    )
+    .unwrap();
+    server.set_web_assets(source(&[&apk])).await.unwrap();
+    let state = server.runtime_state();
+    let active = state.web_root.read().unwrap().clone().unwrap();
+    fs::remove_dir_all(&active).unwrap();
+    crate::services::cache::clear_application(&state)
+        .await
+        .unwrap();
+    assert_eq!(fs::read(active.join("index.html")).unwrap(), b"restore");
+    assert_eq!(*state.web_root.read().unwrap(), Some(active));
+    server.shutdown().await;
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn cancelled_publication_waiter_keeps_asset_publication_serialized_with_cache_clear() {
+    let dir = tempfile::tempdir().unwrap();
+    let apk = dir.path().join("base.apk");
+    archive(&apk, &[("assets/web/index.html", b"first")]);
+    let server = crate::assembly::server::ContentServer::open_with_cache(
+        &dir.path().join("data"),
+        &dir.path().join("cache"),
+    )
+    .unwrap();
+    server.set_web_assets(source(&[&apk])).await.unwrap();
+    let state = server.runtime_state();
+    let first = state.web_root.read().unwrap().clone().unwrap();
+    archive(
+        &apk,
+        &[("assets/web/index.html", b"replacement while clearing")],
+    );
+    let (entered, waiting) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let preparation = tokio::task::spawn_blocking(move || {
+        let _guard = PREPARATION.lock().unwrap();
+        let _ = entered.send(());
+        let _ = released.blocking_recv();
+    });
+    waiting.await.unwrap();
+    let configuring_state = state.clone();
+    let new_source = source(&[&apk]);
+    let configuring = tokio::spawn(async move { configure(&configuring_state, new_source).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while state.web_asset_changes.try_lock().is_ok() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    configuring.abort();
+    assert!(configuring.await.unwrap_err().is_cancelled());
+    let mut clearing = Box::pin(clear_cache(&state));
+    assert!(futures_util::poll!(&mut clearing).is_pending());
+    assert_eq!(fs::read(first.join("index.html")).unwrap(), b"first");
+    release.send(()).unwrap();
+    preparation.await.unwrap();
+    clearing.await.unwrap();
+    let active = state.web_root.read().unwrap().clone().unwrap();
+    assert_ne!(first, active);
+    assert!(!first.exists());
+    assert_eq!(
+        fs::read(active.join("index.html")).unwrap(),
+        b"replacement while clearing"
+    );
+    server.shutdown().await;
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn directory_assets_inside_cache_are_retained_by_their_canonical_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = crate::assembly::server::ContentServer::open_with_cache(
+        &dir.path().join("data"),
+        &dir.path().join("cache"),
+    )
+    .unwrap();
+    let state = server.runtime_state();
+    let assets = state.cache.root().join("packaged");
+    fs::create_dir_all(assets.join("child")).unwrap();
+    fs::write(assets.join("index.html"), b"directory shell").unwrap();
+    fs::write(state.cache.root().join("scratch"), b"remove").unwrap();
+    server
+        .set_web_assets(Source {
+            directory: assets.join("child/..").to_str().unwrap().into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        *state.web_root.read().unwrap(),
+        Some(assets.canonicalize().unwrap())
+    );
+    crate::services::cache::clear_application(&state)
+        .await
+        .unwrap();
+    assert_eq!(
+        fs::read(assets.join("index.html")).unwrap(),
+        b"directory shell"
+    );
+    assert!(!state.cache.root().join("scratch").exists());
+    server.shutdown().await;
 }

@@ -106,3 +106,6 @@ pub(crate) mod note_images;
 
 #[cfg(feature = "core")]
 pub(crate) mod catalog_events;
+
+#[cfg(feature = "core")]
+pub(crate) mod named_copy;

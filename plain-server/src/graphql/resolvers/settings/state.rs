@@ -31,6 +31,7 @@ impl PreferencesQuery {
     async fn user_settings(&self, ctx: &Context<'_>) -> Result<UserSettings> {
         Ok(plain_rs::prefs::user::snapshot(prefs(ctx)?)?.into())
     }
+    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
     async fn verify_adb_token(&self, ctx: &Context<'_>, token: String) -> Result<bool> {
         Ok(plain_rs::prefs::system::verify_adb_token(
             prefs(ctx)?,
@@ -90,14 +91,6 @@ impl PreferencesMutation {
             affected_count: i32::from(changed),
         })
     }
-    async fn clear_recent_searches(&self, ctx: &Context<'_>) -> Result<ActionResult> {
-        let changed = user_preferences(ctx)?
-            .action(plain_rs::prefs::user::Action::ClearSearches)
-            .await?;
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
-    }
     async fn record_recent_save_directory(
         &self,
         ctx: &Context<'_>,
@@ -139,18 +132,6 @@ impl PreferencesMutation {
     async fn clear_notification_filter_apps(&self, ctx: &Context<'_>) -> Result<ActionResult> {
         let changed = user_preferences(ctx)?
             .action(plain_rs::prefs::user::Action::ClearNotificationApps)
-            .await?;
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
-    }
-    async fn delete_playlist_videos(
-        &self,
-        ctx: &Context<'_>,
-        paths: Vec<String>,
-    ) -> Result<ActionResult> {
-        let changed = user_preferences(ctx)?
-            .action(plain_rs::prefs::user::Action::DeleteVideos(paths))
             .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),

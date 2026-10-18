@@ -1,9 +1,7 @@
 use super::public::{ChatItem, item};
 use crate::assembly::server::ServerState;
-use crate::graphql::types::ActionResult;
 use crate::services::chat::chat_actions;
 use async_graphql::{Context, ID, Object, SimpleObject};
-use plain_rs::chat::messages::target as message_target;
 
 #[derive(SimpleObject)]
 pub struct ChatConversation {
@@ -36,11 +34,10 @@ impl ChatHostQuery {
         limit: i32,
     ) -> async_graphql::Result<Vec<ChatItem>> {
         let state = ctx.data::<ServerState>()?;
-        let value = plain_rs::db::chat_store::messages::list(
-            &state.db,
-            &filter(&query, offset, limit, false),
-        )?;
+        let filter = filter(&query, offset, limit, false);
+        let value = plain_rs::db::chat_store::messages::list(&state.db, &filter)?;
         let rows: Vec<plain_rs::db::DChat> = serde_json::from_value(value)?;
+        crate::services::chat::prewarm::prepare_conversation(state, &filter);
         Ok(rows.iter().map(item).collect())
     }
     async fn chat_count(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<i32> {
@@ -48,14 +45,6 @@ impl ChatHostQuery {
         let value =
             plain_rs::db::chat_store::messages::list(&state.db, &filter(&query, 0, 0, true))?;
         Ok(i32::try_from(value.as_i64().unwrap_or_default())?)
-    }
-    async fn chat_ids(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<Vec<ID>> {
-        Ok(
-            plain_rs::db::chat_store::messages::ids(&ctx.data::<ServerState>()?.db, &query)?
-                .into_iter()
-                .map(ID::from)
-                .collect(),
-        )
     }
 }
 #[derive(SimpleObject)]
@@ -154,31 +143,6 @@ impl ChatHostMutation {
         Ok(item(&receipt.chat.ok_or_else(|| {
             async_graphql::Error::new("Message unavailable")
         })?))
-    }
-    async fn clear_chat_items(
-        &self,
-        ctx: &Context<'_>,
-        target: String,
-    ) -> async_graphql::Result<ActionResult> {
-        use plain_rs::chat::attachments::app_file_store::chat_deletion::{self, Selection};
-        let state = ctx.data::<ServerState>()?;
-        let (peer, channel) = message_target::parse(&target)?;
-        let count = chat_deletion::delete(
-            &state.db,
-            &state.directory,
-            if channel.is_empty() {
-                Selection::Peer(&peer)
-            } else {
-                Selection::Channel(&channel)
-            },
-        )?;
-        let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-            plain_rs::chat::events::WS_MESSAGE_DELETED,
-            serde_json::json!(target).to_string(),
-        ));
-        Ok(ActionResult {
-            affected_count: count as i32,
-        })
     }
     async fn edit_chat_text(
         &self,
