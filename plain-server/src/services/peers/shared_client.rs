@@ -4,7 +4,6 @@ use plain_rs::chat::messages::share_card;
 use plain_rs::chat::messages::share_card::Card;
 use plain_rs::files::shares::client::Info;
 use plain_rs::files::shares::client::Link;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::HashSet, time::Duration};
 fn add(
@@ -126,12 +125,12 @@ pub(crate) async fn fetch(state: &ServerState, link: &Link, path: Option<&str>) 
     let bytes = crate::services::peers::peer_lan::limited(response, 4 * 1024 * 1024).await?;
     link.response(&bytes)
 }
-async fn browse(
+async fn browse_current(
     state: &ServerState,
     id: &str,
     expected: &Card,
     path: Option<&str>,
-) -> Result<Value> {
+) -> Result<Option<BrowseResult>> {
     let original = share_card::current(&state.db, id, expected)?;
     Link::new("127.0.0.1", 443, &expected.share_id, &expected.url_token)?;
     for round in 0..=12 {
@@ -171,92 +170,125 @@ async fn browse(
                         json!([plain_rs::chat::service::chat_to_json(&row)]).to_string(),
                     ));
                 }
-                return Ok(json!({"info":info,"link":link,"card":card}));
+                return Ok(Some(BrowseResult { info, link, card }));
             }
         }
     }
-    Ok(Value::Null)
+    Ok(None)
 }
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Request {
-    OwnLink {
-        id: String,
-        host: Option<String>,
-    },
-    Fetch {
-        link: Link,
-        virtual_path: Option<String>,
-    },
-    Browse {
-        message_id: String,
-        expected: Card,
-        virtual_path: Option<String>,
-    },
-    InitialLink {
-        message_id: String,
-        expected: Card,
-    },
-    FileUrl {
-        link: Link,
-        url_token: String,
-        virtual_path: String,
-        zip: bool,
-    },
+pub(crate) struct BrowseResult {
+    pub info: Info,
+    pub link: Link,
+    pub card: Card,
 }
-pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Value> {
+
+async fn request<T>(
+    state: &ServerState,
+    work: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
     let mut stop = state.stop.clone();
     ensure!(!*stop.borrow(), "Core stopped");
-    let work = async {
-        match request {
-            Request::OwnLink { id, host } => {
-                let service =
-                    plain_rs::files::shares::Service::new(state.db.clone(), state.prefs.clone());
-                let token = service.token(&id)?;
-                let host = host.unwrap_or_else(|| {
-                    plain_rs::transport::lan::local_interfaces()
-                        .first()
-                        .map(|iface| iface.ip.to_string())
-                        .unwrap_or_else(|| "127.0.0.1".into())
-                });
-                let link = Link::new(
-                    &host,
-                    state.prefs.get_user::<u16>("https_port")?.unwrap_or(8443),
-                    &id,
-                    &token,
-                )?;
-                Ok(serde_json::to_value(link)?)
-            }
-            Request::Fetch { link, virtual_path } => Ok(serde_json::to_value(
-                fetch(&state, &link, virtual_path.as_deref()).await?,
-            )?),
-            Request::Browse {
-                message_id,
-                expected,
-                virtual_path,
-            } => browse(&state, &message_id, &expected, virtual_path.as_deref()).await,
-            Request::InitialLink {
-                message_id,
-                expected,
-            } => {
-                share_card::current(&state.db, &message_id, &expected)?;
-                let link = candidates(&state, &expected, false)?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Share address unavailable"))?;
-                Ok(serde_json::to_value(link)?)
-            }
-            Request::FileUrl {
-                link,
-                url_token,
-                virtual_path,
-                zip,
-            } => Ok(json!(link.file_url(&url_token, &virtual_path, zip)?)),
-        }
-    };
-    let result = tokio::select! { _=stop.changed()=>Err(anyhow::anyhow!("Core stopped")), result=tokio::time::timeout(Duration::from_secs(120),work)=>result.unwrap_or_else(|_|Err(anyhow::anyhow!("Share request timed out"))) };
-    result
+    tokio::select! {
+        _ = stop.changed() => Err(anyhow::anyhow!("Core stopped")),
+        result = tokio::time::timeout(Duration::from_secs(120), work) =>
+            result.unwrap_or_else(|_| Err(anyhow::anyhow!("Share request timed out"))),
+    }
 }
+
+pub(crate) async fn own_link(state: &ServerState, id: &str, host: Option<String>) -> Result<Link> {
+    request(state, async {
+        let service = plain_rs::files::shares::Service::new(state.db.clone(), state.prefs.clone());
+        let token = service.token(id)?;
+        let host = host.unwrap_or_else(|| {
+            plain_rs::transport::lan::local_interfaces()
+                .first()
+                .map(|interface| interface.ip.to_string())
+                .unwrap_or_else(|| "127.0.0.1".into())
+        });
+        Link::new(
+            &host,
+            state.prefs.get_user::<u16>("https_port")?.unwrap_or(8443),
+            id,
+            &token,
+        )
+    })
+    .await
+}
+
+pub(crate) async fn initial_link(
+    state: &ServerState,
+    message_id: &str,
+    expected: &Card,
+) -> Result<Link> {
+    request(state, async {
+        share_card::current(&state.db, message_id, expected)?;
+        candidates(state, expected, false)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Share address unavailable"))
+    })
+    .await
+}
+
+pub(crate) async fn info(
+    state: &ServerState,
+    link: &Link,
+    virtual_path: Option<&str>,
+) -> Result<Info> {
+    request(state, fetch(state, link, virtual_path)).await
+}
+
+pub(crate) async fn browse(
+    state: &ServerState,
+    message_id: &str,
+    expected: &Card,
+    virtual_path: Option<&str>,
+) -> Result<Option<BrowseResult>> {
+    request(
+        state,
+        browse_current(state, message_id, expected, virtual_path),
+    )
+    .await
+}
+
+pub(crate) async fn file_url(
+    state: &ServerState,
+    link: &Link,
+    url_token: &str,
+    virtual_path: &str,
+    zip: bool,
+) -> Result<String> {
+    request(state, async { link.file_url(url_token, virtual_path, zip) }).await
+}
+
+pub(crate) async fn cache_file(
+    state: &ServerState,
+    cache: &crate::services::files::remote_cache::RemoteCache,
+    link: Link,
+    url_token: String,
+    entry: plain_rs::files::shares::client::File,
+    thumbnail: bool,
+) -> Result<String> {
+    ensure!(!entry.is_dir, "Shared preview requires a file");
+    let mut url = link.file_url(&url_token, &entry.virtual_path, false)?;
+    let (name, key) = if thumbnail {
+        url.push_str("&w=200&h=200");
+        ("thumbnail".to_owned(), Some(json!({"host":link.host,"port":link.port,"shareId":link.shared_id,"token":link.token,"urlToken":url_token,"path":entry.virtual_path,"size":entry.size}).to_string()))
+    } else {
+        (entry.name, None)
+    };
+    cache
+        .download(
+            &url,
+            &name,
+            key.as_deref(),
+            state.stop.clone(),
+            Some(&state.lan.client),
+        )
+        .await
+        .map_err(anyhow::Error::msg)
+}
+
 #[cfg(all(test, feature = "http_transport"))]
 #[path = "../../../tests/unit/services/peers/shared_client.rs"]
 mod tests;

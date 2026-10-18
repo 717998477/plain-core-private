@@ -11,68 +11,16 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-fn root() -> (tempfile::TempDir, ContentServer, String) {
-    let dir = tempfile::tempdir().unwrap();
-    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
-    prefs.set("client_id", "local").unwrap();
-    let token = plain_rs::utils::base64::base64_encode(&[4; 32]);
-    let server = ContentServer::start(dir.path(), &token, prefs).unwrap();
-    (dir, server, token)
-}
-fn card(port: u16) -> Card {
-    serde_json::from_value(json!({"shareId":"fixture","urlToken":plain_rs::utils::base64::base64_encode_url_safe(&[7;32]),"peerInfo":{"id":"peer","ip":"127.0.0.1","port":port},"name":"old","itemCount":2,"totalSize":8,"expiresAt":"2030-01-01T00:00:00.000Z"})).unwrap()
-}
-fn save_card(state: &ServerState, card: &Card) -> DChat {
-    let row = DChat::new(
-        "peer",
-        "me",
-        "",
-        &json!({"type":"SHARE","value":card}).to_string(),
-    );
-    messages::save(&state.db, &[row.clone()], SaveMode::Insert).unwrap();
-    row
-}
-async fn tls() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
-    use axum::{
-        Router,
-        body::Bytes,
-        extract::Query,
-        http::HeaderMap,
-        routing::{get, post},
-    };
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-    let config = axum_server::tls_rustls::RustlsConfig::from_pem(
-        cert.cert.pem().into_bytes(),
-        cert.key_pair.serialize_pem().into_bytes(),
-    )
-    .await
-    .unwrap();
-    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = socket.local_addr().unwrap().port();
-    let count = Arc::new(AtomicUsize::new(0));
-    let seen = count.clone();
-    let router=Router::new().route("/guest_graphql",post(move |headers:HeaderMap,body:Bytes|{let count=seen.clone();async move {
-        assert_eq!(headers["c-id"],"fixture");let plain=plain_rs::crypto::xchacha_decrypt_raw(&[7;32],&body).unwrap();let plain=String::from_utf8(plain).unwrap();let parts:Vec<_>=plain.splitn(3,'|').collect();assert!(uuid::Uuid::parse_str(parts[1]).is_ok());let request:Value=serde_json::from_str(parts[2]).unwrap();count.fetch_add(1,Ordering::SeqCst);
-        if request["variables"]["virtualPath"]=="slow" {tokio::time::sleep(Duration::from_millis(200)).await;}
-        let info=json!({"data":{"sharedInfo":{"name":"current","readOnly":true,"requiresPassword":false,"expiresAt":null,"urlToken":plain_rs::utils::base64::base64_encode(&[8;32]),"entries":[{"name":"a 中文.txt","virtualPath":"folder/ +?#中文%","isDir":false,"size":8,"mimeType":"text/plain","hasThumb":false}]}}});
-        plain_rs::crypto::xchacha_encrypt_raw(&[7;32],info.to_string().as_bytes()).unwrap()
-    }})).route("/fs",get(|Query(params):Query<std::collections::HashMap<String,String>>|async move {
-        assert_eq!(params["sid"],"fixture");let plain=plain_rs::crypto::xchacha_decrypt_raw(&[8;32],&plain_rs::utils::base64::base64_decode(&params["id"])).unwrap();let decoded:Value=serde_json::from_slice(&plain).unwrap();assert_eq!(decoded["virtualPath"],"folder/ +?#中文%");"download"
-    }));
-    let task = tokio::spawn(async move {
-        axum_server::from_tcp_rustls(socket, config)
-            .serve(router.into_make_service())
-            .await
-            .unwrap();
-    });
-    (port, task, count)
-}
+#[path = "shared_client/fixtures.rs"]
+mod fixtures;
+use fixtures::*;
+
 #[tokio::test]
 async fn authenticated_main_browse_caches_and_queues_real_tls_files_without_host() {
     use crate::test_support::graphql_http_variables;
     let (directory, server, token) = root();
     let state = server.runtime_state();
-    let (port, tls, _) = tls().await;
+    let (port, tls, _, _, _) = tls().await;
     let expected = card(port);
     let row = save_card(&state, &expected);
     let client = reqwest::Client::new();
@@ -169,7 +117,7 @@ async fn authenticated_main_browse_caches_and_queues_real_tls_files_without_host
 async fn discovery_retry_rereads_peer_address_and_late_response_cannot_replace_card() {
     let (_dir, server, _) = root();
     let state = server.runtime_state();
-    let (port, tls, count) = tls().await;
+    let (port, tls, count, requested, release) = tls().await;
     let expected = card(1);
     let row = save_card(&state, &expected);
     let peer = DPeer::new(
@@ -196,27 +144,25 @@ async fn discovery_retry_rereads_peer_address_and_late_response_cannot_replace_c
         .unwrap()
         .unwrap()
         .unwrap();
-    assert_eq!(result["link"]["port"], port);
-    let current: Card = serde_json::from_value(result["card"].clone()).unwrap();
-    let before = count.load(Ordering::SeqCst);
+    let result = result.unwrap();
+    assert_eq!(result.link.port, port);
+    let current = result.card;
+    assert_eq!(count.load(Ordering::SeqCst), 1);
     let task = {
         let state = state.clone();
         let id = row.id.clone();
         tokio::spawn(async move { browse(&state, &id, &current, Some("slow")).await })
     };
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while count.load(Ordering::SeqCst) == before {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), requested.notified())
+        .await
+        .unwrap();
     messages::content(
         &state.db,
         &row.id,
         "{\"type\":\"TEXT\",\"value\":{\"text\":\"replacement\"}}",
     )
     .unwrap();
+    release.notify_one();
     assert!(task.await.unwrap().is_err());
     assert!(
         messages::get(&state.db, &row.id)
@@ -324,4 +270,109 @@ async fn root_candidates_preserve_foreign_self_unbound_and_deduplicated_endpoint
         1
     );
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn stopping_the_core_cancels_an_inflight_encrypted_read_and_releases_capacity() {
+    let (_directory, server, _) = root();
+    let state = server.runtime_state();
+    let (port, tls, count, requested, release) = tls().await;
+    let link = Link::new(
+        "127.0.0.1",
+        port,
+        "fixture",
+        &plain_rs::base64_encode(&[7; 32]),
+    )
+    .unwrap();
+    let read = {
+        let state = state.clone();
+        tokio::spawn(async move { info(&state, &link, Some("slow")).await })
+    };
+    tokio::time::timeout(Duration::from_secs(3), requested.notified())
+        .await
+        .unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(state.lan.capacity.available_permits(), 3);
+    server.stop_core().await;
+    let error = tokio::time::timeout(Duration::from_secs(3), read)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.to_string(), "Core stopped");
+    assert_eq!(state.lan.capacity.available_permits(), 4);
+    release.notify_one();
+    server.shutdown().await;
+    tls.abort();
+}
+
+#[tokio::test]
+async fn stopped_core_rejects_every_typed_shared_operation_before_side_effects() {
+    let (directory, server, _) = root();
+    let state = server.runtime_state();
+    let (port, tls, count, _, _) = tls().await;
+    let expected = card(port);
+    let row = save_card(&state, &expected);
+    let link = Link::new(
+        "127.0.0.1",
+        port,
+        "fixture",
+        &plain_rs::base64_encode(&[7; 32]),
+    )
+    .unwrap();
+    server.stop_core().await;
+    let errors = [
+        own_link(&state, "missing-share", None).await.err().unwrap(),
+        initial_link(&state, &row.id, &expected)
+            .await
+            .err()
+            .unwrap(),
+        info(&state, &link, None).await.err().unwrap(),
+        browse(&state, &row.id, &expected, None)
+            .await
+            .err()
+            .unwrap(),
+        file_url(
+            &state,
+            &link,
+            &plain_rs::base64_encode(&[8; 32]),
+            "file",
+            false,
+        )
+        .await
+        .err()
+        .unwrap(),
+    ];
+    for error in errors {
+        assert_eq!(error.to_string(), "Core stopped");
+    }
+    let cache =
+        crate::services::files::remote_cache::RemoteCache::new(directory.path().join("cache"));
+    let file = plain_rs::files::shares::client::File {
+        name: "preview.txt".into(),
+        virtual_path: "folder/ +?#中文%".into(),
+        is_dir: false,
+        size: 8,
+        mime_type: "text/plain".into(),
+        has_thumb: false,
+    };
+    assert_eq!(
+        cache_file(
+            &state,
+            &cache,
+            link,
+            plain_rs::base64_encode(&[8; 32]),
+            file,
+            false
+        )
+        .await
+        .unwrap_err()
+        .to_string(),
+        "Download cancelled"
+    );
+    assert!(!directory.path().join("cache/remote_files").exists());
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.lan.capacity.available_permits(), 4);
+    server.shutdown().await;
+    tls.abort();
 }

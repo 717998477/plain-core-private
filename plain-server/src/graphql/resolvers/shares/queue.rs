@@ -1,10 +1,28 @@
-use super::client::{
-    SharedDownloadKind, SharedEntry, SharedEntryInput, SharedLink, SharedLinkInput, domain,
-};
+use super::client_inputs::{SharedEntryInput, SharedLinkInput};
+use super::client_models::{SharedEntry, SharedLink};
 use crate::assembly::server::ServerState;
 use crate::graphql::types::Long;
 use async_graphql::{Context, Enum, InputObject, Object, SimpleObject};
 use serde::Deserialize;
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum SharedDownloadKind {
+    File,
+    Sync,
+    Multi,
+    Zip,
+}
+impl From<SharedDownloadKind> for plain_rs::files::shares::batch_plan::Kind {
+    fn from(value: SharedDownloadKind) -> Self {
+        match value {
+            SharedDownloadKind::File => Self::File,
+            SharedDownloadKind::Sync => Self::Sync,
+            SharedDownloadKind::Multi => Self::Multi,
+            SharedDownloadKind::Zip => Self::Zip,
+        }
+    }
+}
 
 #[derive(InputObject)]
 struct SharedDownloadInput {
@@ -96,9 +114,9 @@ impl SharedDownloadMutation {
         let intent = plain_rs::files::shares::batch_queue::Intent {
             message_id: input.message_id.to_string(),
             kind: input.kind.into(),
-            link: domain(input.link)?,
+            link: input.link.try_into()?,
             url_token: input.url_token,
-            entries: domain(input.entries)?,
+            entries: input.entries.into_iter().map(Into::into).collect(),
             target_dir: input.target_dir,
             downloads_base,
             zip_name: input.zip_name,
