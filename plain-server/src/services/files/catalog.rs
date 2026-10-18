@@ -116,6 +116,51 @@ impl MediaCatalog {
         }
     }
 
+    /// Semantic matching replaces only the text predicate. Keep the current
+    /// catalog filters and intersect its ID selection with the candidate IDs.
+    pub(crate) async fn image_search_matches(
+        &self,
+        query: &str,
+        ids: &[String],
+    ) -> Result<Vec<Value>, String> {
+        let db = match self {
+            Self::Native(db) | Self::Platform { db, .. } => db,
+        };
+        let plan = image_search_plan(db, query, ids).map_err(|error| error.to_string())?;
+        if plan.ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = plan.ids.len() as u32;
+        match self {
+            Self::Platform { host, .. } => {
+                let facts = host.call(
+                    "systemMediaRows",
+                    json!({"dataType":DataType::Image,"sortBy":"NAME_ASC","limit":limit,"offset":0,"plan":plan}),
+                ).await?;
+                serde_json::from_value(facts).map_err(|error| error.to_string())
+            }
+            Self::Native(db) => {
+                let db = db.clone();
+                tokio::task::spawn_blocking(move || {
+                    media_catalog::rows_with_plan(
+                        &db,
+                        DataType::Image,
+                        plan,
+                        FileSortBy::NameAsc,
+                        limit,
+                        0,
+                    )
+                    .map_err(|error| error.to_string())?
+                    .iter()
+                    .map(media_catalog_facts::row_facts)
+                    .collect()
+                })
+                .await
+                .map_err(|error| error.to_string())?
+            }
+        }
+    }
+
     pub(crate) async fn count(&self, kind: DataType, query: &str) -> Result<i64, String> {
         match self {
             Self::Platform { db, host } => host
@@ -187,6 +232,36 @@ impl MediaCatalog {
             }
         }
     }
+}
+
+fn image_search_plan(
+    db: &Db,
+    query: &str,
+    ids: &[String],
+) -> anyhow::Result<crate::host::query::Plan> {
+    use crate::host::query::{self, Provider};
+    use std::collections::HashSet;
+
+    let mut fields = query::fields(db, query)?;
+    fields.retain(|field| field.name != "text");
+    let mut plan = query::plan(
+        Provider::Image,
+        &fields,
+        &Value::Null,
+        None,
+        query.is_empty(),
+    )?;
+    let allowed = plan.ids.iter().collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let matches = ids
+        .iter()
+        .filter(|id| plan.ids_column.is_none() || allowed.contains(id))
+        .filter(|id| seen.insert(*id))
+        .cloned()
+        .collect();
+    plan.ids_column = Some("_id".into());
+    plan.ids = matches;
+    Ok(plan)
 }
 
 fn platform_params(db: &Db, kind: DataType, query: &str, params: Value) -> Result<Value, String> {

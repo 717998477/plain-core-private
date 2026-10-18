@@ -43,8 +43,8 @@ fn media_exclusions() {
     assert!(excl("/disk/.plain-trash/old.png"));
     assert!(excl("/home/u/web/node_modules/lib.js"));
     assert!(!excl("/home/u/app/target/debug/x"));
-    assert!(!excl("/srv/site/dist/icon.svg"));
-    assert!(!excl("/srv/site/BUILD/style.css"));
+    assert!(!excl("/home/u/site/dist/icon.svg"));
+    assert!(!excl("/home/u/site/BUILD/style.css"));
     assert!(excl(
         "/Users/alice/Movies/CapCut/User Data/Cache/effect/7408409772950637830/image/blusher.png"
     ));
@@ -115,6 +115,18 @@ fn platform_system_root_matching_respects_path_boundaries_and_windows_case() {
     }
     #[cfg(target_os = "linux")]
     {
+        assert!(is_media_excluded_at(
+            "/srv/site/dist/icon.svg",
+            Path::new("/tmp/data"),
+            Path::new("/tmp/cache"),
+            &[]
+        ));
+        assert!(!is_media_excluded_at(
+            "/srv2/site/dist/icon.svg",
+            Path::new("/tmp/data"),
+            Path::new("/tmp/cache"),
+            &[]
+        ));
         assert!(is_media_excluded_at(
             "/etc/ssl/certs/a.pem",
             Path::new("/tmp/data"),

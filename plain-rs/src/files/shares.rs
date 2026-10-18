@@ -180,7 +180,14 @@ impl Service {
                 _ => return Ok(None),
             }
         }
-        let candidate = match std::fs::canonicalize(base.join(relative)) {
+        // Joining an empty path adds a directory separator, which makes file
+        // roots fail to canonicalize on Unix.
+        let path = if relative.as_os_str().is_empty() {
+            base.to_path_buf()
+        } else {
+            base.join(relative)
+        };
+        let candidate = match std::fs::canonicalize(path) {
             Ok(p) => p,
             Err(_) => return Ok(None),
         };

@@ -675,3 +675,166 @@ async fn image_search_uses_the_original_query_for_text_filters_paging_and_count(
     assert_eq!(data["images"], json!([{"title":"sunset blue b"}]));
     assert_eq!(data["imageCount"], 2);
 }
+
+#[tokio::test]
+async fn loaded_image_search_preserves_filters_counts_and_semantic_order() {
+    use crate::services::images::{index::ImageIndex, models::Runtime};
+    use plain_rs::media::images::embeddings::{self, EmbeddingInput};
+    use std::time::Duration;
+
+    let (dir, schema, db) = fixture_seeded(
+        GRANTED,
+        true,
+        |_| {},
+        |method, _| panic!("unexpected host call {method}"),
+    );
+    let models = schema.data::<Arc<Runtime>>().unwrap();
+    let index = schema.data::<Arc<ImageIndex>>().unwrap();
+    index.use_native_catalog_for_test();
+    plain_inference::models::test_fixture::fixture(&dir.path().join("ai_models/incoming"));
+    models.import().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while models.snapshot().status.status
+            != crate::graphql::resolvers::images::public_index::ImageSearchStatusType::Ready
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        index.wait_until_idle().await;
+    })
+    .await
+    .unwrap();
+
+    // Seed after activation: its initial empty scan must not clear our
+    // deterministic embeddings or try to decode these synthetic paths.
+    let stored = db
+        .record_media_files(&[
+            media(DataType::Image, "/fixture/a.jpg", "cat", 100, "b1"),
+            media(
+                DataType::Image,
+                "/fixture/z.jpg",
+                "semantic first",
+                100,
+                "b1",
+            ),
+            media(
+                DataType::Image,
+                "/fixture/b.jpg",
+                "semantic second",
+                200,
+                "b1",
+            ),
+            media(DataType::Image, "/fixture/c.jpg", "not a match", 100, "b1"),
+            media(DataType::Image, "/fixture/d.jpg", "untagged", 100, "b1"),
+            media(DataType::Image, "/fixture/e.jpg", "other folder", 100, "b2"),
+            media(DataType::Image, "/fixture/f.jpg", "in trash", 100, "b1"),
+        ])
+        .unwrap();
+    db.with_conn(|conn| {
+        conn.execute(
+            "UPDATE media_items SET trashed=1 WHERE id=?1",
+            [&stored[6].id],
+        )
+    })
+    .unwrap();
+    let tag = plain_rs::tags::create_tag(&db, DataType::Image.kind(), "selected").unwrap();
+    let empty_tag = plain_rs::tags::create_tag(&db, DataType::Image.kind(), "empty").unwrap();
+    plain_rs::tags::add_relations(
+        &db,
+        &[0, 1, 2, 3, 5, 6].map(|i| (tag.id.clone(), stored[i].id.clone())),
+    )
+    .unwrap();
+    let embedding = |id: String, path: String, score: f32| EmbeddingInput {
+        id,
+        path,
+        embedding_base64: plain_rs::utils::base64::base64_encode(
+            &[score, 0.0, 0.0, 0.0]
+                .into_iter()
+                .flat_map(f32::to_be_bytes)
+                .collect::<Vec<_>>(),
+        ),
+    };
+    let mut embeddings = [0, 1, 2, 4, 5, 6]
+        .into_iter()
+        .map(|i| {
+            embedding(
+                stored[i].id.clone(),
+                stored[i].path.clone(),
+                if i == 2 { 0.8 } else { 1.0 },
+            )
+        })
+        .collect::<Vec<_>>();
+    embeddings.push(embedding(
+        "missing".into(),
+        "/fixture/missing.jpg".into(),
+        1.0,
+    ));
+    embeddings::save(&db, &embeddings).unwrap();
+    assert_eq!(models.search("cat", 50).await.unwrap().len(), 7);
+
+    let active = format!("text:cat tag_id:{} bucket_id:b1 trash:false", tag.id);
+    let cases = [
+        (active.clone(), 0, 10, vec![0, 1, 2], 3),
+        (
+            format!("text:cat tag_id:{} bucket_id:b1", tag.id),
+            0,
+            10,
+            vec![0, 1, 2],
+            3,
+        ),
+        (
+            format!("{active} excluded_dir:/fixture/z"),
+            0,
+            10,
+            vec![0, 2],
+            2,
+        ),
+        (active.clone(), 1, 1, vec![1], 3),
+        (active.clone(), 2, 1, vec![2], 3),
+        (active.clone(), 3, 1, vec![], 3),
+        (active.clone(), 0, 0, vec![], 3),
+        (format!("{active} size:>150"), 0, 10, vec![2], 1),
+        (
+            format!("text:cat tag_id:{} bucket_id:b1 trash:true", tag.id),
+            0,
+            10,
+            vec![6],
+            1,
+        ),
+        (
+            format!("text:cat ids:{} trash:false", stored[1].id),
+            0,
+            10,
+            vec![1],
+            1,
+        ),
+        (
+            format!("text:cat tag_id:{} bucket_id:b1 trash:false", empty_tag.id),
+            0,
+            10,
+            vec![],
+            0,
+        ),
+        ("text:cat ids: trash:false".into(), 0, 10, vec![], 0),
+    ];
+    let mut failures = Vec::new();
+    for (query, offset, limit, expected, count) in cases {
+        let response = schema.execute(
+            async_graphql::Request::new(
+                "query($query:String!,$offset:Int!,$limit:Int!){images(query:$query,offset:$offset,limit:$limit,sortBy:NAME_ASC){id} imageCount(query:$query)}",
+            ).variables(async_graphql::Variables::from_json(json!({"query":query,"offset":offset,"limit":limit}))),
+        ).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        let expected = json!({
+            "images": expected.into_iter().map(|i| json!({"id":stored[i].id})).collect::<Vec<_>>(),
+            "imageCount": count,
+        });
+        if data != expected {
+            failures.push(format!(
+                "{query}, offset={offset}, limit={limit}: expected {expected}, got {data}"
+            ));
+        }
+    }
+    models.shutdown().await;
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

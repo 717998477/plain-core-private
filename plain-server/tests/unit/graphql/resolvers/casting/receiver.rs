@@ -156,6 +156,14 @@ async fn enabling_receiver_uses_the_public_listeners_actual_bound_port() {
     let (generation, mut requests) = host.connect();
     tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
+            if request["method"] == "systemCapabilities" {
+                host.reply(
+                    generation,
+                    json!({"id":request["id"],"result":["PEER_DISCOVERY"]}),
+                )
+                .unwrap();
+                continue;
+            }
             assert_eq!(request["method"], "mdnsMulticast");
             let acquire = request["params"]["acquire"].as_bool().unwrap();
             host.reply(generation, json!({"id":request["id"],"result":acquire}))

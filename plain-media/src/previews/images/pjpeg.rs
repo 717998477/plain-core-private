@@ -11,8 +11,9 @@
 //! pays full entropy decoding for the AC scans — this path skips them.
 //!
 //! Sample reconstruction, chroma upsampling (fir for 2x factors) and the
-//! YCbCr→RGB fixed-point constants mirror `jpeg-decoder` 0.3 so the two
-//! decoders produce byte-identical 1/8 output (pinned by tests).
+//! YCbCr→RGB fixed-point constants mirror `jpeg-decoder` 0.3's scalar
+//! implementation. Tests pin byte-identical 1/8 output against its
+//! platform-independent mode; SIMD paths can round individual channels differently.
 //!
 //! Strictness: anything unusual (arithmetic coding, 12-bit,
 //! 4-component CMYK/YCCK, 16-bit quant tables, malformed/truncated
@@ -930,7 +931,7 @@ fn extend(v: i32, n: u32) -> i32 {
     }
 }
 
-/// jpeg-decoder's fixed-point YCbCr→RGB (offset 2^20, truncating shift).
+/// jpeg-decoder's scalar fixed-point YCbCr→RGB (offset 2^20, truncating shift).
 fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8) -> (u8, u8, u8) {
     const FP: i32 = 20;
     const HALF: i32 = 1 << 19;
