@@ -84,6 +84,14 @@ impl NotificationsMutation {
                 "invalid notification cancellation receipt",
             ));
         }
+        if !cancelled.is_empty() {
+            let _ = ctx
+                .data_unchecked::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()
+                .send(plain_rs::events::WsEvent::broadcast(
+                    "NOTIFICATION_REFRESHED",
+                    "{}".into(),
+                ));
+        }
         Ok(ActionResult {
             affected_count: cancelled.len() as i32,
         })

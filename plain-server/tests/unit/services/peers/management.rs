@@ -273,13 +273,10 @@ async fn actual_management_socket_authenticates_and_relays_only_decrypted_native
         .unwrap()
         .unwrap();
     assert_eq!(pending["method"], "systemCapabilities");
-    let payload = json!({"id":"fixture-notification","body":"fixture body"});
+    let payload = json!({"probe":"fixture clipboard hint"});
     remote_state
         .events
-        .send(WsEvent::broadcast(
-            "NOTIFICATION_CREATED",
-            payload.to_string(),
-        ))
+        .send(WsEvent::broadcast("CLIPBOARD_CHANGED", payload.to_string()))
         .unwrap();
     let relayed = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -293,7 +290,7 @@ async fn actual_management_socket_authenticates_and_relays_only_decrypted_native
     .unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&relayed.payload).unwrap(),
-        json!({"peerId":peer.id,"type":"NOTIFICATION_CREATED","data":payload})
+        json!({"peerId":peer.id,"type":"CLIPBOARD_CHANGED","data":payload})
     );
     assert!(relayed.into_public().is_none());
     state.host.disconnect(host_generation);
@@ -331,7 +328,7 @@ async fn peer_snapshot_waits_for_the_database_without_blocking_the_async_thread(
     })
     .await;
     release.send(()).unwrap();
-    assert!(pending.await.unwrap().is_empty());
+    assert!(pending.await.unwrap().1.is_empty());
     holder.join().unwrap();
     core.stop_core().await;
 }

@@ -41,6 +41,7 @@ async fn snapshots(stream: &mut NativeEventStream) {
         "DLNA_SENDER_UPDATED",
         "APP_UPDATE_DOWNLOAD_UPDATED",
         "AUDIO_PLAYBACK_UPDATED",
+        "PEER_NOTIFICATIONS_UPDATED",
     ] {
         assert_eq!(stream.recv().await.unwrap().event_type, kind);
     }

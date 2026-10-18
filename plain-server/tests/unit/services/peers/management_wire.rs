@@ -13,7 +13,7 @@ fn registration_preserves_the_existing_encrypted_unix_millisecond_frame() {
 }
 
 #[test]
-fn authenticated_json_events_keep_the_peer_protocol_payload() {
+fn authenticated_notification_events_are_hints_and_clipboard_payloads_keep_the_existing_contract() {
     let key = [7; 32];
     for kind in [
         "NOTIFICATION_CREATED",
@@ -28,7 +28,17 @@ fn authenticated_json_events_keep_the_peer_protocol_payload() {
             plain_rs::protocols::websocket::encode(kind, &serde_json::to_vec(&data).unwrap(), &key)
                 .unwrap();
         let decoded = event(&frame, &key).unwrap().unwrap();
-        assert_eq!(decoded, (kind.into(), data));
+        assert_eq!(
+            decoded,
+            (
+                kind.into(),
+                if kind == "CLIPBOARD_CHANGED" {
+                    data
+                } else {
+                    Value::Null
+                }
+            )
+        );
     }
 }
 
@@ -43,7 +53,7 @@ fn corrupt_wrong_key_and_invalid_json_frames_cannot_be_projected() {
     assert!(event(b"missing separator", &key).is_err());
     assert!(event(&frame[..frame.len() - 1], &key).is_err());
     let malformed =
-        plain_rs::protocols::websocket::encode("NOTIFICATION_CREATED", b"not json", &key).unwrap();
+        plain_rs::protocols::websocket::encode("CLIPBOARD_CHANGED", b"not json", &key).unwrap();
     assert!(event(&malformed, &key).is_err());
 }
 
@@ -55,4 +65,18 @@ fn unrelated_binary_events_and_null_payloads_do_not_enter_management_views() {
     let frame =
         plain_rs::protocols::websocket::encode("CLIPBOARD_CHANGED", b"null", &[7; 32]).unwrap();
     assert!(event(&frame, &[7; 32]).unwrap().is_none());
+}
+
+#[test]
+fn notification_refresh_hints_do_not_require_json_payloads() {
+    for payload in [b"".as_slice(), b"null", b"not json"] {
+        let frame =
+            plain_rs::protocols::websocket::encode("NOTIFICATION_REFRESHED", payload, &[7; 32])
+                .unwrap();
+        assert_eq!(
+            event(&frame, &[7; 32]).unwrap(),
+            Some(("NOTIFICATION_REFRESHED".into(), Value::Null))
+        );
+        assert!(event(&frame, &[8; 32]).is_err());
+    }
 }

@@ -8,6 +8,7 @@ pub struct NativeEventStream {
     events: broadcast::Receiver<WsEvent>,
     client_id: Option<String>,
     next_snapshot: usize,
+    notification_snapshot: Option<WsEvent>,
     scope: Option<super::graphql::NativeRequestScope>,
     frame_key: Option<[u8; 32]>,
 }
@@ -25,6 +26,7 @@ enum Snapshot {
     Casting,
     UpdateDownload,
     Audio,
+    PeerNotifications,
 }
 
 const SNAPSHOTS: &[Snapshot] = &[
@@ -34,6 +36,7 @@ const SNAPSHOTS: &[Snapshot] = &[
     Snapshot::Casting,
     Snapshot::UpdateDownload,
     Snapshot::Audio,
+    Snapshot::PeerNotifications,
 ];
 
 impl Delivery {
@@ -49,12 +52,14 @@ impl Delivery {
 
 impl NativeEventStream {
     pub(crate) fn new(state: ServerState, client_id: Option<String>) -> Self {
-        let events = state.events.subscribe();
+        let (events, notification_snapshot) =
+            state.management.notifications.subscribe(&state.events);
         Self {
             state,
             events,
             client_id,
             next_snapshot: 0,
+            notification_snapshot: Some(notification_snapshot),
             scope: None,
             frame_key: None,
         }
@@ -115,7 +120,7 @@ impl NativeEventStream {
                 return None;
             }
             if let Some(snapshot) = SNAPSHOTS.get(self.next_snapshot).copied() {
-                let snapshot = async {
+                let pending_snapshot = async {
                     match snapshot {
                         Snapshot::Images => self.state.image_models.snapshot().event(),
                         Snapshot::OnlineClients => self.state.main_ws.snapshot_event(),
@@ -126,6 +131,11 @@ impl NativeEventStream {
                         Snapshot::UpdateDownload => {
                             self.state.update_checks.download.snapshot_event()
                         }
+                        Snapshot::PeerNotifications => self
+                            .notification_snapshot
+                            .as_ref()
+                            .expect("notification snapshot pending")
+                            .clone(),
                         Snapshot::Audio => self.state.audio.playback_event().await,
                     }
                 };
@@ -133,12 +143,15 @@ impl NativeEventStream {
                     biased;
                     _ = stop.wait_for(|stopped| *stopped) => return None,
                     _ = &mut closed => return None,
-                    event = snapshot => event,
+                    event = pending_snapshot => event,
                 };
                 if *stop.borrow() {
                     return None;
                 }
                 self.next_snapshot += 1;
+                if matches!(snapshot, Snapshot::PeerNotifications) {
+                    self.notification_snapshot = None;
+                }
                 return Some(Delivery {
                     event,
                     reconcile: false,
@@ -179,6 +192,8 @@ impl NativeEventStream {
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     self.next_snapshot = 0;
+                    self.notification_snapshot =
+                        Some(self.state.management.notifications.snapshot_event());
                     #[cfg(feature = "http_transport")]
                     if let Some(failure) = self.state.http_failure.lock().unwrap().as_ref() {
                         return Some(Delivery {

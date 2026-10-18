@@ -95,6 +95,10 @@ async fn delete_notifications_counts_only_what_the_platform_confirmed() {
         }
         other => panic!("unexpected host call {other}"),
     });
+    let mut events = schema
+        .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()
+        .unwrap()
+        .subscribe();
     let response = schema
         .execute(r#"mutation { deleteNotifications(ids:["a","b"]) { affectedCount } }"#)
         .await;
@@ -103,6 +107,11 @@ async fn delete_notifications_counts_only_what_the_platform_confirmed() {
         response.data.into_json().unwrap()["deleteNotifications"]["affectedCount"],
         1
     );
+    assert_eq!(
+        events.try_recv().unwrap().event_type,
+        "NOTIFICATION_REFRESHED"
+    );
+    assert!(events.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -243,4 +252,36 @@ fn sms_refresh_hints_follow_notification_permissions_filters_and_event_kinds() {
         "NOTIFICATION_DELETED"
     );
     assert!(receiver.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn rejected_and_empty_cancellation_receipts_do_not_publish_refresh_hints() {
+    for receipt in [json!([]), json!(["not-requested"])] {
+        let empty = receipt.as_array().unwrap().is_empty();
+        let (_dir, schema) = fixture(json!(["NOTIFICATION_LISTENER"]));
+        stub(schema_host(&schema), move |method, _| match method {
+            "systemCancelNotifications" => receipt.clone(),
+            method => panic!("unexpected host call {method}"),
+        });
+        let mut events = schema
+            .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()
+            .unwrap()
+            .subscribe();
+        let response = schema
+            .execute(r#"mutation { deleteNotifications(ids:["a"]) { affectedCount } }"#)
+            .await;
+        if empty {
+            assert!(response.errors.is_empty());
+            assert_eq!(
+                response.data.into_json().unwrap()["deleteNotifications"]["affectedCount"],
+                0
+            );
+        } else {
+            assert_eq!(
+                response.errors[0].message,
+                "invalid notification cancellation receipt"
+            );
+        }
+        assert!(events.try_recv().is_err());
+    }
 }

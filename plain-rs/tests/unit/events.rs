@@ -82,3 +82,11 @@ fn management_peer_events_are_native_only_and_cannot_be_reported_by_sdk_hosts() 
     assert!(event.into_public().is_none());
     assert!(WsEvent::host_text(PEER_MANAGEMENT_EVENT, "{}".into()).is_none());
 }
+
+#[test]
+fn aggregated_notifications_are_native_only_and_cannot_be_reported_by_sdk_hosts() {
+    let event = WsEvent::broadcast(PEER_NOTIFICATIONS_UPDATED, "{}".into());
+    assert!(event.is_internal());
+    assert!(event.into_public().is_none());
+    assert!(WsEvent::host_text(PEER_NOTIFICATIONS_UPDATED, "{}".into()).is_none());
+}

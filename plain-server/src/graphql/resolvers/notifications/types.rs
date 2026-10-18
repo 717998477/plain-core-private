@@ -2,7 +2,7 @@ use crate::graphql::types::Instant;
 use async_graphql::ID;
 use async_graphql::SimpleObject;
 
-#[derive(SimpleObject, Clone, Debug, serde::Serialize)]
+#[derive(SimpleObject, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Notification {
     pub id: ID,

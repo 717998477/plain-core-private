@@ -220,6 +220,10 @@ async fn native_transport_snapshots_follow_current_routes_without_graphql_reads(
         bridge.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
     );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
+    );
     notify(&state);
     state.transport.abort(&ticket);
     let current = bridge.next_event().await.unwrap();

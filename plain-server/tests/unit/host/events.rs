@@ -57,6 +57,10 @@ async fn cancelled_audio_snapshot_read_is_retried_before_consuming_queued_events
     assert_eq!(recovered["type"], "AUDIO_PLAYBACK_UPDATED");
     let playback: Value = serde_json::from_str(recovered["payload"].as_str().unwrap()).unwrap();
     assert!(playback.get("error").is_none(), "{playback}");
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
+    );
     let queued = tokio::time::timeout(Duration::from_secs(3), bridge.next_event())
         .await
         .unwrap()
@@ -92,6 +96,10 @@ async fn model_snapshots_recover_current_versions_on_attach_overflow_and_replace
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
     );
     let before: Value = serde_json::from_str(initial["payload"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -162,6 +170,10 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
     );
     assert!(public.try_recv().is_err());
     for kind in [
@@ -329,6 +341,10 @@ async fn listener_failure_survives_event_queue_overflow() {
         bridge.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
     );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
+    );
     let state = server.runtime_state();
     *state.http_failure.lock().unwrap() = Some(crate::assembly::lifecycle::HttpServerFailure {
         generation: 7,
@@ -375,6 +391,10 @@ async fn replacing_a_host_wakes_a_waiting_event_receiver() {
     assert_eq!(
         original.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
+    );
+    assert_eq!(
+        original.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
     );
     let mut waiting = Box::pin(original.next_event());
     std::future::poll_fn(|context| {
@@ -540,6 +560,10 @@ async fn casting_snapshots_recover_the_current_version_without_a_query() {
         bridge.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
     );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
+    );
     let initial: Value = serde_json::from_str(initial["payload"].as_str().unwrap()).unwrap();
     assert_eq!(initial["items"][0]["path"], "/owned/track.mp3");
     state.cast.snapshot.lock().unwrap().items.clear();
@@ -571,6 +595,10 @@ async fn casting_snapshots_recover_the_current_version_without_a_query() {
         "AUDIO_PLAYBACK_UPDATED"
     );
     assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
+    );
+    assert_eq!(
         serde_json::from_str::<Value>(recovered["payload"].as_str().unwrap()).unwrap(),
         expected
     );
@@ -592,6 +620,10 @@ async fn casting_snapshots_recover_the_current_version_without_a_query() {
     assert_eq!(
         replacement.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
+    );
+    assert_eq!(
+        replacement.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
     );
     assert_eq!(
         serde_json::from_str::<Value>(restored["payload"].as_str().unwrap()).unwrap(),
@@ -656,6 +688,7 @@ async fn update_download_snapshots_recover_without_querying_or_replaying_stale_h
         "DLNA_SENDER_UPDATED",
         "APP_UPDATE_DOWNLOAD_UPDATED",
         "AUDIO_PLAYBACK_UPDATED",
+        "PEER_NOTIFICATIONS_UPDATED",
     ] {
         assert_eq!(bridge.next_event().await.unwrap()["type"], kind);
     }

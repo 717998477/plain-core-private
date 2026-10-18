@@ -12,11 +12,11 @@ use tokio::{sync::watch, task::JoinHandle};
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Clone, PartialEq, Eq)]
-struct Identity {
-    url: String,
-    token: String,
-    ip: String,
-    port: Option<u16>,
+pub(super) struct Identity {
+    pub(super) url: String,
+    pub(super) token: String,
+    pub(super) ip: String,
+    pub(super) port: Option<u16>,
 }
 
 struct Worker {
@@ -35,6 +35,7 @@ impl Drop for Worker {
 #[derive(Default)]
 pub(crate) struct Runtime {
     coordinator: Mutex<Option<(watch::Sender<bool>, JoinHandle<()>)>>,
+    pub(crate) notifications: super::notifications::Store,
 }
 
 impl Runtime {
@@ -62,7 +63,11 @@ impl Runtime {
                     wanted = desired(&state, &actor) => wanted,
                 };
                 let retry = match wanted {
-                    Ok(wanted) => {
+                    Ok((peers, wanted)) => {
+                        state
+                            .management
+                            .notifications
+                            .reconcile(&peers, &wanted, &state.events);
                         reconcile(&state, &mut workers, wanted).await;
                         false
                     }
@@ -132,18 +137,24 @@ fn identity(peer: &DPeer, actor: &str, base: &str) -> Option<Identity> {
     })
 }
 
-async fn desired(state: &ServerState, actor: &str) -> Result<HashMap<String, Identity>> {
+async fn desired(
+    state: &ServerState,
+    actor: &str,
+) -> Result<(Vec<DPeer>, HashMap<String, Identity>)> {
     let state = state.clone();
     let actor = actor.to_owned();
-    tokio::task::spawn_blocking(move || -> Result<HashMap<String, Identity>> {
+    tokio::task::spawn_blocking(move || -> Result<(Vec<DPeer>, HashMap<String, Identity>)> {
         let interfaces = plain_rs::transport::lan::local_interfaces();
-        Ok(peers::all(&state.db)?
-            .into_iter()
+        let peers = peers::all(&state.db)?;
+        let wanted = peers
+            .iter()
             .filter_map(|peer| {
-                let address = super::peer_address::address_with_interfaces(&peer, &interfaces);
-                identity(&peer, &actor, &address.base_url).map(|identity| (peer.id, identity))
+                let address = super::peer_address::address_with_interfaces(peer, &interfaces);
+                identity(peer, &actor, &address.base_url)
+                    .map(|identity| (peer.id.clone(), identity))
             })
-            .collect())
+            .collect();
+        Ok((peers, wanted))
     })
     .await?
 }
@@ -222,7 +233,7 @@ async fn publish(
     .await?
 }
 
-fn current(
+pub(super) fn current(
     connection: &rusqlite::Connection,
     state: &ServerState,
     peer_id: &str,
@@ -249,7 +260,7 @@ fn current(
         }))
 }
 
-async fn current_peer(
+pub(super) async fn current_peer(
     state: &ServerState,
     peer_id: &str,
     identity: &Identity,
@@ -387,6 +398,25 @@ async fn run(
     identity: Identity,
     mut cancelled: watch::Receiver<bool>,
 ) {
+    let changed = tokio::sync::Notify::new();
+    let mut stop = state.stop.clone();
+    let publication_cancelled = cancelled.clone();
+    tokio::select! {
+        biased;
+        _ = stop.wait_for(|stopped| *stopped) => {},
+        _ = cancelled.wait_for(|cancelled| *cancelled) => {},
+        _ = super::notifications::follow(&state, &id, &identity, &publication_cancelled, &changed) => {},
+        _ = connection_loop(state.clone(), id.clone(), identity.clone(), publication_cancelled.clone(), &changed) => {},
+    }
+}
+
+async fn connection_loop(
+    state: ServerState,
+    id: String,
+    identity: Identity,
+    mut cancelled: watch::Receiver<bool>,
+    notifications_changed: &tokio::sync::Notify,
+) {
     let key = plain_rs::utils::base64::base64_decode(&identity.token);
     let mut stop = state.stop.clone();
     let mut delay = Duration::from_secs(1);
@@ -420,21 +450,22 @@ async fn run(
                                 if let Some((kind, data)) =
                                     super::management_wire::event(&frame, &key)?
                                 {
-                                    let clipboard = kind == "CLIPBOARD_CHANGED";
-                                    if !publish(
-                                        &state,
-                                        &id,
-                                        &identity,
-                                        kind,
-                                        data,
-                                        &publication_cancelled,
-                                    )
-                                    .await?
-                                    {
-                                        break;
-                                    }
-                                    if clipboard {
+                                    if kind == "CLIPBOARD_CHANGED" {
+                                        if !publish(
+                                            &state,
+                                            &id,
+                                            &identity,
+                                            kind,
+                                            data,
+                                            &publication_cancelled,
+                                        )
+                                        .await?
+                                        {
+                                            break;
+                                        }
                                         changed.notify_one();
+                                    } else {
+                                        notifications_changed.notify_one();
                                     }
                                     delay = Duration::from_secs(1);
                                 }

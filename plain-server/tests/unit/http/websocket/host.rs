@@ -605,6 +605,10 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
         bridge.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
     );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
+    );
 
     state
         .events
@@ -659,6 +663,10 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
         bridge.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
     );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
+    );
 
     let replacement = core.host_events();
     assert!(bridge.next_event().await.is_none());
@@ -687,6 +695,10 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
     assert_eq!(
         replacement.next_event().await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
+    );
+    assert_eq!(
+        replacement.next_event().await.unwrap()["type"],
+        "PEER_NOTIFICATIONS_UPDATED"
     );
     core.stop_core().await;
     assert!(replacement.next_event().await.is_none());

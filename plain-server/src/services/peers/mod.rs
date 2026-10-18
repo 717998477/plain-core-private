@@ -56,3 +56,6 @@ mod management_wire;
 
 #[cfg(feature = "core")]
 mod management_http;
+
+#[cfg(feature = "core")]
+mod notifications;

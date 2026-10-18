@@ -22,6 +22,9 @@ pub(super) fn event(frame: &[u8], key: &[u8]) -> Result<Option<(String, Value)>>
     }
     let plain = plain_rs::crypto::xchacha_decrypt_raw(key, body)
         .ok_or_else(|| anyhow!("Invalid management event authentication"))?;
+    if kind != "CLIPBOARD_CHANGED" {
+        return Ok(Some((kind.to_owned(), Value::Null)));
+    }
     let data: Value = serde_json::from_slice(&plain)?;
     Ok((!data.is_null()).then(|| (kind.to_owned(), data)))
 }
