@@ -21,6 +21,7 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
         "SMS_SEND_RESULT",
         "PAIRING_SUCCESS",
         "CONTENT_CHANGED",
+        "CLIPBOARD_CHANGED",
         "UNKNOWN_EVENT",
         "IMAGE_INDEX_ERROR_REPORTED",
         plain_rs::events::NETWORK_CHANGED,
@@ -39,6 +40,7 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
                 | "PAIRING_RESPONSE_REPORTED"
                 | "PAIRING_CANCEL_REPORTED"
                 | "NOTIFICATION_REPORTED"
+                | "CLIPBOARD_REPORTED"
                 | "AUDIO_PROGRESS_REPORTED"
                 | "AUDIO_STARTED_REPORTED"
                 | "AUDIO_COMPLETED_REPORTED"

@@ -60,3 +60,6 @@ pub(crate) mod http_server;
 
 #[cfg(feature = "core")]
 pub mod web_assets;
+
+#[cfg(feature = "core")]
+pub(crate) mod clipboard;

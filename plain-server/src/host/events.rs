@@ -189,6 +189,9 @@ impl HostEvents {
             crate::services::feeds::sync_service::schedule::revoke(&self.state, &value.id).await;
             return Ok(());
         }
+        if kind == "CLIPBOARD_REPORTED" {
+            return crate::services::clipboard::report(&self.state, &payload);
+        }
         if kind == "NOTIFICATION_REPORTED" {
             return crate::graphql::resolvers::notifications::public::publish(
                 &self.state.prefs,

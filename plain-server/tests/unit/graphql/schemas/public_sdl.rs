@@ -299,7 +299,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Mutation",
         "clipboard",
-        resolvers::clipboard::host::ClipboardHostMutation,
         resolvers::clipboard::public::ClipboardMutation
     );
     group!(

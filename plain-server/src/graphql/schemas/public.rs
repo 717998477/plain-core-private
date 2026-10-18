@@ -120,7 +120,6 @@ pub struct Mutation(
     crate::graphql::resolvers::shares::host::ShareHostMutation,
     crate::graphql::resolvers::files::app_files::AppFilesMutation,
     crate::graphql::resolvers::media::actions::MediaActionMutation,
-    crate::graphql::resolvers::clipboard::host::ClipboardHostMutation,
     crate::graphql::resolvers::bookmarks::metadata::BookmarkMetadataMutation,
     crate::graphql::resolvers::pomodoro::state::PomodoroControlMutation,
     crate::graphql::resolvers::device::sessions::SessionsMutation,

@@ -10,18 +10,6 @@ type ClipboardItem {
 	createdAt: Instant!
 }
 
-input ClipboardRecordInput {
-	text: String!
-	source: String!
-	label: String!
-	sensitive: Boolean!
-}
-
-type ClipboardRecordResult {
-	inserted: Boolean!
-	item: ClipboardItem!
-}
-
 extend type Mutation {
 	"""
 	Delete clipboard history entries matching the query DSL (`ids:` /
@@ -29,8 +17,6 @@ extend type Mutation {
 	send `all:true` to target everything.
 	"""
 	deleteClipboardItems(query: String!): ActionResult!
-	deleteClipboardItemsByIds(ids: [ID!]!): ActionResult!
-	recordClipboard(input: ClipboardRecordInput!): ClipboardRecordResult!
 	"""
 	Write text into the system clipboard on behalf of the calling client.
 	The write is recorded with the caller as source; the local watcher

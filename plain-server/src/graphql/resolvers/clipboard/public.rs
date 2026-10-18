@@ -1,4 +1,4 @@
-use crate::graphql::resolvers::clipboard::host::ClipboardItem;
+use crate::graphql::resolvers::clipboard::models::ClipboardItem;
 use crate::graphql::types::ActionResult;
 use crate::host::bridge::Host;
 use crate::http::auth::public_gate;

@@ -2,4 +2,4 @@
 pub mod public;
 
 #[cfg(feature = "core")]
-pub mod host;
+pub mod models;
