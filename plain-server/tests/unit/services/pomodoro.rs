@@ -381,10 +381,10 @@ async fn server_assembly_runs_the_timer_and_main_controls_share_its_statistics()
         call(
             &server,
             &token,
-            "{pomodoroTotalCompleted pomodoroToday {completedCount state isRunning}} "
+            "{pomodoroToday {completedCount state isRunning}} "
         )
         .await["data"],
-        json!({"pomodoroTotalCompleted":1,"pomodoroToday":{"completedCount":1,"state":"SHORT_BREAK","isRunning":false}})
+        json!({"pomodoroToday":{"completedCount":1,"state":"SHORT_BREAK","isRunning":false}})
     );
     let date = Utc::now()
         .with_timezone(&chrono::Local)
@@ -397,7 +397,7 @@ async fn server_assembly_runs_the_timer_and_main_controls_share_its_statistics()
     call(
         &server,
         &token,
-        "mutation {skipPomodoro {today {state} completedState}}",
+        "mutation {adjustPomodoro(durationSec:0) {state}}",
     )
     .await;
     assert_eq!(
@@ -419,6 +419,8 @@ async fn main_schema_rejects_retired_client_scheduler_controls() {
     .unwrap();
     for query in [
         "mutation { tickPomodoro {completedState} }",
+        "mutation { skipPomodoro {completedState} }",
+        "{pomodoroTotalCompleted}",
         "mutation { configurePomodoroDay(date:\"2026-10-03\", dayStart:\"2026-10-03T00:00:00Z\") {date} }",
     ] {
         let result: Value = reqwest::Client::new()
@@ -442,13 +444,13 @@ async fn main_schema_rejects_retired_client_scheduler_controls() {
 fn timer_controls_do_not_invalidate_unrelated_domains() {
     for query in [
         "mutation { startPomodoro(durationSec:30) }",
-        "mutation { named: skipPomodoro {completedState} }",
+        "mutation { named: adjustPomodoro(durationSec:30) {state} }",
         "query {pomodoroToday {state}}",
     ] {
         assert!(!content_changes(&Request::new(query)));
     }
     assert!(content_changes(&Request::new(
-        "mutation {skipPomodoro {completedState} deleteBookmarks(ids:[]) {affectedCount}}"
+        "mutation {adjustPomodoro(durationSec:30) {state} deleteBookmarks(ids:[]) {affectedCount}}"
     )));
 }
 

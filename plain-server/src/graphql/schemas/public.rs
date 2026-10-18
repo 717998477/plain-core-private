@@ -68,7 +68,6 @@ pub struct Query(
     crate::graphql::resolvers::files::tasks::FileTaskQuery,
     crate::graphql::resolvers::videos::progress::VideoProgressQuery,
     crate::graphql::resolvers::shares::host::ShareHostQuery,
-    crate::graphql::resolvers::pomodoro::state::PomodoroStatsQuery,
     crate::graphql::resolvers::device::sessions::SessionsQuery,
     crate::graphql::resolvers::media::scan::MediaScanQuery,
     crate::graphql::resolvers::app::platform::PlatformQuery,

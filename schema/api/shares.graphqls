@@ -179,6 +179,4 @@ extend type Query {
 	shareRecord(id: ID!): ShareRecord
 	shareRecords: [ShareRecord!]!
 	sharedDownloadQueue: SharedDownloadQueue!
-	sharedFileUrl(link: SharedLinkInput!, urlToken: String!, virtualPath: String!, zip: Boolean! = false): String!
-	sharedLinkInfo(link: SharedLinkInput!, virtualPath: String): SharedLinkInfo!
 }

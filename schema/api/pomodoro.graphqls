@@ -15,11 +15,6 @@ enum PomodoroState {
 	LONG_BREAK
 }
 
-type PomodoroTickResult {
-	today: PomodoroToday!
-	completedState: PomodoroState
-}
-
 type PomodoroToday {
 	date: Instant!
 	completedCount: Int!
@@ -35,7 +30,6 @@ extend type Mutation {
 	adjustPomodoro(durationSec: Int!): PomodoroToday!
 	importPomodoroSound(source: String!): String!
 	pausePomodoro: Boolean!
-	skipPomodoro: PomodoroTickResult!
 	startPomodoro(durationSec: Int!): Boolean!
 	stopPomodoro: Boolean!
 }
@@ -43,5 +37,4 @@ extend type Mutation {
 extend type Query {
 	pomodoroSettings: PomodoroSettings!
 	pomodoroToday: PomodoroToday!
-	pomodoroTotalCompleted: Long!
 }

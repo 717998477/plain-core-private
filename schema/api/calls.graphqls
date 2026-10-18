@@ -42,9 +42,5 @@ extend type Mutation {
 
 extend type Query {
 	callCount(query: String!): Int!
-	"""
-	plain-app degrades this to 0 rather than erroring.
-	"""
-	callIds(query: String!): [ID!]!
 	calls(query: String!, offset: Int!, limit: Int!): [Call!]!
 }

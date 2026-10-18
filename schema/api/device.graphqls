@@ -194,7 +194,6 @@ type Temperature {
 extend type Mutation {
 	clearAppLogFiles: Boolean!
 	clearAppLogs: Boolean!
-	closeAllWebSocketSessions: Boolean!
 	confirmWebLogin(requestId: String!, allowed: Boolean!): Boolean!
 	createCrashReport(report: String!): String!
 	createSession(name: String!): Session!

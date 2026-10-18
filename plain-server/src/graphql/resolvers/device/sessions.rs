@@ -122,12 +122,6 @@ impl SessionsMutation {
             &name,
         )?)
     }
-    async fn close_all_web_socket_sessions(&self, ctx: &Context<'_>) -> Result<bool> {
-        caller(ctx)?;
-        let state = ctx.data::<ServerState>()?;
-        state.main_ws.close_client(state, None);
-        Ok(true)
-    }
     async fn logout(&self, ctx: &Context<'_>) -> Result<bool> {
         revoke(ctx, caller(ctx)?, "logout")
     }

@@ -416,22 +416,6 @@ impl AudioMutation {
         Ok(item(track))
     }
 
-    async fn play_audio_by_path(
-        &self,
-        ctx: &Context<'_>,
-        path: String,
-    ) -> async_graphql::Result<AudioItem> {
-        let track = audio(ctx)?
-            .run(move |db, lib| {
-                use plain_rs::media::audio::commands::Engine;
-                let track = lib.metadata(&path)?;
-                plain_rs::media::audio::playback::prepare_track(db, &track)?;
-                Ok(track)
-            })
-            .await?;
-        Ok(item(track))
-    }
-
     async fn cycle_audio_play_mode(
         &self,
         ctx: &Context<'_>,

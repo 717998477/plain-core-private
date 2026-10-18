@@ -163,28 +163,6 @@ impl CallsQuery {
         Ok(calls)
     }
 
-    /// plain-app degrades this to 0 rather than erroring.
-    async fn call_ids(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<Vec<ID>> {
-        if !public_gate::require_granted(ctx, &[READ]).await? {
-            return Ok(Vec::new());
-        }
-        let params = provider_params(
-            ctx,
-            crate::host::query::Provider::Call,
-            &query,
-            serde_json::json!({}),
-        )
-        .await?;
-        let facts = ctx
-            .data_unchecked::<Arc<Host>>()
-            .call("systemCallIds", params)
-            .await
-            .map_err(async_graphql::Error::new)?;
-        serde_json::from_value::<Vec<String>>(facts)
-            .map(|ids| ids.into_iter().map(ID::from).collect())
-            .map_err(|error| async_graphql::Error::new(error.to_string()))
-    }
-
     async fn call_count(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<i32> {
         if !public_gate::require_granted(ctx, &[WRITE]).await? {
             return Ok(0);

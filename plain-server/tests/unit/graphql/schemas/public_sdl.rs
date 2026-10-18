@@ -158,7 +158,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Query",
         "pomodoro",
-        resolvers::pomodoro::state::PomodoroStatsQuery,
         resolvers::pomodoro::pomodoro::PomodoroQuery
     );
     group!(

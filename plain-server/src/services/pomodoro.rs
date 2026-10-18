@@ -49,7 +49,6 @@ pub struct PomodoroToday {
     pub is_paused: bool,
     pub state: PomodoroState,
 }
-#[derive(SimpleObject)]
 pub struct PomodoroTickResult {
     pub today: PomodoroToday,
     pub completed_state: Option<PomodoroState>,
@@ -234,9 +233,6 @@ impl Service {
         self.changed
             .send_modify(|revision| *revision = revision.wrapping_add(1));
         Ok(today)
-    }
-    pub fn tick(&self, skip: bool) -> anyhow::Result<PomodoroTickResult> {
-        self.tick_at(skip, Utc::now())
     }
     fn tick_at(&self, skip: bool, now: DateTime<Utc>) -> anyhow::Result<PomodoroTickResult> {
         self.advance_at(skip, now, false)

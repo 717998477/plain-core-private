@@ -1,5 +1,5 @@
 use super::client_inputs::{SharedEntryInput, SharedLinkInput, SharedMessageCardInput};
-use super::client_models::{SharedBrowseResult, SharedLink, SharedLinkInfo};
+use super::client_models::{SharedBrowseResult, SharedLink};
 use crate::assembly::{server::ServerState, services::Services};
 use crate::services::peers::shared_client;
 use async_graphql::{Context, Object};
@@ -39,37 +39,6 @@ impl SharedClientQuery {
                 .map_err(error)?
                 .into(),
         )
-    }
-    async fn shared_link_info(
-        &self,
-        ctx: &Context<'_>,
-        link: SharedLinkInput,
-        virtual_path: Option<String>,
-    ) -> async_graphql::Result<SharedLinkInfo> {
-        let link: client::Link = link.try_into()?;
-        shared_client::info(ctx.data::<ServerState>()?, &link, virtual_path.as_deref())
-            .await
-            .map_err(error)?
-            .try_into()
-    }
-    async fn shared_file_url(
-        &self,
-        ctx: &Context<'_>,
-        link: SharedLinkInput,
-        url_token: String,
-        virtual_path: String,
-        #[graphql(default)] zip: bool,
-    ) -> async_graphql::Result<String> {
-        let link: client::Link = link.try_into()?;
-        shared_client::file_url(
-            ctx.data::<ServerState>()?,
-            &link,
-            &url_token,
-            &virtual_path,
-            zip,
-        )
-        .await
-        .map_err(error)
     }
 }
 #[derive(Default)]
@@ -115,7 +84,3 @@ impl SharedClientMutation {
         .transpose()
     }
 }
-
-#[cfg(all(test, feature = "http_transport"))]
-#[path = "../../../../tests/unit/graphql/resolvers/shares/client.rs"]
-mod tests;

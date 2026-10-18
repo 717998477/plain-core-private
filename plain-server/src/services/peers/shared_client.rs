@@ -230,14 +230,6 @@ pub(crate) async fn initial_link(
     .await
 }
 
-pub(crate) async fn info(
-    state: &ServerState,
-    link: &Link,
-    virtual_path: Option<&str>,
-) -> Result<Info> {
-    request(state, fetch(state, link, virtual_path)).await
-}
-
 pub(crate) async fn browse(
     state: &ServerState,
     message_id: &str,
@@ -249,16 +241,6 @@ pub(crate) async fn browse(
         browse_current(state, message_id, expected, virtual_path),
     )
     .await
-}
-
-pub(crate) async fn file_url(
-    state: &ServerState,
-    link: &Link,
-    url_token: &str,
-    virtual_path: &str,
-    zip: bool,
-) -> Result<String> {
-    request(state, async { link.file_url(url_token, virtual_path, zip) }).await
 }
 
 pub(crate) async fn cache_file(

@@ -124,7 +124,6 @@ extend type Mutation {
 	enqueueAudios(mediaIds: [ID!]!): Boolean!
 	invalidateAudioEngine: AudioPlaybackState!
 	playAudio(mediaId: ID!): AudioItem!
-	playAudioByPath(path: String!): AudioItem!
 	removeAudioFromQueue(mediaId: ID!): Boolean!
 	removeAudioPlaylistItem(id: ID!, query: String!): ActionResult!
 	reorderAudioQueue(mediaIds: [ID!]!): Boolean!

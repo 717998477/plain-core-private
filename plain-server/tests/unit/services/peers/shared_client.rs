@@ -277,16 +277,11 @@ async fn stopping_the_core_cancels_an_inflight_encrypted_read_and_releases_capac
     let (_directory, server, _) = root();
     let state = server.runtime_state();
     let (port, tls, count, requested, release) = tls().await;
-    let link = Link::new(
-        "127.0.0.1",
-        port,
-        "fixture",
-        &plain_rs::base64_encode(&[7; 32]),
-    )
-    .unwrap();
+    let expected = card(port);
+    let row = save_card(&state, &expected);
     let read = {
         let state = state.clone();
-        tokio::spawn(async move { info(&state, &link, Some("slow")).await })
+        tokio::spawn(async move { browse(&state, &row.id, &expected, Some("slow")).await })
     };
     tokio::time::timeout(Duration::from_secs(3), requested.notified())
         .await
@@ -298,7 +293,8 @@ async fn stopping_the_core_cancels_an_inflight_encrypted_read_and_releases_capac
         .await
         .unwrap()
         .unwrap()
-        .unwrap_err();
+        .err()
+        .expect("stopped in-flight browse must fail");
     assert_eq!(error.to_string(), "Core stopped");
     assert_eq!(state.lan.capacity.available_permits(), 4);
     release.notify_one();
@@ -327,21 +323,10 @@ async fn stopped_core_rejects_every_typed_shared_operation_before_side_effects()
             .await
             .err()
             .unwrap(),
-        info(&state, &link, None).await.err().unwrap(),
         browse(&state, &row.id, &expected, None)
             .await
             .err()
             .unwrap(),
-        file_url(
-            &state,
-            &link,
-            &plain_rs::base64_encode(&[8; 32]),
-            "file",
-            false,
-        )
-        .await
-        .err()
-        .unwrap(),
     ];
     for error in errors {
         assert_eq!(error.to_string(), "Core stopped");

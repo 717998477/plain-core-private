@@ -229,11 +229,6 @@ extend type Mutation {
 extend type Query {
 	contactCount(query: String!): Int!
 	contactGroups: [ContactGroup!]!
-	"""
-	plain-app degrades this to 0 rather than erroring when the web client
-	was not granted the contact permission.
-	"""
-	contactIds(query: String!): [ID!]!
 	contactSources: [ContactSource!]!
 	contacts(query: String!, offset: Int!, limit: Int!): [Contact!]!
 }

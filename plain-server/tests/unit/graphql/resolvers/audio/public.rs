@@ -277,7 +277,7 @@ async fn playback_joins_the_queue_state_and_the_player_state() {
         .unwrap();
     let played = query(
         &schema,
-        r#"mutation { playAudioByPath(path: "/music/one.mp3") { title path } }"#,
+        r#"mutation { audioPlayPath(path: "/music/one.mp3") { path } }"#,
     )
     .await;
     assert!(played.get("errors").is_none(), "{played}");
@@ -320,11 +320,11 @@ async fn playing_a_track_never_changes_the_queue() {
 
     let played = query(
         &schema,
-        r#"mutation { playAudioByPath(path: "/music/one.mp3") { path } }"#,
+        r#"mutation { audioPlayPath(path: "/music/one.mp3") { path } }"#,
     )
     .await;
     assert_eq!(
-        played["data"]["playAudioByPath"]["path"], "/music/one.mp3",
+        played["data"]["audioPlayPath"]["path"], "/music/one.mp3",
         "{played}"
     );
 

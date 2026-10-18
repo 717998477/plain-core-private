@@ -367,17 +367,26 @@ async fn audio_queue_uses_the_registered_host_and_keeps_unindexed_playback_tempo
     let response = executor
         .execute(
             format!(
-                r#"mutation {{ playAudioByPath(path:{}) {{ mediaId path }} }}"#,
+                r#"mutation {{ audioPlayPath(path:{}) {{ path }} }}"#,
                 serde_json::to_string(&raw.to_string_lossy()).unwrap()
             )
             .into(),
         )
         .await;
+    assert_eq!(response.errors.len(), 1, "{:?}", response.errors);
+    assert_eq!(
+        response.errors[0].message,
+        "Native audio playback is unavailable"
+    );
+    let response = executor
+        .execute("{ audioPlayback {mediaId path isPlaying} }".into())
+        .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let result = response.data.into_json().unwrap();
-    assert!(result["playAudioByPath"]["mediaId"].is_null());
+    assert!(result["audioPlayback"]["mediaId"].is_null());
+    assert_eq!(result["audioPlayback"]["isPlaying"], false);
     assert_eq!(
-        result["playAudioByPath"]["path"],
+        result["audioPlayback"]["path"],
         raw.to_string_lossy().as_ref()
     );
     assert_eq!(
