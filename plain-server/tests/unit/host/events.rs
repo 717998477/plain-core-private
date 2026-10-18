@@ -57,7 +57,11 @@ async fn cancelled_audio_snapshot_read_is_retried_before_consuming_queued_events
     assert_eq!(recovered["type"], "AUDIO_PLAYBACK_UPDATED");
     let playback: Value = serde_json::from_str(recovered["payload"].as_str().unwrap()).unwrap();
     assert!(playback.get("error").is_none(), "{playback}");
-    assert!(!bridge.audio_snapshot_pending.load(Ordering::Acquire));
+    let queued = tokio::time::timeout(Duration::from_secs(3), bridge.next_event())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(queued["type"], "CONTENT_CHANGED");
     core.stop_core().await;
 }
 

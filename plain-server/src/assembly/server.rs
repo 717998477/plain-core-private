@@ -96,6 +96,15 @@ pub(crate) struct ServerState {
     pub(crate) bridge: Arc<crate::host::resources::NativeResources>,
 }
 impl ServerState {
+    pub(crate) fn native_url_token(&self) -> Result<String, String> {
+        self.native_client_id()?;
+        self.prefs
+            .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
+            .map_err(|error| error.to_string())?
+            .filter(|token| !token.is_empty())
+            .ok_or_else(|| "native URL token unavailable".into())
+    }
+
     pub(crate) fn native_client_id(&self) -> Result<String, String> {
         if *self.stop.borrow() || self.stop.has_changed().is_err() {
             return Err("Rust core stopped".into());
@@ -185,10 +194,8 @@ impl ContentServer {
     pub fn native_graphql(&self) -> Result<crate::native::graphql::NativeGraphqlExecutor, String> {
         let client_id = self.state.native_client_id()?;
         Ok(crate::native::graphql::NativeGraphqlExecutor::new(
-            self.graphql_executor(),
-            self.state.events.clone(),
+            self.state.clone(),
             client_id,
-            self.state.stop.clone(),
         ))
     }
 
@@ -687,13 +694,7 @@ impl ContentServer {
     }
 
     pub fn native_url_token(&self) -> Result<String, String> {
-        self.state.native_client_id()?;
-        self.state
-            .prefs
-            .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
-            .map_err(|error| error.to_string())?
-            .filter(|token| !token.is_empty())
-            .ok_or_else(|| "native URL token unavailable".into())
+        self.state.native_url_token()
     }
 
     #[cfg(feature = "http_transport")]

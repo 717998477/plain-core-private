@@ -357,7 +357,7 @@ async fn pairing_success_keeps_native_credentials_out_of_every_network_event_soc
     let (_directory, core) = public_fixture();
     let state = core.runtime_state();
     let native = core.native_graphql().unwrap();
-    let mut native_events = native.subscribe_events();
+    let mut native_events = native.subscribe_events(Default::default()).unwrap();
     let session =
         crate::services::sessions::create(&state, "Pairing event fixture".into()).unwrap();
     let clients = [

@@ -1,38 +1,27 @@
+use crate::assembly::server::ServerState;
 use crate::graphql::executor::GraphqlExecutor;
+use crate::native::events::NativeEventStream;
 use async_graphql::{Request, Response};
-use plain_rs::events::WsEvent;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
 #[derive(Clone)]
 pub struct NativeGraphqlExecutor {
     executor: GraphqlExecutor,
-    events: broadcast::Sender<WsEvent>,
+    state: ServerState,
     client_id: String,
-    stop: watch::Receiver<bool>,
 }
 
 impl NativeGraphqlExecutor {
-    pub(crate) fn new(
-        executor: GraphqlExecutor,
-        events: broadcast::Sender<WsEvent>,
-        client_id: String,
-        stop: watch::Receiver<bool>,
-    ) -> Self {
+    pub(crate) fn new(state: ServerState, client_id: String) -> Self {
         Self {
-            executor,
-            events,
+            executor: GraphqlExecutor::new(state.clone()),
+            state,
             client_id,
-            stop,
         }
     }
 
-    pub fn subscribe_events(&self) -> broadcast::Receiver<WsEvent> {
-        self.events.subscribe()
-    }
-
-    pub async fn wait_stopped(&self) {
-        let mut stop = self.stop.clone();
-        let _ = stop.wait_for(|stopped| *stopped).await;
+    pub fn subscribe_events(&self, scope: NativeRequestScope) -> Result<NativeEventStream, String> {
+        NativeEventStream::scoped(self.state.clone(), self.client_id.clone(), scope)
     }
 
     pub fn client_id(&self) -> &str {

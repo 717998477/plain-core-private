@@ -1,4 +1,7 @@
 #[cfg(feature = "core")]
+pub mod events;
+
+#[cfg(feature = "core")]
 pub mod assets;
 
 #[cfg(feature = "core")]
