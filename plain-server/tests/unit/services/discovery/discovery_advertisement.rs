@@ -49,3 +49,42 @@ async fn native_advertisements_use_current_preferences_without_host_calls() {
     state.host.disconnect(generation);
     core.stop_core().await;
 }
+
+#[tokio::test]
+async fn first_start_advertises_the_persisted_generated_mdns_name() {
+    let _runtime = crate::services::discovery::mdns_runtime::TEST_LOCK
+        .lock()
+        .await;
+    let directory = tempfile::tempdir().unwrap();
+    let (core, state) = core_with_host(directory.path());
+    let hostname = plain_rs::prefs::system::snapshot(&state.prefs)
+        .unwrap()
+        .mdns_hostname;
+    let label = hostname.strip_suffix(".local").unwrap();
+    assert_eq!(label.len(), 2);
+    assert!(
+        label
+            .bytes()
+            .all(|byte| b"abcdefghjkmnpqrstuwxyz".contains(&byte))
+    );
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    core.start_public(
+        0,
+        0,
+        cert.cert.pem().into_bytes(),
+        cert.key_pair.serialize_pem().into_bytes(),
+    )
+    .await
+    .unwrap();
+    let advertised = execute(&state, Request::Mdns {}).await.unwrap();
+    assert_eq!(advertised["targetHostname"], hostname);
+    let reloaded = plain_rs::prefs::Prefs::load(state.prefs.path()).unwrap();
+    assert_eq!(plain_rs::prefs::ensure_mdns_hostname(&reloaded), hostname);
+    state
+        .prefs
+        .set("mdns_hostname", "custom-device.local")
+        .unwrap();
+    let advertised = execute(&state, Request::Mdns {}).await.unwrap();
+    assert_eq!(advertised["targetHostname"], "custom-device.local");
+    core.stop_core().await;
+}

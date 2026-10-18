@@ -86,11 +86,17 @@ fn ensure_url_token_regenerates_zero_token() {
 }
 
 #[test]
-fn ensure_mdns_hostname_uses_the_shared_default() {
+fn ensure_mdns_hostname_generates_and_persists_the_pre_migration_format() {
     let prefs = tmp_prefs("mdns");
     let h = ensure_mdns_hostname(&prefs);
-    assert_eq!(h, "plainapp.local");
-    // Persisted + stable across reloads.
+    assert!(h.ends_with(".local"));
+    let label = h.strip_suffix(".local").unwrap();
+    assert_eq!(label.len(), 2);
+    assert!(
+        label
+            .bytes()
+            .all(|byte| b"abcdefghjkmnpqrstuwxyz".contains(&byte))
+    );
     assert_eq!(
         prefs.get::<String>("mdns_hostname").unwrap().as_deref(),
         Some(h.as_str())
@@ -108,4 +114,13 @@ fn default_device_name_prefers_hostname() {
     assert!(!name.is_empty());
     assert!(!name.ends_with(".local"));
     assert!(!name.ends_with('.'));
+}
+
+#[test]
+fn ensure_mdns_hostname_preserves_a_saved_custom_name() {
+    let prefs = tmp_prefs("mdns-custom");
+    prefs.set("mdns_hostname", "custom-device.local").unwrap();
+    assert_eq!(ensure_mdns_hostname(&prefs), "custom-device.local");
+    let reloaded = Prefs::load(prefs.path()).unwrap();
+    assert_eq!(ensure_mdns_hostname(&reloaded), "custom-device.local");
 }

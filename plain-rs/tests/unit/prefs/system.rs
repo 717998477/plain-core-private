@@ -164,3 +164,37 @@ fn key_value_settings_validate_protected_fields_and_patch_permissions_atomically
     );
     assert_eq!(prefs.entries(), before);
 }
+
+#[test]
+fn bootstrap_generates_mdns_name_once_for_new_or_empty_preferences() {
+    for empty_value in [false, true] {
+        let (_dir, prefs) = fixture();
+        if empty_value {
+            prefs.set(MDNS_HOSTNAME, "").unwrap();
+        }
+        bootstrap(&prefs).unwrap();
+        let hostname = snapshot(&prefs).unwrap().mdns_hostname;
+        let label = hostname.strip_suffix(".local").unwrap();
+        assert_eq!(label.len(), 2);
+        assert!(
+            label
+                .bytes()
+                .all(|byte| b"abcdefghjkmnpqrstuwxyz".contains(&byte))
+        );
+        assert_eq!(crate::prefs::ensure_mdns_hostname(&prefs), hostname);
+        let reloaded = Prefs::load(prefs.path()).unwrap();
+        bootstrap(&reloaded).unwrap();
+        assert_eq!(snapshot(&reloaded).unwrap().mdns_hostname, hostname);
+    }
+}
+
+#[test]
+fn bootstrap_preserves_the_saved_mdns_name() {
+    let (_dir, prefs) = fixture();
+    prefs.set(MDNS_HOSTNAME, "custom-device.local").unwrap();
+    bootstrap(&prefs).unwrap();
+    assert_eq!(
+        snapshot(&prefs).unwrap().mdns_hostname,
+        "custom-device.local"
+    );
+}

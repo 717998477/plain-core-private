@@ -203,7 +203,8 @@ impl Runtime {
             state
                 .prefs
                 .get::<String>(plain_rs::prefs::system::keys::MDNS_HOSTNAME)?
-                .unwrap_or_else(|| "plainapp.local".into()),
+                .filter(|hostname| !hostname.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("Missing mDNS hostname"))?,
         ));
         let scanning = Arc::new(AtomicBool::new(false));
         let context = Context::from(state);

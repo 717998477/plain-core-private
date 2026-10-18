@@ -65,7 +65,7 @@ pub fn bootstrap(prefs: &Prefs) -> Result<()> {
         ensure(map, MASTER_SECRET, crate::gen_token)?;
         ensure(map, PASSWORD, || random_password(6))?;
         ensure(map, ADB_TOKEN, || random_password(32))?;
-        ensure(map, MDNS_HOSTNAME, default_mdns_hostname)?;
+        ensure(map, MDNS_HOSTNAME, generate_mdns_hostname)?;
         let rotate = read::<bool>(map, ROTATE_URL_TOKEN_ON_RESTART)?;
         if rotate {
             put(map, URL_TOKEN, crate::gen_token())?;
@@ -261,8 +261,14 @@ pub const PERMISSIONS: &[&str] = &[
     "CLIPBOARD",
 ];
 
-pub(crate) fn default_mdns_hostname() -> String {
-    "plainapp.local".into()
+pub(crate) fn generate_mdns_hostname() -> String {
+    use rand::Rng;
+    let alphabet = b"abcdefghjkmnpqrstuwxyz";
+    let mut rng = rand::thread_rng();
+    let label: String = (0..2)
+        .map(|_| alphabet[rng.gen_range(0..alphabet.len())] as char)
+        .collect();
+    format!("{label}.local")
 }
 
 /// Diagnostic entries exclude secrets that must stay in the core.

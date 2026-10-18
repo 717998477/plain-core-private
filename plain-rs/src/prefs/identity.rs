@@ -117,7 +117,7 @@ pub fn ensure_mdns_hostname(prefs: &Prefs) -> String {
     ensure_string(
         prefs,
         crate::prefs::system::keys::MDNS_HOSTNAME,
-        crate::prefs::system::default_mdns_hostname,
+        crate::prefs::system::generate_mdns_hostname,
     )
 }
 
