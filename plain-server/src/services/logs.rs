@@ -1,49 +1,27 @@
-use crate::host::bridge::Host;
 use std::{
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::RwLock,
 };
 
 pub(crate) struct Logs {
-    host: Arc<Host>,
-    path: RwLock<Option<PathBuf>>,
+    path: RwLock<PathBuf>,
 }
 impl Logs {
-    pub(crate) fn new(host: Arc<Host>) -> Self {
+    pub(crate) fn new(directory: &Path) -> Self {
         Self {
-            host,
-            path: RwLock::new(None),
+            path: RwLock::new(plain_rs::data_paths::DataPaths::new(directory).log_file()),
         }
     }
     pub(crate) fn set_path(&self, path: PathBuf) -> Result<(), String> {
         if !path.is_absolute() {
             return Err("Absolute log file path required".into());
         }
-        *self.path.write().map_err(|error| error.to_string())? = Some(path);
+        *self.path.write().map_err(|error| error.to_string())? = path;
         Ok(())
     }
-    pub(crate) async fn path(&self) -> Result<PathBuf, String> {
-        if let Some(path) = self.path.read().map_err(|error| error.to_string())?.clone() {
-            return Ok(path);
-        }
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        {
-            let value = self
-                .host
-                .call("systemLogPath", serde_json::json!({}))
-                .await?;
-            let path = PathBuf::from(value.as_str().ok_or("Invalid log path")?);
-            if !path.is_absolute() {
-                return Err("Absolute log file path required".into());
-            }
-            return Ok(path);
-        }
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        {
-            let _ = &self.host;
-            Err("Log file path is not configured".into())
-        }
+    pub(crate) fn path(&self) -> Result<PathBuf, String> {
+        Ok(self.path.read().map_err(|error| error.to_string())?.clone())
     }
     pub(crate) async fn read(
         &self,
@@ -54,7 +32,7 @@ impl Logs {
         if limit <= 0 {
             return Ok(Vec::new());
         }
-        let path = self.path().await?;
+        let path = self.path()?;
         tokio::task::spawn_blocking(move || {
             read_lines_newest_first(
                 &path,
@@ -68,7 +46,7 @@ impl Logs {
         .map_err(|error| error.to_string())
     }
     pub(crate) async fn size(&self) -> Result<u64, String> {
-        let path = self.path().await?;
+        let path = self.path()?;
         tokio::task::spawn_blocking(move || {
             log_files(&path)?.into_iter().try_fold(0u64, |size, file| {
                 size.checked_add(std::fs::metadata(file)?.len())
@@ -80,7 +58,7 @@ impl Logs {
         .map_err(|error| error.to_string())
     }
     pub(crate) async fn clear_files(&self) -> Result<(), String> {
-        let path = self.path().await?;
+        let path = self.path()?;
         tokio::task::spawn_blocking(move || {
             for file in log_files(&path)? {
                 let result = if file == path {
@@ -109,7 +87,7 @@ impl Logs {
         cache: &plain_rs::cache_paths::CachePaths,
         stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Option<String>, String> {
-        let path = self.path().await?;
+        let path = self.path()?;
         let paths = plain_rs::data_paths::DataPaths::new(directory);
         let reports = vec![paths.crash_report(), paths.crash_log()];
         let target = cache.root().join("logs.zip");
@@ -152,7 +130,7 @@ impl Logs {
             .map(Some)
     }
     pub(crate) async fn clear(&self) -> Result<(), String> {
-        let path = self.path().await?;
+        let path = self.path()?;
         tokio::task::spawn_blocking(move || {
             match std::fs::OpenOptions::new().write(true).open(path) {
                 Ok(file) => file.set_len(0),

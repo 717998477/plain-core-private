@@ -394,7 +394,6 @@ impl DeviceQuery {
             .data::<crate::assembly::services::Services>()?
             .logs
             .path()
-            .await
             .map_err(async_graphql::Error::new)?
             .to_string_lossy()
             .into_owned())

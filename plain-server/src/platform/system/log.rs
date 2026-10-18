@@ -132,12 +132,11 @@ fn write_log(level: Level, body: &str) {
 // ---------------------------------------------------------------------------
 
 /// File name of the on-disk log, relative to `<data_dir>/logs/`.
-const LOG_FILE_NAME: &str = "latest.log";
 
 /// Default on-disk log path for a data dir. Single source of truth for
 /// the startup sink, the `appLogPath` resolver and tests.
 pub fn default_log_file(data_dir: &Path) -> PathBuf {
-    data_dir.join("logs").join(LOG_FILE_NAME)
+    plain_rs::data_paths::DataPaths::new(data_dir).log_file()
 }
 
 struct Sink {

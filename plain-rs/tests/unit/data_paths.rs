@@ -11,6 +11,8 @@ fn all_platforms_derive_one_layout_from_the_data_root() {
         (paths.kv(), "fjall"),
         (paths.note_images(), "note-images"),
         (paths.audio(), "audio"),
+        (paths.logs(), "logs"),
+        (paths.log_file(), "logs/latest.log"),
         (paths.crash_report(), "crash_report.txt"),
         (paths.crash_log(), "crash_log.txt"),
         (paths.pomodoro_sound(), "audio/pomodoro_sound.mp3"),
@@ -27,7 +29,7 @@ fn all_platforms_derive_one_layout_from_the_data_root() {
 #[cfg(unix)]
 #[test]
 fn fixed_directories_cannot_redirect_application_io() {
-    for child in ["note-images", "audio"] {
+    for child in ["note-images", "audio", "logs"] {
         let directory = tempfile::tempdir().unwrap();
         let external = tempfile::tempdir().unwrap();
         let paths = DataPaths::new(directory.path());

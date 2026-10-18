@@ -249,6 +249,10 @@ impl ContentServer {
         ))
     }
 
+    pub fn log_file(&self) -> Result<PathBuf, String> {
+        self.state.logs.path()
+    }
+
     pub fn set_log_file(&self, path: &Path) -> Result<(), String> {
         self.state.logs.set_path(path.to_owned())
     }

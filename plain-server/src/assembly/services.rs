@@ -102,7 +102,7 @@ impl Services {
         );
         let sms_sends =
             crate::services::sms::send_runtime::Runtime::new(prefs.clone(), events.clone());
-        let logs = Arc::new(crate::services::logs::Logs::new(host.clone()));
+        let logs = Arc::new(crate::services::logs::Logs::new(&directory));
         let remote_cache = Arc::new(crate::services::files::remote_cache::RemoteCache::new(
             cache.root().to_owned(),
         ));

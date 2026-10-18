@@ -37,6 +37,12 @@ impl DataPaths {
     pub fn pomodoro_sound(&self) -> PathBuf {
         self.audio().join("pomodoro_sound.mp3")
     }
+    pub fn logs(&self) -> PathBuf {
+        self.root.join("logs")
+    }
+    pub fn log_file(&self) -> PathBuf {
+        self.logs().join("latest.log")
+    }
     pub fn crash_report(&self) -> PathBuf {
         self.root.join("crash_report.txt")
     }
@@ -47,7 +53,7 @@ impl DataPaths {
         self.root.join("tls-identity.json")
     }
     pub fn initialize_directories(&self) -> std::io::Result<()> {
-        for directory in [self.note_images(), self.audio()] {
+        for directory in [self.note_images(), self.audio(), self.logs()] {
             if std::fs::symlink_metadata(&directory).is_ok_and(|metadata| metadata.is_symlink()) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,

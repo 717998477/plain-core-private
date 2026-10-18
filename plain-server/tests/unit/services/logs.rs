@@ -80,7 +80,7 @@ fn newest_page_stops_after_one_block() {
 async fn clear_preserves_an_append_handle_and_missing_file_stays_missing() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("plain.log");
-    let logs = Logs::new(Arc::new(Host::default()));
+    let logs = Logs::new(directory.path());
     logs.set_path(path.clone()).unwrap();
     logs.clear().await.unwrap();
     assert!(!path.exists());
@@ -94,6 +94,7 @@ async fn clear_preserves_an_append_handle_and_missing_file_stays_missing() {
     writer.write_all(b"new\n").unwrap();
     assert_eq!(logs.read(String::new(), 0, 10).await.unwrap(), vec!["new"]);
     assert!(logs.set_path(PathBuf::from("relative.log")).is_err());
+    assert_eq!(logs.path().unwrap(), path);
 }
 
 #[test]
@@ -105,6 +106,37 @@ fn missing_log_is_empty_but_read_failures_are_reported() {
             .is_empty()
     );
     assert!(read_lines_newest_first(directory.path(), None, 0, 10).is_err());
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn native_main_uses_the_shared_default_path_without_host_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let path = plain_rs::data_paths::DataPaths::new(directory.path()).log_file();
+    assert_eq!(core.log_file().unwrap(), path);
+    let contents = b"INFO previous\nERROR current\n";
+    std::fs::write(&path, contents).unwrap();
+    let native = core.native_graphql().unwrap();
+    let (generation, mut requests) = core.runtime_state().host.connect();
+    for _ in 0..3 {
+        let response = native
+            .execute(async_graphql::Request::new(
+                "{ appLogPath appLogs(query:\"\",offset:0,limit:2) appLogFilesSize }",
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        assert_eq!(data["appLogPath"], path.to_string_lossy().as_ref());
+        assert_eq!(
+            data["appLogs"],
+            serde_json::json!(["ERROR current", "INFO previous"])
+        );
+        assert_eq!(data["appLogFilesSize"], contents.len());
+    }
+    assert!(requests.try_recv().is_err());
+    core.runtime_state().host.disconnect(generation);
+    core.stop_core().await;
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -131,7 +163,7 @@ async fn native_main_uses_the_injected_logger_path_without_host_requests() {
         .execute(async_graphql::Request::new("mutation { clearAppLogs }"))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert!(std::fs::read(path).unwrap().is_empty());
+    assert!(std::fs::read(&path).unwrap().is_empty());
     assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }
@@ -149,7 +181,7 @@ async fn storage_management_counts_log_family_and_preserves_the_active_append_ha
     std::fs::write(&unrelated, b"preserved").unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(&unrelated, directory.path().join("plain.log.link")).unwrap();
-    let logs = Logs::new(Arc::new(Host::default()));
+    let logs = Logs::new(directory.path());
     logs.set_path(path.clone()).unwrap();
     assert_eq!(logs.size().await.unwrap(), 13);
     let mut writer = std::fs::OpenOptions::new()
@@ -233,7 +265,7 @@ async fn main_log_export_uses_shared_zip_and_keeps_current_only_clear_contract()
 #[tokio::test]
 async fn missing_log_family_reports_zero_and_exports_nothing() {
     let directory = tempfile::tempdir().unwrap();
-    let logs = Logs::new(Arc::new(Host::default()));
+    let logs = Logs::new(directory.path());
     logs.set_path(directory.path().join("missing/latest.log"))
         .unwrap();
     assert_eq!(logs.size().await.unwrap(), 0);
