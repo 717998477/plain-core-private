@@ -1,4 +1,8 @@
 use super::*;
+use crate::chat::attachments::app_file_store;
+use crate::chat::attachments::app_file_store::chat_deletion;
+use crate::chat::attachments::app_file_store::chat_deletion::Selection;
+use serde_json::{Value, json};
 const TEXT: &str = r#"{"type":"TEXT","value":{"text":"fixture ' 中文"}}"#;
 fn db() -> Db {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
@@ -227,4 +231,100 @@ fn channel_reception_requires_current_joined_membership_before_consuming_receipt
         Ok(())
     })
     .unwrap();
+}
+
+fn attachment_fixture() -> (tempfile::TempDir, Db, app_file_store::ImportResult) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("plain.db")).unwrap();
+    let file =
+        app_file_store::import_bytes(&db, dir.path(), b"synthetic owned attachment", "text/plain")
+            .unwrap();
+    (dir, db, file)
+}
+fn attachment_item(id: &str, file: &app_file_store::ImportResult) -> Value {
+    json!({"id":id,"uri":format!("fid:{}",file.fid_suffix),"fileName":"fixture.txt","size":26,"loading":false})
+}
+fn attachment_refs(db: &Db, id: &str) -> i64 {
+    db.with_conn(|c| {
+        c.query_row("SELECT ref_count FROM app_files WHERE id=?1", [id], |r| {
+            r.get(0)
+        })
+    })
+    .unwrap()
+}
+fn create_attachments(
+    db: &Db,
+    destination: &str,
+    items: Vec<Value>,
+    images: bool,
+) -> Result<DChat> {
+    create(
+        db,
+        destination.strip_prefix("peer:").unwrap_or(destination),
+        "",
+        &json!({"type":if images {"IMAGES"} else {"FILES"},"value":{"items":items}}).to_string(),
+    )
+}
+#[test]
+fn one_import_shared_across_targets_keeps_physical_content_until_last_owner() {
+    let (dir, db, file) = attachment_fixture();
+    let first = create_attachments(
+        &db,
+        "peer:local",
+        vec![attachment_item("file", &file)],
+        false,
+    )
+    .unwrap();
+    assert_eq!(attachment_refs(&db, &file.id), 1);
+    let second = create_attachments(
+        &db,
+        "peer:other",
+        vec![attachment_item("file", &file)],
+        false,
+    )
+    .unwrap();
+    assert_eq!(attachment_refs(&db, &file.id), 2);
+    chat_deletion::delete(&db, dir.path(), Selection::Ids(&[first.id])).unwrap();
+    assert_eq!(attachment_refs(&db, &file.id), 1);
+    assert!(file.real_path.exists());
+    chat_deletion::delete(&db, dir.path(), Selection::Ids(&[second.id])).unwrap();
+    assert!(!file.real_path.exists());
+}
+#[test]
+fn a_fresh_deduplicated_import_is_consumed_once_without_double_increment() {
+    let (dir, db, file) = attachment_fixture();
+    create_attachments(&db, "local", vec![attachment_item("first", &file)], true).unwrap();
+    let imported =
+        app_file_store::import_bytes(&db, dir.path(), b"synthetic owned attachment", "text/plain")
+            .unwrap();
+    assert_eq!(attachment_refs(&db, &file.id), 2);
+    create_attachments(
+        &db,
+        "peer:other",
+        vec![attachment_item("second", &imported)],
+        true,
+    )
+    .unwrap();
+    assert_eq!(attachment_refs(&db, &file.id), 2);
+}
+#[test]
+fn failed_attachment_batch_does_not_claim_imports_or_leave_partial_messages() {
+    let (_dir, db, file) = attachment_fixture();
+    let content =
+        json!({"type":"FILES","value":{"items":[attachment_item("file", &file)]}}).to_string();
+    db.with_conn(|connection| connection.execute_batch("CREATE TRIGGER reject_second BEFORE INSERT ON chats WHEN NEW.to_id='other' BEGIN SELECT RAISE(FAIL,'synthetic refusal'); END")).unwrap();
+    assert!(
+        create_many(
+            &db,
+            &[("local".into(), "".into()), ("other".into(), "".into())],
+            &content
+        )
+        .is_err()
+    );
+    assert!(db.get_all_chats().is_empty());
+    assert_eq!(attachment_refs(&db, &file.id), 1);
+    assert!(file.real_path.exists());
+    assert!(create(&db, "local", "", &json!({"type":"FILES","value":{"items":[json!({"id":"missing","uri":"fid:missing.txt","size":1})]}}).to_string()).is_err());
+    assert!(db.get_all_chats().is_empty());
+    assert_eq!(attachment_refs(&db, &file.id), 1);
 }

@@ -87,7 +87,6 @@ extend type Mutation {
 	browseMdns: MdnsState!
 	endBleScan(scanId: ID!): Boolean!
 	prewarmPeerTransport(id: ID!): PeerPrewarmAdvertisement
-	publishMdns: MdnsState!
 	releaseDiscovery(token: ID!): Boolean!
 	releaseMdnsDebugSession(token: String!): MdnsState!
 	startMdnsReceiver: MdnsState!

@@ -185,7 +185,6 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                                 | "controlDlnaReceiver"
                                 | "startMdnsReceiver"
                                 | "browseMdns"
-                                | "publishMdns"
                                 | "acquireDiscovery"
                                 | "releaseDiscovery"
                                 | "acquireMdnsDebugSession"

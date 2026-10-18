@@ -3,7 +3,7 @@ use crate::assembly::server::ServerState;
 use crate::graphql::types::ActionResult;
 use crate::services::chat::chat_actions;
 use async_graphql::{Context, ID, Object, SimpleObject};
-use plain_rs::chat::messages::{message_commands, message_lifecycle};
+use plain_rs::chat::messages::target as message_target;
 
 #[derive(SimpleObject)]
 pub struct ChatConversation {
@@ -155,38 +155,6 @@ impl ChatHostMutation {
             async_graphql::Error::new("Message unavailable")
         })?))
     }
-    async fn create_chat_item(
-        &self,
-        ctx: &Context<'_>,
-        target: String,
-        content: String,
-    ) -> async_graphql::Result<ChatItem> {
-        let state = ctx.data::<ServerState>()?;
-        let (to, channel) = message_commands::target(&target)?;
-        let chat = message_lifecycle::create(&state.db, &to, &channel, &content)?;
-        chat_actions::committed(state, &chat, plain_rs::chat::events::WS_MESSAGE_CREATED);
-        Ok(item(&chat))
-    }
-    async fn replace_chat_files(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-        content: String,
-    ) -> async_graphql::Result<Option<ChatItem>> {
-        let state = ctx.data::<ServerState>()?;
-        let content: serde_json::Value = serde_json::from_str(&content)?;
-        let items = content["value"]["items"]
-            .as_array()
-            .ok_or_else(|| async_graphql::Error::new("File items required"))?
-            .clone();
-        let Some(chat) =
-            message_commands::replace_files(&state.db, &state.directory, id.as_str(), items)?
-        else {
-            return Ok(None);
-        };
-        chat_actions::committed(state, &chat, plain_rs::chat::events::WS_MESSAGE_UPDATED);
-        Ok(Some(item(&chat_actions::deliver(state, chat).await?)))
-    }
     async fn clear_chat_items(
         &self,
         ctx: &Context<'_>,
@@ -194,7 +162,7 @@ impl ChatHostMutation {
     ) -> async_graphql::Result<ActionResult> {
         use plain_rs::chat::attachments::app_file_store::chat_deletion::{self, Selection};
         let state = ctx.data::<ServerState>()?;
-        let (peer, channel) = message_commands::target(&target)?;
+        let (peer, channel) = message_target::parse(&target)?;
         let count = chat_deletion::delete(
             &state.db,
             &state.directory,

@@ -1,8 +1,8 @@
 use crate::assembly::server::ServerState;
 use anyhow::{Result, ensure};
 use plain_rs::chat::events;
-use plain_rs::chat::messages::message_commands;
 use plain_rs::chat::messages::share_send;
+use plain_rs::chat::messages::target as message_target;
 use plain_rs::db::DChat;
 use plain_rs::events::WsEvent;
 use serde_json::json;
@@ -23,7 +23,7 @@ pub(crate) async fn deliver(state: &ServerState, row: DChat) -> Result<DChat> {
         .ok_or_else(|| anyhow::anyhow!("Message removed"))
 }
 pub(crate) async fn send(state: &ServerState, target: &str, content: &str) -> Result<DChat> {
-    let (to, channel) = message_commands::target(target)?;
+    let (to, channel) = message_target::parse(target)?;
     let (content, _imports) = prepare_content(state, content)?;
     let row =
         plain_rs::chat::messages::message_lifecycle::create(&state.db, &to, &channel, &content)?;
@@ -69,7 +69,7 @@ pub(crate) fn validate_targets(targets: &[String]) -> Result<Vec<(String, String
     ensure!(targets.len() <= 128, "Too many share targets");
     targets
         .iter()
-        .map(|target| message_commands::target(target))
+        .map(|target| message_target::parse(target))
         .collect()
 }
 

@@ -201,9 +201,6 @@ impl MdnsMutation {
     async fn browse_mdns(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
         control(ctx, Request::Browse {}).await
     }
-    async fn publish_mdns(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::Publish {}).await
-    }
     async fn acquire_mdns_debug_session(
         &self,
         ctx: &Context<'_>,

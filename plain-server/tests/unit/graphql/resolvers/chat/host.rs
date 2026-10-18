@@ -87,21 +87,6 @@ async fn prepared_files_retain_metadata_and_message_owners_after_import_cleanup(
         .unwrap();
     let suffix = file.real_path.rsplit('/').next().unwrap();
     let content = json!({"type":"FILES","value":{"items":[{"id":"attachment","uri":format!("fid:{suffix}"),"size":3,"fileName":"fixture.txt","width":12,"height":34,"durationMs":56,"summary":""}]}}).to_string();
-    let placeholder = execute(&server, r#"mutation { createChatItem(target:"local", content:"{\"type\":\"IMAGES\",\"value\":{\"items\":[]}}") {id} }"#.into()).await;
-    let placeholder_id = placeholder["createChatItem"]["id"].as_str().unwrap();
-    let replaced = execute(
-        &server,
-        format!(
-            r#"mutation {{ replaceChatFiles(id:{}, content:{}) {{status content}} }}"#,
-            json!(placeholder_id),
-            json!(content)
-        ),
-    )
-    .await;
-    assert_eq!(replaced["replaceChatFiles"]["status"], "SENT");
-    let replacement: Value =
-        serde_json::from_str(replaced["replaceChatFiles"]["content"].as_str().unwrap()).unwrap();
-    assert_eq!(replacement["type"], "IMAGES");
     let first = execute(
         &server,
         format!(
@@ -126,14 +111,6 @@ async fn prepared_files_retain_metadata_and_message_owners_after_import_cleanup(
     for row in forwarded["forwardChatItems"].as_array().unwrap() {
         assert_eq!(row["content"], first["sendChatItem"][0]["content"]);
     }
-    execute(
-        &server,
-        format!(
-            r#"mutation {{ deleteChatItem(id:{}) }}"#,
-            json!(placeholder_id)
-        ),
-    )
-    .await;
     store.release(file.id.clone()).await.unwrap();
     assert_eq!(
         state.db.app_file_get(&file.id).unwrap().unwrap().ref_count,

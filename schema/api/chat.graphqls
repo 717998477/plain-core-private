@@ -106,7 +106,6 @@ extend type Mutation {
 	addChatChannelMember(id: ID!, peerId: ID!): ChatChannel!
 	clearChatItems(target: String!): ActionResult!
 	createChatChannel(name: String!): ChatChannel!
-	createChatItem(target: String!, content: String!): ChatItem!
 	declineChatChannelInvite(id: ID!): Boolean!
 	deleteChatChannel(id: ID!): Boolean!
 	"""
@@ -120,7 +119,6 @@ extend type Mutation {
 	forwardChatItems(id: ID!, targets: [String!]!): [ChatItem!]!
 	leaveChatChannel(id: ID!): Boolean!
 	removeChatChannelMember(id: ID!, peerId: ID!): ChatChannel!
-	replaceChatFiles(id: ID!, content: String!): ChatItem
 	retryChatItem(id: ID!): ChatItem!
 	"""
 	Send a chat message. `target` is the chat target id — a bare peer id
