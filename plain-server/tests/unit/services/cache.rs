@@ -180,11 +180,11 @@ fn cache_byte_counts_preserve_64_bit_width_without_reading_contents() {
 fn portable_cache_clear_retains_only_the_active_tree_and_its_ancestors() {
     let dir = tempfile::tempdir().unwrap();
     let cache = CachePaths::new(&dir.path().join("cache"));
-    let active = cache.web_assets().join("active");
+    let active = cache.root().join("retained").join("active");
     fs_create_cache_file(&active.join("assets/app.js"), b"keep");
     let unrelated = [
-        cache.web_assets().join("inactive/index.html"),
-        cache.web_assets().join(".extract-stale/index.html"),
+        cache.root().join("retained").join("inactive/index.html"),
+        cache.root().join("retained").join("partial/index.html"),
         cache.root().join("scratch"),
     ];
     for path in &unrelated {
@@ -213,15 +213,19 @@ fn retained_asset_cleanup_unlinks_sibling_links_without_traversing_them() {
     let dir = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
     let cache = CachePaths::new(&dir.path().join("cache"));
-    let active = cache.web_assets().join("active");
+    let active = cache.root().join("retained").join("active");
     fs_create_cache_file(&active.join("index.html"), b"active");
     fs_create_cache_file(&external.path().join("index.html"), b"external");
-    std::os::unix::fs::symlink(external.path(), cache.web_assets().join("linked")).unwrap();
+    std::os::unix::fs::symlink(
+        external.path(),
+        cache.root().join("retained").join("linked"),
+    )
+    .unwrap();
     clear_files(&cache, Some(&active)).unwrap();
     assert_eq!(
         std::fs::read(external.path().join("index.html")).unwrap(),
         b"external"
     );
     assert_eq!(std::fs::read(active.join("index.html")).unwrap(), b"active");
-    assert!(!cache.web_assets().join("linked").exists());
+    assert!(!cache.root().join("retained").join("linked").exists());
 }

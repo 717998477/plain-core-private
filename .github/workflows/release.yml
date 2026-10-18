@@ -23,40 +23,8 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  web:
-    name: Build the web bundle
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out the frontend
-        uses: actions/checkout@v4
-        with:
-          repository: plainhub/plain-desktop
-          path: plain-desktop
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: yarn
-          cache-dependency-path: plain-desktop/yarn.lock
-
-      - name: Build
-        working-directory: plain-desktop
-        run: |
-          corepack enable
-          yarn install --immutable
-          VITE_APP_API_HOST="" yarn build
-
-      - name: Upload the bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: plain-desktop/dist
-          retention-days: 1
-
   binary:
     name: plainapp ${{ matrix.arch }}
-    needs: web
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -85,12 +53,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-
-      - name: Unpack the web bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: plain-cli/src/web_dist
 
       - name: Build plainapp with the embedded UI
         run: cargo build --release --locked --target ${{ matrix.target }} -p plainapp

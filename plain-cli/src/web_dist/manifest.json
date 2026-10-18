@@ -1,0 +1,62 @@
+{
+    "name": "PlainApp",
+    "short_name": "PlainApp",
+    "start_url": "/",
+    "display": "standalone",
+    "icons": [
+        {
+            "sizes": "114x114",
+            "src": "/icons/114.png"
+        },
+        {
+            "sizes": "120x120",
+            "src": "/icons/120.png"
+        },
+        {
+            "sizes": "144x144",
+            "src": "/icons/144.png"
+        },
+        {
+            "sizes": "152x152",
+            "src": "/icons/152.png"
+        },
+        {
+            "sizes": "180x180",
+            "src": "/icons/180.png"
+        },
+        {
+            "sizes": "57x57",
+            "src": "/icons/57.png"
+        },
+        {
+            "sizes": "60x60",
+            "src": "/icons/60.png"
+        },
+        {
+            "sizes": "72x72",
+            "src": "/icons/72.png"
+        },
+        {
+            "sizes": "76x76",
+            "src": "/icons/76.png"
+        },
+        {
+            "src": "/icons/192.png",
+            "type": "image/png",
+            "sizes": "192x192"
+        },
+        {
+            "src": "/icons/512.png",
+            "type": "image/png",
+            "sizes": "512x512"
+        }
+    ],
+    "prefer_related_applications": true,
+    "related_applications": [
+        {
+            "platform": "play",
+            "url": "https://play.google.com/store/apps/details?id=com.ismartcoding.plain",
+            "id": "com.ismartcoding.plain"
+        }
+    ]
+}

@@ -28,4 +28,3 @@ AGENTS.md
 .ai
 .cargo/config.toml
 __pycache__/
-/plain-cli/src/web_dist/

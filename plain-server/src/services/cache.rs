@@ -117,7 +117,12 @@ pub(crate) async fn clear_application(
         download
             .reset_after_cache_clear(&state)
             .map_err(|error| error.to_string())?;
-        crate::services::web_assets::clear_cache(&state).await
+        let retained = state
+            .web_root
+            .read()
+            .map_err(|error| error.to_string())?
+            .clone();
+        clear(&state.cache, &state.host, retained).await
     })
     .await
     .map_err(|error| error.to_string())?

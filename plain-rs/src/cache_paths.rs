@@ -30,9 +30,6 @@ impl CachePaths {
     pub fn app_updates(&self) -> PathBuf {
         self.root.join("updates")
     }
-    pub fn web_assets(&self) -> PathBuf {
-        self.root.join("web_assets")
-    }
     pub fn pdf_previews(&self) -> PathBuf {
         self.root.join("preview_pdf")
     }
@@ -59,7 +56,6 @@ impl CachePaths {
             self.image_cache(),
             self.video_cache(),
             self.shared_previews(),
-            self.web_assets(),
             self.app_updates(),
         ] {
             if std::fs::symlink_metadata(path)

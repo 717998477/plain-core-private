@@ -13,7 +13,6 @@ pub(crate) mod storage;
 pub struct Options {
     pub media_directories: Vec<PathBuf>,
     pub web_root: Option<PathBuf>,
-    pub web_bundle: Option<crate::http::routes::web_bundle::SharedWebBundle>,
     pub automount: bool,
 }
 
@@ -108,16 +107,13 @@ impl HeadlessService {
                 certificate: paths.tls_cert.clone(),
                 key: paths.tls_key.clone(),
             };
-        if let Some(root) = options.web_root.or_else(web_root) {
+        if let Some(root) = options.web_root {
             anyhow::ensure!(
                 root.is_dir(),
                 "Web directory does not exist: {}",
                 root.display()
             );
             self.core.set_web_root(&root.to_string_lossy());
-        }
-        if let Some(bundle) = options.web_bundle {
-            self.core.set_web_bundle(bundle);
         }
         let ports = self
             .core
@@ -208,20 +204,6 @@ fn has_command(command: &str) -> bool {
             executable.is_file() || cfg!(windows) && executable.with_extension("exe").is_file()
         })
     })
-}
-
-fn web_root() -> Option<PathBuf> {
-    [
-        "web/dist",
-        "../web/dist",
-        "../../web/dist",
-        "src/web_dist",
-        "plain-cli/src/web_dist",
-        "dist",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|path| path.is_dir())
 }
 
 #[cfg(test)]

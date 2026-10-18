@@ -20,7 +20,6 @@ async fn app_and_remote_access_share_listeners_without_background_service() {
         cert.cert.pem().into_bytes(),
         cert.key_pair.serialize_pem().into_bytes(),
         false,
-        crate::services::web_assets::Source::default(),
     )
     .await
     .unwrap();
@@ -403,67 +402,71 @@ async fn startup_device_name_initialization_is_shared_and_preserves_user_changes
 }
 
 #[tokio::test]
-async fn packaged_web_archive_is_prepared_in_the_validated_cache_and_served_by_shared_routes() {
-    use std::io::Write;
+async fn embedded_web_assets_survive_cache_clear_without_extraction() {
+    use crate::http::routes::web_bundle::{SharedWebBundle, WebBundle};
+    struct Bundle;
+    impl WebBundle for Bundle {
+        fn read(&self, path: &str) -> Option<&'static [u8]> {
+            match path {
+                "index.html" => Some(b"<html><head></head><body>embedded</body></html>"),
+                "assets/app.js" => Some(b"console.log('embedded')"),
+                _ => None,
+            }
+        }
+    }
     let directory = tempfile::tempdir().unwrap();
     let data = directory.path().join("data");
     let cache = directory.path().join("cache");
-    let archive_path = directory.path().join("package.apk");
-    let mut archive = zip::ZipWriter::new(std::fs::File::create(&archive_path).unwrap());
-    archive
-        .start_file(
-            "assets/web/index.html",
-            zip::write::SimpleFileOptions::default(),
-        )
-        .unwrap();
-    archive
-        .write_all(b"<html><head></head><body>packaged</body></html>")
-        .unwrap();
-    archive.finish().unwrap();
     let server = ContentServer::open_with_cache(&data, &cache).unwrap();
-    server
-        .set_web_assets(crate::services::web_assets::Source {
-            archives: vec![archive_path.to_str().unwrap().into()],
-            prefix: "assets/web/".into(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
     let state = server.runtime_state();
-    let root = state.web_root.read().unwrap().clone().unwrap();
-    assert!(root.starts_with(server.cache_paths().web_assets()));
-    assert!(!data.join("web-assets").exists());
-    let response = crate::http::routes::static_host::fallback(
-        axum::extract::State(state),
-        axum::http::Request::builder()
-            .uri("/")
-            .body(axum::body::Body::empty())
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .unwrap();
-    let text = std::str::from_utf8(&body).unwrap();
-    assert!(text.contains("window.__SERVER_TIME__="));
-    assert!(text.contains("packaged"));
-    let cleared = server
-        .native_graphql()
-        .unwrap()
-        .execute(async_graphql::Request::new("mutation { clearAppCache }"))
-        .await;
-    assert!(cleared.errors.is_empty(), "{:?}", cleared.errors);
-    assert_eq!(cleared.data.into_json().unwrap()["clearAppCache"], true);
-    assert!(root.join("index.html").is_file());
-    let response = crate::http::routes::static_host::fallback(
-        axum::extract::State(server.runtime_state()),
-        axum::http::Request::builder()
-            .uri("/")
-            .body(axum::body::Body::empty())
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let compiled = state.web_bundle.read().unwrap().clone().unwrap();
+    use crate::http::routes::web_bundle::EmbeddedBundle;
+    assert_eq!(
+        compiled.read("index.html"),
+        EmbeddedBundle.read("index.html")
+    );
+    let bundle: SharedWebBundle = Arc::new(Bundle);
+    server.set_web_bundle(bundle.clone());
+    for iteration in 0..2 {
+        if iteration == 1 {
+            let cleared = server
+                .native_graphql()
+                .unwrap()
+                .execute(async_graphql::Request::new("mutation { clearAppCache }"))
+                .await;
+            assert!(cleared.errors.is_empty(), "{:?}", cleared.errors);
+            assert_eq!(cleared.data.into_json().unwrap()["clearAppCache"], true);
+        }
+        for (path, expected) in [
+            ("/", "embedded"),
+            ("/settings", "embedded"),
+            ("/assets/app.js", "console.log('embedded')"),
+        ] {
+            let response = crate::http::routes::static_host::fallback(
+                axum::extract::State(server.runtime_state()),
+                axum::http::Request::builder()
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let text = std::str::from_utf8(&body).unwrap();
+            assert!(text.contains(expected));
+            if path != "/assets/app.js" {
+                assert!(text.contains("window.__SERVER_TIME__="));
+            }
+        }
+        assert!(state.web_root.read().unwrap().is_none());
+        assert!(Arc::ptr_eq(
+            state.web_bundle.read().unwrap().as_ref().unwrap(),
+            &bundle
+        ));
+        assert!(!cache.join("web_assets").exists());
+        assert!(!data.join("web-assets").exists());
+    }
     server.stop_core().await;
 }

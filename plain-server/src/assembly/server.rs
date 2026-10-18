@@ -34,9 +34,7 @@ pub(crate) struct ServerState {
         Arc<std::sync::Mutex<Option<crate::assembly::lifecycle::HttpServerFailure>>>,
     pub(crate) http_server: Arc<crate::services::http_server::Runtime>,
     pub(crate) build_debug: Arc<std::sync::atomic::AtomicBool>,
-    pub(crate) web_asset_changes: Arc<tokio::sync::Mutex<()>>,
     pub(crate) web_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
-    pub(crate) web_source: Arc<std::sync::RwLock<Option<crate::services::web_assets::Source>>>,
     pub(crate) web_bundle:
         Arc<std::sync::RwLock<Option<crate::http::routes::web_bundle::SharedWebBundle>>>,
     pub(crate) tls_identity: Arc<std::sync::RwLock<crate::services::tls_identity::IdentitySource>>,
@@ -484,10 +482,10 @@ impl ContentServer {
             directory: directory.clone(),
             http_server: Arc::new(crate::services::http_server::Runtime::default()),
             build_debug: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            web_asset_changes: Arc::new(tokio::sync::Mutex::new(())),
             web_root: Arc::new(std::sync::RwLock::new(None)),
-            web_source: Arc::new(std::sync::RwLock::new(None)),
-            web_bundle: Arc::new(std::sync::RwLock::new(None)),
+            web_bundle: Arc::new(std::sync::RwLock::new(Some(Arc::new(
+                crate::http::routes::web_bundle::EmbeddedBundle,
+            )))),
             tls_identity: Arc::new(std::sync::RwLock::new(
                 crate::services::tls_identity::IdentitySource::Json(
                     plain_rs::data_paths::DataPaths::new(&directory).tls_identity(),
@@ -644,7 +642,6 @@ impl ContentServer {
         cert: Vec<u8>,
         key: Vec<u8>,
         debug: bool,
-        web_assets: crate::services::web_assets::Source,
     ) -> Result<Self, String> {
         let (state, stop, _) =
             Self::build_state_with_properties(directory, token, prefs, properties)?;
@@ -655,7 +652,6 @@ impl ContentServer {
             stop,
         };
         server.set_build_debug(debug);
-        server.set_web_assets(web_assets).await?;
         server.port = server.start_public(http, https, cert, key).await?.0;
         Ok(server)
     }
@@ -722,12 +718,6 @@ impl ContentServer {
         self.state
             .build_debug
             .store(debug, std::sync::atomic::Ordering::Relaxed);
-    }
-    pub async fn set_web_assets(
-        &self,
-        source: crate::services::web_assets::Source,
-    ) -> Result<(), String> {
-        crate::services::web_assets::configure(&self.state, source).await
     }
     pub fn set_web_root(&self, root: &str) {
         if let Ok(mut guard) = self.state.web_root.write() {
