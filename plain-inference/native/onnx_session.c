@@ -19,15 +19,18 @@ typedef struct {
 typedef struct {
     const OrtApi *api;
     OrtEnv *env;
+    void *library;
+} PlainOnnxContext;
+typedef struct {
+    const OrtApi *api;
     OrtSession *session;
     OrtMemoryInfo *memory;
-    void *library;
 } PlainOnnxSession;
 
-static int check(PlainOnnxSession *s, OrtStatus *status, char *error, size_t capacity) {
+static int check(const OrtApi *api, OrtStatus *status, char *error, size_t capacity) {
     if (!status) return 0;
-    snprintf(error, capacity, "%s", s->api->GetErrorMessage(status));
-    s->api->ReleaseStatus(status);
+    snprintf(error, capacity, "%s", api->GetErrorMessage(status));
+    api->ReleaseStatus(status);
     return -1;
 }
 void plain_onnx_close(PlainOnnxSession *s) {
@@ -37,8 +40,22 @@ void plain_onnx_close(PlainOnnxSession *s) {
 
     free(s);
 }
-PlainOnnxSession *plain_onnx_context(const char *library, char *error, size_t capacity) {
-    PlainOnnxSession *s = calloc(1, sizeof(*s));
+void plain_onnx_close_context(PlainOnnxContext *s) {
+    if (!s) return;
+    if (s->env) s->api->ReleaseEnv(s->env);
+#ifndef PLAIN_ONNX_STATIC
+    if (s->library) {
+#ifdef _WIN32
+        FreeLibrary((HMODULE)s->library);
+#else
+        dlclose(s->library);
+#endif
+    }
+#endif
+    free(s);
+}
+PlainOnnxContext *plain_onnx_context(const char *library, char *error, size_t capacity) {
+    PlainOnnxContext *s = calloc(1, sizeof(*s));
     if (!s) { snprintf(error, capacity, "ONNX allocation failed"); return NULL; }
     const OrtApiBase *base = NULL;
 #ifdef PLAIN_ONNX_STATIC
@@ -61,20 +78,22 @@ PlainOnnxSession *plain_onnx_context(const char *library, char *error, size_t ca
 #endif
     if (!base || !(s->api = base->GetApi(ORT_API_VERSION))) {
         snprintf(error, capacity, "ONNX Runtime %d library unavailable: %s", ORT_API_VERSION, library);
-        plain_onnx_close(s); return NULL;
+        plain_onnx_close_context(s); return NULL;
     }
     OrtStatus *status = s->api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "plain-image-search", &s->env);
-    if (check(s, status, error, capacity)) { plain_onnx_close(s); return NULL; }
+    if (check(s->api, status, error, capacity)) { plain_onnx_close_context(s); return NULL; }
+    if (check(s->api, s->api->DisableTelemetryEvents(s->env), error, capacity)) {
+        plain_onnx_close_context(s); return NULL;
+    }
     return s;
 }
-PlainOnnxSession *plain_onnx_create(PlainOnnxSession *context, const char *model,
+PlainOnnxSession *plain_onnx_create(PlainOnnxContext *context, const char *model,
     int threads, const char *provider, char *error, size_t capacity) {
     PlainOnnxSession *s = calloc(1, sizeof(*s));
     OrtSessionOptions *options = NULL;
     if (!s) { snprintf(error, capacity, "ONNX allocation failed"); return NULL; }
     s->api = context->api;
-    s->env = context->env;
-#define TRY(expr) if (check(s, (expr), error, capacity)) goto failed
+#define TRY(expr) if (check(s->api, (expr), error, capacity)) goto failed
     TRY(s->api->CreateSessionOptions(&options));
     TRY(s->api->SetIntraOpNumThreads(options, threads));
     TRY(s->api->SetInterOpNumThreads(options, 1));
@@ -104,11 +123,11 @@ PlainOnnxSession *plain_onnx_create(PlainOnnxSession *context, const char *model
     wchar_t *wide = wide_count > 0 ? calloc(wide_count, sizeof(wchar_t)) : NULL;
     if (!wide) { snprintf(error, capacity, "Invalid ONNX model path"); goto failed; }
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, model, -1, wide, wide_count);
-    OrtStatus *created = s->api->CreateSession(s->env, wide, options, &s->session);
+    OrtStatus *created = s->api->CreateSession(context->env, wide, options, &s->session);
     free(wide);
     TRY(created);
 #else
-    TRY(s->api->CreateSession(s->env, model, options, &s->session));
+    TRY(s->api->CreateSession(context->env, model, options, &s->session));
 #endif
     s->api->ReleaseSessionOptions(options);
     return s;
@@ -125,7 +144,7 @@ int plain_onnx_run(PlainOnnxSession *s, PlainOnnxInput *inputs, size_t count,
     OrtTensorTypeAndShapeInfo *info = NULL;
     size_t input_count = 0, output_count = 0;
     int status = -1;
-#define TRY(expr) if (check(s, (expr), error, capacity)) goto finished
+#define TRY(expr) if (check(s->api, (expr), error, capacity)) goto finished
     TRY(s->api->SessionGetInputCount(s->session, &input_count));
     TRY(s->api->SessionGetOutputCount(s->session, &output_count));
     if (input_count != count || output_count == 0) {

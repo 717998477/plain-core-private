@@ -1,13 +1,12 @@
 use crate::models::manifest::Layout;
 use crate::models::manifest::Manifest;
 use crate::models::manifest::TextRole;
-use crate::runtime::session::Input;
-use crate::runtime::session::Session;
+use crate::runtime::session::{Context, Input, Session};
 use sha2::{Digest, Sha256};
 use std::{
     ffi::CString,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
@@ -24,6 +23,7 @@ pub struct Engine {
     directory: PathBuf,
     tokenizer: Tokenizer,
     session: Mutex<Option<(bool, Session)>>,
+    context: Arc<Context>,
 }
 pub fn normalize(values: &mut [f32]) -> Result<(), String> {
     let norm = values
@@ -99,6 +99,7 @@ impl Engine {
             directory,
             tokenizer,
             session: Mutex::new(None),
+            context: Context::new()?,
         };
         engine.image_tensor(vec![
             0.0;
@@ -113,7 +114,7 @@ impl Engine {
         self
     }
     fn session(&self, file: &str) -> Result<Session, String> {
-        Session::new(&self.directory.join(file))
+        Session::new(&self.context, &self.directory.join(file))
     }
     pub fn text(&self, text: &str) -> Result<Vec<f32>, String> {
         if text.len() > 65536 {

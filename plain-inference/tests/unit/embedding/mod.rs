@@ -1,7 +1,7 @@
 use super::*;
 use crate::models::default_model;
-use crate::models::test_fixture::fixture;
 use crate::models::package as onnx_package;
+use crate::models::test_fixture::fixture;
 use crate::preprocess;
 
 #[test]
@@ -31,6 +31,21 @@ fn real_runtime_executes_paired_encoders_and_reloads_released_sessions() {
     assert_eq!(engine.text("image").unwrap()[0], 1.0);
     assert_eq!(engine.image(&path).unwrap().unwrap()[0], 1.0);
 }
+#[test]
+fn encoder_context_lives_until_the_last_session_and_can_be_reopened() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = fixture(directory.path());
+    let engine = Engine::open(directory.path().into(), manifest.clone()).unwrap();
+    let context = Arc::downgrade(&engine.context);
+    let session = engine.session(&manifest.text.file).unwrap();
+    drop(engine);
+    assert_eq!(context.strong_count(), 1);
+    drop(session);
+    assert!(context.upgrade().is_none());
+    let reopened = Engine::open(directory.path().into(), manifest).unwrap();
+    assert_eq!(reopened.text("cat").unwrap(), vec![1.0, 0.0, 0.0, 0.0]);
+}
+
 #[test]
 fn packages_reject_corruption_wrong_shapes_and_path_traversal() {
     let directory = tempfile::tempdir().unwrap();

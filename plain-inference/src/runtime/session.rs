@@ -1,6 +1,7 @@
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     ptr::NonNull,
+    sync::Arc,
 };
 #[repr(C)]
 pub struct Input {
@@ -17,6 +18,7 @@ unsafe extern "C" {
         error: *mut c_char,
         capacity: usize,
     ) -> *mut c_void;
+    fn plain_onnx_close_context(context: *mut c_void);
     fn plain_onnx_create(
         context: *mut c_void,
         model: *const c_char,
@@ -37,10 +39,11 @@ unsafe extern "C" {
         capacity: usize,
     ) -> i32;
 }
-pub struct Session(NonNull<c_void>);
-unsafe impl Send for Session {}
-impl Session {
-    pub fn new(model: &std::path::Path) -> Result<Self, String> {
+pub struct Context(NonNull<c_void>);
+unsafe impl Send for Context {}
+unsafe impl Sync for Context {}
+impl Context {
+    pub fn new() -> Result<Arc<Self>, String> {
         #[cfg(target_os = "android")]
         let library = CString::new("libonnxruntime.so").unwrap();
         #[cfg(target_os = "ios")]
@@ -48,34 +51,44 @@ impl Session {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let library = CString::new(library_path()).map_err(|e| e.to_string())?;
         let mut error = [0 as c_char; 2048];
+        let pointer =
+            unsafe { plain_onnx_context(library.as_ptr(), error.as_mut_ptr(), error.len()) };
+        NonNull::new(pointer)
+            .map(|pointer| Arc::new(Self(pointer)))
+            .ok_or_else(|| {
+                unsafe { CStr::from_ptr(error.as_ptr()) }
+                    .to_string_lossy()
+                    .into_owned()
+            })
+    }
+}
+impl Drop for Context {
+    fn drop(&mut self) {
+        unsafe {
+            plain_onnx_close_context(self.0.as_ptr());
+        }
+    }
+}
+pub struct Session {
+    pointer: NonNull<c_void>,
+    _context: Arc<Context>,
+}
+unsafe impl Send for Session {}
+impl Session {
+    pub fn new(context: &Arc<Context>, model: &std::path::Path) -> Result<Self, String> {
+        let mut error = [0 as c_char; 2048];
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4)) as i32;
         #[cfg(unix)]
         let model = CString::new(std::os::unix::ffi::OsStrExt::as_bytes(model.as_os_str()))
             .map_err(|e| e.to_string())?;
         #[cfg(not(unix))]
         let model = CString::new(model.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
-        static CONTEXT: std::sync::OnceLock<Result<usize, String>> = std::sync::OnceLock::new();
-        let context = CONTEXT
-            .get_or_init(|| {
-                let pointer = unsafe {
-                    plain_onnx_context(library.as_ptr(), error.as_mut_ptr(), error.len())
-                };
-                if pointer.is_null() {
-                    Err(unsafe { CStr::from_ptr(error.as_ptr()) }
-                        .to_string_lossy()
-                        .into_owned())
-                } else {
-                    Ok(pointer as usize)
-                }
-            })
-            .as_ref()
-            .map_err(Clone::clone)?;
         let provider =
             CString::new(std::env::var("PLAIN_ONNX_PROVIDER").unwrap_or_else(|_| "CPU".into()))
                 .map_err(|e| e.to_string())?;
         let mut pointer = unsafe {
             plain_onnx_create(
-                *context as *mut c_void,
+                context.0.as_ptr(),
                 model.as_ptr(),
                 threads,
                 provider.as_ptr(),
@@ -90,7 +103,7 @@ impl Session {
             );
             pointer = unsafe {
                 plain_onnx_create(
-                    *context as *mut c_void,
+                    context.0.as_ptr(),
                     model.as_ptr(),
                     threads,
                     c"CPU".as_ptr(),
@@ -99,11 +112,16 @@ impl Session {
                 )
             };
         }
-        NonNull::new(pointer).map(Self).ok_or_else(|| {
-            unsafe { CStr::from_ptr(error.as_ptr()) }
-                .to_string_lossy()
-                .into_owned()
-        })
+        NonNull::new(pointer)
+            .map(|pointer| Self {
+                pointer,
+                _context: Arc::clone(context),
+            })
+            .ok_or_else(|| {
+                unsafe { CStr::from_ptr(error.as_ptr()) }
+                    .to_string_lossy()
+                    .into_owned()
+            })
     }
     pub fn run(
         &mut self,
@@ -116,7 +134,7 @@ impl Session {
         let mut error = [0 as c_char; 2048];
         let code = unsafe {
             plain_onnx_run(
-                self.0.as_ptr(),
+                self.pointer.as_ptr(),
                 inputs.as_mut_ptr(),
                 inputs.len(),
                 name.as_ptr(),
@@ -138,7 +156,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         unsafe {
-            plain_onnx_close(self.0.as_ptr());
+            plain_onnx_close(self.pointer.as_ptr());
         }
     }
 }

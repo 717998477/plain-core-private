@@ -3,7 +3,6 @@ fn main() {
     println!("cargo:rerun-if-changed=native");
     for name in [
         "PLAIN_ONNX_RUNTIME_DIR",
-        "PLAIN_ONNX_SOURCE_BUILD",
         "ANDROID_NDK_HOME",
         "ANDROID_HOME",
         "PLAIN_ONNX_PYTHON",
@@ -51,9 +50,6 @@ fn main() {
             "--output",
         ])
         .arg(&runtime);
-    if env::var_os("PLAIN_ONNX_SOURCE_BUILD").is_some() {
-        prepare.arg("--source");
-    }
     assert!(
         prepare
             .status()
@@ -61,6 +57,22 @@ fn main() {
             .success(),
         "ONNX Runtime preparation failed"
     );
+    for path in [
+        runtime.join("runtime.json"),
+        runtime.join("LICENSE"),
+        runtime.join("ThirdPartyNotices.txt"),
+        runtime.join(if target.contains("windows") {
+            "onnxruntime.dll"
+        } else if target.contains("apple-ios") {
+            "libonnxruntime.a"
+        } else if target.contains("apple") {
+            "libonnxruntime.dylib"
+        } else {
+            "libonnxruntime.so"
+        }),
+    ] {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
     let mut native = cc::Build::new();
     native
         .file("native/onnx_session.c")
