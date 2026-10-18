@@ -202,27 +202,4 @@ impl AudioCommandsMutation {
             .await?;
         Ok(true)
     }
-    async fn add_audio_playlist_media(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-        media_ids: Vec<ID>,
-    ) -> Result<i32> {
-        let count = ctx
-            .data::<Arc<Audio>>()?
-            .run(move |db, engine| {
-                let ids = media_ids
-                    .into_iter()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<_>>();
-                engine.cache_ids(&ids)?;
-                let tracks = ids
-                    .iter()
-                    .map(|id| queue::track_by_id(db, id))
-                    .collect::<plain_rs::error::DomainResult<Vec<_>>>()?;
-                queue::add_playlist_items(db, id.as_str(), &tracks)
-            })
-            .await?;
-        Ok(count.try_into()?)
-    }
 }

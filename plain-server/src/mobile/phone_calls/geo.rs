@@ -1,74 +1,49 @@
-use crate::host::bridge::Host;
-use crate::mobile::phone_calls::resolvers::PhoneGeo;
+use super::resolvers::PhoneGeo;
 use serde::Deserialize;
-use serde_json::json;
-use std::{collections::VecDeque, sync::Mutex};
+use std::sync::Arc;
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct LocaleFacts {
     pub region: String,
     pub locale: String,
-    pub available: bool,
+    #[serde(default)]
+    pub network_region: String,
+    #[serde(default)]
+    pub sim_region: String,
 }
-#[derive(Default)]
-pub(crate) struct Runtime {
-    cache: Mutex<VecDeque<(String, Option<PhoneGeo>)>>,
-}
-impl Runtime {
-    pub async fn lookup(
-        &self,
-        host: &Host,
-        number: &str,
-        locale: &LocaleFacts,
-    ) -> Option<PhoneGeo> {
-        if !locale.available || number.trim().is_empty() {
-            return None;
-        }
-        let key = format!("{}\0{}\0{}", locale.region, locale.locale, number);
-        {
-            let mut cache = self.cache.lock().unwrap();
-            if let Some(index) = cache.iter().position(|(cached, _)| cached == &key) {
-                let entry = cache.remove(index).unwrap();
-                let result = entry.1.clone();
-                cache.push_back(entry);
-                return result;
-            }
-        }
-        let result = self.resolve(host, number, locale).await;
-        let mut cache = self.cache.lock().unwrap();
-        cache.retain(|(cached, _)| cached != &key);
-        cache.push_back((key, result.clone()));
-        while cache.len() > 1024 {
-            cache.pop_front();
-        }
-        result
+
+pub(crate) type Runtime = plain_rs::phone::Service;
+
+pub(crate) async fn lookup_many(
+    runtime: Arc<Runtime>,
+    numbers: Vec<String>,
+    locale: LocaleFacts,
+) -> Result<Vec<Option<PhoneGeo>>, tokio::task::JoinError> {
+    if numbers.is_empty() {
+        return Ok(Vec::new());
     }
-    async fn resolve(&self, host: &Host, number: &str, locale: &LocaleFacts) -> Option<PhoneGeo> {
-        // Parsing and classification belong to the platform: it owns the
-        // libphonenumber data for the device's region, and iOS has none at
-        // all. This used to parse the number here and hand back a country
-        // code plus national number just so the host could rebuild the very
-        // same number object.
-        let facts = host
-            .call(
-                "systemPhoneMetadata",
-                json!({
-                    "number":number,"region":locale.region,"locale":locale.locale
-                }),
-            )
-            .await
-            .ok()?;
-        let country = facts["country"].as_str().unwrap_or_default();
-        if country.is_empty() {
-            return None;
-        }
-        Some(PhoneGeo {
-            country: country.to_owned(),
-            number_type: facts["numberType"].as_str().unwrap_or_default().to_owned(),
-            carrier: facts["carrier"].as_str().unwrap_or_default().to_owned(),
-            description: facts["description"].as_str().unwrap_or_default().to_owned(),
-        })
-    }
+    tokio::task::spawn_blocking(move || {
+        let region = plain_rs::phone::default_region(
+            &locale.network_region,
+            &locale.sim_region,
+            &locale.region,
+        );
+        numbers
+            .iter()
+            .map(|number| {
+                runtime
+                    .lookup(number, region, &locale.locale)
+                    .map(|metadata| PhoneGeo {
+                        country: metadata.country,
+                        number_type: metadata.number_type,
+                        carrier: metadata.carrier,
+                        description: metadata.description,
+                    })
+            })
+            .collect()
+    })
+    .await
 }
 
 #[cfg(test)]

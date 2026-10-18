@@ -599,6 +599,28 @@ impl AudioMutation {
         id: async_graphql::ID,
         query: String,
     ) -> async_graphql::Result<bool> {
+        let fields = plain_rs::utils::search_dsl::parse(&query);
+        if fields.len() == 1 && fields[0].name == "ids" && fields[0].op == "=" {
+            let ids = fields[0]
+                .value
+                .split(',')
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if ids.iter().any(|id| id.trim().is_empty()) {
+                return Err(async_graphql::Error::new("media IDs required"));
+            }
+            audio(ctx)?
+                .run(move |db, library| {
+                    library.cache_ids(&ids)?;
+                    let tracks = ids
+                        .iter()
+                        .map(|id| domain::track_by_id(db, id))
+                        .collect::<plain_rs::error::DomainResult<Vec<_>>>()?;
+                    domain::add_playlist_items(db, id.as_str(), &tracks)
+                })
+                .await?;
+            return Ok(true);
+        }
         let tracks = search_tracks(ctx, &query).await?;
         audio(ctx)?
             .run(move |db, lib| {

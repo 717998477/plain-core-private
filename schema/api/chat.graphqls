@@ -121,7 +121,6 @@ extend type Mutation {
 	leaveChatChannel(id: ID!): Boolean!
 	removeChatChannelMember(id: ID!, peerId: ID!): ChatChannel!
 	replaceChatFiles(id: ID!, content: String!): ChatItem
-	respondChannelInvite(id: ID!, accept: Boolean!): Boolean!
 	retryChatItem(id: ID!): ChatItem!
 	"""
 	Send a chat message. `target` is the chat target id — a bare peer id
@@ -132,7 +131,6 @@ extend type Mutation {
 	"""
 	sendChatItem(target: String!, content: String!): [ChatItem!]!
 	sendChatItems(targets: [String!]!, content: String!): [ChatItem!]!
-	sendChatText(target: String!, text: String!): ChatItem!
 	sendFolderShare(targets: [String!]!, path: String!, name: String!, expiresAt: Instant): [ChatItem!]!
 	sendShare(targets: [String!]!, shareId: ID!): [ChatItem!]!
 	updateChatChannel(id: ID!, name: String!): ChatChannel!
@@ -153,9 +151,4 @@ extend type Query {
 	"""
 	chatItems(target: String!, query: String!, offset: Int!, limit: Int!): [ChatItem!]!
 	chatRecords(query: String!, offset: Int!, limit: Int!): [ChatItem!]!
-	"""
-	The most recent item of every conversation (direct and channel),
-	newest conversation first.
-	"""
-	latestChatItems: [ChatItem!]!
 }

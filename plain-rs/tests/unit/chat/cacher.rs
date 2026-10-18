@@ -117,3 +117,47 @@ fn load_keeps_most_recent_for_same_conversation() {
     let latest = cacher.get_latest_chat("local").unwrap();
     assert_eq!(latest.id, "new");
 }
+
+#[test]
+fn conversations_unify_both_directions_and_edits_do_not_promote_older_messages() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    seed_peer(&db, "peer1");
+    seed_channel(&db, "group1");
+    for (id, from, to, channel, created, updated) in [
+        ("old", "me", "peer1", "", 1, 9),
+        ("reply", "peer1", "me", "", 2, 2),
+        ("local", "me", "local", "", 3, 3),
+        ("group", "peer1", "", "group1", 4, 4),
+        ("unknown", "me", "ghost", "", 5, 5),
+        ("unknown-group", "peer1", "me", "ghost-group", 6, 6),
+    ] {
+        let mut chat = DChat::new(from, to, channel, "{}");
+        chat.id = id.into();
+        chat.created_at = format!("2026-01-01T00:00:{created:02}.000Z");
+        chat.updated_at = format!("2026-01-01T00:00:{updated:02}.000Z");
+        db.insert_chat(&chat).unwrap();
+    }
+    let rows = ChatCacher::conversations(&db).unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|(id, chat)| (id.as_str(), chat.id.as_str()))
+            .collect::<Vec<_>>(),
+        [("group1", "group"), ("local", "local"), ("peer1", "reply")]
+    );
+    assert_eq!(ChatCacher::snapshot(&db).unwrap().len(), 3);
+}
+
+#[test]
+fn equal_creation_times_choose_one_stable_message_and_an_empty_store_has_no_conversations() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    assert!(ChatCacher::conversations(&db).unwrap().is_empty());
+    for id in ["a", "b"] {
+        let mut chat = DChat::new("me", "local", "", "{}");
+        chat.id = id.into();
+        chat.created_at = "2026-01-01T00:00:00.000Z".into();
+        db.insert_chat(&chat).unwrap();
+    }
+    let rows = ChatCacher::conversations(&db).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].1.id, "b");
+}

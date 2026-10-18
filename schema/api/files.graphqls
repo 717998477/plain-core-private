@@ -244,13 +244,7 @@ extend type Mutation {
 	moveMediaItems(type: MediaDataType!, query: String!, destDir: String!): ActionResult!
 	releaseAppFile(fileId: String!): Boolean!
 	removeFileTask(id: ID!): Boolean!
-	"""
-	`false` rather than an error when the rename is refused: a name that
-	is empty, a traversal segment, or an existing destination are all
-	ordinary outcomes for a user typing in a rename box.
-	"""
-	renameFile(path: String!, name: String!): Boolean!
-	renameFilePath(path: String!, name: String!): String
+	renameFile(path: String!, name: String!): String
 	restoreFiles(paths: [String!]!): ActionResult!
 	restoreMediaItems(type: MediaDataType!, query: String!): ActionResult!
 	trashFiles(paths: [String!]!): ActionResult!

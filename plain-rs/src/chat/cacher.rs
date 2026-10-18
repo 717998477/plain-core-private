@@ -24,6 +24,10 @@ impl ChatCacher {
     }
 
     pub fn snapshot(db: &Db) -> Result<HashMap<String, DChat>> {
+        Ok(Self::conversations(db)?.into_iter().collect())
+    }
+
+    pub fn conversations(db: &Db) -> Result<Vec<(String, DChat)>> {
         let peer_ids: HashSet<String> = peers::all(db)?.into_iter().map(|p| p.id).collect();
         let channel_ids: HashSet<String> = channels::all(db)?.into_iter().map(|c| c.id).collect();
         let latest_chats: Vec<DChat> = serde_json::from_value(messages::list(
@@ -41,8 +45,8 @@ impl ChatCacher {
         )?)?;
         let mut chat_cache = HashMap::<String, DChat>::new();
         for chat in latest_chats {
-            let chat_id = if let Some(id) = chat.channel_id.as_ref().filter(|id| channel_ids.contains(*id)) {
-                Some(id.clone())
+            let chat_id = if let Some(id) = chat.channel_id.as_ref().filter(|id| !id.is_empty()) {
+                channel_ids.contains(id).then(|| id.clone())
             } else if (chat.from_id == "me" && chat.to_id == "local")
                 || (chat.from_id == "local" && chat.to_id == "me")
             {
@@ -55,11 +59,15 @@ impl ChatCacher {
                 None
             };
             if let Some(chat_id) = chat_id {
-                let updated_at = chrono::DateTime::parse_from_rfc3339(&chat.updated_at)?;
+                let created_at = chrono::DateTime::parse_from_rfc3339(&chat.created_at)?;
                 let should_replace = match chat_cache.get(&chat_id) {
                     None => true,
                     Some(existing) => {
-                        updated_at > chrono::DateTime::parse_from_rfc3339(&existing.updated_at)?
+                        (created_at, &chat.id)
+                            > (
+                                chrono::DateTime::parse_from_rfc3339(&existing.created_at)?,
+                                &existing.id,
+                            )
                     }
                 };
                 if should_replace {
@@ -67,7 +75,24 @@ impl ChatCacher {
                 }
             }
         }
-        Ok(chat_cache)
+        let mut rows = chat_cache
+            .into_iter()
+            .map(|(id, chat)| {
+                Ok((
+                    chrono::DateTime::parse_from_rfc3339(&chat.created_at)?,
+                    id,
+                    chat,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        rows.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| right.2.id.cmp(&left.2.id))
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        Ok(rows.into_iter().map(|(_, id, chat)| (id, chat)).collect())
     }
 
     pub fn load(&self, db: &Db) {

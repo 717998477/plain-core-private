@@ -78,7 +78,7 @@ impl ImageEditorProjectQuery {
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Vec<ImageEditorProjectSummary>> {
-        store::summaries(ctx.data::<Arc<Db>>()?, 0, 20, "")?
+        store::summaries(ctx.data::<Arc<Db>>()?, 0, 50, "")?
             .into_iter()
             .map(to_summary)
             .collect()

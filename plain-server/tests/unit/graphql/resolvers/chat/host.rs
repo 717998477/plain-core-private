@@ -28,12 +28,12 @@ async fn local_messages_edit_forward_and_clear_through_native_executor() {
     let mut events = state.events.subscribe();
     let result = execute(
         &server,
-        r#"mutation { sendChatText(target:"peer:local", text:"original") {id status content} }"#
+        r#"mutation { sendChatItem(target:"peer:local", content:"{\"type\":\"TEXT\",\"value\":{\"text\":\"original\"}}") {id status content} }"#
             .into(),
     )
     .await;
-    let id = result["sendChatText"]["id"].as_str().unwrap();
-    assert_eq!(result["sendChatText"]["status"], "SENT");
+    let id = result["sendChatItem"][0]["id"].as_str().unwrap();
+    assert_eq!(result["sendChatItem"][0]["status"], "SENT");
     assert_eq!(
         events.recv().await.unwrap().event_type,
         plain_rs::chat::events::WS_MESSAGE_CREATED
@@ -159,19 +159,19 @@ async fn long_text_files_and_invalid_targets_use_the_same_message_lifecycle() {
     let result = execute(
         &server,
         format!(
-            r#"mutation {{sendChatText(target:"local", text:{}) {{content}}}}"#,
-            json!(text)
+            r#"mutation {{sendChatItem(target:"local", content:{}) {{content}}}}"#,
+            json!(json!({"type":"TEXT","value":{"text":text}}).to_string())
         ),
     )
     .await;
     let content: Value =
-        serde_json::from_str(result["sendChatText"]["content"].as_str().unwrap()).unwrap();
+        serde_json::from_str(result["sendChatItem"][0]["content"].as_str().unwrap()).unwrap();
     assert_eq!(content["type"], "FILES");
     assert_eq!(content["value"]["items"][0]["size"], text.len());
     let rejected = server
         .graphql_executor()
         .execute(Request::new(
-            r#"mutation { sendChatText(target:"channel:", text:"bad") {id} }"#,
+            r#"mutation { sendChatItem(target:"channel:", content:"{\"type\":\"TEXT\",\"value\":{\"text\":\"bad\"}}") {id} }"#,
         ))
         .await;
     assert!(!rejected.errors.is_empty());
@@ -262,10 +262,10 @@ async fn batch_forward_uses_current_content_and_owns_each_creation_event() {
     let state = server.runtime_state();
     let source = execute(
         &server,
-        r#"mutation { sendChatText(target:"local", text:"old") {id} }"#.into(),
+        r#"mutation { sendChatItem(target:"local", content:"{\"type\":\"TEXT\",\"value\":{\"text\":\"old\"}}") {id} }"#.into(),
     )
     .await;
-    let id = source["sendChatText"]["id"].as_str().unwrap();
+    let id = source["sendChatItem"][0]["id"].as_str().unwrap();
     execute(
         &server,
         format!(

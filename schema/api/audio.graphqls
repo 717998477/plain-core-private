@@ -111,7 +111,6 @@ enum MediaPlayMode {
 
 extend type Mutation {
 	addAudioPlaylistItems(id: ID!, query: String!): Boolean!
-	addAudioPlaylistMedia(id: ID!, mediaIds: [ID!]!): Int!
 	addAudioToQueue(query: String!): Boolean!
 	advanceAudioSelection(action: AudioSelectionAction!, expectedPath: String!, expectedRevision: Long!, shuffle: Boolean! = false): AudioSelection
 	audioCommand(action: AudioCommandAction!, positionMs: Long!, speed: Float!): AudioPlaybackState!

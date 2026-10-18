@@ -165,7 +165,6 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                                 | "sendFolderShare"
                                 | "mediaAction"
                                 | "renameFile"
-                                | "renameFilePath"
                                 | "copyFile"
                                 | "moveFile"
                                 | "copyFileToDirectory"

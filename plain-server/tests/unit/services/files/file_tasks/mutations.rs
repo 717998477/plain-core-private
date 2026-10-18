@@ -53,13 +53,16 @@ async fn strict_native_rename_and_delete_rebind_and_clean_generic_file_reference
     for name in ["existing.txt", "..", "../escape", ""] {
         let response = rename(&core, &source, name).await;
         assert!(response.errors.is_empty(), "{name}: {:?}", response.errors);
-        assert_eq!(response.data.into_json().unwrap()["renameFile"], false);
+        assert!(response.data.into_json().unwrap()["renameFile"].is_null());
         assert_eq!(std::fs::read(&source).unwrap(), b"source");
         assert_eq!(std::fs::read(&collision).unwrap(), b"existing");
     }
     let response = rename(&core, &source, "renamed.txt").await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["renameFile"], true);
+    assert_eq!(
+        response.data.into_json().unwrap()["renameFile"],
+        destination.to_str().unwrap()
+    );
     assert!(!source.exists());
     assert_eq!(std::fs::read(&destination).unwrap(), b"source");
     assert_eq!(
@@ -232,7 +235,10 @@ async fn native_rename_and_delete_follow_actual_catalog_identities() {
     let (_generation, mut requests) = state.host.connect();
     let response = rename(&core, &source, "renamed.png").await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["renameFile"], true);
+    assert_eq!(
+        response.data.into_json().unwrap()["renameFile"],
+        destination.to_str().unwrap()
+    );
     let current = state
         .db
         .media_file_by_path(DataType::Image, destination.to_str().unwrap())

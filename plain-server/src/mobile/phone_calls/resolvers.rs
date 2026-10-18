@@ -121,7 +121,7 @@ impl CallsQuery {
         )
         .await?;
         let host = ctx.data_unchecked::<Arc<Host>>();
-        let locale = if ctx.look_ahead().field("geo").exists() {
+        let locale = if !facts.is_empty() && ctx.look_ahead().field("geo").exists() {
             host.call("systemPhoneLocaleFacts", serde_json::json!({}))
                 .await
                 .ok()
@@ -149,10 +149,16 @@ impl CallsQuery {
                     &prefs.get_or(plain_rs::prefs::system::keys::URL_TOKEN, String::new()),
                 )
             };
-            if let Some(locale) = &locale {
-                row.geo = runtime.lookup(host, &row.number, locale).await;
-            }
             calls.push(row);
+        }
+        if let Some(locale) = locale {
+            let numbers = calls.iter().map(|call| call.number.clone()).collect();
+            let metadata =
+                crate::mobile::phone_calls::geo::lookup_many(runtime.clone(), numbers, locale)
+                    .await?;
+            for (call, geo) in calls.iter_mut().zip(metadata) {
+                call.geo = geo;
+            }
         }
         Ok(calls)
     }

@@ -95,18 +95,6 @@ impl FileOpsMutation {
         .map_err(async_graphql::Error::new)?;
         Ok(written_file(record))
     }
-    async fn rename_file_path(
-        &self,
-        ctx: &Context<'_>,
-        path: String,
-        name: String,
-    ) -> async_graphql::Result<Option<String>> {
-        public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
-        Ok(ctx
-            .data::<Arc<crate::services::files::file_tasks::FileTasks>>()?
-            .rename(&super::tasks::caller(ctx)?, path, name)
-            .await?)
-    }
     async fn delete_files(
         &self,
         ctx: &Context<'_>,
@@ -181,21 +169,17 @@ impl FileOpsMutation {
         Ok(written_file(record))
     }
 
-    /// `false` rather than an error when the rename is refused: a name that
-    /// is empty, a traversal segment, or an existing destination are all
-    /// ordinary outcomes for a user typing in a rename box.
     async fn rename_file(
         &self,
         ctx: &Context<'_>,
         path: String,
         name: String,
-    ) -> async_graphql::Result<bool> {
+    ) -> async_graphql::Result<Option<String>> {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         Ok(ctx
             .data::<Arc<crate::services::files::file_tasks::FileTasks>>()?
             .rename(&super::tasks::caller(ctx)?, path, name)
-            .await?
-            .is_some())
+            .await?)
     }
 
     async fn write_text_file(

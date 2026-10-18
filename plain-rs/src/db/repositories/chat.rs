@@ -101,7 +101,12 @@ impl Db {
             let conn = self.0.lock().unwrap();
             let _ = conn.execute(
                 "UPDATE chats SET status=?1, status_data=?2, updated_at=?3 WHERE id=?4",
-                params![status, (!status_data.is_empty()).then_some(status_data), now, id],
+                params![
+                    status,
+                    (!status_data.is_empty()).then_some(status_data),
+                    now,
+                    id
+                ],
             );
         }
         self.get_chat_by_id(id)
@@ -140,61 +145,6 @@ impl Db {
             .ok()
             .map(|iter| iter.filter_map(|r| r.ok()).collect())
             .unwrap_or_default()
-    }
-
-    /// Direct translation of plain-app `ChatDao.getAllLatestChats()`:
-    /// ```kotlin
-    /// @Query("""
-    ///     SELECT c.* FROM chats c
-    ///     INNER JOIN (
-    ///         SELECT '' as from_id, '' as to_id, channel_id, MAX(created_at) as max_created_at
-    ///         FROM chats WHERE channel_id IS NOT NULL GROUP BY channel_id
-    ///         UNION ALL
-    ///         SELECT from_id, to_id, '' as channel_id, MAX(created_at) as max_created_at
-    ///         FROM chats WHERE channel_id IS NULL GROUP BY from_id, to_id
-    ///     ) latest ON (
-    ///         (c.channel_id IS NOT NULL AND c.channel_id = latest.channel_id AND c.created_at = latest.max_created_at)
-    ///         OR (c.channel_id IS NULL AND c.from_id = latest.from_id AND c.to_id = latest.to_id AND c.created_at = latest.max_created_at)
-    ///     )
-    ///     ORDER BY c.created_at DESC
-    /// """)
-    /// suspend fun getAllLatestChats(): List<DChat>
-    /// ```
-    pub fn get_all_latest_chats(&self) -> Vec<DChat> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = match conn.prepare(
-            "SELECT c.id,c.from_id,c.to_id,c.channel_id,c.content,c.status,c.status_data,c.created_at,c.updated_at \
-             FROM chats c \
-             INNER JOIN ( \
-                 SELECT '' as from_id, '' as to_id, channel_id, MAX(created_at) as max_created_at \
-                 FROM chats WHERE channel_id IS NOT NULL GROUP BY channel_id \
-                 UNION ALL \
-                 SELECT from_id, to_id, '' as channel_id, MAX(created_at) as max_created_at \
-                 FROM chats WHERE channel_id IS NULL GROUP BY from_id, to_id \
-             ) latest ON ( \
-                 (c.channel_id IS NOT NULL AND c.channel_id = latest.channel_id AND c.created_at = latest.max_created_at) \
-                 OR (c.channel_id IS NULL AND c.from_id = latest.from_id AND c.to_id = latest.to_id AND c.created_at = latest.max_created_at) \
-             ) \
-             ORDER BY c.created_at DESC",
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("[chat] get_all_latest_chats prepare error: {e}");
-                return vec![];
-            }
-        };
-        match stmt.query_map(params![], row_to_chat) {
-            Ok(iter) => iter
-                .filter_map(|r| {
-                    r.map_err(|e| log::error!("[chat] get_all_latest_chats row error: {e}"))
-                        .ok()
-                })
-                .collect(),
-            Err(e) => {
-                log::error!("[chat] get_all_latest_chats query_map error: {e}");
-                vec![]
-            }
-        }
     }
 
     pub fn delete_chats_by_channel(&self, channel_id: &str) {

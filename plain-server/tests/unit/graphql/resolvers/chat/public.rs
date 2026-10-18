@@ -180,22 +180,42 @@ async fn the_text_field_filters_before_the_page_is_cut() {
     assert_eq!(rows.len(), 2, "{items}");
 }
 
+#[cfg(feature = "http_transport")]
 #[tokio::test]
 async fn the_latest_page_covers_every_conversation() {
-    let (_dir, schema) = fixture();
-    let db = database(&schema);
+    let (_dir, server) = channel_fixture();
+    let state = server.runtime_state();
+    let db = &state.db;
     seed(db, "m1", "me", "peer-1", "", "first", T1);
     seed(db, "m2", "me", "peer-1", "", "second", T2);
     seed(db, "c1", "me", "", "chan-1", "channel note", T2);
 
-    let latest = query(&schema, r#"query { latestChatItems { id content } }"#).await;
-    let rows = latest["data"]["latestChatItems"].as_array().unwrap();
+    db.upsert_peer(&plain_rs::db::DPeer::new(
+        "peer-1",
+        "fixture",
+        "",
+        None,
+        plain_rs::chat::enums::DeviceType::Unknown,
+    ));
+    let mut channel = plain_rs::db::DChannel::new("fixture", "me");
+    channel.id = "chan-1".into();
+    db.insert_channel(&channel).unwrap();
+    let latest = channel_query(
+        &state,
+        r#"query { chatConversations { id chat { id content } } }"#,
+    )
+    .await;
+    assert!(latest.get("errors").is_none(), "{latest}");
+    let rows = latest["data"]["chatConversations"].as_array().unwrap();
     assert_eq!(rows.len(), 2, "{latest}");
-    let ids: std::collections::HashSet<&str> =
-        rows.iter().map(|row| row["id"].as_str().unwrap()).collect();
+    let ids: std::collections::HashSet<&str> = rows
+        .iter()
+        .map(|row| row["chat"]["id"].as_str().unwrap())
+        .collect();
     assert!(ids.contains("m2"), "{latest}");
     assert!(ids.contains("c1"), "{latest}");
     assert!(!ids.contains("m1"), "{latest}");
+    server.shutdown().await;
 }
 
 // ── the mutations, which are commands rather than store writes ──────────

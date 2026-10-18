@@ -1,60 +1,58 @@
 use super::*;
+
 #[tokio::test]
-async fn the_platform_owns_classification_and_its_answer_is_passed_through() {
-    let host = std::sync::Arc::new(Host::default());
-    let (generation, mut requests) = host.connect();
-    let adapter = host.clone();
-    let task = tokio::spawn(async move {
-        while let Some(request) = requests.recv().await {
-            assert_eq!(request["method"], "systemPhoneMetadata");
-            // The number travels as typed: the platform parses it against
-            // the region it reports, we never rewrite it here.
-            let known = request["params"]["number"] == "800-555-0100"
-                && request["params"]["region"] == "US";
-            let result = if known {
-                json!({"country":"US","numberType":"TOLL_FREE","carrier":"","description":"region"})
-            } else {
-                json!({"country":"","numberType":"","carrier":"","description":""})
-            };
-            let _ = adapter.reply(generation, json!({"id":request["id"],"result":result}));
-        }
-    });
-    let runtime = Runtime::default();
-    let us = LocaleFacts {
-        region: "US".into(),
-        locale: "en_US".into(),
-        available: true,
-    };
-    let geo = runtime.lookup(&host, "800-555-0100", &us).await.unwrap();
-    assert_eq!(geo.country, "US");
-    assert_eq!(geo.number_type, "TOLL_FREE");
-    assert_eq!(geo.carrier, "");
-    assert_eq!(geo.description, "region");
-    // An unknown number comes back as nothing rather than an empty geo.
-    for number in ["12345", "not-a-number", ""] {
-        assert!(runtime.lookup(&host, number, &us).await.is_none());
-    }
-    // A platform without the data (iOS) is never asked.
-    let ios = LocaleFacts {
-        region: String::new(),
-        locale: String::new(),
-        available: false,
-    };
-    assert!(runtime.lookup(&host, "800-555-0100", &ios).await.is_none());
-    // Same number, different region: the cache is keyed by region too.
-    let cn = LocaleFacts {
-        region: "CN".into(),
-        locale: "zh_CN".into(),
-        available: true,
-    };
-    assert!(runtime.lookup(&host, "800-555-0100", &cn).await.is_none());
-    assert_eq!(
-        runtime
-            .lookup(&host, "800-555-0100", &us)
-            .await
-            .unwrap()
-            .country,
-        "US"
+async fn batch_resolution_preserves_order_and_handles_invalid_numbers_without_a_host() {
+    let runtime = Arc::new(Runtime::default());
+    let rows = lookup_many(
+        runtime.clone(),
+        vec![
+            "800-555-0100".into(),
+            "not a number".into(),
+            "800-555-0100".into(),
+        ],
+        LocaleFacts {
+            region: "US".into(),
+            locale: "en-US".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 3);
+    let first = rows[0].as_ref().unwrap();
+    assert_eq!(first.country, "US");
+    assert_eq!(first.number_type, "TOLL_FREE");
+    assert!(first.carrier.is_empty());
+    assert!(rows[1].is_none());
+    assert_eq!(rows[2].as_ref().unwrap().country, first.country);
+    assert!(
+        lookup_many(
+            runtime,
+            vec![],
+            LocaleFacts {
+                region: String::new(),
+                locale: String::new(),
+                ..Default::default()
+            }
+        )
+        .await
+        .unwrap()
+        .is_empty()
     );
-    task.abort();
+}
+
+#[tokio::test]
+async fn raw_network_region_takes_precedence_for_national_numbers() {
+    let locale = serde_json::from_value(serde_json::json!({
+        "region":"CN", "locale":"en-US", "networkRegion":"US", "simRegion":"CN"
+    }))
+    .unwrap();
+    let rows = lookup_many(
+        Arc::new(Runtime::default()),
+        vec!["800-555-0100".into()],
+        locale,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows[0].as_ref().unwrap().country, "US");
 }

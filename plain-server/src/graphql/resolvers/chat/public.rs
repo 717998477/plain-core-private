@@ -113,12 +113,6 @@ impl ChatQuery {
             .collect())
     }
 
-    /// The most recent item of every conversation (direct and channel),
-    /// newest conversation first.
-    async fn latest_chat_items(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<ChatItem>> {
-        Ok(db(ctx)?.get_all_latest_chats().iter().map(item).collect())
-    }
-
     async fn chat_item(
         &self,
         ctx: &Context<'_>,
@@ -289,17 +283,6 @@ impl ChatMutation {
         id: async_graphql::ID,
     ) -> async_graphql::Result<bool> {
         flag(ctx, "decline", &[("id", json!(id.as_str()))]).await
-    }
-
-    async fn respond_channel_invite(
-        &self,
-        ctx: &Context<'_>,
-        id: async_graphql::ID,
-        accept: bool,
-    ) -> async_graphql::Result<bool> {
-        let action = if accept { "accept" } else { "decline" };
-        flag(ctx, action, &[("id", json!(id.as_str()))]).await?;
-        Ok(accept)
     }
 }
 

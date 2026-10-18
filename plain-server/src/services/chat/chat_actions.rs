@@ -24,8 +24,9 @@ pub(crate) async fn deliver(state: &ServerState, row: DChat) -> Result<DChat> {
 }
 pub(crate) async fn send(state: &ServerState, target: &str, content: &str) -> Result<DChat> {
     let (to, channel) = message_commands::target(target)?;
+    let (content, _imports) = prepare_content(state, content)?;
     let row =
-        plain_rs::chat::messages::message_lifecycle::create(&state.db, &to, &channel, content)?;
+        plain_rs::chat::messages::message_lifecycle::create(&state.db, &to, &channel, &content)?;
     committed(state, &row, events::WS_MESSAGE_CREATED);
     deliver(state, row).await
 }
@@ -38,6 +39,7 @@ pub(crate) async fn send_many(
     if targets.is_empty() {
         return Ok(vec![]);
     }
+    let (content, _imports) = prepare_content(state, &content)?;
     let rows =
         plain_rs::chat::messages::message_lifecycle::create_many(&state.db, &targets, &content)?;
     deliver_many(state, rows).await
@@ -71,24 +73,24 @@ pub(crate) fn validate_targets(targets: &[String]) -> Result<Vec<(String, String
         .collect()
 }
 
-pub(crate) async fn send_text(
-    state: &ServerState,
-    targets: Vec<String>,
-    text: &str,
-) -> Result<Vec<DChat>> {
-    if targets.is_empty() {
-        return Ok(vec![]);
+fn prepare_content(state: &ServerState, content: &str) -> Result<(String, Option<Imported>)> {
+    let value: serde_json::Value = serde_json::from_str(content)?;
+    if value["type"] != "TEXT" {
+        return Ok((content.to_owned(), None));
     }
-    for target in &targets {
-        message_commands::target(target)?;
+    let text = value["value"]["text"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Text required"))?;
+    if text.encode_utf16().count() <= 2048 {
+        return Ok((content.to_owned(), None));
     }
     let content = share_send::text(&state.db, &state.directory, text)?;
-    let _imports = Imported {
+    let imports = Imported {
         db: state.db.clone(),
         directory: state.directory.clone(),
         ids: plain_rs::chat::attachments::app_file_store::content_reference_ids(&content),
     };
-    send_many(state, targets, content.to_string()).await
+    Ok((content.to_string(), Some(imports)))
 }
 pub(crate) fn delete_query(state: &ServerState, query: &str) -> Result<usize> {
     let ids = if query.trim().is_empty() {

@@ -66,10 +66,7 @@ async fn calls_map_the_provider_rows_onto_the_contract_type() {
             assert_eq!(params["limit"], 20);
             json!([call_fact("c1", 2)])
         }
-        "systemPhoneLocaleFacts" => json!({"region":"CN","locale":"zh_CN","available":true}),
-        "systemPhoneMetadata" => {
-            json!({"country":"CN","numberType":"MOBILE","carrier":"Test","description":"mobile"})
-        }
+        "systemPhoneLocaleFacts" => json!({"region":"CN","locale":"zh-CN"}),
         other => panic!("unexpected host call {other}"),
     });
     let response = schema
@@ -237,4 +234,54 @@ async fn calls_without_geo_preserve_provider_values_without_phone_metadata_calls
     assert_eq!(data["calls"][0]["typeCode"], 37);
     assert_eq!(data["calls"][0]["photoUri"], "content://contacts/photo/1");
     assert_eq!(*calls.lock().unwrap(), ["systemCallFacts"]);
+}
+
+#[tokio::test]
+async fn phone_geo_samples_locale_once_for_the_page_and_never_dispatches_number_metadata() {
+    let (_dir, schema) = fixture(json!(["READ_CALL_LOG"]));
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let observed = requests.clone();
+    stub(schema_host(&schema), move |method, _| {
+        observed.lock().unwrap().push(method.into());
+        match method {
+            "systemCallFacts" => json!(
+                (0..128)
+                    .map(|index| {
+                        let mut fact = call_fact(&index.to_string(), 1);
+                        fact["number"] = json!(format!("800-555-0100 ext {index}"));
+                        fact
+                    })
+                    .collect::<Vec<_>>()
+            ),
+            "systemPhoneLocaleFacts" => json!({"region":"US","locale":"en-US"}),
+            other => panic!("unexpected host call {other}"),
+        }
+    });
+    let response = schema.execute(r#"{ calls(query:"", offset:0, limit:128) { id geo { country numberType carrier description } } }"#).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let rows = data["calls"].as_array().unwrap();
+    assert_eq!(rows.len(), 128);
+    assert!(
+        rows.iter()
+            .all(|row| row["geo"]["country"] == "US" && row["geo"]["numberType"] == "TOLL_FREE")
+    );
+    assert_eq!(
+        *requests.lock().unwrap(),
+        ["systemCallFacts", "systemPhoneLocaleFacts"]
+    );
+}
+
+#[tokio::test]
+async fn empty_call_page_does_not_request_locale_or_number_metadata() {
+    let (_dir, schema) = fixture(json!(["READ_CALL_LOG"]));
+    stub(schema_host(&schema), |method, _| match method {
+        "systemCallFacts" => json!([]),
+        other => panic!("unexpected host call {other}"),
+    });
+    let response = schema
+        .execute(r#"{ calls(query:"", offset:0, limit:20) { geo { country } } }"#)
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["calls"], json!([]));
 }

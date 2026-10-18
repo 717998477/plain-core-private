@@ -91,7 +91,6 @@ extend type Mutation {
 extend type Query {
 	imageCount(query: String!): Int!
 	imageEditorProject(id: ID!): ImageEditorProject
-	imageEditorProjectItems(query: String!, offset: Int!, limit: Int!): [ImageEditorProjectSummary!]!
 	imageEditorProjects: [ImageEditorProjectSummary!]!
 	imageModelsState: ImageModelsState!
 	imageSearchStatus: ImageSearchStatus!

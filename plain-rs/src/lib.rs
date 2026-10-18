@@ -5,6 +5,8 @@ extern crate self as plain_rs;
 
 pub mod cache_paths;
 pub mod data_paths;
+#[cfg(feature = "phone")]
+pub mod phone;
 #[cfg(feature = "prefs")]
 pub mod updates;
 

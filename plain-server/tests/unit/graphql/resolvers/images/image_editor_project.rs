@@ -36,7 +36,7 @@ async fn projects_persist_project_summaries_and_validate_state() {
                 .is_some()
         );
     }
-    for n in 0..24 {
+    for n in 0..55 {
         let save = format!(
             r#"mutation {{saveImageEditorProject(id:"project-{n}%_",input:{{stateB64:"AQID",canvasWidth:1,canvasHeight:1,layerCount:1}}) {{id}}}}"#
         );
@@ -47,39 +47,28 @@ async fn projects_persist_project_summaries_and_validate_state() {
                 .is_none()
         );
     }
-    let list = call(
-        server.port,
-        &token,
-        r#"{imageEditorProjects {id} imageEditorProjectItems(offset:0,limit:50,query:"%_") {id}}"#,
-    )
-    .await;
-    assert_eq!(
-        list["data"]["imageEditorProjects"]
-            .as_array()
-            .unwrap()
-            .len(),
-        20
-    );
-    assert_eq!(
-        list["data"]["imageEditorProjectItems"]
-            .as_array()
-            .unwrap()
-            .len(),
-        24
-    );
-    let list = call(
-        server.port,
-        &token,
-        r#"{imageEditorProjectItems(offset:20,limit:50,query:"%_") {id}}"#,
-    )
-    .await;
-    assert_eq!(
-        list["data"]["imageEditorProjectItems"]
-            .as_array()
-            .unwrap()
-            .len(),
-        4
-    );
+    server
+        .runtime_state()
+        .db
+        .with_conn(|connection| -> rusqlite::Result<()> {
+            for n in 0..55 {
+                connection.execute(
+                    "UPDATE image_editor_projects SET updated_at=?1 WHERE id=?2",
+                    rusqlite::params![
+                        format!("2099-01-01T00:00:{n:02}.000Z"),
+                        format!("project-{n}%_")
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    let list = call(server.port, &token, "{imageEditorProjects {id}}").await;
+    assert!(list.get("errors").is_none(), "{list}");
+    let rows = list["data"]["imageEditorProjects"].as_array().unwrap();
+    assert_eq!(rows.len(), 50);
+    assert_eq!(rows[0]["id"], "project-54%_");
+    assert_eq!(rows[49]["id"], "project-5%_");
     server.shutdown().await;
     let server = ContentServer::start(path.parent().unwrap(), &token, prefs).unwrap();
     let read = call(

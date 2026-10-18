@@ -139,6 +139,49 @@ fn seed_queue(schema: &PublicSchema, tracks: &[(&str, &str, &str)]) {
     domain::enqueue(database(schema), &items, false).unwrap();
 }
 
+#[tokio::test]
+async fn playlist_query_id_selection_preserves_input_order_and_fails_without_partial_inserts() {
+    let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    seed_queue(
+        &schema,
+        &[
+            ("/music/a.mp3", "A", "Artist"),
+            ("/music/b.mp3", "B", "Artist"),
+        ],
+    );
+    let db = database(&schema);
+    let playlist = domain::create_playlist(db, "ordered").unwrap();
+    let add = query(&schema, &format!(r#"mutation {{ addAudioPlaylistItems(id:"{}",query:"ids:test:/music/b.mp3,test:/music/a.mp3,test:/music/b.mp3") }}"#, playlist.id)).await;
+    assert_eq!(add["data"]["addAudioPlaylistItems"], true, "{add}");
+    let rows = domain::playlist_items_page(db, &playlist.id, 0, 10, "").unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(),
+        ["/music/b.mp3", "/music/a.mp3"]
+    );
+    let empty = domain::create_playlist(db, "empty").unwrap();
+    for selection in [
+        "ids:test:/music/b.mp3,test:/missing",
+        "ids:",
+        "ids:test:/music/a.mp3,",
+    ] {
+        let response = query(
+            &schema,
+            &format!(
+                r#"mutation {{ addAudioPlaylistItems(id:"{}",query:{}) }}"#,
+                empty.id,
+                json!(selection)
+            ),
+        )
+        .await;
+        assert!(response.get("errors").is_some(), "{response}");
+        assert!(
+            domain::playlist_items_page(db, &empty.id, 0, 10, "")
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
 /// A queue seeded behind the resolver's back still reads back through it:
 /// that is the point of mounting the app's own service rather than a second
 /// copy of the queue.

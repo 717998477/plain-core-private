@@ -137,7 +137,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
         "Query",
         "images",
         resolvers::images::models::ImageModelsQuery,
-        resolvers::images::editor_host::ImageEditorItemsQuery,
         resolvers::images::image_editor_project::ImageEditorProjectQuery,
         resolvers::images::public_index::ImageIndexQuery,
         resolvers::images::public::ImagesQuery

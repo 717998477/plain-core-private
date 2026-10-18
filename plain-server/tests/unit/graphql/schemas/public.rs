@@ -39,6 +39,12 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
     assert!(!sdl.contains("includeTrashed"));
     assert!(!sdl.contains("embeddedAudioLyrics"));
     for removed in [
+        "respondChannelInvite(",
+        "sendChatText(",
+        "latestChatItems:",
+        "addAudioPlaylistMedia(",
+        "imageEditorProjectItems(",
+        "renameFilePath(",
         "searchImages(",
         "searchImageCount(",
         "semanticImageSearch(",
@@ -263,7 +269,11 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "removeAudioPlaylistItem(id: ID!, query: String!): ActionResult!",
         "chatChannels: [ChatChannel!]!",
         "chatItems(target: String!, query: String!, offset: Int!, limit: Int!): [ChatItem!]!",
-        "latestChatItems: [ChatItem!]!",
+        "chatConversations: [ChatConversation!]!",
+        "acceptChatChannelInvite(id: ID!): Boolean!",
+        "declineChatChannelInvite(id: ID!): Boolean!",
+        "addAudioPlaylistItems(id: ID!, query: String!): Boolean!",
+        "renameFile(path: String!, name: String!): String",
         "sendChatItem(target: String!, content: String!): [ChatItem!]!",
         "deleteChatItem(id: ID!): Boolean!",
         "deleteChatItems(query: String!): ActionResult!",

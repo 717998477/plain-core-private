@@ -205,7 +205,7 @@ async fn a_refused_rename_reports_false() {
         )
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["renameFile"], false);
+    assert!(response.data.into_json().unwrap()["renameFile"].is_null());
 }
 
 #[tokio::test]

@@ -19,7 +19,7 @@ impl ChatHostQuery {
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Vec<ChatConversation>> {
         Ok(
-            plain_rs::chat::cacher::ChatCacher::snapshot(&ctx.data::<ServerState>()?.db)?
+            plain_rs::chat::cacher::ChatCacher::conversations(&ctx.data::<ServerState>()?.db)?
                 .into_iter()
                 .map(|(id, chat)| ChatConversation {
                     id: ID::from(id),
@@ -124,17 +124,6 @@ impl ChatHostMutation {
         .collect())
     }
 
-    async fn send_chat_text(
-        &self,
-        ctx: &Context<'_>,
-        target: String,
-        text: String,
-    ) -> async_graphql::Result<ChatItem> {
-        let rows = chat_actions::send_text(ctx.data::<ServerState>()?, vec![target], &text).await?;
-        Ok(item(rows.first().ok_or_else(|| {
-            async_graphql::Error::new("Message unavailable")
-        })?))
-    }
     async fn forward_chat_items(
         &self,
         ctx: &Context<'_>,

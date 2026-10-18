@@ -102,7 +102,7 @@ fn cache_only_and_task_owned_mutations_skip_the_generic_content_broadcast() {
         "mutation { preview: cacheSharedFile }",
         "mutation { cacheRemoteFile cacheZipEntry cacheAudioCover exportAppLogs exportAppBackup stageAppRestore }",
         "mutation { ...Cache } fragment Cache on Mutation { cacheRemoteFile }",
-        "mutation { ... on Mutation { copyFileToDirectory copyFile moveFile renameFile renameFilePath } }",
+        "mutation { ... on Mutation { copyFileToDirectory copyFile moveFile renameFile } }",
         "mutation { createFileTask }",
     ] {
         assert!(!content_changes(&Request::new(query)), "{query}");
