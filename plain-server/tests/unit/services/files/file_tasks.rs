@@ -16,6 +16,16 @@ async fn call(port: u16, token: &str, doc: String) -> Value {
         .unwrap();
     serde_json::from_str(&text).unwrap()
 }
+fn find_task(response: &Value, id: &str) -> Value {
+    assert!(response.get("errors").is_none(), "{response}");
+    response["data"]["fileTasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == id)
+        .unwrap()
+        .clone()
+}
 #[tokio::test]
 async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_authorization() {
     let temp = tempfile::tempdir().unwrap();
@@ -72,9 +82,9 @@ async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_auth
     let id = queued["data"]["createFileTask"]["id"].as_str().unwrap();
     let done = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let result = call(server.port,&token,format!("query {{ fileTask(id:{}) {{ id status error doneBytes completedOps {{ src dst }} }} }}",json!(id))).await;
+            let result = call(server.port,&token,"query { fileTasks(query:\"\",offset:0,limit:2147483647) { id status error doneBytes completedOps { src dst } } }".to_owned()).await;
             assert!(result.get("errors").is_none(),"{result}");
-            let task = result["data"]["fileTask"].clone();
+            let task = find_task(&result, id);
             if task["status"] == "DONE" || task["status"] == "ERROR" { break task; }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
@@ -94,12 +104,14 @@ async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_auth
         .runtime_state()
         .public
         .execute(
-            async_graphql::Request::new(format!("{{ fileTask(id:{}) {{ id }} }}", json!(id)))
-                .data("foreign".to_owned()),
+            async_graphql::Request::new(
+                "{ fileTasks(query:\"\",offset:0,limit:2147483647) { id } }",
+            )
+            .data("foreign".to_owned()),
         )
         .await;
     assert!(foreign.errors.is_empty(), "{:?}", foreign.errors);
-    assert!(foreign.data.into_json().unwrap()["fileTask"].is_null());
+    assert_eq!(foreign.data.into_json().unwrap()["fileTasks"], json!([]));
     revoked.store(true, std::sync::atomic::Ordering::SeqCst);
     let denied = call(server.port, &token, document).await;
     assert!(denied.get("errors").is_some());
@@ -257,13 +269,10 @@ async fn media_move_case(missing_destination: bool) {
             let row = call(
                 server.port,
                 &token,
-                format!(
-                    "query {{ fileTask(id:{}) {{ status error completedOps {{ src dst }} }} }}",
-                    json!(id)
-                ),
+                "query { fileTasks(query:\"\",offset:0,limit:2147483647) { id status error completedOps { src dst } } }".to_owned(),
             )
             .await;
-            let task = row["data"]["fileTask"].clone();
+            let task = find_task(&row, id);
             if task["status"] == "DONE" || task["status"] == "ERROR" {
                 break task;
             }
@@ -300,10 +309,10 @@ async fn media_move_case(missing_destination: bool) {
         let row = call(
             server.port,
             &token,
-            format!("query {{ fileTask(id:{}) {{ status }} }}", json!(id)),
+            "query { fileTasks(query:\"\",offset:0,limit:2147483647) { id status } }".to_owned(),
         )
         .await;
-        assert_eq!(row["data"]["fileTask"]["status"], "ERROR");
+        assert_eq!(find_task(&row, id)["status"], "ERROR");
         assert_eq!(clear_count.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(!base.join("target (2)").exists());
     } else {

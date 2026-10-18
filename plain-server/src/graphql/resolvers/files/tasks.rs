@@ -67,16 +67,6 @@ impl From<FileTask> for FileTaskResult {
 pub struct FileTaskQuery;
 #[Object]
 impl FileTaskQuery {
-    async fn file_task(&self, ctx: &Context<'_>, id: ID) -> Result<Option<FileTaskResult>> {
-        let client_id = caller(ctx)?;
-        Ok(ctx
-            .data::<Arc<FileTasks>>()?
-            .list(client_id)
-            .await?
-            .into_iter()
-            .find(|task| task.id == id.as_str())
-            .map(Into::into))
-    }
     async fn file_tasks(
         &self,
         ctx: &Context<'_>,

@@ -268,7 +268,6 @@ extend type Query {
 	fileCount(root: String!, query: String!): Int!
 	fileInfo(path: String!, fileName: String): FileInfo!
 	filePaths(paths: [String!]!): [String]!
-	fileTask(id: ID!): FileTask
 	fileTasks(query: String!, offset: Int!, limit: Int!): [FileTask!]!
 	"""
 	One page of a directory listing, filtered and sorted by the search
