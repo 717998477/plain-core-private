@@ -143,14 +143,9 @@ impl ScreenMirrorMutation {
         mode: ScreenMirrorMode,
     ) -> async_graphql::Result<bool> {
         let quality = serde_json::json!({"mode":mode.name(),"resolution":if mode==ScreenMirrorMode::Smooth {720}else{1080}});
-        crate::services::settings::preferences::set(
-            ctx.data_unchecked::<Arc<plain_rs::prefs::Prefs>>(),
-            ctx.data_unchecked::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>(),
-            true,
-            plain_rs::prefs::user::keys::SCREEN_MIRROR_QUALITY,
-            quality,
-        )
-        .map_err(async_graphql::Error::new)?;
+        crate::graphql::resolvers::settings::state::user_preferences(ctx)?
+            .set(plain_rs::prefs::user::keys::SCREEN_MIRROR_QUALITY, quality)
+            .await?;
         dispatch(
             ctx,
             "systemUpdateScreenMirrorQuality",

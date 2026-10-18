@@ -68,9 +68,9 @@ async fn tls() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     (port, task, count)
 }
 #[tokio::test]
-async fn authenticated_main_browse_updates_card_and_caches_real_tls_files_without_host() {
+async fn authenticated_main_browse_caches_and_queues_real_tls_files_without_host() {
     use crate::test_support::graphql_http_variables;
-    let (_dir, server, token) = root();
+    let (directory, server, token) = root();
     let state = server.runtime_state();
     let (port, tls, _) = tls().await;
     let expected = card(port);
@@ -116,14 +116,51 @@ async fn authenticated_main_browse_updates_card_and_caches_real_tls_files_withou
         &plain_rs::utils::base64::base64_encode_url_safe(&[7; 32]),
     )
     .unwrap();
-    let plan = graphql_http_variables(server.port,&token,
-        r#"mutation($link:SharedLinkInput!,$entries:[SharedEntryInput!]!){planSharedDownload(kind:SYNC,link:$link,entries:$entries,targetDir:"/out",downloadsBase:"/downloads"){totalSize targets{writeDir entryName}}}"#,
-        json!({"link":link,"entries":[{"name":"Root","virtualPath":"root","isDir":true,"size":0,"mimeType":"","hasThumb":false}]})).await;
-    assert!(plan.get("errors").is_none(), "{plan}");
-    let plan = &plan["data"]["planSharedDownload"];
-    assert_eq!(plan["totalSize"], 8);
-    assert_eq!(plan["targets"][0]["writeDir"], "/out/Root");
-    assert_eq!(plan["targets"][0]["entryName"], "Root/a 中文.txt");
+    let target = directory.path().join("queued");
+    let queued = graphql_http_variables(
+        server.port,
+        &token,
+        "mutation($input: SharedDownloadInput!) { enqueueSharedDownload(input: $input) }",
+        json!({"input":{
+            "messageId":row.id,"kind":"SYNC","link":link,
+            "urlToken":result["info"]["urlToken"],
+            "entries":[{"name":"Root","virtualPath":"root","isDir":true,"size":0,"mimeType":"","hasThumb":false}],
+            "targetDir":target.to_str().unwrap(),"zipName":""
+        }}),
+    ).await;
+    assert!(queued.get("errors").is_none(), "{queued}");
+    let id = queued["data"]["enqueueSharedDownload"].as_str().unwrap();
+    let mut changed = state.shared_batches.queue.changed.subscribe();
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = state.shared_batches.queue.snapshot();
+            let task = snapshot["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|task| task["id"] == id)
+                .unwrap();
+            if matches!(
+                task["status"].as_str(),
+                Some("COMPLETED" | "PARTIAL" | "FAILED" | "CANCELED")
+            ) {
+                return task.clone();
+            }
+            changed.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(completed["status"], "COMPLETED", "{completed}");
+    assert_eq!(completed["totalSize"], 8);
+    assert_eq!(completed["totalFiles"], 1);
+    assert_eq!(completed["doneFiles"], 1);
+    assert_eq!(
+        tokio::fs::read(target.join("Root/a 中文.txt"))
+            .await
+            .unwrap(),
+        b"download"
+    );
     assert!(!state.host.connected());
     server.shutdown().await;
     tls.abort();

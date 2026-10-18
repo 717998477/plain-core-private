@@ -242,14 +242,12 @@ pub(crate) async fn shutdown(
     if !shutdown_allowed(address) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    match crate::graphql::resolvers::settings::state::apply_user_patch(
-        crate::graphql::resolvers::settings::state::UserPatchEnv::from_server(&state),
-        plain_rs::prefs::user::UserSettingsPatch {
+    match crate::services::settings::user_preferences::UserPreferences::from_server(&state)
+        .patch(plain_rs::prefs::user::UserSettingsPatch {
             desktop_access: Some(false),
             ..Default::default()
-        },
-    )
-    .await
+        })
+        .await
     {
         Ok(_) => {}
         Err(error) => {

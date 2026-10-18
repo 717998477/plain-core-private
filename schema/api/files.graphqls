@@ -213,11 +213,9 @@ extend type Mutation {
 	cacheZipEntry(path: String!): String!
 	copyFile(src: String!, dst: String!, overwrite: Boolean!): Boolean!
 	copyFileToDirectory(src: String!, directory: String!, name: String!): String
-	createCopyTask(ops: [FileTaskOpInput!]!): FileTask!
 	createDir(path: String!): File!
 	createFile(path: String!): File!
 	createFileTask(type: FileTaskType!, title: String!, ops: [FileTaskOpInput!]!, waitForCompletion: Boolean! = false): FileTask!
-	createMoveTask(ops: [FileTaskOpInput!]!): FileTask!
 	createZipArchive(paths: [String!]!, target: String!): String!
 	deleteChunks(fileId: String!): Boolean!
 	deleteFiles(paths: [String!]!): ActionResult!

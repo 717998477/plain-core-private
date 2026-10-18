@@ -180,13 +180,6 @@ async fn browse(
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Request {
-    Plan {
-        kind: plain_rs::files::shares::batch_plan::Kind,
-        link: Link,
-        entries: Vec<plain_rs::files::shares::client::File>,
-        target_dir: String,
-        downloads_base: String,
-    },
     OwnLink {
         id: String,
         host: Option<String>,
@@ -216,31 +209,6 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
     ensure!(!*stop.borrow(), "Core stopped");
     let work = async {
         match request {
-            Request::Plan {
-                kind,
-                link,
-                entries,
-                target_dir,
-                downloads_base,
-            } => {
-                link.url("/guest_graphql")?;
-                let mut walker = plain_rs::files::shares::batch_plan::Walker::new(
-                    kind,
-                    entries,
-                    &target_dir,
-                    &downloads_base,
-                )?;
-                while let Some(path) = walker.next_directory()? {
-                    let info = fetch(
-                        &state,
-                        &link,
-                        if path.is_empty() { None } else { Some(&path) },
-                    )
-                    .await?;
-                    walker.supply(info.entries)?;
-                }
-                Ok(serde_json::to_value(walker.finish()?)?)
-            }
             Request::OwnLink { id, host } => {
                 let service =
                     plain_rs::files::shares::Service::new(state.db.clone(), state.prefs.clone());

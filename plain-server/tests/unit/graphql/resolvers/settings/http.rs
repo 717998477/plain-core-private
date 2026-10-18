@@ -48,12 +48,20 @@ async fn call(state: ServerState, headers: &HeaderMap, document: &str) -> (Statu
 async fn remote_settings_authentication_device_isolation_and_disable_reply() {
     let (_a, first, headers) = device();
     let (_b, second, other) = device();
-    let (status,result)=call(first.runtime_state(),&headers,"mutation {updateUserSettings(input:{editorFontSize:20,feedAutoRefreshIntervalSec:3600}) {result {affectedCount} userSettings {editorFontSize feedAutoRefreshIntervalSec}}}").await;
+    let (status, result) = call(first.runtime_state(), &headers, r#"mutation{font:setUserPref(key:"editor_font_size",value:20) interval:setUserPref(key:"feed_auto_refresh_interval",value:3600)}"#).await;
     assert_eq!(status, StatusCode::OK);
     assert!(result.get("errors").is_none(), "{result}");
+    assert_eq!(result["data"]["font"], true);
+    let (_, result) = call(
+        first.runtime_state(),
+        &headers,
+        "{userSettings{editorFontSize feedAutoRefreshIntervalSec}}",
+    )
+    .await;
+    assert_eq!(result["data"]["userSettings"]["editorFontSize"], 20);
     assert_eq!(
-        result["data"]["updateUserSettings"]["userSettings"]["editorFontSize"],
-        20
+        result["data"]["userSettings"]["feedAutoRefreshIntervalSec"],
+        3600
     );
     let (_, result) = call(
         second.runtime_state(),
@@ -82,13 +90,10 @@ async fn remote_settings_authentication_device_isolation_and_disable_reply() {
     let (_, result) = call(
         first.runtime_state(),
         &headers,
-        "mutation {updateUserSettings(input:{desktopAccess:false}) {userSettings {desktopAccess}}}",
+        r#"mutation{setUserPref(key:"desktop_access",value:false)}"#,
     )
     .await;
-    assert_eq!(
-        result["data"]["updateUserSettings"]["userSettings"]["desktopAccess"],
-        false
-    );
+    assert_eq!(result["data"]["setUserPref"], true);
     assert_eq!(
         call(
             first.runtime_state(),

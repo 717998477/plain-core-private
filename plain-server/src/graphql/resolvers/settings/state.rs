@@ -1,6 +1,7 @@
-use super::models::{SettingsUpdate, SystemSettings, UserSettings, UserSettingsInput};
-use super::system_input::SystemSettingsInput;
+use super::models::{SystemSettings, UserSettings};
 use crate::graphql::types::ActionResult;
+use crate::services::settings::system_preferences::SystemPreferences;
+use crate::services::settings::user_preferences::UserPreferences;
 use async_graphql::{Context, Json, Object, Result};
 use plain_rs::{events::WsEvent, prefs::Prefs};
 use serde_json::Value;
@@ -47,9 +48,8 @@ impl PreferencesMutation {
         key: String,
         value: Json<Value>,
     ) -> Result<ActionResult> {
-        validate_dynamic_key(&key)?;
-        let changed = plain_rs::prefs::system::set_entry(prefs(ctx)?, &key, value.0)?;
-        notify(ctx, changed);
+        validate_key(&key)?;
+        let changed = system_preferences(ctx)?.set(&key, value.0).await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
@@ -62,69 +62,38 @@ impl PreferencesMutation {
             affected_count: i32::from(changed),
         })
     }
-    async fn update_system_settings(
-        &self,
-        ctx: &Context<'_>,
-        input: SystemSettingsInput,
-    ) -> Result<SettingsUpdate> {
-        let prefs = prefs(ctx)?;
-        let command: plain_rs::prefs::system::Command =
-            serde_json::from_value(serde_json::to_value(input)?)?;
-        #[cfg(feature = "core")]
-        if let plain_rs::prefs::system::Command::SetMdnsHostname { hostname } = &command {
-            if let Some(state) = ctx.data_opt::<crate::assembly::server::ServerState>() {
-                let changed = apply_mdns_hostname(state, hostname).await?;
-                return Ok(updated(changed));
-            }
-        }
-        if matches!(
-            command,
-            plain_rs::prefs::system::Command::PatchUpdate { .. }
-        ) {
-            if let Some(state) = ctx.data_opt::<crate::assembly::server::ServerState>() {
-                let changed =
-                    crate::services::settings::updates::apply_settings(state, command).await?;
-                notify(ctx, changed);
-                return Ok(updated(changed));
-            }
-        }
-        let changed = command.apply(prefs)?;
-        notify(ctx, changed);
-        Ok(updated(changed))
+    async fn reset_password(&self, ctx: &Context<'_>) -> Result<bool> {
+        system_preferences(ctx)?.reset_password()?;
+        Ok(true)
     }
-    async fn update_user_settings(
-        &self,
-        ctx: &Context<'_>,
-        input: UserSettingsInput,
-    ) -> Result<SettingsUpdate> {
-        let patch: plain_rs::prefs::user::UserSettingsPatch =
-            serde_json::from_value(serde_json::to_value(input)?)?;
-        let changed = update_user(ctx, patch).await?;
-        Ok(updated(changed))
+    async fn reset_url_token(&self, ctx: &Context<'_>) -> Result<bool> {
+        system_preferences(ctx)?.reset_url_token()?;
+        Ok(true)
+    }
+    async fn reset_adb_token(&self, ctx: &Context<'_>) -> Result<bool> {
+        system_preferences(ctx)?.reset_adb_token()?;
+        Ok(true)
     }
     async fn record_recent_search(&self, ctx: &Context<'_>, query: String) -> Result<ActionResult> {
-        let before = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
-        let changed = plain_rs::prefs::user::Action::RecordSearch(query).apply(prefs(ctx)?)?;
-        notify(ctx, changed);
-        emit_user_events_ctx(ctx, &before)?;
+        let changed = user_preferences(ctx)?
+            .action(plain_rs::prefs::user::Action::RecordSearch(query))
+            .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
     }
     async fn remove_recent_search(&self, ctx: &Context<'_>, query: String) -> Result<ActionResult> {
-        let before = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
-        let changed = plain_rs::prefs::user::Action::RemoveSearch(query).apply(prefs(ctx)?)?;
-        notify(ctx, changed);
-        emit_user_events_ctx(ctx, &before)?;
+        let changed = user_preferences(ctx)?
+            .action(plain_rs::prefs::user::Action::RemoveSearch(query))
+            .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
     }
     async fn clear_recent_searches(&self, ctx: &Context<'_>) -> Result<ActionResult> {
-        let before = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
-        let changed = plain_rs::prefs::user::Action::ClearSearches.apply(prefs(ctx)?)?;
-        notify(ctx, changed);
-        emit_user_events_ctx(ctx, &before)?;
+        let changed = user_preferences(ctx)?
+            .action(plain_rs::prefs::user::Action::ClearSearches)
+            .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
@@ -134,11 +103,9 @@ impl PreferencesMutation {
         ctx: &Context<'_>,
         path: String,
     ) -> Result<ActionResult> {
-        let before = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
-        let changed =
-            plain_rs::prefs::user::Action::RecordSaveDirectory(path).apply(prefs(ctx)?)?;
-        notify(ctx, changed);
-        emit_user_events_ctx(ctx, &before)?;
+        let changed = user_preferences(ctx)?
+            .action(plain_rs::prefs::user::Action::RecordSaveDirectory(path))
+            .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
@@ -148,11 +115,11 @@ impl PreferencesMutation {
         ctx: &Context<'_>,
         package_name: String,
     ) -> Result<ActionResult> {
-        let before = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
-        let changed = plain_rs::prefs::user::Action::ToggleNotificationApp(package_name)
-            .apply(prefs(ctx)?)?;
-        notify(ctx, changed);
-        emit_user_events_ctx(ctx, &before)?;
+        let changed = user_preferences(ctx)?
+            .action(plain_rs::prefs::user::Action::ToggleNotificationApp(
+                package_name,
+            ))
+            .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
@@ -162,20 +129,17 @@ impl PreferencesMutation {
         ctx: &Context<'_>,
         mode: String,
     ) -> Result<ActionResult> {
-        let before = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
-        let changed =
-            plain_rs::prefs::user::Action::SetNotificationMode(mode).apply(prefs(ctx)?)?;
-        notify(ctx, changed);
-        emit_user_events_ctx(ctx, &before)?;
+        let changed = user_preferences(ctx)?
+            .action(plain_rs::prefs::user::Action::SetNotificationMode(mode))
+            .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
     }
     async fn clear_notification_filter_apps(&self, ctx: &Context<'_>) -> Result<ActionResult> {
-        let before = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
-        let changed = plain_rs::prefs::user::Action::ClearNotificationApps.apply(prefs(ctx)?)?;
-        notify(ctx, changed);
-        emit_user_events_ctx(ctx, &before)?;
+        let changed = user_preferences(ctx)?
+            .action(plain_rs::prefs::user::Action::ClearNotificationApps)
+            .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
@@ -185,56 +149,19 @@ impl PreferencesMutation {
         ctx: &Context<'_>,
         paths: Vec<String>,
     ) -> Result<ActionResult> {
-        let before = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
-        let changed = plain_rs::prefs::user::Action::DeleteVideos(paths).apply(prefs(ctx)?)?;
-        notify(ctx, changed);
-        emit_user_events_ctx(ctx, &before)?;
+        let changed = user_preferences(ctx)?
+            .action(plain_rs::prefs::user::Action::DeleteVideos(paths))
+            .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
     }
 }
-/// Emits the events derived from one user-settings write. Takes the already
-/// computed `after` snapshot so every caller shares one diff, and so a write
-/// never re-reads the store it just persisted.
-fn emit_user_events(
-    events: Option<&broadcast::Sender<WsEvent>>,
-    before: &plain_rs::prefs::user::UserSettings,
-    after: &plain_rs::prefs::user::UserSettings,
-) -> Result<()> {
-    if let Some(events) = events {
-        if before.device_name != after.device_name {
-            let _ = events.send(WsEvent::broadcast(
-                "DEVICE_NAME_UPDATED",
-                serde_json::to_string(&after.device_name)?,
-            ));
-        }
-        if before.notification_filter != after.notification_filter {
-            let _ = events.send(WsEvent::broadcast("NOTIFICATION_REFRESHED", String::new()));
-        }
-        if before.pomodoro_settings != after.pomodoro_settings {
-            let _ = events.send(WsEvent::broadcast(
-                "POMODORO_SETTINGS_UPDATE",
-                after.pomodoro_settings.to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn emit_user_events_ctx(
-    ctx: &Context<'_>,
-    before: &plain_rs::prefs::user::UserSettings,
-) -> Result<()> {
-    let after = plain_rs::prefs::user::snapshot(prefs(ctx)?)?;
-    emit_user_events(events(ctx), before, &after)
-}
-
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 #[path = "../../../../tests/unit/graphql/resolvers/settings/state.rs"]
 mod tests;
 
-fn validate_dynamic_key(key: &str) -> Result<()> {
+fn validate_key(key: &str) -> Result<()> {
     if key.is_empty()
         || key.len() > 128
         || !key
@@ -243,6 +170,11 @@ fn validate_dynamic_key(key: &str) -> Result<()> {
     {
         return Err(async_graphql::Error::new("invalid_pref_key"));
     }
+    Ok(())
+}
+
+fn validate_dynamic_key(key: &str) -> Result<()> {
+    validate_key(key)?;
     if [
         plain_rs::prefs::system::keys::PASSWORD,
         plain_rs::prefs::system::keys::PASSWORD_TYPE,
@@ -267,96 +199,31 @@ fn validate_dynamic_key(key: &str) -> Result<()> {
     Ok(())
 }
 
-fn updated(changed: bool) -> SettingsUpdate {
-    SettingsUpdate {
-        result: ActionResult {
-            affected_count: i32::from(changed),
-        },
-    }
-}
-
 #[cfg(all(test, feature = "core", feature = "http_transport"))]
 #[path = "../../../../tests/unit/graphql/resolvers/settings/http.rs"]
 mod http_tests;
+
+pub(crate) fn user_preferences<'a>(ctx: &'a Context<'_>) -> Result<UserPreferences<'a>> {
+    Ok(UserPreferences {
+        prefs: prefs(ctx)?,
+        events: events(ctx),
+        #[cfg(feature = "core")]
+        server: ctx.data_opt::<crate::assembly::server::ServerState>(),
+    })
+}
 
 pub(crate) async fn update_user(
     ctx: &Context<'_>,
     patch: plain_rs::prefs::user::UserSettingsPatch,
 ) -> Result<bool> {
-    apply_user_patch(UserPatchEnv::from_ctx(ctx)?, patch).await
+    Ok(user_preferences(ctx)?.patch(patch).await?)
 }
 
-pub(crate) struct UserPatchEnv<'a> {
-    prefs: &'a Arc<Prefs>,
-    events: Option<&'a broadcast::Sender<WsEvent>>,
-    #[cfg(feature = "core")]
-    server: Option<&'a crate::assembly::server::ServerState>,
-}
-
-impl<'a> UserPatchEnv<'a> {
-    pub(crate) fn from_ctx(ctx: &'a Context<'_>) -> Result<Self> {
-        Ok(Self {
-            prefs: prefs(ctx)?,
-            events: events(ctx),
-            #[cfg(feature = "core")]
-            server: ctx.data_opt::<crate::assembly::server::ServerState>(),
-        })
-    }
-
-    #[cfg(feature = "core")]
-    pub(crate) fn from_server(state: &'a crate::assembly::server::ServerState) -> Self {
-        Self {
-            prefs: &state.prefs,
-            events: Some(&state.events),
-            server: Some(state),
-        }
-    }
-}
-
-/// Validates, persists and publishes one user-settings patch.
-pub(crate) async fn apply_user_patch(
-    env: UserPatchEnv<'_>,
-    patch: plain_rs::prefs::user::UserSettingsPatch,
-) -> Result<bool> {
-    let before = plain_rs::prefs::user::snapshot(env.prefs)?;
-    let changed = plain_rs::prefs::user::patch(env.prefs, patch)?;
-    if changed {
-        if let Some(events) = env.events {
-            let _ = events.send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
-        }
-    }
-    // One read after the write feeds every effect below.
-    let after = plain_rs::prefs::user::snapshot(env.prefs)?;
-    #[cfg(feature = "core")]
-    if before.desktop_access && !after.desktop_access {
-        if let Some(state) = env.server {
-            state.main_ws.close_client(state, None);
-        }
-    }
-    if before.device_name != after.device_name {
+fn system_preferences<'a>(ctx: &'a Context<'_>) -> Result<SystemPreferences<'a>> {
+    Ok(SystemPreferences {
+        prefs: prefs(ctx)?,
+        events: events(ctx),
         #[cfg(feature = "core")]
-        if let Some(state) = env.server {
-            state.mdns.update_hostname(state).await?;
-        }
-    }
-    emit_user_events(env.events, &before, &after)?;
-    Ok(changed)
-}
-
-#[cfg(feature = "core")]
-pub(crate) async fn apply_mdns_hostname(
-    state: &crate::assembly::server::ServerState,
-    hostname: &str,
-) -> Result<bool> {
-    let changed = plain_rs::prefs::system::Command::SetMdnsHostname {
-        hostname: hostname.to_owned(),
-    }
-    .apply(&state.prefs)?;
-    if changed {
-        let _ = state
-            .events
-            .send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
-    }
-    state.mdns.update_hostname(state).await?;
-    Ok(changed)
+        server: ctx.data_opt::<crate::assembly::server::ServerState>(),
+    })
 }

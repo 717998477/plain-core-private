@@ -25,18 +25,25 @@ async fn main_share_content_uses_saved_roots_identity_and_live_port() {
     let id = data["createShare"]["id"].as_str().unwrap();
     let result = executor
         .execute(Request::new(format!(
-            "{{ shareMessageContent(id: {}) shareToken(id: {}) }}",
-            json!(id),
+            r#"mutation {{ sendShare(shareId:{}, targets:["local"]) {{content}} }}"#,
             json!(id)
         )))
         .await;
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     let data = result.data.into_json().unwrap();
     let message: Value =
-        serde_json::from_str(data["shareMessageContent"].as_str().unwrap()).unwrap();
+        serde_json::from_str(data["sendShare"][0]["content"].as_str().unwrap()).unwrap();
     assert_eq!(message["type"], "SHARE");
     assert_eq!(message["value"]["shareId"], id);
-    assert_eq!(message["value"]["urlToken"], data["shareToken"]);
+    assert_eq!(
+        message["value"]["urlToken"],
+        plain_rs::files::shares::Service::new(
+            server.runtime_state().db.clone(),
+            server.runtime_state().prefs.clone()
+        )
+        .token(id)
+        .unwrap()
+    );
     assert_eq!(message["value"]["name"], "A share");
     assert_eq!(message["value"]["itemCount"], 1);
     assert_eq!(message["value"]["totalSize"], 3);

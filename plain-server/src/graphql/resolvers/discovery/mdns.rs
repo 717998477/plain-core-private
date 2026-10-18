@@ -198,33 +198,11 @@ impl MdnsMutation {
     async fn start_mdns_receiver(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
         control(ctx, Request::Receiver {}).await
     }
-    async fn start_mdns_discovery(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::Start {}).await
-    }
-    async fn stop_mdns_discovery(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::Stop {}).await
-    }
     async fn browse_mdns(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
         control(ctx, Request::Browse {}).await
     }
-    async fn restart_mdns_discovery(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::Restart {}).await
-    }
     async fn publish_mdns(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
         control(ctx, Request::Publish {}).await
-    }
-    async fn update_mdns_publication(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::Update {}).await
-    }
-    async fn unpublish_mdns(&self, ctx: &Context<'_>) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::Unpublish {}).await
-    }
-    async fn set_mdns_capture(
-        &self,
-        ctx: &Context<'_>,
-        enabled: bool,
-    ) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::Capture { enabled }).await
     }
     async fn acquire_mdns_debug_session(
         &self,

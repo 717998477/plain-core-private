@@ -38,11 +38,65 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
     let sdl = sdl();
     assert!(!sdl.contains("includeTrashed"));
     assert!(!sdl.contains("embeddedAudioLyrics"));
-    for removed in ["searchImages(", "searchImageCount(", "semanticImageSearch(", "SemanticImageMatch", "audioPlayHistoryCount:"] {
+    for removed in [
+        "searchImages(",
+        "searchImageCount(",
+        "semanticImageSearch(",
+        "SemanticImageMatch",
+        "audioPlayHistoryCount:",
+        "startMdnsDiscovery:",
+        "stopMdnsDiscovery:",
+        "restartMdnsDiscovery:",
+        "updateMdnsPublication:",
+        "unpublishMdns:",
+        "setMdnsCapture(",
+        "updateUserSettings(",
+        "updateSystemSettings(",
+        "UserSettingsInput",
+        "SystemSettingsInput",
+        "SystemSettingsAction",
+        "type SettingsUpdate",
+        "forwardChatItem(",
+        "shareAuth(",
+        "shareToken(",
+        "shareMessageContent(",
+        "resolveSharePath(",
+        "resolveShareFile(",
+        "browseShare(",
+        "shareZipEntries(",
+        "createCopyTask(",
+        "createMoveTask(",
+        "updateFeedUrl(",
+        "planSharedDownload(",
+        "type SharedDownloadPlan",
+        "type SharedDownloadTarget",
+        "selectNextAudio(",
+        "audioArtistPlayCounts:",
+        "audioQueuedMediaIds:",
+        "type AudioArtistPlayCount",
+        "releaseImageModelMemory:",
+    ] {
         assert!(!sdl.contains(removed), "Retired root/type: {removed}");
     }
-    assert!(sdl.contains("images(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!"));
+    assert!(sdl.contains(
+        "images(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!"
+    ));
     assert!(sdl.contains("imageCount(query: String!): Int!"));
+    for reset in [
+        "resetPassword: Boolean!",
+        "resetUrlToken: Boolean!",
+        "resetAdbToken: Boolean!",
+    ] {
+        assert!(sdl.contains(reset));
+    }
+    let image = sdl
+        .split("type Image implements MediaItem {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    assert!(!image.contains("durationMs"));
     assert!(sdl.contains("audioLyricsByPath(path: String!): String"));
     assert!(sdl.contains("smsIds(query: String!): [ID!]!"));
     let playback = sdl
@@ -176,7 +230,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "feedEntryCount(query: String!): Int!",
         "feedEntry(id: ID!): FeedEntry",
         "feedEntries(query: String!, offset: Int!, limit: Int!): [FeedEntry!]!",
-        "updateFeedUrl(id: ID!, url: String!): Feed!",
+        "updateFeed(id: ID!, name: String, fetchContent: Boolean, url: String): Feed!",
         "markFeedEntriesRead(query: String!, read: Boolean!): ActionResult!",
         "syncFeeds(id: ID): Boolean!",
         "updateFeed(id: ID!, name: String, fetchContent: Boolean, url: String): Feed!",

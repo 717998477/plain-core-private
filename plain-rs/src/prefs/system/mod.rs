@@ -116,6 +116,43 @@ fn parse_log_level(value: &str) -> anyhow::Result<log::LevelFilter> {
 }
 
 pub fn set_entry(prefs: &Prefs, key: &str, value: Value) -> anyhow::Result<bool> {
+    let command = match key {
+        PASSWORD => Some(Command::SetPassword {
+            password: serde_json::from_value(value.clone())?,
+        }),
+        PASSWORD_TYPE => Some(Command::SetPasswordType {
+            value: serde_json::from_value(value.clone())?,
+        }),
+        AUTH_TWO_FACTOR => Some(Command::SetTwoFactor {
+            enabled: serde_json::from_value(value.clone())?,
+        }),
+        ROTATE_URL_TOKEN_ON_RESTART => Some(Command::SetRotateUrlToken {
+            enabled: serde_json::from_value(value.clone())?,
+        }),
+        MDNS_HOSTNAME => Some(Command::SetMdnsHostname {
+            hostname: serde_json::from_value(value.clone())?,
+        }),
+        UPDATE_INFO => Some(Command::PatchUpdate {
+            patch: serde_json::from_value(value.clone())?,
+        }),
+        API_PERMISSIONS if value.is_object() => Some(Command::PatchApiPermissions {
+            permissions: serde_json::from_value(value.clone())?,
+        }),
+        API_PERMISSIONS => Some(Command::SetApiPermissions {
+            permissions: serde_json::from_value(value.clone())?,
+        }),
+        CLIENT_ID | SIGNATURE_KEY_PAIR | MASTER_SECRET | URL_TOKEN | ADB_TOKEN => {
+            anyhow::bail!("Read-only system preference")
+        }
+        ONBOARDING_COMPLETED => {
+            anyhow::ensure!(value.is_boolean(), "Invalid onboarding state");
+            None
+        }
+        _ => None,
+    };
+    if let Some(command) = command {
+        return command.apply(prefs);
+    }
     let level = match key {
         LOG_LEVEL => Some(parse_log_level(
             value

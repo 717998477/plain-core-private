@@ -633,9 +633,27 @@ async fn image_search_uses_the_original_query_for_text_filters_paging_and_count(
         true,
         |db| {
             db.record_media_files(&[
-                media(DataType::Image, "/fixture/a.jpg", "sunset blue a", 100, "b1"),
-                media(DataType::Image, "/fixture/b.jpg", "sunset blue b", 100, "b1"),
-                media(DataType::Image, "/fixture/c.jpg", "sunset blue c", 100, "b2"),
+                media(
+                    DataType::Image,
+                    "/fixture/a.jpg",
+                    "sunset blue a",
+                    100,
+                    "b1",
+                ),
+                media(
+                    DataType::Image,
+                    "/fixture/b.jpg",
+                    "sunset blue b",
+                    100,
+                    "b1",
+                ),
+                media(
+                    DataType::Image,
+                    "/fixture/c.jpg",
+                    "sunset blue c",
+                    100,
+                    "b2",
+                ),
                 media(DataType::Image, "/fixture/d.jpg", "sunset red", 100, "b1"),
             ])
             .unwrap();

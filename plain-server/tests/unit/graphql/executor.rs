@@ -7,6 +7,9 @@ use std::sync::Arc;
 async fn local_and_remote_execute_the_same_envelope_and_preserve_errors() {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
+    prefs
+        .set("api_permissions", vec!["WRITE_EXTERNAL_STORAGE"])
+        .unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[8; 32]);
     let server = ContentServer::start(dir.path(), &token, prefs).unwrap();
     let state = server.runtime_state();
@@ -40,7 +43,7 @@ async fn local_and_remote_execute_the_same_envelope_and_preserve_errors() {
             serde_json::to_value(remote).unwrap()
         );
     }
-    let query = "{ audioQueuedMediaIds }";
+    let query = r#"{ audioQueueItems(query: "", offset: 0, limit: 10) { mediaId } }"#;
     let local = server.graphql_executor().execute(Request::new(query)).await;
     let remote = execute_graphql(
         &state.public,
@@ -100,7 +103,7 @@ fn cache_only_and_task_owned_mutations_skip_the_generic_content_broadcast() {
         "mutation { cacheRemoteFile cacheZipEntry cacheAudioCover exportAppLogs exportAppBackup stageAppRestore }",
         "mutation { ...Cache } fragment Cache on Mutation { cacheRemoteFile }",
         "mutation { ... on Mutation { copyFileToDirectory copyFile moveFile renameFile renameFilePath } }",
-        "mutation { createCopyTask createMoveTask createFileTask }",
+        "mutation { createFileTask }",
     ] {
         assert!(!content_changes(&Request::new(query)), "{query}");
     }
@@ -194,7 +197,6 @@ fn shared_batch_chat_and_share_flows_own_their_events() {
     for query in [
         r#"mutation { sendChatItems(targets:["local"],content:"{}") { id } }"#,
         r#"mutation { forwardChatItems(id:"source",targets:["local"]) { id } }"#,
-        r#"mutation { forwardChatItem(id:"source",target:"local") { id } }"#,
         r#"mutation { sendShare(targets:["local"],shareId:"share") { id } }"#,
         r#"mutation { sendFolderShare(targets:["local"],path:"/folder",name:"Folder") { id } }"#,
     ] {

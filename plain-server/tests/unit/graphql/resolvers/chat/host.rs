@@ -55,7 +55,7 @@ async fn local_messages_edit_forward_and_clear_through_native_executor() {
     execute(
         &server,
         format!(
-            r#"mutation {{ forwardChatItem(id:{}, target:"peer:local") {{id status}} }}"#,
+            r#"mutation {{ forwardChatItems(id:{}, targets:["peer:local"]) {{id status}} }}"#,
             json!(id)
         ),
     )
@@ -114,7 +114,7 @@ async fn prepared_files_retain_metadata_and_message_owners_after_import_cleanup(
     execute(
         &server,
         format!(
-            r#"mutation {{ forwardChatItem(id:{}, target:"local") {{id}} }}"#,
+            r#"mutation {{ forwardChatItems(id:{}, targets:["local"]) {{id}} }}"#,
             json!(id)
         ),
     )

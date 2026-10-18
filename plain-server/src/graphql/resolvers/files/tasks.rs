@@ -105,20 +105,6 @@ impl FileTaskQuery {
 pub struct FileTaskMutation;
 #[Object]
 impl FileTaskMutation {
-    async fn create_copy_task(
-        &self,
-        ctx: &Context<'_>,
-        ops: Vec<FileTaskOpInput>,
-    ) -> Result<FileTaskResult> {
-        create(ctx, FileTaskType::Copy, "COPY".into(), ops, false).await
-    }
-    async fn create_move_task(
-        &self,
-        ctx: &Context<'_>,
-        ops: Vec<FileTaskOpInput>,
-    ) -> Result<FileTaskResult> {
-        create(ctx, FileTaskType::Move, "MOVE".into(), ops, false).await
-    }
     async fn remove_file_task(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
         let client_id = caller(ctx)?;
         Ok(ctx

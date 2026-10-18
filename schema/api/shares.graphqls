@@ -4,16 +4,6 @@ type Root {
 	isDir: Boolean!
 }
 
-type ShareAuthRecord {
-	share: ShareRecord!
-	token: String!
-}
-
-type ShareListing {
-	share: ShareRecord!
-	entries: [Root!]!
-}
-
 type ShareRecord {
 	id: ID!
 	name: String!
@@ -64,23 +54,10 @@ enum SharedDownloadKind {
 	ZIP
 }
 
-type SharedDownloadPlan {
-	targets: [SharedDownloadTarget!]!
-	totalFiles: Int!
-	totalSize: Long!
-}
-
 type SharedDownloadQueue {
 	runtimeId: String!
 	revision: Long!
 	tasks: [SharedDownloadTask!]!
-}
-
-type SharedDownloadTarget {
-	entry: SharedEntry!
-	writeDir: String!
-	storeToDownloads: Boolean!
-	entryName: String!
 }
 
 type SharedDownloadTask {
@@ -190,7 +167,6 @@ extend type Mutation {
 	deleteShare(id: ID!): Boolean!
 	enqueueSharedDownload(input: SharedDownloadInput!): ID!
 	pauseSharedDownload(id: ID!): Boolean!
-	planSharedDownload(kind: SharedDownloadKind!, link: SharedLinkInput!, entries: [SharedEntryInput!]!, targetDir: String!, downloadsBase: String!): SharedDownloadPlan!
 	removeSharedDownload(id: ID!): Boolean!
 	resumeSharedDownload(id: ID!): Boolean!
 	retrySharedDownload(id: ID!): Boolean!
@@ -198,17 +174,10 @@ extend type Mutation {
 }
 
 extend type Query {
-	browseShare(id: ID!, virtualPath: String!): ShareListing!
 	initialSharedLink(messageId: ID!, expected: SharedMessageCardInput!): SharedLink!
-	resolveShareFile(id: ID!, fileId: String!): String
-	resolveSharePath(id: ID!, virtualPath: String!): String
-	shareAuth(id: ID!): ShareAuthRecord
 	shareLink(id: ID!, host: String): SharedLink!
-	shareMessageContent(id: ID!): String!
 	shareRecord(id: ID!): ShareRecord
 	shareRecords: [ShareRecord!]!
-	shareToken(id: ID!): String!
-	shareZipEntries(id: ID!, fileId: String!): [Root!]!
 	sharedDownloadQueue: SharedDownloadQueue!
 	sharedFileUrl(link: SharedLinkInput!, urlToken: String!, virtualPath: String!, zip: Boolean! = false): String!
 	sharedLinkInfo(link: SharedLinkInput!, virtualPath: String): SharedLinkInfo!

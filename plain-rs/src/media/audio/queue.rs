@@ -43,16 +43,22 @@ impl AudioTrack {
     }
 }
 
-impl From<&QueueItem> for AudioTrack {
-    fn from(q: &QueueItem) -> Self {
+impl From<QueueItem> for AudioTrack {
+    fn from(item: QueueItem) -> Self {
         Self {
-            media_id: Some(q.media_id.clone()),
-            title: q.title.clone(),
-            artist: q.artist.clone(),
-            path: q.path.clone(),
-            duration_ms: q.duration_ms,
+            media_id: Some(item.media_id),
+            title: item.title,
+            artist: item.artist,
+            path: item.path,
+            duration_ms: item.duration_ms,
             album_id: String::new(),
         }
+    }
+}
+
+impl From<&QueueItem> for AudioTrack {
+    fn from(item: &QueueItem) -> Self {
+        item.clone().into()
     }
 }
 
@@ -367,7 +373,7 @@ pub fn queue_page(db: &Db, offset: i64, limit: i64, query: &str) -> DomainResult
     validate_page(offset, limit)?;
     Ok(crate::db::audio_queue::all_queue_items(db)?
         .into_iter()
-        .map(|item| AudioTrack::from(&item))
+        .map(AudioTrack::from)
         .filter(|item| matches_query(item, query))
         .skip(offset as usize)
         .take(limit as usize)
@@ -697,17 +703,6 @@ pub fn record_history(
         record_history_conn(c, path, title, artist, duration_ms)
     })
 }
-pub fn artist_play_counts(db: &Db) -> DomainResult<std::collections::BTreeMap<String, i64>> {
-    let mut out = std::collections::BTreeMap::<String, i64>::new();
-    for row in crate::db::audio_queue::all_history(db)? {
-        let total = out.entry(row.artist).or_default();
-        *total = total
-            .checked_add(row.play_count)
-            .ok_or_else(|| DomainError::Other("play count overflow".into()))?;
-    }
-    Ok(out)
-}
-
 pub fn track_by_path_conn(
     conn: &rusqlite::Connection,
     path: &str,

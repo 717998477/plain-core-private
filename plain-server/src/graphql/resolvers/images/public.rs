@@ -23,7 +23,6 @@ pub struct Image {
     pub title: String,
     pub path: String,
     pub size: Long,
-    pub duration_ms: Long,
     pub width: i32,
     pub height: i32,
     pub rotation: i32,
@@ -94,7 +93,6 @@ impl ImagesQuery {
         );
         Ok(rows(&items, image))
     }
-
 }
 
 fn image(item: &Value) -> Image {
@@ -104,7 +102,6 @@ fn image(item: &Value) -> Image {
         title: row.title,
         path: row.path,
         size: row.size,
-        duration_ms: Long(crate::graphql::types::facts::integer(item, "durationMs")),
         width: crate::graphql::types::facts::integer(item, "width") as i32,
         height: crate::graphql::types::facts::integer(item, "height") as i32,
         rotation: crate::graphql::types::facts::integer(item, "rotation") as i32,

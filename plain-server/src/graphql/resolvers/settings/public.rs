@@ -71,14 +71,9 @@ impl PrefsMutation {
     ) -> async_graphql::Result<bool> {
         validate_key(&key)?;
         validate_value(&value.0)?;
-        crate::services::settings::preferences::set(
-            prefs(ctx),
-            ctx.data_unchecked::<broadcast::Sender<WsEvent>>(),
-            true,
-            &key,
-            value.0,
-        )
-        .map_err(async_graphql::Error::new)?;
+        super::state::user_preferences(ctx)?
+            .set(&key, value.0)
+            .await?;
         Ok(true)
     }
 
@@ -88,13 +83,7 @@ impl PrefsMutation {
         key: String,
     ) -> async_graphql::Result<bool> {
         validate_key(&key)?;
-        crate::services::settings::preferences::remove(
-            prefs(ctx),
-            ctx.data_unchecked::<broadcast::Sender<WsEvent>>(),
-            true,
-            &key,
-        )
-        .map_err(async_graphql::Error::new)?;
+        super::state::user_preferences(ctx)?.remove(&key).await?;
         Ok(true)
     }
 }

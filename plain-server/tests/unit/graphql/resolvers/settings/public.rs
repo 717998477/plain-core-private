@@ -65,34 +65,31 @@ async fn reads_come_from_the_rust_store() {
     assert!(data["userPrefs"].get("device_name").is_none());
 }
 
-/// A pref write has to travel through the platform so its in-memory copy
-/// and the flows the UI collects see the change. The stub below fails the
-/// test if the write is faked locally, which is the whole point.
 #[tokio::test]
-async fn a_pref_write_goes_through_the_platform() {
-    let (_dir, schema) = fixture(|method, params| match method {
-        "systemSetUserPref" => {
-            assert_eq!(params["key"], "recent_search");
-            assert_eq!(params["value"], json!(["x"]));
-            json!(true)
-        }
-        "systemRemoveUserPref" => {
-            assert_eq!(params["key"], "recent_search");
-            json!(true)
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+async fn preference_writes_and_removal_use_rust_storage_without_host_calls() {
+    let (_directory, schema) = fixture(|method, _| panic!("Unexpected host call: {method}"));
     let response = schema
-        .execute(r#"mutation { setUserPref(key:"recent_search", value:["x"]) }"#)
+        .execute(r#"mutation { setUserPref(key:"recent_search",value:["x"]) }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(response.data.into_json().unwrap()["setUserPref"], true);
-
+    let response = schema.execute("{userPrefs}").await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap()["userPrefs"]["recent_search"],
+        json!(["x"])
+    );
     let response = schema
         .execute(r#"mutation { removeUserPref(key:"recent_search") }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["removeUserPref"], true);
+    let response = schema.execute("{userPrefs}").await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert!(
+        response.data.into_json().unwrap()["userPrefs"]
+            .get("recent_search")
+            .is_none()
+    );
 }
 
 /// The key ends up in a file name and a JSON object; anything outside this
@@ -135,10 +132,7 @@ async fn an_oversized_pref_value_is_refused_by_its_byte_length() {
 
 #[tokio::test]
 async fn a_value_just_under_the_cap_is_accepted() {
-    let (_dir, schema) = fixture(|method, _| match method {
-        "systemSetUserPref" => json!(true),
-        other => panic!("unexpected host call {other}"),
-    });
+    let (_dir, schema) = fixture(|method, _| panic!("Unexpected host call: {method}"));
     let response = schema
         .execute(r#"mutation { setUserPref(key:"ok", value:"0123456789") }"#)
         .await;

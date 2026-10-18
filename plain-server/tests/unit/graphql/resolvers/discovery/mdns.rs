@@ -26,17 +26,19 @@ async fn native_main_schema_reads_and_stops_idle_mdns_without_initializing_the_h
     assert_eq!(state["services"], json!([]));
     assert_eq!(state["packetsIn"], json!([]));
     let response = native
+        .execute(async_graphql::Request::new("mutation { stopDiscovery }"))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["stopDiscovery"], true);
+    let response = native
         .execute(async_graphql::Request::new(
-            "mutation { stopMdnsDiscovery { runtimeId revision receiver } }",
+            "{ mdnsState { runtimeId receiver } }",
         ))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let stopped = response.data.into_json().unwrap();
-    assert_eq!(
-        stopped["stopMdnsDiscovery"]["runtimeId"],
-        state["runtimeId"]
-    );
-    assert_eq!(stopped["stopMdnsDiscovery"]["receiver"], false);
+    assert_eq!(stopped["mdnsState"]["runtimeId"], state["runtimeId"]);
+    assert_eq!(stopped["mdnsState"]["receiver"], false);
     let response = native.execute(async_graphql::Request::new("mutation { prewarmPeerTransport(id: \"unknown-peer\") { shortId awareSupported awareRunning } }")).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert!(response.data.into_json().unwrap()["prewarmPeerTransport"].is_null());
@@ -131,12 +133,17 @@ async fn main_schema_hostname_and_debug_reads_reuse_owned_idle_state() {
     let state = core.runtime_state();
     let (_generation, mut requests) = state.host.connect();
     let executor = core.native_graphql().unwrap();
-    let request = async_graphql::Request::new("mutation($input:SystemSettingsInput!){updateSystemSettings(input:$input){systemSettings{mdnsHostname}}}")
-        .variables(async_graphql::Variables::from_json(json!({"input":{"action":"SET_MDNS_HOSTNAME","hostname":" renderer.local "}})));
+    let request = async_graphql::Request::new(
+        r#"mutation{setSystemPref(key:"mdns_hostname",value:" renderer.local "){affectedCount}}"#,
+    );
     let response = executor.execute(request).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
-        response.data.into_json().unwrap()["updateSystemSettings"]["systemSettings"]["mdnsHostname"],
+        state
+            .prefs
+            .get::<String>(plain_rs::prefs::system::keys::MDNS_HOSTNAME)
+            .unwrap()
+            .unwrap(),
         "renderer.local"
     );
     let response = executor
@@ -149,7 +156,7 @@ async fn main_schema_hostname_and_debug_reads_reuse_owned_idle_state() {
     assert_eq!(value["mdnsState"]["receiver"], false);
     assert_eq!(value["mdnsDebug"]["services"], json!([]));
     assert_eq!(value["mdnsDebug"]["activity"], json!([]));
-    let invalid = executor.execute(async_graphql::Request::new(r#"mutation{updateSystemSettings(input:{action:SET_MDNS_HOSTNAME,hostname:"invalid.example"}){result{affectedCount}}}"#)).await;
+    let invalid = executor.execute(async_graphql::Request::new(r#"mutation{setSystemPref(key:"mdns_hostname",value:"invalid.example"){affectedCount}}"#)).await;
     assert!(!invalid.errors.is_empty());
     assert_eq!(
         plain_rs::prefs::system::snapshot(&state.prefs)

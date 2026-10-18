@@ -119,3 +119,48 @@ fn runtime_preferences_use_shared_defaults_and_persist_only_system_values() {
     remove_entry(&prefs, LOG_LEVEL).unwrap();
     assert_eq!(log_level(&prefs).unwrap(), log::LevelFilter::Info);
 }
+
+#[test]
+fn key_value_settings_validate_protected_fields_and_patch_permissions_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let prefs = Prefs::load(&dir.path().join("prefs.json")).unwrap();
+    bootstrap(&prefs).unwrap();
+    let before = prefs.entries();
+    for (key, value) in [
+        (PASSWORD_TYPE, serde_json::json!(4)),
+        (AUTH_TWO_FACTOR, serde_json::json!("false")),
+        (URL_TOKEN, serde_json::json!("client-supplied")),
+        (SIGNATURE_KEY_PAIR, serde_json::json!("client-supplied")),
+        (MDNS_HOSTNAME, serde_json::json!("invalid.example")),
+    ] {
+        assert!(set_entry(&prefs, key, value).is_err());
+        assert_eq!(prefs.entries(), before);
+    }
+    set_entry(&prefs, PASSWORD, serde_json::json!("Synthetic password")).unwrap();
+    set_entry(
+        &prefs,
+        API_PERMISSIONS,
+        serde_json::json!(["READ_SMS", "SEND_SMS"]),
+    )
+    .unwrap();
+    set_entry(
+        &prefs,
+        API_PERMISSIONS,
+        serde_json::json!({"READ_SMS":false,"READ_CONTACTS":true}),
+    )
+    .unwrap();
+    assert_eq!(
+        snapshot(&prefs).unwrap().api_permissions,
+        ["READ_CONTACTS", "SEND_SMS"]
+    );
+    let before = prefs.entries();
+    assert!(
+        set_entry(
+            &prefs,
+            API_PERMISSIONS,
+            serde_json::json!({"READ_SMS":true,"UNKNOWN":false})
+        )
+        .is_err()
+    );
+    assert_eq!(prefs.entries(), before);
+}

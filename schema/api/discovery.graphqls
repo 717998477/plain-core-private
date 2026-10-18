@@ -90,13 +90,7 @@ extend type Mutation {
 	publishMdns: MdnsState!
 	releaseDiscovery(token: ID!): Boolean!
 	releaseMdnsDebugSession(token: String!): MdnsState!
-	restartMdnsDiscovery: MdnsState!
-	setMdnsCapture(enabled: Boolean!): MdnsState!
-	startMdnsDiscovery: MdnsState!
 	startMdnsReceiver: MdnsState!
-	stopMdnsDiscovery: MdnsState!
-	unpublishMdns: MdnsState!
-	updateMdnsPublication: MdnsState!
 }
 
 extend type Query {

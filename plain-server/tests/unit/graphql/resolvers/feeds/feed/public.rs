@@ -292,11 +292,11 @@ async fn changing_a_feed_url_reports_the_new_url() {
     seed_feed(database(&schema), "moved", "Moved");
     let updated = query(
         &schema,
-        r#"mutation { updateFeedUrl(id: "moved", url: "https://other.example/feed.xml") { url } }"#,
+        r#"mutation { updateFeed(id: "moved", url: "https://other.example/feed.xml") { url } }"#,
     )
     .await;
     assert_eq!(
-        updated["data"]["updateFeedUrl"]["url"],
+        updated["data"]["updateFeed"]["url"],
         "https://other.example/feed.xml"
     );
 }

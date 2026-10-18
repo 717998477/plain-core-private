@@ -142,12 +142,7 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
         resolvers::images::public_index::ImageIndexQuery,
         resolvers::images::public::ImagesQuery
     );
-    group!(
-        "Query",
-        "audio",
-        resolvers::audio::host::AudioHostQuery,
-        resolvers::audio::public::AudioQuery
-    );
+    group!("Query", "audio", resolvers::audio::public::AudioQuery);
     group!(
         "Query",
         "videos",
@@ -276,7 +271,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Mutation",
         "images",
-        resolvers::images::models::ImageModelsMutation,
         resolvers::images::image_editor_project::ImageEditorProjectMutation,
         resolvers::images::public_index::ImageIndexMutation
     );

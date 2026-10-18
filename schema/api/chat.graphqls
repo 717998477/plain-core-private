@@ -117,7 +117,6 @@ extend type Mutation {
 	deleteChatItems(query: String!): ActionResult!
 	deliverChatItem(id: ID!, recipients: [ID!]): ChatItem!
 	editChatText(id: ID!, text: String!): ChatTextEdit!
-	forwardChatItem(id: ID!, target: String!): ChatItem!
 	forwardChatItems(id: ID!, targets: [String!]!): [ChatItem!]!
 	leaveChatChannel(id: ID!): Boolean!
 	removeChatChannelMember(id: ID!, peerId: ID!): ChatChannel!

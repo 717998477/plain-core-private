@@ -4,18 +4,38 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Command {
-    SetPassword { password: String },
-    SetPasswordType { value: i32 },
-    SetTwoFactor { enabled: bool },
-    SetRotateUrlToken { enabled: bool },
+    SetPassword {
+        password: String,
+    },
+    SetPasswordType {
+        value: i32,
+    },
+    SetTwoFactor {
+        enabled: bool,
+    },
+    SetRotateUrlToken {
+        enabled: bool,
+    },
     ResetPassword,
     ResetUrlToken,
     ResetAdbToken,
-    SetApiPermission { permission: String, enabled: bool },
-    SetApiPermissions { permissions: Vec<String> },
+    SetApiPermission {
+        permission: String,
+        enabled: bool,
+    },
+    SetApiPermissions {
+        permissions: Vec<String>,
+    },
+    PatchApiPermissions {
+        permissions: std::collections::BTreeMap<String, bool>,
+    },
     CompleteOnboarding,
-    SetMdnsHostname { hostname: String },
-    PatchUpdate { patch: UpdatePatch },
+    SetMdnsHostname {
+        hostname: String,
+    },
+    PatchUpdate {
+        patch: UpdatePatch,
+    },
 }
 
 impl Command {
@@ -36,6 +56,12 @@ impl Command {
                 permissions
                     .iter()
                     .all(|p| PERMISSIONS.contains(&p.as_str())),
+                "Unknown permission"
+            ),
+            Self::PatchApiPermissions { ref permissions } => anyhow::ensure!(
+                permissions
+                    .keys()
+                    .all(|permission| PERMISSIONS.contains(&permission.as_str())),
                 "Unknown permission"
             ),
             _ => {}
@@ -69,6 +95,18 @@ impl Command {
                     permissions.sort();
                     permissions.dedup();
                     put(map, API_PERMISSIONS, permissions)?;
+                }
+                Self::PatchApiPermissions { permissions } => {
+                    let mut current: Vec<String> = read(map, API_PERMISSIONS)?;
+                    current.retain(|permission| !permissions.contains_key(permission));
+                    current.extend(
+                        permissions
+                            .into_iter()
+                            .filter_map(|(permission, enabled)| enabled.then_some(permission)),
+                    );
+                    current.sort();
+                    current.dedup();
+                    put(map, API_PERMISSIONS, current)?;
                 }
                 Self::CompleteOnboarding => put(map, ONBOARDING_COMPLETED, true)?,
                 Self::SetMdnsHostname { hostname } => put(map, MDNS_HOSTNAME, hostname)?,

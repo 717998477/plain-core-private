@@ -128,7 +128,7 @@ async fn configured_public_uses_core_settings_and_keeps_listeners_on_tls_preflig
         .native_graphql()
         .unwrap()
         .execute(async_graphql::Request::new(
-            "mutation{updateUserSettings(input:{httpPort:0,httpsPort:0}){result{affectedCount}}}",
+            "mutation{http:setUserPref(key:\"http_port\",value:0) https:setUserPref(key:\"https_port\",value:0)}",
         ))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
@@ -278,7 +278,7 @@ async fn every_transport_build_serves_the_main_guest_and_peer_contracts_without_
     let token = plain_rs::utils::base64::base64_encode(&[3; 32]);
     let server = ContentServer::start(directory.path(), &token, prefs).unwrap();
     let client = reqwest::Client::new();
-    let document = serde_json::json!({"query":"query Main { __typename audioQueuedMediaIds }","operationName":"Main"});
+    let document = serde_json::json!({"query":"query Main { __typename audioQueueItems(query: \"\", offset: 0, limit: 10) { mediaId } }","operationName":"Main"});
     let native = server
         .graphql_executor()
         .execute(serde_json::from_value(document.clone()).unwrap())

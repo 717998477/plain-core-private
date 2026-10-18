@@ -27,11 +27,6 @@ type AudioArtist {
 	samplePath: String!
 }
 
-type AudioArtistPlayCount {
-	artist: String!
-	count: Long!
-}
-
 enum AudioCommandAction {
 	PLAY
 	PAUSE
@@ -136,13 +131,11 @@ extend type Mutation {
 	reorderAudioQueue(mediaIds: [ID!]!): Boolean!
 	reportAudioPlayback(path: String!, revision: Long!, positionMs: Long!, started: Boolean!): Boolean!
 	selectAudio(mediaId: ID): Boolean!
-	selectNextAudio(isNext: Boolean!, shuffle: Boolean!): AudioItem
 	updateAudioPlayMode(mode: MediaPlayMode!): Boolean!
 	updateAudioPlaylist(id: ID!, name: String!): AudioPlaylist!
 }
 
 extend type Query {
-	audioArtistPlayCounts: [AudioArtistPlayCount!]!
 	audioCount(query: String!): Int!
 	audioLyrics(mediaId: ID!): String
 	audioLyricsByPath(path: String!): String
@@ -156,6 +149,5 @@ extend type Query {
 	audioPlaylists: [AudioPlaylist!]!
 	audioQueueItemCount: Int!
 	audioQueueItems(query: String!, offset: Int!, limit: Int!): [AudioItem!]!
-	audioQueuedMediaIds: [ID!]!
 	audios(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Audio!]!
 }

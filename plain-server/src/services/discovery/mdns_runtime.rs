@@ -24,7 +24,6 @@ struct Session {
     context: Context,
     published: bool,
     manual_scanning: bool,
-    manual_capture: bool,
     debug_sessions: std::collections::HashSet<uuid::Uuid>,
     discovery_sessions: plain_rs::discovery::sessions::DiscoverySessions,
 }
@@ -101,7 +100,6 @@ pub(crate) enum Request {
     Update {},
     Unpublish {},
     Snapshot {},
-    Capture { enabled: bool },
     DebugStart { token: String },
     DebugStop { token: String },
 }
@@ -176,7 +174,7 @@ impl Runtime {
             (vec![], vec![])
         };
         let services = session.map(browser_services).unwrap_or_default();
-        json!({"runtimeId":self.id,"packetsIn":packets_in,"packetsOut":packets_out,"revision":self.revision.load(Ordering::SeqCst),"receiver":session.is_some(),"running":session.is_some() && host_responder::is_running(),"scanning":session.is_some_and(|s|s.scanning.load(Ordering::SeqCst)),"published":session.is_some_and(|s|s.published),"manualScanning":session.is_some_and(|s|s.manual_scanning),"debugSessionCount":session.map(|s|s.debug_sessions.len()).unwrap_or(0),"capturing":session.is_some_and(|s|s.manual_capture || !s.debug_sessions.is_empty()),"services":services})
+        json!({"runtimeId":self.id,"packetsIn":packets_in,"packetsOut":packets_out,"revision":self.revision.load(Ordering::SeqCst),"receiver":session.is_some(),"running":session.is_some() && host_responder::is_running(),"scanning":session.is_some_and(|s|s.scanning.load(Ordering::SeqCst)),"published":session.is_some_and(|s|s.published),"manualScanning":session.is_some_and(|s|s.manual_scanning),"debugSessionCount":session.map(|s|s.debug_sessions.len()).unwrap_or(0),"capturing":session.is_some_and(|s|!s.debug_sessions.is_empty()),"services":services})
     }
     async fn initialize(self: &Arc<Self>, state: &ServerState) -> Result<()> {
         let mut owner = OWNER.lock().await;
@@ -349,7 +347,6 @@ impl Runtime {
             context,
             published: false,
             manual_scanning: false,
-            manual_capture: false,
             debug_sessions: std::collections::HashSet::new(),
             discovery_sessions: Default::default(),
         });
@@ -373,7 +370,6 @@ impl Runtime {
                 | Request::Unpublish {}
                 | Request::Restart {}
                 | Request::Update {}
-                | Request::Capture { enabled: false }
                 | Request::DebugStop { .. }
         ) && self.session.lock().unwrap().is_none()
         {
@@ -395,7 +391,6 @@ impl Runtime {
                 | Request::Release { .. }
                 | Request::Unpublish {}
                 | Request::DebugStop { .. }
-                | Request::Capture { enabled: false }
         ) {
             crate::services::capabilities::require(&state.host, "PEER_DISCOVERY").await?;
         }
@@ -405,7 +400,6 @@ impl Runtime {
                 | Request::Release { .. }
                 | Request::Unpublish {}
                 | Request::DebugStop { .. }
-                | Request::Capture { enabled: false }
         ) {
             self.initialize(state).await?;
         }
@@ -444,12 +438,6 @@ impl Runtime {
                     session.discovery_sessions = sessions;
                 }
                 Request::Receiver {} => {}
-                Request::Capture { enabled } => {
-                    session.manual_capture = enabled;
-                    plain_rs::protocols::mdns::packet_capture::set_enabled(
-                        enabled || !session.debug_sessions.is_empty(),
-                    );
-                }
                 Request::DebugStart { token } => {
                     let token = uuid::Uuid::parse_str(&token)?;
                     ensure!(
@@ -473,7 +461,7 @@ impl Runtime {
                     )?;
                     session.debug_sessions.remove(&token);
                     plain_rs::protocols::mdns::packet_capture::set_enabled(
-                        session.manual_capture || !session.debug_sessions.is_empty(),
+                        !session.debug_sessions.is_empty(),
                     );
                 }
                 Request::Start {} => {

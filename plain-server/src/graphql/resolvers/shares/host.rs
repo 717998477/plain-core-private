@@ -33,42 +33,10 @@ fn record(row: ShareRow) -> async_graphql::Result<ShareRecord> {
         roots,
     })
 }
-#[derive(SimpleObject)]
-struct ShareAuthRecord {
-    share: ShareRecord,
-    token: String,
-}
-#[derive(SimpleObject)]
-struct ShareListing {
-    share: ShareRecord,
-    entries: Vec<Root>,
-}
 #[derive(Default)]
 pub struct ShareHostQuery;
 #[Object]
 impl ShareHostQuery {
-    async fn browse_share(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-        virtual_path: String,
-    ) -> async_graphql::Result<ShareListing> {
-        let service = ctx.data::<Arc<Service>>()?.clone();
-        let (row, entries) = blocking(move || service.browse(&id, &virtual_path)).await?;
-        Ok(ShareListing {
-            share: record(row)?,
-            entries,
-        })
-    }
-    async fn share_zip_entries(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-        file_id: String,
-    ) -> async_graphql::Result<Vec<Root>> {
-        let service = ctx.data::<Arc<Service>>()?.clone();
-        blocking(move || service.archive(&id, &file_id)).await
-    }
     async fn share_record(
         &self,
         ctx: &Context<'_>,
@@ -85,63 +53,6 @@ impl ShareHostQuery {
             .into_iter()
             .map(record)
             .collect()
-    }
-    async fn share_token(&self, ctx: &Context<'_>, id: ID) -> async_graphql::Result<String> {
-        ctx.data::<Arc<Service>>()?
-            .token(&id)
-            .map_err(|e| async_graphql::Error::new(e.to_string()))
-    }
-    async fn share_message_content(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> async_graphql::Result<String> {
-        Ok(crate::services::chat::share_card::content(
-            ctx.data::<crate::assembly::server::ServerState>()?,
-            ctx.data::<Arc<Service>>()?.clone(),
-            id.to_string(),
-        )
-        .await?)
-    }
-    async fn share_auth(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> async_graphql::Result<Option<ShareAuthRecord>> {
-        let service = ctx.data::<Arc<Service>>()?;
-        let Some(row) = service
-            .active(&id, true)
-            .map_err(|e| async_graphql::Error::new(e.to_string()))?
-        else {
-            return Ok(None);
-        };
-        let token = service
-            .token(&id)
-            .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-        Ok(Some(ShareAuthRecord {
-            share: record(row)?,
-            token,
-        }))
-    }
-    async fn resolve_share_path(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-        virtual_path: String,
-    ) -> async_graphql::Result<Option<String>> {
-        ctx.data::<Arc<Service>>()?
-            .resolve(&id, &virtual_path, true)
-            .map_err(|e| async_graphql::Error::new(e.to_string()))
-    }
-    async fn resolve_share_file(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-        file_id: String,
-    ) -> async_graphql::Result<Option<String>> {
-        ctx.data::<Arc<Service>>()?
-            .resolve_file(&id, &file_id)
-            .map_err(|e| async_graphql::Error::new(e.to_string()))
     }
 }
 #[derive(Default)]

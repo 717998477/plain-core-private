@@ -187,18 +187,6 @@ impl AudioCommandsMutation {
             .await?;
         Ok(true)
     }
-    async fn select_next_audio(
-        &self,
-        ctx: &Context<'_>,
-        is_next: bool,
-        shuffle: bool,
-    ) -> Result<Option<AudioItem>> {
-        Ok(ctx
-            .data::<Arc<Audio>>()?
-            .run(move |db, _| queue::select_next(db, is_next, shuffle))
-            .await?
-            .map(Into::into))
-    }
     async fn select_audio(&self, ctx: &Context<'_>, media_id: Option<ID>) -> Result<bool> {
         ctx.data::<Arc<Audio>>()?
             .run(move |db, engine| {

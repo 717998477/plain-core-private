@@ -3,7 +3,6 @@ type Image implements MediaItem {
 	title: String!
 	path: String!
 	size: Long!
-	durationMs: Long!
 	width: Int!
 	height: Int!
 	rotation: Int!
@@ -82,7 +81,6 @@ extend type Mutation {
 	disableImageSearch: Boolean!
 	enableImageSearch: Boolean!
 	importImageSearchModel: Boolean!
-	releaseImageModelMemory: Boolean!
 	saveImageEditorProject(id: ID!, input: ImageEditorProjectInput!): ImageEditorProject!
 	"""
 	`force` re-scans images that already have an embedding.

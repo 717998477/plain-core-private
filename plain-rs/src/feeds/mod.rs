@@ -88,10 +88,6 @@ pub fn delete_entries(db: &Db, query: &str) -> DomainResult<usize> {
     Ok(db.feed_entries_delete(query)?)
 }
 
-pub fn update_url(db: &Db, id: &str, url: &str) -> DomainResult<FeedRow> {
-    update_fields(db, id, None, Some(url), None)
-}
-
 pub fn mark_read(db: &Db, query: &str, read: bool) -> DomainResult<usize> {
     if query.trim().is_empty() {
         return Err(error("query is required"));

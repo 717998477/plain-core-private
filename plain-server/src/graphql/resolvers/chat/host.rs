@@ -135,19 +135,6 @@ impl ChatHostMutation {
             async_graphql::Error::new("Message unavailable")
         })?))
     }
-    async fn forward_chat_item(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-        target: String,
-    ) -> async_graphql::Result<ChatItem> {
-        let rows =
-            chat_actions::forward_many(ctx.data::<ServerState>()?, id.as_str(), vec![target])
-                .await?;
-        Ok(item(rows.first().ok_or_else(|| {
-            async_graphql::Error::new("Message unavailable")
-        })?))
-    }
     async fn forward_chat_items(
         &self,
         ctx: &Context<'_>,

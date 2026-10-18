@@ -1,25 +1,39 @@
 use super::*;
-use async_graphql::{EmptySubscription, Schema};
+use async_graphql::{EmptySubscription, MergedObject, Schema};
+#[derive(MergedObject)]
+struct Mutations(
+    PreferencesMutation,
+    crate::graphql::resolvers::settings::public::PrefsMutation,
+);
 fn fixture() -> (
     tempfile::TempDir,
-    Schema<PreferencesQuery, PreferencesMutation, EmptySubscription>,
+    Schema<PreferencesQuery, Mutations, EmptySubscription>,
     tokio::sync::broadcast::Receiver<WsEvent>,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(Prefs::load(&dir.path().join("system_prefs.json")).unwrap());
     plain_rs::prefs::system::bootstrap(&prefs).unwrap();
     let (events, receiver) = broadcast::channel(32);
-    let schema = Schema::build(PreferencesQuery, PreferencesMutation, EmptySubscription)
-        .data(prefs)
-        .data(events)
-        .finish();
+    let schema = Schema::build(
+        PreferencesQuery,
+        Mutations(
+            PreferencesMutation,
+            crate::graphql::resolvers::settings::public::PrefsMutation,
+        ),
+        EmptySubscription,
+    )
+    .data(prefs)
+    .data(events)
+    .finish();
     (dir, schema, receiver)
 }
 #[tokio::test]
 async fn graphql_settings_are_isolated_between_devices() {
     let (_a, first, mut events) = fixture();
     let (_b, second, _) = fixture();
-    let response=first.execute("mutation { updateUserSettings(input:{editorFontSize:20}) { result { affectedCount } } }").await;
+    let response = first
+        .execute("mutation { setUserPref(key:\"editor_font_size\",value:20) }")
+        .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(events.recv().await.unwrap().event_type, "PREFS_UPDATED");
     let first = first
@@ -40,9 +54,13 @@ async fn graphql_settings_are_isolated_between_devices() {
 #[tokio::test]
 async fn system_commands_validate_and_do_not_return_private_keys() {
     let (_dir, schema, _) = fixture();
-    let invalid=schema.execute("mutation {updateSystemSettings(input:{action:SET_PASSWORD_TYPE,value:4}){result {affectedCount}}}").await;
+    let invalid = schema
+        .execute("mutation {setSystemPref(key:\"password_type\",value:4){affectedCount}}")
+        .await;
     assert!(!invalid.errors.is_empty());
-    let updated=schema.execute("mutation {updateSystemSettings(input:{action:SET_TWO_FACTOR,enabled:false}){result {affectedCount}}}").await;
+    let updated = schema
+        .execute("mutation {setSystemPref(key:\"auth_two_factor\",value:false){affectedCount}}")
+        .await;
     assert!(updated.errors.is_empty(), "{:?}", updated.errors);
     let result = schema
         .execute("{systemSettings {authTwoFactor clientId signaturePublicKey}}")
@@ -152,31 +170,31 @@ async fn result_only_user_patch_does_not_read_unselected_system_settings() {
             serde_json::json!("malformed unrelated system data"),
         )
         .unwrap();
-    let schema = Schema::build(PreferencesQuery, PreferencesMutation, EmptySubscription)
-        .data(prefs.clone())
-        .finish();
-    let response = schema.execute("mutation{updateUserSettings(input:{editorFontSize:21}){result{affectedCount} userSettings{editorFontSize}}}").await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let data = response.data.into_json().unwrap();
-    assert_eq!(data["updateUserSettings"]["result"]["affectedCount"], 1);
-    assert_eq!(
-        data["updateUserSettings"]["userSettings"]["editorFontSize"],
-        21
-    );
+    let schema = Schema::build(
+        PreferencesQuery,
+        Mutations(
+            PreferencesMutation,
+            crate::graphql::resolvers::settings::public::PrefsMutation,
+        ),
+        EmptySubscription,
+    )
+    .data(prefs.clone())
+    .finish();
     let response = schema
-        .execute(
-            "mutation{updateUserSettings(input:{editorFontSize:22}){systemSettings{clientId}}}",
-        )
+        .execute(r#"mutation{setUserPref(key:"editor_font_size",value:21)}"#)
         .await;
-    assert!(
-        !response.errors.is_empty(),
-        "selected system settings must still validate their data"
-    );
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["setUserPref"], true);
     assert_eq!(
         plain_rs::prefs::user::snapshot(&prefs)
             .unwrap()
             .editor_font_size,
-        22
+        21
+    );
+    let response = schema.execute("{systemSettings{clientId}}").await;
+    assert!(
+        !response.errors.is_empty(),
+        "Selected system settings must validate malformed data"
     );
 }
 
@@ -222,4 +240,41 @@ async fn desktop_namespaced_preferences_use_the_main_settings_mutations() {
         assert!(!schema.execute(request).await.errors.is_empty(), "{key}");
         assert!(events.try_recv().is_err());
     }
+}
+
+#[tokio::test]
+async fn explicit_resets_generate_rust_owned_values_without_returning_secrets() {
+    let (directory, schema, mut events) = fixture();
+    let prefs = Prefs::load(&directory.path().join("system_prefs.json")).unwrap();
+    let before = plain_rs::prefs::system::snapshot(&prefs).unwrap();
+    let response = schema
+        .execute("mutation{resetPassword resetUrlToken resetAdbToken}")
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        serde_json::json!({"resetPassword":true,"resetUrlToken":true,"resetAdbToken":true})
+    );
+    let persisted = Prefs::load(&directory.path().join("system_prefs.json")).unwrap();
+    let after = plain_rs::prefs::system::snapshot(&persisted).unwrap();
+    assert_ne!(after.password, before.password);
+    assert_ne!(after.url_token, before.url_token);
+    assert_ne!(after.adb_token, before.adb_token);
+    assert_eq!(after.client_id, before.client_id);
+    assert_eq!(after.signature_public_key, before.signature_public_key);
+    assert_eq!(
+        plain_rs::utils::base64::base64_decode_checked(&after.url_token)
+            .unwrap()
+            .len(),
+        32
+    );
+    assert_eq!(after.password.len(), 6);
+    assert_eq!(after.adb_token.len(), 32);
+    assert_eq!(
+        (0..3)
+            .map(|_| events.try_recv().unwrap().event_type)
+            .collect::<Vec<_>>(),
+        ["PREFS_UPDATED", "PREFS_UPDATED", "PREFS_UPDATED"]
+    );
+    assert!(events.try_recv().is_err());
 }

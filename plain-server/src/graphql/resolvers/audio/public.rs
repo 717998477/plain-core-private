@@ -454,8 +454,8 @@ impl AudioMutation {
         ctx: &Context<'_>,
         mode: MediaPlayMode,
     ) -> async_graphql::Result<bool> {
-        crate::graphql::resolvers::settings::state::apply_user_patch(
-            crate::graphql::resolvers::settings::state::UserPatchEnv::from_ctx(ctx)?,
+        crate::graphql::resolvers::settings::state::update_user(
+            ctx,
             plain_rs::prefs::user::UserSettingsPatch {
                 audio_play_mode: Some(mode.ordinal()),
                 ..Default::default()

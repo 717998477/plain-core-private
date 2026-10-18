@@ -84,16 +84,14 @@ pub(crate) fn restart(
         tokio::spawn(async move {
             let result = async {
                 state.native_client_id()?;
-                crate::graphql::resolvers::settings::state::apply_user_patch(
-                    crate::graphql::resolvers::settings::state::UserPatchEnv::from_server(&state),
-                    plain_rs::prefs::user::UserSettingsPatch {
+                crate::services::settings::user_preferences::UserPreferences::from_server(&state)
+                    .patch(plain_rs::prefs::user::UserSettingsPatch {
                         http_port: http.map(i32::from),
                         https_port: https.map(i32::from),
                         ..Default::default()
-                    },
-                )
-                .await
-                .map_err(|error| error.message)?;
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?;
                 state.restart_public().await
             }
             .await;

@@ -169,6 +169,43 @@ async fn the_queue_is_paged_and_its_count_matches() {
     assert_eq!(count["data"]["audioQueueItemCount"], 3);
 }
 
+#[cfg(not(target_os = "android"))]
+#[tokio::test]
+async fn queue_ids_use_the_existing_items_projection_without_platform_calls() {
+    let (_directory, schema) = fixture_with(GRANTED, |method, _| {
+        panic!("Unexpected host call: {method}")
+    });
+    seed_queue(
+        &schema,
+        &[
+            ("/music/a.mp3", "Alpha", "One"),
+            ("/music/b.mp3", "Beta", "Two"),
+            ("/music/c.mp3", "Gamma", "Three"),
+        ],
+    );
+    let result = query(
+        &schema,
+        r#"{
+        all: audioQueueItems(query: "", offset: 0, limit: 2147483647) { mediaId }
+        page: audioQueueItems(query: "", offset: 1, limit: 1) { mediaId }
+        selected: audioQueueItems(query: "ids:test:/music/b.mp3", offset: 0, limit: 10) { mediaId }
+    }"#,
+    )
+    .await;
+    assert!(result["errors"].is_null(), "{result}");
+    assert_eq!(
+        result["data"]["all"],
+        json!([
+            {"mediaId":"test:/music/a.mp3"}, {"mediaId":"test:/music/b.mp3"}, {"mediaId":"test:/music/c.mp3"}
+        ])
+    );
+    assert_eq!(
+        result["data"]["page"],
+        json!([{"mediaId":"test:/music/b.mp3"}])
+    );
+    assert_eq!(result["data"]["selected"], result["data"]["page"]);
+}
+
 /// `audioPlayback` merges the store and the player, so both halves are
 /// asserted: the queue's current path and the platform's own progress.
 #[tokio::test]

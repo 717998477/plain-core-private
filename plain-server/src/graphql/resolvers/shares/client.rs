@@ -119,21 +119,6 @@ struct SharedBrowseResult {
     card: SharedMessageCard,
 }
 
-#[derive(SimpleObject)]
-struct SharedDownloadTarget {
-    entry: SharedEntry,
-    write_dir: String,
-    store_to_downloads: bool,
-    entry_name: String,
-}
-
-#[derive(SimpleObject)]
-struct SharedDownloadPlan {
-    targets: Vec<SharedDownloadTarget>,
-    total_files: i32,
-    total_size: Long,
-}
-
 impl From<client::Link> for SharedLink {
     fn from(row: client::Link) -> Self {
         Self {
@@ -363,57 +348,6 @@ impl SharedClientMutation {
         })
         .transpose()?)
     }
-    async fn plan_shared_download(
-        &self,
-        ctx: &Context<'_>,
-        kind: SharedDownloadKind,
-        link: SharedLinkInput,
-        entries: Vec<SharedEntryInput>,
-        target_dir: String,
-        downloads_base: String,
-    ) -> async_graphql::Result<SharedDownloadPlan> {
-        let result: DownloadPlanReceipt = execute(
-            ctx,
-            Request::Plan {
-                kind: kind.into(),
-                link: domain(link)?,
-                entries: domain(entries)?,
-                target_dir,
-                downloads_base,
-            },
-        )
-        .await?;
-        Ok(SharedDownloadPlan {
-            targets: result
-                .targets
-                .into_iter()
-                .map(|row| SharedDownloadTarget {
-                    entry: row.entry.into(),
-                    write_dir: row.write_dir,
-                    store_to_downloads: row.store_to_downloads,
-                    entry_name: row.entry_name,
-                })
-                .collect(),
-            total_files: i32::try_from(result.total_files)?,
-            total_size: Long(result.total_size),
-        })
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DownloadTargetReceipt {
-    entry: client::File,
-    write_dir: String,
-    store_to_downloads: bool,
-    entry_name: String,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DownloadPlanReceipt {
-    targets: Vec<DownloadTargetReceipt>,
-    total_files: usize,
-    total_size: i64,
 }
 
 #[cfg(all(test, feature = "http_transport"))]

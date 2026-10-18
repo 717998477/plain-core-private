@@ -105,7 +105,7 @@ async fn http_restart_returns_its_acknowledgment_before_its_listener_drains() {
         .native_graphql()
         .unwrap()
         .execute(async_graphql::Request::new(
-            "mutation{updateUserSettings(input:{httpPort:0,httpsPort:0}){result{affectedCount}}}",
+            "mutation{http:setUserPref(key:\"http_port\",value:0) https:setUserPref(key:\"https_port\",value:0)}",
         ))
         .await;
     assert!(configured.errors.is_empty(), "{:?}", configured.errors);

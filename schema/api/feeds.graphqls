@@ -60,7 +60,6 @@ extend type Mutation {
 	syncFeedEntryContent(id: ID!): FeedEntry!
 	syncFeeds(id: ID): Boolean!
 	updateFeed(id: ID!, name: String, fetchContent: Boolean, url: String): Feed!
-	updateFeedUrl(id: ID!, url: String!): Feed!
 }
 
 extend type Query {

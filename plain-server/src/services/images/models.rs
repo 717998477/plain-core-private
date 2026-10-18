@@ -423,15 +423,6 @@ impl Runtime {
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())
     }
-    pub async fn release(&self) -> Result<(), String> {
-        let _guard = self.operations.lock().await;
-        self.pause_index().await?;
-        if let Some(engine) = self.engine.lock().unwrap().as_ref() {
-            engine.release_all();
-        }
-        self.publish();
-        Ok(())
-    }
     async fn stop_task(&self) {
         self.cancelled.store(true, Ordering::Release);
         let task = self.task.lock().unwrap().take();

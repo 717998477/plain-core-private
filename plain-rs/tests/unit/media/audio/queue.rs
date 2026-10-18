@@ -4,6 +4,40 @@ mod fixtures;
 use fixtures::*;
 
 #[test]
+fn owned_queue_rows_keep_their_string_allocations_when_projected() {
+    let row = QueueItem {
+        media_id: "synthetic-audio".into(),
+        path: "/synthetic/track.mp3".into(),
+        title: "Synthetic title".into(),
+        artist: "Synthetic artist".into(),
+        duration_ms: 1234,
+        sort_order: 7,
+    };
+    let allocations = [
+        row.media_id.as_ptr(),
+        row.path.as_ptr(),
+        row.title.as_ptr(),
+        row.artist.as_ptr(),
+    ];
+    let track = AudioTrack::from(row);
+    assert_eq!(
+        [
+            track.media_id.as_ref().unwrap().as_ptr(),
+            track.path.as_ptr(),
+            track.title.as_ptr(),
+            track.artist.as_ptr()
+        ],
+        allocations
+    );
+    assert_eq!(track.media_id.as_deref(), Some("synthetic-audio"));
+    assert_eq!(track.path, "/synthetic/track.mp3");
+    assert_eq!(track.title, "Synthetic title");
+    assert_eq!(track.artist, "Synthetic artist");
+    assert_eq!(track.duration_ms, 1234);
+    assert!(track.album_id.is_empty());
+}
+
+#[test]
 fn enqueue_appends_moves_and_never_duplicates() {
     let db = test_db("enqueue");
     indexed_enqueue(

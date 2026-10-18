@@ -50,15 +50,3 @@ impl ImageModelsQuery {
         ctx.data::<Arc<Runtime>>()?.snapshot().try_into()
     }
 }
-#[derive(Default)]
-pub struct ImageModelsMutation;
-#[Object]
-impl ImageModelsMutation {
-    async fn release_image_model_memory(&self, ctx: &Context<'_>) -> Result<bool> {
-        ctx.data::<Arc<Runtime>>()?
-            .release()
-            .await
-            .map_err(async_graphql::Error::new)?;
-        Ok(true)
-    }
-}

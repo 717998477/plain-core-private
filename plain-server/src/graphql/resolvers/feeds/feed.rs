@@ -193,12 +193,6 @@ pub struct FeedMutation;
 
 #[Object]
 impl FeedMutation {
-    async fn update_feed_url(&self, ctx: &Context<'_>, id: ID, url: String) -> GqlResult<Feed> {
-        feed_model(
-            ctx,
-            plain_rs::feeds::update_url(ctx.data::<Arc<Db>>()?, id.as_str(), &url)?,
-        )
-    }
     async fn mark_feed_entries_read(
         &self,
         ctx: &Context<'_>,
