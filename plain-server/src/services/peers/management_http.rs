@@ -1,0 +1,46 @@
+use crate::assembly::server::ServerState;
+use anyhow::{Result, ensure};
+use serde_json::Value;
+use std::time::Duration;
+
+pub(crate) async fn query(
+    state: &ServerState,
+    base: &reqwest::Url,
+    client_id: &str,
+    key: &[u8],
+    request: Value,
+    limit: usize,
+) -> Result<Value> {
+    ensure!(
+        base.scheme() == "https" && base.host_str().is_some(),
+        "Invalid management address"
+    );
+    let body = format!(
+        "{}|{}|{}",
+        chrono::Utc::now().timestamp_millis(),
+        uuid::Uuid::new_v4(),
+        request
+    );
+    let encrypted = plain_rs::crypto::xchacha_encrypt_raw(key, body.as_bytes())
+        .ok_or_else(|| anyhow::anyhow!("invalid_session"))?;
+    let response = state
+        .lan
+        .client
+        .post(base.join("/graphql")?)
+        .header("c-id", client_id)
+        .header("content-type", "application/octet-stream")
+        .body(encrypted)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await?;
+    ensure!(response.status().is_success(), "invalid_session");
+    let bytes = super::peer_lan::limited(response, limit).await?;
+    let plain = plain_rs::crypto::xchacha_decrypt_raw(key, &bytes)
+        .ok_or_else(|| anyhow::anyhow!("invalid_session"))?;
+    let response: Value = serde_json::from_slice(&plain)?;
+    ensure!(
+        response["errors"].is_null() && response["data"].is_object(),
+        "Invalid management response"
+    );
+    Ok(response["data"].clone())
+}

@@ -53,3 +53,6 @@ pub(crate) mod management;
 
 #[cfg(feature = "core")]
 mod management_wire;
+
+#[cfg(feature = "core")]
+mod management_http;

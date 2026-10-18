@@ -1,3 +1,5 @@
+pub mod sync;
+
 use crate::db::ClipboardRow;
 use crate::db::Db;
 use sha2::{Digest, Sha256};
@@ -9,9 +11,7 @@ pub fn record(
     label: &str,
     sensitive: bool,
 ) -> Result<(ClipboardRow, bool), String> {
-    if text.chars().all(char::is_whitespace) || text.encode_utf16().count() > 256 * 1024 {
-        return Err("invalid_clipboard_text".into());
-    }
+    validate_text(text)?;
     let row = ClipboardRow {
         id: uuid::Uuid::new_v4().to_string(),
         hash: crate::utils::hex::bytes_to_hex(&Sha256::digest(text.as_bytes())),
@@ -22,4 +22,11 @@ pub fn record(
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     };
     db.clipboard_record(&row).map_err(|error| error.to_string())
+}
+
+pub fn validate_text(text: &str) -> Result<(), String> {
+    if text.chars().all(char::is_whitespace) || text.encode_utf16().count() > 256 * 1024 {
+        return Err("invalid_clipboard_text".into());
+    }
+    Ok(())
 }
