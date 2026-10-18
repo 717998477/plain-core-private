@@ -157,7 +157,8 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                     Selection::Field(field) => {
                         if !matches!(
                             field.node.name.node.as_str(),
-                            "advanceAudioSelection"
+                            "setClipboard"
+                                | "advanceAudioSelection"
                                 | "reportAudioPlayback"
                                 | "sendChatItems"
                                 | "forwardChatItems"

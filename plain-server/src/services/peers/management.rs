@@ -313,6 +313,14 @@ async fn synchronize_clipboard(
         {
             return Ok(());
         }
+        crate::services::clipboard::record_history(
+            &state.db,
+            &state.events,
+            &item.text,
+            peer_id,
+            false,
+        )
+        .map_err(anyhow::Error::msg)?;
         let result = state
             .host
             .call_current(

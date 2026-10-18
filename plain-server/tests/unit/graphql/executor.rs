@@ -104,6 +104,7 @@ fn cache_only_and_task_owned_mutations_skip_the_generic_content_broadcast() {
         "mutation { ...Cache } fragment Cache on Mutation { cacheRemoteFile }",
         "mutation { ... on Mutation { copyFileToDirectory copyFile moveFile renameFile } }",
         "mutation { createFileTask }",
+        "mutation { ...Copy } fragment Copy on Mutation { copied: setClipboard(text: \"fixture\") }",
     ] {
         assert!(!content_changes(&Request::new(query)), "{query}");
     }

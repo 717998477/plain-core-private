@@ -29,8 +29,14 @@ fn literal_search_count_pagination_and_order() {
     assert!(db.clipboard_page("", 1, 99).unwrap().is_empty());
     assert_eq!(db.clipboard_page("", 0, -1).unwrap().len(), 1);
     assert_eq!(db.clipboard_count("text:other").unwrap(), 0);
-    db.clipboard_save(&row("d", "a\\b' OR 1=1 --", "", "", "2026-10-03T00:00:00.000Z"))
-        .unwrap();
+    db.clipboard_save(&row(
+        "d",
+        "a\\b' OR 1=1 --",
+        "",
+        "",
+        "2026-10-03T00:00:00.000Z",
+    ))
+    .unwrap();
     assert_eq!(db.clipboard_count("a\\b' OR 1=1 --").unwrap(), 1);
 }
 
@@ -107,3 +113,20 @@ fn validation_uses_kotlin_utf16_length() {
 }
 
 use sha2::Digest;
+
+#[test]
+fn same_millisecond_history_uses_insertion_order_for_every_latest_view() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    let time = "2026-10-01T00:00:00.000Z";
+    db.clipboard_save(&row("z-first", "first", "", "", time))
+        .unwrap();
+    db.clipboard_save(&row("a-second", "second", "", "", time))
+        .unwrap();
+    let page = db.clipboard_page("", 10, 0).unwrap();
+    assert_eq!(
+        page.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+        ["a-second", "z-first"]
+    );
+    assert_eq!(db.clipboard_latest().unwrap().unwrap().id, "a-second");
+    assert_eq!(db.clipboard_page("", 1, 1).unwrap()[0].id, "z-first");
+}

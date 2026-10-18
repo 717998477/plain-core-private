@@ -111,3 +111,182 @@ async fn clipboard_id_selection_deletes_only_selected_rows() {
         );
     }
 }
+
+fn write_fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
+    let dir = tempfile::tempdir().unwrap();
+    let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
+    prefs.set("api_permissions", json!(["CLIPBOARD"])).unwrap();
+    let token = plain_rs::utils::base64::base64_encode(&[9; 32]);
+    let server = crate::assembly::server::ContentServer::start(dir.path(), &token, prefs).unwrap();
+    (dir, server)
+}
+
+async fn write_request(
+    state: &crate::assembly::server::ServerState,
+    text: &str,
+) -> async_graphql::Response {
+    crate::graphql::executor::execute_graphql(
+        &state.public,
+        async_graphql::Request::new("mutation($text:String!){setClipboard(text:$text)}")
+            .variables(async_graphql::Variables::from_json(json!({"text":text}))),
+        crate::graphql::executor::RequestContext::authenticated_remote(
+            state.clone(),
+            "fixture-client".into(),
+        ),
+    )
+    .await
+}
+
+fn write_host(
+    state: &crate::assembly::server::ServerState,
+    result: Value,
+) -> Arc<std::sync::Mutex<Vec<Option<plain_rs::db::ClipboardRow>>>> {
+    let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = observations.clone();
+    let db = state.db.clone();
+    let host = state.host.clone();
+    let (generation, mut requests) = host.connect();
+    tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            let reply = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => json!({"result":["CLIPBOARD"]}),
+                "systemSetClipboard" => {
+                    let text = request["params"]["text"].as_str().unwrap();
+                    let item = db
+                        .clipboard_page("", 200, 0)
+                        .unwrap()
+                        .into_iter()
+                        .find(|item| item.text == text);
+                    seen.lock().unwrap().push(item);
+                    result.clone()
+                }
+                other => panic!("unexpected host call {other}"),
+            };
+            let mut reply = reply;
+            reply["id"] = request["id"].clone();
+            host.reply(generation, reply).unwrap();
+        }
+    });
+    observations
+}
+
+#[tokio::test]
+async fn set_clipboard_records_authenticated_source_before_platform_write_and_suppresses_echo() {
+    let (_dir, server) = write_fixture();
+    let state = server.runtime_state();
+    let seen = write_host(&state, json!({"result":true}));
+    let mut changes = state.events.subscribe();
+    for index in 0..2 {
+        let response = write_request(&state, "received 🌍").await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.into_json().unwrap()["setClipboard"], true);
+        if index == 0 {
+            assert_eq!(changes.try_recv().unwrap().event_type, "CONTENT_CHANGED");
+        }
+        assert!(changes.try_recv().is_err());
+    }
+    let observations = seen.lock().unwrap();
+    assert_eq!(observations.len(), 2);
+    for item in observations.iter() {
+        let item = item
+            .as_ref()
+            .expect("history must precede the platform write");
+        assert_eq!(item.source, "fixture-client");
+        assert_eq!(item.label, "");
+        assert!(!item.sensitive);
+    }
+    assert_eq!(
+        observations[0].as_ref().unwrap().id,
+        observations[1].as_ref().unwrap().id
+    );
+    drop(observations);
+    let mut events = state.events.subscribe();
+    crate::services::clipboard::report(
+        &state,
+        &json!({"text":"received 🌍","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(state.db.clipboard_count_rows().unwrap(), 1);
+    assert!(
+        events.try_recv().is_err(),
+        "platform echo must not rebroadcast remotely supplied text"
+    );
+    let response = server
+        .graphql_executor()
+        .execute(async_graphql::Request::new(
+            "mutation { setClipboard(text: \"local input\") }",
+        ))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(events.try_recv().unwrap().event_type, "CONTENT_CHANGED");
+    assert!(
+        events.try_recv().is_err(),
+        "native executor must not duplicate the service event"
+    );
+    let local = state.db.clipboard_page("local input", 1, 0).unwrap();
+    assert_eq!(local[0].source, state.native_client_id().unwrap());
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn set_clipboard_rejects_invalid_text_without_history_or_platform_writes() {
+    let (_dir, server) = write_fixture();
+    let state = server.runtime_state();
+    let seen = write_host(&state, json!({"result":true}));
+    for text in [
+        "".into(),
+        " \t\n".into(),
+        "a".repeat(256 * 1024 + 1),
+        "🌍".repeat(128 * 1024 + 1),
+    ] {
+        let response = write_request(&state, &text).await;
+        assert_eq!(
+            response.errors.first().map(|error| error.message.as_str()),
+            Some("invalid_clipboard_text")
+        );
+    }
+    assert!(seen.lock().unwrap().is_empty());
+    assert_eq!(state.db.clipboard_count_rows().unwrap(), 0);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn set_clipboard_keeps_the_utf16_boundary_and_platform_failure_semantics() {
+    let (_dir, server) = write_fixture();
+    let state = server.runtime_state();
+    let seen = write_host(&state, json!({"error":"fixture platform failure"}));
+    let text = "🌍".repeat(128 * 1024);
+    let response = write_request(&state, &text).await;
+    assert_eq!(response.errors[0].message, "fixture platform failure");
+    assert!(
+        seen.lock().unwrap()[0].is_some(),
+        "baseline history remains recorded even when the SDK fails"
+    );
+    assert_eq!(state.db.clipboard_count_rows().unwrap(), 1);
+    let seen = write_host(&state, json!({"result":false}));
+    let response = write_request(&state, &text).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["setClipboard"], false);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(state.db.clipboard_count_rows().unwrap(), 1);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn set_clipboard_does_not_write_to_the_platform_when_history_storage_fails() {
+    let (_dir, server) = write_fixture();
+    let state = server.runtime_state();
+    let seen = write_host(&state, json!({"result":true}));
+    state.db.with_conn(|connection| connection.execute_batch(
+        "CREATE TRIGGER fixture_reject_clipboard BEFORE INSERT ON clipboards BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END;"
+    )).unwrap();
+    let response = write_request(&state, "fixture input").await;
+    assert!(
+        response.errors[0]
+            .message
+            .contains("fixture storage failure")
+    );
+    assert!(seen.lock().unwrap().is_empty());
+    assert_eq!(state.db.clipboard_count_rows().unwrap(), 0);
+    server.shutdown().await;
+}

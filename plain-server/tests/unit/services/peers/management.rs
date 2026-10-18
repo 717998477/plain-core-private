@@ -469,6 +469,21 @@ async fn encrypted_clipboard_sync_seeds_baseline_retries_failed_writes_and_reche
         .await
         .unwrap();
     assert_eq!(writes.load(Ordering::SeqCst), 2);
+    let history = state.db.clipboard_page("", 10, 0).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].text, "new clipboard");
+    assert_eq!(history[0].source, peer.id);
+    state
+        .prefs
+        .set("api_permissions", json!(["CLIPBOARD"]))
+        .unwrap();
+    let mut echoes = state.events.subscribe();
+    crate::services::clipboard::report(
+        &state,
+        &json!({"text":"new clipboard","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(echoes.try_recv().is_err());
     seed(&remote_state.db, "private clipboard", true, 3);
     synchronize_clipboard(&state, &peer.id, &expected, &cancelled)
         .await
@@ -502,6 +517,50 @@ async fn encrypted_clipboard_sync_seeds_baseline_retries_failed_writes_and_reche
         .await
         .unwrap();
     assert_eq!(writes.load(Ordering::SeqCst), 2);
+    assert_eq!(state.db.clipboard_count_rows().unwrap(), 1);
+    let (remote_generation, mut remote_requests) = remote_state.host.connect();
+    let (remote_host, remote_db) = (remote_state.host.clone(), remote_state.db.clone());
+    let expected_source = session.client_id.clone();
+    let remote_responder = tokio::spawn(async move {
+        while let Some(request) = remote_requests.recv().await {
+            let result = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => json!(["CLIPBOARD"]),
+                "systemSetClipboard" => {
+                    assert_eq!(request["params"]["text"], "encrypted fixture write");
+                    let item = remote_db
+                        .clipboard_page("encrypted fixture write", 1, 0)
+                        .unwrap();
+                    assert_eq!(item[0].source, expected_source);
+                    json!(true)
+                }
+                method => panic!("Unexpected remote host primitive {method}"),
+            };
+            remote_host
+                .reply(
+                    remote_generation,
+                    json!({"id":request["id"],"result":result}),
+                )
+                .unwrap();
+        }
+    });
+    let result = super::super::management_http::query(
+        &state,
+        &reqwest::Url::parse(&format!("https://127.0.0.1:{port}")).unwrap(),
+        &session.client_id,
+        &plain_rs::utils::base64::base64_decode(&peer.token),
+        json!({"query":"mutation($text:String!){setClipboard(text:$text)}", "variables":{"text":"encrypted fixture write"}}),
+        4 * 1024 * 1024,
+    ).await.unwrap();
+    assert_eq!(result["setClipboard"], true);
+    let mut remote_echoes = remote_state.events.subscribe();
+    crate::services::clipboard::report(
+        &remote_state,
+        &json!({"text":"encrypted fixture write","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(remote_echoes.try_recv().is_err());
+    remote_state.host.disconnect(remote_generation);
+    remote_responder.abort();
     state.host.disconnect(generation);
     responder.abort();
     manager.stop_core().await;

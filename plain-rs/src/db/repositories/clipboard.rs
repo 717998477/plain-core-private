@@ -3,6 +3,7 @@ use crate::db::Db;
 use rusqlite::{OptionalExtension, params, params_from_iter, types::Value};
 
 const CLIPBOARD_COLUMNS: &str = "id, text, hash, source, label, sensitive, created_at";
+const CLIPBOARD_ORDER: &str = "created_at DESC, rowid DESC";
 
 fn clipboard_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardRow> {
     Ok(ClipboardRow {
@@ -29,7 +30,7 @@ impl Db {
             let item = if inserted {
                 tx.query_row(&format!("SELECT {CLIPBOARD_COLUMNS} FROM clipboards WHERE id=?1"),[&row.id],clipboard_from_row)?
             } else {
-                tx.query_row(&format!("SELECT {CLIPBOARD_COLUMNS} FROM clipboards WHERE hash=?1 ORDER BY created_at DESC, id DESC LIMIT 1"), [&row.hash], clipboard_from_row)?
+                tx.query_row(&format!("SELECT {CLIPBOARD_COLUMNS} FROM clipboards WHERE hash=?1 ORDER BY {CLIPBOARD_ORDER} LIMIT 1"), [&row.hash], clipboard_from_row)?
             };
             tx.commit()?;
             Ok((item, inserted))
@@ -48,7 +49,7 @@ impl Db {
             Value::Integer(offset.max(0)),
         ]);
         self.with_conn(|c| {
-            let mut statement = c.prepare(&format!("SELECT {CLIPBOARD_COLUMNS} FROM clipboards WHERE {clause} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"))?;
+            let mut statement = c.prepare(&format!("SELECT {CLIPBOARD_COLUMNS} FROM clipboards WHERE {clause} ORDER BY {CLIPBOARD_ORDER} LIMIT ? OFFSET ?"))?;
             statement.query_map(params_from_iter(values), clipboard_from_row)?.collect()
         })
     }
@@ -108,7 +109,7 @@ impl Db {
         self.with_conn(|c| {
             c.query_row(
                 &format!(
-                    "SELECT {CLIPBOARD_COLUMNS} FROM clipboards ORDER BY created_at DESC LIMIT 1"
+                    "SELECT {CLIPBOARD_COLUMNS} FROM clipboards ORDER BY {CLIPBOARD_ORDER} LIMIT 1"
                 ),
                 [],
                 clipboard_from_row,
@@ -121,7 +122,7 @@ impl Db {
         self.with_conn(|c| {
             c.query_row(
                 &format!(
-                    "SELECT {CLIPBOARD_COLUMNS} FROM clipboards WHERE hash=?1 ORDER BY created_at DESC LIMIT 1"
+                    "SELECT {CLIPBOARD_COLUMNS} FROM clipboards WHERE hash=?1 ORDER BY {CLIPBOARD_ORDER} LIMIT 1"
                 ),
                 [hash],
                 clipboard_from_row,

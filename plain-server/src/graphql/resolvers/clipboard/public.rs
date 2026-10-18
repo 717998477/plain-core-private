@@ -56,11 +56,24 @@ impl ClipboardMutation {
     /// sees it but skips re-broadcasting (hash dedup), so there is no loop.
     async fn set_clipboard(&self, ctx: &Context<'_>, text: String) -> async_graphql::Result<bool> {
         enabled(ctx)?;
-        ctx.data::<Arc<Host>>()?
+        let source = ctx
+            .data_opt::<crate::graphql::executor::RequestClient>()
+            .map(crate::graphql::executor::RequestClient::client_id)
+            .unwrap_or_default();
+        crate::services::clipboard::record_history(
+            ctx.data::<Arc<Db>>()?,
+            ctx.data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?,
+            &text,
+            source,
+            false,
+        )
+        .map_err(async_graphql::Error::new)?;
+        let result = ctx
+            .data::<Arc<Host>>()?
             .call("systemSetClipboard", serde_json::json!({ "text": text }))
             .await
-            .map_err(|error| async_graphql::Error::new(error))?;
-        Ok(true)
+            .map_err(async_graphql::Error::new)?;
+        Ok(serde_json::from_value(result)?)
     }
 
     /// Delete clipboard history entries matching the query DSL (`ids:` /
