@@ -51,7 +51,7 @@ impl MediaPage {
 
 impl MediaCatalog {
     pub(crate) fn new(db: Arc<Db>, host: Arc<Host>) -> Self {
-        if cfg!(any(target_os = "android", target_os = "ios")) {
+        if host.uses_system_media_catalog() {
             Self::Platform { db, host }
         } else {
             Self::Native(db)

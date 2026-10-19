@@ -166,6 +166,7 @@ fn startup_values_are_validated_before_the_host_is_created() {
         ("model", json!(123)),
         ("wifiAwareSupported", json!("true")),
         ("files.recentCatalog", json!(1)),
+        ("media.systemCatalog", json!("true")),
         ("files.recentRoot", json!([])),
         ("socModel", json!(false)),
         ("deviceType", json!("UNKNOWN")),

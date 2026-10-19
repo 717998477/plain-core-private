@@ -1,5 +1,53 @@
 use super::*;
 
+#[tokio::test]
+async fn sdk_file_access_without_a_system_media_catalog_records_portable_file_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = tempfile::Builder::new()
+        .prefix("catalog-source-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let path = source.path().join("document.txt");
+    std::fs::write(&path, b"owned catalog document").unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let host = Arc::new(Host::default());
+    let platform = FilePlatform::new(
+        host.clone(),
+        state.db.clone(),
+        state.directory.clone(),
+        state.cache.root().to_owned(),
+        state.events.clone(),
+        #[cfg(feature = "media")]
+        state.media_scans.clone(),
+    );
+    platform.use_sdk_for_test();
+    let (generation, mut requests) = host.connect();
+    let responder = host.clone();
+    let worker = tokio::spawn(async move {
+        let mut scans = 0;
+        while let Some(request) = requests.recv().await {
+            assert_eq!(request["method"], "fileTaskScan");
+            scans += 1;
+            responder
+                .reply(generation, json!({"id":request["id"],"result":true}))
+                .unwrap();
+        }
+        scans
+    });
+    platform
+        .scan(&[path.to_string_lossy().into_owned()])
+        .await
+        .unwrap();
+    let count =
+        super::super::media_catalog::count(&state.db, plain_rs::enums::DataType::Doc, "").unwrap();
+    host.disconnect(generation);
+    let host_scans = worker.await.unwrap();
+    core.stop_core().await;
+    assert_eq!(count, 1);
+    assert_eq!(host_scans, 0);
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
 async fn native_recent_files_use_the_owned_preferences_without_media_or_host_dispatch() {
@@ -60,6 +108,7 @@ async fn sdk_recents(
         state.db.clone(),
         directory.path().to_path_buf(),
         state.cache.root().to_owned(),
+        state.events.clone(),
         #[cfg(feature = "media")]
         state.media_scans.clone(),
     );

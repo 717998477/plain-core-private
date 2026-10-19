@@ -66,6 +66,7 @@ fn is_startup_property(key: &str) -> bool {
             | "wifiAwareSupported"
             | "files.recentCatalog"
             | "files.recentRoot"
+            | "media.systemCatalog"
             | "android.sdkVersion"
             | "android.versionCodeName"
             | "android.securityPatch"
@@ -100,7 +101,9 @@ impl Host {
                 "cacheDir" => value
                     .as_str()
                     .is_some_and(|path| std::path::Path::new(path).is_absolute()),
-                "debug" | "wifiAwareSupported" | "files.recentCatalog" => value.is_boolean(),
+                "debug" | "wifiAwareSupported" | "files.recentCatalog" | "media.systemCatalog" => {
+                    value.is_boolean()
+                }
                 "socModel" | "files.recentRoot" => value.is_null() || value.is_string(),
                 "supportedAbis" => value.as_array().is_some_and(|abis| {
                     abis.iter()
@@ -136,6 +139,12 @@ impl Host {
     }
     pub(crate) fn startup_property(&self, name: &str) -> Option<&Value> {
         self.properties.get(name)
+    }
+
+    pub(crate) fn uses_system_media_catalog(&self) -> bool {
+        self.startup_property("media.systemCatalog")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     }
     pub(crate) fn needs_socket_cleanup(&self) -> bool {
         self.state.lock().unwrap().peer_sockets

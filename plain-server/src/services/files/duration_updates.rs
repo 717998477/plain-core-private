@@ -74,6 +74,7 @@ impl Runtime {
     ) -> Arc<Self> {
         Arc::new(Self {
             cache,
+            provider_catalog: host.uses_system_media_catalog(),
             host,
             resources,
             directory,
@@ -81,7 +82,6 @@ impl Runtime {
             permits: Semaphore::new(10),
             stop: watch::channel(false).0,
             idle: Notify::new(),
-            provider_catalog: cfg!(any(target_os = "android", target_os = "ios")),
         })
     }
     pub(crate) async fn probe_milliseconds(&self, path: &str) -> Result<Option<i64>, String> {

@@ -81,6 +81,7 @@ impl Services {
             db.clone(),
             directory.clone(),
             cache.root().to_owned(),
+            events.clone(),
             #[cfg(feature = "media")]
             media_scans.clone(),
         ));

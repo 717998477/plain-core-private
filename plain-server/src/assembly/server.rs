@@ -554,23 +554,6 @@ impl ContentServer {
         Ok((state, stop, receiver))
     }
 
-    fn build(
-        directory: &Path,
-        token: &str,
-        prefs: Arc<plain_rs::prefs::Prefs>,
-    ) -> Result<
-        (
-            ServerState,
-            Router,
-            watch::Sender<bool>,
-            watch::Receiver<bool>,
-        ),
-        String,
-    > {
-        let (state, stop, receiver) = Self::build_state(directory, token, prefs)?;
-        let router = crate::http::routes::public::build_router(state.clone(), receiver.clone());
-        Ok((state, router, stop, receiver))
-    }
     pub fn cache_paths(&self) -> &plain_rs::cache_paths::CachePaths {
         &self.state.cache
     }
@@ -633,7 +616,18 @@ impl ContentServer {
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
     ) -> Result<Self, String> {
-        let (state, router, stop, mut receiver) = Self::build(directory, token, prefs)?;
+        Self::start_with_properties(directory, token, prefs, serde_json::Map::new())
+    }
+
+    pub(crate) fn start_with_properties(
+        directory: &Path,
+        token: &str,
+        prefs: Arc<plain_rs::prefs::Prefs>,
+        properties: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Self, String> {
+        let (state, stop, mut receiver) =
+            Self::build_state_with_properties(directory, token, prefs, properties)?;
+        let router = crate::http::routes::public::build_router(state.clone(), receiver.clone());
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;

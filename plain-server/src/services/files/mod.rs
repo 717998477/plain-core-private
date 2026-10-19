@@ -2,6 +2,9 @@
 pub mod file_access;
 
 #[cfg(feature = "core")]
+pub(crate) mod media_index;
+
+#[cfg(feature = "core")]
 pub mod file_task_media;
 
 #[cfg(feature = "core")]

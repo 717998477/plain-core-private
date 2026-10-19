@@ -67,7 +67,7 @@ impl Operation {
         destination: String,
         #[cfg(feature = "media")] scans: Arc<super::media_scans::MediaScans>,
     ) -> Result<Self, String> {
-        let backend = if cfg!(any(target_os = "android", target_os = "ios")) {
+        let backend = if host.uses_system_media_catalog() {
             Backend::Provider(
                 super::media_provider::run(
                     host,

@@ -20,6 +20,8 @@ pub mod audio;
 
 pub mod documents;
 
+pub mod catalog_paths;
+pub mod file_metadata;
 pub mod probe;
 
 pub mod cover;

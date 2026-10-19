@@ -55,7 +55,15 @@ async fn native_catalog_reads_rows_counts_ids_and_buckets_without_a_host() {
 
 #[tokio::test]
 async fn platform_catalog_reads_os_facts_without_a_local_catalogue() {
-    let host = Arc::new(Host::default());
+    let host = Arc::new(
+        Host::with_startup_properties(
+            json!({"media.systemCatalog":true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap(),
+    );
     let (generation, mut requests) = host.connect();
     let replies = host.clone();
     let worker = tokio::spawn(async move {
@@ -100,7 +108,7 @@ async fn platform_catalog_reads_os_facts_without_a_local_catalogue() {
     });
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Db::open(&dir.path().join("data.db")).unwrap());
-    let catalog = MediaCatalog::Platform { db, host };
+    let catalog = MediaCatalog::new(db, host);
     let rows = catalog
         .rows(DataType::Image, "text:picture", FileSortBy::NameAsc, 8, 4)
         .await

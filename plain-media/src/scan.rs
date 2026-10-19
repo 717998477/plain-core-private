@@ -1,18 +1,7 @@
-//! Media scanner. 1:1 port of `internal/media/control.go` +
-//! `internal/media/api.go` + the relevant pieces of `media_scan_api.go`.
-//!
-//! Differences from the Go side:
-//! - **No FSUUID**: the Go side uses filesystem UUID + inode + ctime to derive
-//!   a stable UUID that survives path renames. On Linux `nix` doesn't expose
-//!   `st_ctim` as a `timespec` (we can read it via `statx` but the simpler
-//!   solution is to derive UUID from a path hash). Since the MVP doesn't
-//!   implement path-rename tracking, a path-hash UUID is fine.
-//! - **No thumbnails**: ffmpeg integration is left as a 501 stub.
-//! - **No metadata extraction at scan time**: duration/artist/title stay
-//!   0/empty until a read path that surfaces them hydrates the row via
-//!   `probe_missing_metadata` / `hydrate_metadata` (probe once, persist) —
-//!   the same lazy read-side extraction the Go implementation does in its
-//!   list resolvers.
+#[cfg(test)]
+use plain_rs::media::catalog_paths::under_root_case_insensitive;
+pub use plain_rs::media::catalog_paths::{infer_type, is_media_excluded_at};
+use plain_rs::media::catalog_paths::{is_media_excluded_name_or_root, is_native_hidden};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -84,37 +73,6 @@ const TYPE_INDEX_PREFIX: &str = "media:type:";
 // Media-library exclusions
 // ---------------------------------------------------------------------------
 
-/// System and application roots are platform-specific. User mounted volumes
-/// and home directories remain scannable on each platform.
-#[cfg(target_os = "macos")]
-const EXCLUDED_SYSTEM_ROOTS: &[&str] = &[
-    "/System",
-    "/Library",
-    "/Applications",
-    "/private",
-    "/usr",
-    "/bin",
-    "/sbin",
-    "/var",
-    "/tmp",
-    "/dev",
-    "/cores",
-    "/proc",
-];
-
-#[cfg(target_os = "linux")]
-const EXCLUDED_SYSTEM_ROOTS: &[&str] = &[
-    "/proc", "/sys", "/dev", "/run", "/tmp", "/snap", "/usr", "/etc", "/var", "/boot", "/opt",
-    "/srv", "/lib", "/lib32", "/lib64", "/bin", "/sbin",
-];
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-const EXCLUDED_SYSTEM_ROOTS: &[&str] = &[];
-
-const EXCLUDED_DIR_NAMES: &[&str] = &["node_modules"];
-
-const PROFILE_CACHE_NAMES: &[&str] = &["cache", "caches", "gpucache", "code cache", "cachestorage"];
-
 /// Extra excluded roots from config (`[media_scan] excluded_dirs`,
 /// comma-separated absolute paths). Set once at startup.
 static EXTRA_EXCLUDED_ROOTS: OnceLock<Vec<String>> = OnceLock::new();
@@ -137,144 +95,6 @@ pub fn is_media_excluded(path: &str) -> bool {
     )
 }
 
-pub fn is_media_excluded_at(
-    path: &str,
-    data_dir: &Path,
-    cache_dir: &Path,
-    extra_roots: &[String],
-) -> bool {
-    let p = path.replace('\\', "/");
-    if is_media_excluded_name_or_root(&p, data_dir, cache_dir, extra_roots) {
-        return true;
-    }
-    let mut ancestor = Some(Path::new(&p));
-    while let Some(dir) = ancestor {
-        if dir.join(".nomedia").is_file()
-            || (is_native_hidden(dir) && !is_cloud_drive_ancestor(&p, dir))
-        {
-            return true;
-        }
-        ancestor = dir.parent();
-    }
-    false
-}
-
-#[cfg(target_os = "macos")]
-fn is_cloud_drive_ancestor(path: &str, ancestor: &Path) -> bool {
-    let Some(cloud) = cloud_drive_path() else {
-        return false;
-    };
-    Path::new(path).starts_with(cloud) && cloud.starts_with(ancestor)
-}
-
-#[cfg(target_os = "macos")]
-fn cloud_drive_path() -> Option<&'static std::path::PathBuf> {
-    static CLOUD: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
-    CLOUD
-        .get_or_init(|| {
-            std::env::var_os("HOME")
-                .map(|home| Path::new(&home).join("Library/Mobile Documents/com~apple~CloudDocs"))
-        })
-        .as_ref()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn is_cloud_drive_ancestor(_path: &str, _ancestor: &Path) -> bool {
-    false
-}
-
-fn is_media_excluded_name_or_root(
-    p: &str,
-    data_dir: &Path,
-    cache_dir: &Path,
-    extra_roots: &[String],
-) -> bool {
-    let mut follows_user_data = false;
-    if Path::new(&p).components().any(|c| {
-        c.as_os_str().to_str().is_some_and(|comp| {
-            let profile_cache = follows_user_data
-                && PROFILE_CACHE_NAMES
-                    .iter()
-                    .any(|name| comp.eq_ignore_ascii_case(name));
-            follows_user_data = comp.eq_ignore_ascii_case("User Data");
-            comp.starts_with('.')
-                || EXCLUDED_DIR_NAMES
-                    .iter()
-                    .any(|name| comp.eq_ignore_ascii_case(name))
-                || is_excluded_package_component(comp)
-                || profile_cache
-        })
-    }) {
-        return true;
-    }
-    if is_system_root(p) {
-        return true;
-    }
-    if is_platform_private_root(p) {
-        return true;
-    }
-    for root in extra_roots {
-        if under_root(&p, root.trim_end_matches('/')) {
-            return true;
-        }
-    }
-    for dir in [data_dir, cache_dir] {
-        let s = dir.to_string_lossy().replace('\\', "/");
-        if under_root(&p, s.trim_end_matches('/')) {
-            return true;
-        }
-    }
-    false
-}
-
-#[cfg(target_os = "macos")]
-fn is_platform_private_root(path: &str) -> bool {
-    static LIBRARY: OnceLock<Option<String>> = OnceLock::new();
-    let library = LIBRARY.get_or_init(|| {
-        std::env::var_os("HOME").map(|home| {
-            Path::new(&home)
-                .join("Library")
-                .to_string_lossy()
-                .to_string()
-        })
-    });
-    library.as_ref().is_some_and(|library| {
-        under_root(path, library)
-            && !cloud_drive_path().is_some_and(|cloud| Path::new(path).starts_with(cloud))
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn is_platform_private_root(path: &str) -> bool {
-    static APP_DATA: OnceLock<Option<String>> = OnceLock::new();
-    let app_data = APP_DATA.get_or_init(|| {
-        std::env::var_os("USERPROFILE").map(|home| {
-            Path::new(&home)
-                .join("AppData")
-                .to_string_lossy()
-                .replace('\\', "/")
-        })
-    });
-    app_data
-        .as_ref()
-        .is_some_and(|app_data| under_root_case_insensitive(path, app_data))
-}
-
-#[cfg(target_os = "linux")]
-fn is_platform_private_root(path: &str) -> bool {
-    static SNAP: OnceLock<Option<String>> = OnceLock::new();
-    let snap = SNAP.get_or_init(|| {
-        std::env::var_os("HOME")
-            .map(|home| Path::new(&home).join("snap").to_string_lossy().to_string())
-    });
-    snap.as_ref().is_some_and(|snap| under_root(path, snap))
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn is_platform_private_root(_path: &str) -> bool {
-    false
-}
-
 fn is_media_excluded_for_walk(path: &Path) -> bool {
     let paths = crate::storage::paths::detect();
     let p = path.to_string_lossy().replace('\\', "/");
@@ -284,96 +104,6 @@ fn is_media_excluded_for_walk(path: &Path) -> bool {
         &paths.cache_dir,
         EXTRA_EXCLUDED_ROOTS.get().map(Vec::as_slice).unwrap_or(&[]),
     ) || is_native_hidden(path)
-}
-
-#[cfg(target_os = "windows")]
-fn is_native_hidden(path: &Path) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_attributes() & (0x2 | 0x4) != 0)
-}
-
-#[cfg(target_os = "macos")]
-fn is_native_hidden(path: &Path) -> bool {
-    use std::os::macos::fs::MetadataExt;
-    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.st_flags() & 0x8000 != 0)
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn is_native_hidden(_path: &Path) -> bool {
-    false
-}
-
-#[cfg(target_os = "macos")]
-fn is_excluded_package_component(component: &str) -> bool {
-    [".photoslibrary", ".app", ".bundle", ".framework"]
-        .iter()
-        .any(|suffix| component.to_ascii_lowercase().ends_with(suffix))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn is_excluded_package_component(_component: &str) -> bool {
-    false
-}
-
-#[cfg(target_os = "windows")]
-fn windows_system_roots() -> Vec<String> {
-    let mut roots = Vec::new();
-    for key in [
-        "SystemRoot",
-        "ProgramFiles",
-        "ProgramFiles(x86)",
-        "ProgramData",
-    ] {
-        if let Some(path) = std::env::var_os(key) {
-            roots.push(path.to_string_lossy().replace('\\', "/"));
-        }
-    }
-    if let Some(system_root) = std::env::var_os("SystemRoot") {
-        if let Some(drive) = Path::new(&system_root).components().next() {
-            let drive = drive.as_os_str().to_string_lossy();
-            roots.extend(
-                [
-                    "$Recycle.Bin",
-                    "System Volume Information",
-                    "Recovery",
-                    "PerfLogs",
-                ]
-                .into_iter()
-                .map(|name| format!("{drive}/{name}")),
-            );
-        }
-    }
-    roots
-}
-
-#[cfg(target_os = "windows")]
-fn is_system_root(path: &str) -> bool {
-    static ROOTS: OnceLock<Vec<String>> = OnceLock::new();
-    ROOTS
-        .get_or_init(windows_system_roots)
-        .iter()
-        .any(|root| under_root_case_insensitive(path, root))
-}
-
-#[cfg(not(target_os = "windows"))]
-fn is_system_root(path: &str) -> bool {
-    EXCLUDED_SYSTEM_ROOTS
-        .iter()
-        .any(|root| under_root(path, root))
-}
-
-/// Component-boundary prefix check: `/usr` covers `/usr/share/x` but not
-/// `/usr2`; the root itself counts too.
-fn under_root(p: &str, root: &str) -> bool {
-    p == root || p.starts_with(&format!("{root}/"))
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn under_root_case_insensitive(p: &str, root: &str) -> bool {
-    p.eq_ignore_ascii_case(root)
-        || p.get(..root.len())
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(root))
-            && p.as_bytes().get(root.len()) == Some(&b'/')
 }
 
 const STATE_IDLE: i32 = 0;
@@ -561,29 +291,6 @@ pub fn scanner() -> Arc<Scanner> {
 // ---------------------------------------------------------------------------
 // Type inference
 // ---------------------------------------------------------------------------
-
-pub fn infer_type(name: &str) -> &'static str {
-    let mime = plain_rs::utils::mime::mime_from_ext(name);
-    if mime.starts_with("image/") {
-        "image"
-    } else if mime.starts_with("video/") {
-        "video"
-    } else if mime.starts_with("audio/") {
-        "audio"
-    } else if mime.starts_with("text/") || DOC_EXTRA_MIMES.contains(&mime) {
-        "doc"
-    } else {
-        "other"
-    }
-}
-
-const DOC_EXTRA_MIMES: [&str; 5] = [
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/javascript",
-];
 
 fn is_album_art(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();

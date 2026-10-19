@@ -17,6 +17,7 @@ pub(crate) struct FilePlatform {
     directory: PathBuf,
     cache: PathBuf,
     private_roots: std::result::Result<[PathBuf; 2], String>,
+    events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
     #[cfg(test)]
     sdk: std::sync::atomic::AtomicBool,
     #[cfg(feature = "media")]
@@ -28,6 +29,7 @@ impl FilePlatform {
         db: Arc<Db>,
         directory: PathBuf,
         cache: PathBuf,
+        events: tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
         #[cfg(feature = "media")] scans: Arc<super::media_scans::MediaScans>,
     ) -> Self {
         let private_roots =
@@ -39,6 +41,7 @@ impl FilePlatform {
             db,
             directory,
             cache,
+            events,
             #[cfg(test)]
             sdk: std::sync::atomic::AtomicBool::new(cfg!(any(
                 target_os = "android",
@@ -270,7 +273,7 @@ impl FilePlatform {
         &self,
         paths: &[String],
     ) -> Result<Vec<super::file_task_media::Identity>> {
-        if self.uses_sdk() {
+        if self.host.uses_system_media_catalog() {
             let paths = self.external_paths(paths, false).await?;
             if paths.is_empty() {
                 return Ok(vec![]);
@@ -291,7 +294,7 @@ impl FilePlatform {
         })).await??)
     }
     pub(crate) async fn scan(&self, paths: &[String]) -> Result<()> {
-        if self.uses_sdk() {
+        if self.host.uses_system_media_catalog() {
             let paths = self.external_paths(paths, false).await?;
             if paths.is_empty() {
                 return Ok(());
@@ -319,10 +322,37 @@ impl FilePlatform {
             .await?
             .map_err(anyhow::Error::msg)?;
         }
+        #[cfg(not(feature = "media"))]
+        {
+            let db = self.db.clone();
+            let directory = self.directory.clone();
+            let cache = self.cache.clone();
+            let events = self.events.clone();
+            let paths = paths.to_vec();
+            tokio::task::spawn_blocking(move || {
+                let mut existing = Vec::new();
+                for path in paths {
+                    match std::fs::metadata(&path) {
+                        Ok(metadata) if metadata.is_file() => existing.push(path),
+                        Ok(_) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.to_string()),
+                    }
+                }
+                let reads = super::media_index::read_files(&directory, &cache, &[], existing)?;
+                let rows = db
+                    .record_media_file_reads(&reads)
+                    .map_err(|error| error.to_string())?;
+                super::catalog_events::publish(&events, rows.iter().map(|row| row.data_type));
+                Ok::<_, String>(())
+            })
+            .await?
+            .map_err(anyhow::Error::msg)?;
+        }
         Ok(())
     }
     pub(crate) async fn forget_removed(&self, paths: Vec<String>) -> Result<()> {
-        if self.uses_sdk() {
+        if self.host.uses_system_media_catalog() {
             return Ok(());
         }
         let db = self.db.clone();

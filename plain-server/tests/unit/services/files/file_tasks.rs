@@ -31,10 +31,14 @@ async fn main_tasks_track_resolved_paths_and_gate_sdk_execution_on_platform_auth
     let temp = tempfile::tempdir().unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[12; 32]);
     let db_path = temp.path().join("core/tasks.db");
-    let server = ContentServer::start(
+    let server = ContentServer::start_with_properties(
         db_path.parent().unwrap(),
         &token,
         Arc::new(plain_rs::prefs::Prefs::load(&temp.path().join("prefs.json")).unwrap()),
+        json!({"media.systemCatalog":true})
+            .as_object()
+            .unwrap()
+            .clone(),
     )
     .unwrap();
     server.runtime_state().file_platform.use_sdk_for_test();
@@ -160,10 +164,14 @@ async fn media_move_case(missing_destination: bool) {
     std::fs::write(&destination, b"existing").unwrap();
     let db_path = base.join("core/db");
     let token = plain_rs::utils::base64::base64_encode(&[16; 32]);
-    let server = ContentServer::start(
+    let server = ContentServer::start_with_properties(
         db_path.parent().unwrap(),
         &token,
         Arc::new(plain_rs::prefs::Prefs::load(&base.join("prefs")).unwrap()),
+        json!({"media.systemCatalog":true})
+            .as_object()
+            .unwrap()
+            .clone(),
     )
     .unwrap();
     let db = server.runtime_state().db.clone();

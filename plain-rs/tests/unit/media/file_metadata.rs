@@ -1,18 +1,50 @@
-//! Unit tests for `src/metadata/file_facts.rs` — moved out-of-line;
-//! compiled as the `tests` child module via `#[cfg(test)] #[path]` there.
 use super::*;
-use plain_rs::db::MediaFileMetadata;
-use plain_rs::enums::DataType;
-use plain_rs::utils::dbtime::iso_from_unix_millis;
+use crate::db::MediaFileMetadata;
+use crate::enums::DataType;
+use crate::utils::dbtime::iso_from_unix_millis;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+
+fn read_file_metadata(path: &Path, data_type: DataType) -> anyhow::Result<MediaFileMetadata> {
+    Ok(read_file_metadata_with_availability(path, data_type)?.metadata)
+}
+
+fn read_file_metadata_with_availability(
+    path: &Path,
+    data_type: DataType,
+) -> anyhow::Result<crate::db::MediaFileMetadataRead> {
+    super::read(path, data_type, |_| None)
+}
+
+#[test]
+fn an_external_image_decoder_receives_the_rewound_file_only_when_header_dimensions_are_missing() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("image.other");
+    std::fs::write(&path, b"external image codec fixture").unwrap();
+    let calls = std::cell::Cell::new(0);
+    let facts = super::read(&path, DataType::Image, |mut reader| {
+        calls.set(calls.get() + 1);
+        assert_eq!(reader.stream_position().unwrap(), 0);
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"external image codec fixture");
+        Some((320, 240))
+    })
+    .unwrap();
+    assert_eq!(calls.get(), 1);
+    assert_eq!((facts.metadata.width, facts.metadata.height), (320, 240));
+    assert!(facts.available.dimensions);
+    let facts = super::read(&fixture("v-prog420.jpg"), DataType::Image, |_| {
+        panic!("header dimensions already available")
+    })
+    .unwrap();
+    assert!(facts.metadata.width > 0 && facts.metadata.height > 0);
+}
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../plain-rs/testdata")).join(name)
 }
 
-/// The row format is the fixed-width `...Z` text the catalog sorts on, so a
-/// rendered timestamp must equal `dbtime`'s own rendering of the same instant.
 fn dbtime_of(at: SystemTime) -> String {
     let millis = at
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -21,8 +53,6 @@ fn dbtime_of(at: SystemTime) -> String {
     iso_from_unix_millis(millis)
 }
 
-/// Directory contents with size and mtime, so a side effect anywhere in the
-/// tree (cache file, cover write, temp file) shows up as a difference.
 fn listing(dir: &Path) -> Vec<(String, u64, SystemTime)> {
     let mut out: Vec<(String, u64, SystemTime)> = std::fs::read_dir(dir)
         .unwrap()
@@ -39,10 +69,6 @@ fn listing(dir: &Path) -> Vec<(String, u64, SystemTime)> {
     out.sort();
     out
 }
-
-// ---------------------------------------------------------------------------
-// The four kinds the media index covers
-// ---------------------------------------------------------------------------
 
 #[test]
 fn accepted_kinds_are_exactly_the_media_index_wire_values() {
@@ -87,10 +113,6 @@ fn data_types_outside_the_media_index_are_errors_even_for_a_real_file() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Real OS facts: path, bucket, size, timestamps
-// ---------------------------------------------------------------------------
-
 #[test]
 fn audio_row_carries_probe_tags_and_real_stat_facts() {
     let path = fixture("audio-tagged.mp3");
@@ -106,7 +128,7 @@ fn audio_row_carries_probe_tags_and_real_stat_facts() {
     assert_eq!(m.artist, "Hydrate Artist");
     assert_eq!(m.title, "Hydrate Title");
     assert_eq!(m.cover_image_id, None);
-    let probed = crate::metadata::probe_media(m.path.as_str(), "audio");
+    let probed = crate::media::probe::probe_media(m.path.as_str(), "audio");
     assert_eq!(m.duration_ms, probed.duration_ms);
     assert!(m.duration_ms > 0);
     assert_eq!((m.width, m.height, m.rotation), (0, 0, 0));
@@ -153,10 +175,6 @@ fn timestamps_sort_chronologically_as_text() {
     assert!(row_timestamp(base) < row_timestamp(later));
 }
 
-// ---------------------------------------------------------------------------
-// Probe results and the title fallback
-// ---------------------------------------------------------------------------
-
 #[test]
 fn video_row_duration_comes_from_the_container_probe() {
     let m = read_file_metadata(&fixture("video-h264-baseline.mp4"), DataType::Video).unwrap();
@@ -192,10 +210,6 @@ fn doc_row_keeps_real_stat_facts_and_unknown_optional_metadata() {
     assert!(!m.created_at.is_empty() && !m.updated_at.is_empty());
 }
 
-// ---------------------------------------------------------------------------
-// Image dimensions, and formats the enabled image features cannot decode
-// ---------------------------------------------------------------------------
-
 #[test]
 fn image_row_reads_pixel_dimensions_from_the_image_crate() {
     let big = read_file_metadata(&fixture("v-photo-prog.jpg"), DataType::Image).unwrap();
@@ -228,10 +242,6 @@ fn image_dimensions_follow_file_contents_instead_of_a_misleading_extension() {
         );
     }
 }
-
-// ---------------------------------------------------------------------------
-// Errors, never fabricated rows
-// ---------------------------------------------------------------------------
 
 #[test]
 fn missing_path_and_directory_are_errors() {
@@ -284,10 +294,6 @@ fn an_unreadable_directory_is_an_error() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(result.is_err());
 }
-
-// ---------------------------------------------------------------------------
-// Read-only by construction
-// ---------------------------------------------------------------------------
 
 #[test]
 fn reading_facts_writes_nothing_and_repeats_identically() {
@@ -440,7 +446,7 @@ fn indexed_image_metadata_seeks_to_distant_fields_without_reading_the_pixel_payl
         source: std::io::Cursor::new(distant_image_metadata(6)),
         bytes_read: 0,
     };
-    let (width, height, rotation, taken_at) = image_reader(&mut reader);
+    let (width, height, rotation, taken_at) = image_reader(&mut reader, |_| None);
     assert_eq!((width, height, rotation), (1920, 1080, Some(90)));
     assert_eq!(taken_at.as_deref(), Some("2026-10-16T04:34:56.000Z"));
     assert!(
@@ -463,7 +469,7 @@ fn video_row_keeps_fractional_milliseconds_from_the_single_probe() {
         [36u32.to_be_bytes().to_vec(), b"moov".to_vec(), mvhd].concat(),
     )
     .unwrap();
-    let probe = crate::metadata::probe_media(path.to_str().unwrap(), "video");
+    let probe = crate::media::probe::probe_media(path.to_str().unwrap(), "video");
     assert_eq!(probe.duration_ms, 3211);
     assert_eq!(probe.duration_secs, 3);
     assert_eq!(
