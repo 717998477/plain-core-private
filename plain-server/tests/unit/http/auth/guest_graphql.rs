@@ -46,9 +46,12 @@ async fn guest_executes_encrypted_contract_and_rejects_replay_and_revocation() {
     );
     let (status, encrypted) = execute(&state, &share.id, &body).await;
     assert_eq!(status, 200);
-    let result: Value =
-        serde_json::from_slice(&plain_rs::crypto::xchacha_decrypt_raw(&key, &encrypted).unwrap())
-            .unwrap();
+    let result: Value = serde_json::from_slice(
+        &plain_rs::transport::http_response::Context::new("/guest_graphql", &body)
+            .decrypt(&key, &encrypted)
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(result["data"]["alias"]["name"], "Test");
     assert_eq!(
         result["data"]["alias"]["entries"][0]["virtualPath"],
@@ -63,9 +66,12 @@ async fn guest_executes_encrypted_contract_and_rejects_replay_and_revocation() {
     let forbidden = wrap("c", r#"{"query":"{ shareRecords { id } }"}"#);
     let (status, encrypted) = execute(&state, &share.id, &forbidden).await;
     assert_eq!(status, 200);
-    let result: Value =
-        serde_json::from_slice(&plain_rs::crypto::xchacha_decrypt_raw(&key, &encrypted).unwrap())
-            .unwrap();
+    let result: Value = serde_json::from_slice(
+        &plain_rs::transport::http_response::Context::new("/guest_graphql", &forbidden)
+            .decrypt(&key, &encrypted)
+            .unwrap(),
+    )
+    .unwrap();
     assert!(result["errors"].is_array());
     state.db.share_delete(&share.id).unwrap();
     assert_eq!(execute(&state, &share.id, &body).await.0, 403);

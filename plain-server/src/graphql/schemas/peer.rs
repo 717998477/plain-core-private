@@ -156,8 +156,10 @@ pub(crate) async fn execute(
             channel_id: channel_id.into(),
         }))
         .await;
+    let context = plain_rs::transport::http_response::Context::new("/peer_graphql", body);
     match serde_json::to_vec(&response) {
-        Ok(body) => plain_rs::crypto::xchacha_encrypt_raw(&key, &body)
+        Ok(body) => context
+            .encrypt(&key, &body)
             .map(|body| (200, body))
             .unwrap_or((500, vec![])),
         Err(_) => (500, vec![]),

@@ -161,7 +161,8 @@ async fn execute(
     )
     .await?;
     let mut response = if token_mode {
-        let encrypted = plain_rs::crypto::xchacha_encrypt_raw(&key, &result)
+        let encrypted = plain_rs::transport::http_response::Context::new("/graphql", &body)
+            .encrypt(&key, &result)
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
         encrypted.into_response()
     } else {

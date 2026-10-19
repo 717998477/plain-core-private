@@ -156,6 +156,7 @@ pub(crate) async fn aware_send(
 ) -> Result<Value, Failure> {
     let encrypted = plain_rs::crypto::xchacha_encrypt_raw(key, body.as_bytes())
         .ok_or_else(|| Failure::Fatal("Invalid peer key".into()))?;
+    let context = plain_rs::transport::http_response::Context::new("/peer_graphql", &encrypted);
     let response = aware(state, peer, "POST", "/peer_graphql", channel, encrypted).await?;
     async {
         let status = response.status;
@@ -171,13 +172,19 @@ pub(crate) async fn aware_send(
                 bytes.extend_from_slice(&data);
             }
         }
-        decode_response(status, key, &bytes)
+        decode_response(status, key, &context, &bytes)
     }
     .await
     .map_err(|e: anyhow::Error| Failure::Fatal(e.to_string()))
 }
-fn decode_response(status: u16, key: &[u8], bytes: &[u8]) -> Result<Value> {
-    let plain = plain_rs::crypto::xchacha_decrypt_raw(key, bytes)
+fn decode_response(
+    status: u16,
+    key: &[u8],
+    context: &plain_rs::transport::http_response::Context,
+    bytes: &[u8],
+) -> Result<Value> {
+    let plain = context
+        .decrypt(key, bytes)
         .ok_or_else(|| anyhow::anyhow!("Failed to authenticate peer response"))?;
     if status != 200 {
         return Ok(json!({"data":null,"errors":[{"message":format!("Peer HTTP {status}")}]}));
@@ -220,6 +227,7 @@ pub(crate) async fn ble_send(
 ) -> Result<Value, Failure> {
     let encrypted = plain_rs::crypto::xchacha_encrypt_raw(key, body.as_bytes())
         .ok_or_else(|| Failure::Fatal("Invalid peer key".into()))?;
+    let context = plain_rs::transport::http_response::Context::new("/peer_graphql", &encrypted);
     let response = ble(
         state,
         peer,
@@ -232,7 +240,7 @@ pub(crate) async fn ble_send(
     .await?;
     let (status, bytes) = plain_rs::protocols::ble::decode_response(&response)
         .map_err(|e| Failure::Fatal(e.to_string()))?;
-    decode_response(status, key, bytes).map_err(|e| Failure::Fatal(e.to_string()))
+    decode_response(status, key, &context, bytes).map_err(|e| Failure::Fatal(e.to_string()))
 }
 
 #[cfg(test)]

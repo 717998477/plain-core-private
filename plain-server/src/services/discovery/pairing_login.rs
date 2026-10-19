@@ -319,36 +319,24 @@ async fn metadata(
     client_id: &str,
     key: &[u8],
 ) -> Result<Value> {
-    let body = format!(
-        "{}|{}|{}",
-        chrono::Utc::now().timestamp_millis(),
-        uuid::Uuid::new_v4(),
-        json!({"query":"{ app { clientId deviceName deviceType httpsPort } }"})
-    );
-    let encrypted = crypto::xchacha_encrypt_raw(key, body.as_bytes())
-        .ok_or_else(|| anyhow::anyhow!("invalid_session"))?;
-    let response = state
-        .lan
-        .client
-        .post(base.join("graphql")?)
-        .header("c-id", client_id)
-        .header("content-type", "application/octet-stream")
-        .body(encrypted)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|_| anyhow::anyhow!("failed_connect"))?;
-    ensure!(response.status().is_success(), "invalid_session");
-    let bytes = crate::services::peers::peer_lan::limited(response, 65536).await?;
-    let plain = crypto::xchacha_decrypt_raw(key, &bytes)
-        .ok_or_else(|| anyhow::anyhow!("invalid_session"))?;
-    let data: Value =
-        serde_json::from_slice(&plain).map_err(|_| anyhow::anyhow!("invalid_session"))?;
-    ensure!(
-        data["errors"].is_null() && data["data"]["app"].is_object(),
-        "invalid_session"
-    );
-    Ok(data["data"]["app"].clone())
+    let data = crate::services::peers::management_http::query(
+        state,
+        base,
+        client_id,
+        key,
+        json!({"query":"{ app { clientId deviceName deviceType httpsPort } }"}),
+        65536,
+    )
+    .await
+    .map_err(|error| {
+        if error.downcast_ref::<reqwest::Error>().is_some() {
+            anyhow::anyhow!("failed_connect")
+        } else {
+            anyhow::anyhow!("invalid_session")
+        }
+    })?;
+    ensure!(data["app"].is_object(), "invalid_session");
+    Ok(data["app"].clone())
 }
 
 #[cfg(test)]

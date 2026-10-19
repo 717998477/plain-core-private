@@ -57,10 +57,14 @@ pub(crate) async fn send(
         .ok_or_else(|| Failure::Fatal("Missing peer actor".into()))?;
     let cipher = plain_rs::crypto::xchacha_encrypt_raw(key, body.as_bytes())
         .ok_or_else(|| Failure::Fatal("Invalid peer encryption key".into()))?;
+    let context = plain_rs::transport::http_response::Context::new("/peer_graphql", &cipher);
     let response = state
         .lan
         .client
-        .post(peer.peer_graphql_url().ok_or_else(|| Failure::Unavailable("No peer address".into()))?)
+        .post(
+            peer.peer_graphql_url()
+                .ok_or_else(|| Failure::Unavailable("No peer address".into()))?,
+        )
         .timeout(Duration::from_secs(10))
         .header("content-type", "application/octet-stream")
         .header("c-id", actor)
@@ -73,7 +77,8 @@ pub(crate) async fn send(
     let bytes = limited(response, 4 * 1024 * 1024)
         .await
         .map_err(|e| Failure::Fatal(e.to_string()))?;
-    let plain = plain_rs::crypto::xchacha_decrypt_raw(key, &bytes)
+    let plain = context
+        .decrypt(key, &bytes)
         .ok_or_else(|| Failure::Fatal("Failed to authenticate peer response".into()))?;
     if !status.is_success() {
         return Ok(json!({"data":null,"errors":[{"message":format!("Peer HTTP {status}")}]}));

@@ -225,7 +225,12 @@ pub(crate) fn test_reply(
     value: serde_json::Value,
     key: &[u8],
 ) -> serde_json::Value {
-    let body = plain_rs::crypto::xchacha_encrypt_raw(key, value.to_string().as_bytes()).unwrap();
+    let Request::PeerGraphql { body: request, .. } = runtime.request_for_test(params) else {
+        panic!("Expected peer request")
+    };
+    let body = plain_rs::transport::http_response::Context::new("/peer_graphql", &request)
+        .encrypt(key, value.to_string().as_bytes())
+        .unwrap();
     runtime.reply_for_test(params, ble::response(200, &body).unwrap())
 }
 

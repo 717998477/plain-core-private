@@ -131,6 +131,7 @@ async fn execute(state: &ServerState, id: &str, body: &[u8]) -> (u16, Vec<u8>) {
         Some(p) if !p.is_empty() => p,
         _ => return (401, vec![]),
     };
+    let context = plain_rs::transport::http_response::Context::new("/guest_graphql", body);
     let now = chrono::Utc::now().timestamp_millis();
     let body = match state.guest_replay.admit(id, &plain, now) {
         Ok(p) => p,
@@ -153,7 +154,7 @@ async fn execute(state: &ServerState, id: &str, body: &[u8]) -> (u16, Vec<u8>) {
     let result = schema.execute(request).await;
     match serde_json::to_vec(&result)
         .ok()
-        .and_then(|p| plain_rs::crypto::xchacha_encrypt_raw(&key, &p))
+        .and_then(|p| context.encrypt(&key, &p))
     {
         Some(body) => (200, body),
         None => (500, vec![]),

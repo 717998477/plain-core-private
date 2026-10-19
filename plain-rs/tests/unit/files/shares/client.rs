@@ -68,18 +68,30 @@ fn guest_response_never_accepts_unauthenticated_data_or_invalid_file_tokens() {
     )
     .unwrap();
     let plain=json!({"data":{"sharedInfo":{"name":"share","readOnly":true,"requiresPassword":false,"expiresAt":null,"urlToken":crate::utils::base64::base64_encode(&[8;32]),"entries":[]}}}).to_string();
-    assert!(link.response(plain.as_bytes()).is_err());
+    let request = link.request(None).unwrap();
+    let context = crate::transport::http_response::Context::new("/guest_graphql", &request);
+    assert!(link.response(&request, plain.as_bytes()).is_err());
     assert_eq!(
-        link.response(&crate::xchacha_encrypt_raw(&[7; 32], plain.as_bytes()).unwrap())
-            .unwrap()
-            .name,
+        link.response(
+            &request,
+            &context.encrypt(&[7; 32], plain.as_bytes()).unwrap()
+        )
+        .unwrap()
+        .name,
         "share"
     );
     assert!(
-        link.response(&crate::xchacha_encrypt_raw(&[9; 32], plain.as_bytes()).unwrap())
-            .is_err()
+        link.response(
+            &request,
+            &context.encrypt(&[9; 32], plain.as_bytes()).unwrap()
+        )
+        .is_err()
     );
-    let errors =
-        crate::xchacha_encrypt_raw(&[7; 32], br#"{"errors":[{"message":"expired"}]}"#).unwrap();
-    assert_eq!(link.response(&errors).unwrap_err().to_string(), "expired");
+    let errors = context
+        .encrypt(&[7; 32], br#"{"errors":[{"message":"expired"}]}"#)
+        .unwrap();
+    assert_eq!(
+        link.response(&request, &errors).unwrap_err().to_string(),
+        "expired"
+    );
 }

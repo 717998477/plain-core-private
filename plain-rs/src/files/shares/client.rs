@@ -71,8 +71,9 @@ impl Link {
         crate::xchacha_encrypt_raw(&self.key()?, envelope.as_bytes())
             .ok_or_else(|| anyhow::anyhow!("Cannot encrypt shared request"))
     }
-    pub fn response(&self, bytes: &[u8]) -> Result<Info> {
-        let plain = crate::xchacha_decrypt_raw(&self.key()?, bytes)
+    pub fn response(&self, request: &[u8], bytes: &[u8]) -> Result<Info> {
+        let plain = crate::transport::http_response::Context::new("/guest_graphql", request)
+            .decrypt(&self.key()?, bytes)
             .ok_or_else(|| anyhow::anyhow!("Invalid shared response authentication"))?;
         let response: Value = serde_json::from_slice(&plain)?;
         if let Some(error) = response

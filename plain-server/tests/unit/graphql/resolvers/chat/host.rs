@@ -230,10 +230,16 @@ async fn retry_returns_pending_before_platform_transport_completes() {
         .reply(generation, json!({"id":caps["id"],"result":["BLE"]}))
         .unwrap();
     let exchange = requests.recv().await.unwrap();
-    let bytes =
-        plain_rs::crypto::xchacha_encrypt_raw(&[7; 32], br#"{"data":{"createChatItem":[]}}"#)
-            .unwrap();
-    state.host.reply(generation,json!({"id":exchange["id"],"result":state.ble_transport.reply_for_test(&exchange["params"], plain_rs::protocols::ble::response(200,&bytes).unwrap())})).unwrap();
+    let result = crate::services::discovery::ble_http::test_reply(
+        &state.ble_transport,
+        &exchange["params"],
+        json!({"data":{"createChatItem":[]}}),
+        &[7; 32],
+    );
+    state
+        .host
+        .reply(generation, json!({"id":exchange["id"],"result":result}))
+        .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             if plain_rs::db::chat_store::messages::get(&state.db, &row.id)

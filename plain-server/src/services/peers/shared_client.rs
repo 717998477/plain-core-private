@@ -107,6 +107,8 @@ fn discovery_candidates(
 }
 pub(crate) async fn fetch(state: &ServerState, link: &Link, path: Option<&str>) -> Result<Info> {
     let _permit = state.lan.capacity.clone().acquire_owned().await?;
+    let request = link.request(path)?;
+
     let response = state
         .lan
         .client
@@ -114,7 +116,7 @@ pub(crate) async fn fetch(state: &ServerState, link: &Link, path: Option<&str>) 
         .timeout(Duration::from_secs(10))
         .header("content-type", "application/octet-stream")
         .header("c-id", &link.shared_id)
-        .body(link.request(path)?)
+        .body(request.clone())
         .send()
         .await?;
     ensure!(
@@ -123,7 +125,7 @@ pub(crate) async fn fetch(state: &ServerState, link: &Link, path: Option<&str>) 
         response.status()
     );
     let bytes = crate::services::peers::peer_lan::limited(response, 4 * 1024 * 1024).await?;
-    link.response(&bytes)
+    link.response(&request, &bytes)
 }
 async fn browse_current(
     state: &ServerState,

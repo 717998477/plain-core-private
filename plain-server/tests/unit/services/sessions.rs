@@ -166,19 +166,19 @@ async fn web_login_ecdh_encrypted_response_signature_and_token_auth_survive_rest
         chrono::Utc::now().timestamp_millis(),
         uuid::Uuid::new_v4()
     );
+    let encrypted = plain_rs::crypto::xchacha_encrypt_raw(&shared, plaintext.as_bytes()).unwrap();
+    let context = plain_rs::transport::http_response::Context::new("/graphql", &encrypted);
     let response = graphql::call(
         State(state.clone()),
         headers.clone(),
-        axum::body::Bytes::from(
-            plain_rs::crypto::xchacha_encrypt_raw(&shared, plaintext.as_bytes()).unwrap(),
-        ),
+        axum::body::Bytes::from(encrypted),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    let body = plain_rs::crypto::xchacha_decrypt_raw(&shared, &body).unwrap();
+    let body = context.decrypt(&shared, &body).unwrap();
     assert!(serde_json::from_slice::<Value>(&body).unwrap()["errors"].is_null());
     headers.insert(
         "authorization",
@@ -372,7 +372,11 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
     let local = native.execute(query.into()).await;
     assert!(local.errors.is_empty(), "{:?}", local.errors);
     let local = local.data.into_json().unwrap();
-    let settings = server.native_management().unwrap().system_preferences().unwrap();
+    let settings = server
+        .native_management()
+        .unwrap()
+        .system_preferences()
+        .unwrap();
     assert_eq!(settings["password"], "secret");
     assert_eq!(settings["url_token"], "resource-token");
     assert_eq!(local["peers"][0]["key"], "peer-secret");

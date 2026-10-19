@@ -1,6 +1,6 @@
 use chacha20poly1305::{
     ChaCha20Poly1305, Nonce as ChaNonce, XChaCha20Poly1305, XNonce,
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, Payload},
 };
 
 use crate::utils::base64::base64_decode;
@@ -19,11 +19,23 @@ use crate::utils::base64::base64_decode;
 /// Encrypt `plaintext` with a raw 32-byte key using XChaCha20-Poly1305.
 /// Returns `nonce (24 bytes) || ciphertext` or `None` on failure.
 pub fn xchacha_encrypt_raw(key: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
+    xchacha_encrypt_raw_with_aad(key, plaintext, &[])
+}
+
+pub fn xchacha_encrypt_raw_with_aad(key: &[u8], plaintext: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
     let cipher = XChaCha20Poly1305::new_from_slice(key).ok()?;
     let mut nonce_bytes = [0u8; 24];
     crate::crypto::gen_random(&mut nonce_bytes);
     let nonce = XNonce::from_slice(&nonce_bytes);
-    let ciphertext = cipher.encrypt(nonce, plaintext).ok()?;
+    let ciphertext = cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .ok()?;
     let mut result = Vec::with_capacity(24 + ciphertext.len());
     result.extend_from_slice(&nonce_bytes);
     result.extend_from_slice(&ciphertext);
@@ -33,12 +45,24 @@ pub fn xchacha_encrypt_raw(key: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
 /// Decrypt `data` (`nonce (24 bytes) || ciphertext`) with a raw 32-byte key using XChaCha20-Poly1305.
 /// Returns plaintext or `None` on auth failure.
 pub fn xchacha_decrypt_raw(key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
+    xchacha_decrypt_raw_with_aad(key, data, &[])
+}
+
+pub fn xchacha_decrypt_raw_with_aad(key: &[u8], data: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
     if data.len() < 24 {
         return None;
     }
     let cipher = XChaCha20Poly1305::new_from_slice(key).ok()?;
     let nonce = XNonce::from_slice(&data[..24]);
-    cipher.decrypt(nonce, &data[24..]).ok()
+    cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: &data[24..],
+                aad,
+            },
+        )
+        .ok()
 }
 
 /// Encrypt `plaintext` using XChaCha20-Poly1305 with the key derived from a base64 token.

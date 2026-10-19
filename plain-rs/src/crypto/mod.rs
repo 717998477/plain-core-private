@@ -13,8 +13,9 @@ pub use crate::utils::base64::base64_encode;
 pub use ecdh::EcdhSession;
 pub use ed25519::{ed25519_generate, ed25519_public_from_keypair, ed25519_sign, ed25519_verify};
 pub use symmetric::{
-    chacha20_decrypt, chacha20_encrypt, xchacha_decrypt, xchacha_decrypt_raw, xchacha_encrypt,
-    xchacha_encrypt_raw,
+    chacha20_decrypt, chacha20_encrypt, xchacha_decrypt, xchacha_decrypt_raw,
+    xchacha_decrypt_raw_with_aad, xchacha_encrypt, xchacha_encrypt_raw,
+    xchacha_encrypt_raw_with_aad,
 };
 
 pub fn gen_random(buf: &mut [u8]) {

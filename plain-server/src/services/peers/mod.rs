@@ -55,7 +55,7 @@ pub(crate) mod management;
 mod management_wire;
 
 #[cfg(feature = "core")]
-mod management_http;
+pub(crate) mod management_http;
 
 #[cfg(feature = "core")]
 mod notifications;

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod http_response;
 
 pub mod contract;
 

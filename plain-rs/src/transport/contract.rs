@@ -9,7 +9,6 @@ use serde_json::json;
 
 use crate::ed25519_sign;
 use crate::utils::http_url::build_url;
-use crate::xchacha_decrypt_raw;
 use crate::xchacha_encrypt_raw;
 
 use crate::db::DPeer;
@@ -134,6 +133,7 @@ pub async fn deliver_signed<T: PeerTransport + ?Sized>(
         return Err("encrypt failed".to_string());
     };
 
+    let context = crate::transport::http_response::Context::new("/peer_graphql", &encrypted);
     let mut errors = Vec::new();
 
     for peer_graphql_url in peer_graphql_urls {
@@ -148,7 +148,7 @@ pub async fn deliver_signed<T: PeerTransport + ?Sized>(
                 continue;
             }
         };
-        let Some(decrypted) = xchacha_decrypt_raw(key, &response) else {
+        let Some(decrypted) = context.decrypt(key, &response) else {
             log::warn!("deliver_to_peer failed decrypting response from {peer_graphql_url}");
             errors.push(format!("{peer_graphql_url}: failed decrypting response"));
             continue;
@@ -276,6 +276,7 @@ pub async fn deliver_channel_system_message<T: PeerTransport>(
         return false;
     };
 
+    let context = crate::transport::http_response::Context::new("/peer_graphql", &encrypted);
     for url in peer_graphql_urls(peer) {
         let resp = transport
             .post(&url, client_id, channel_id_opt, &encrypted)
@@ -283,7 +284,7 @@ pub async fn deliver_channel_system_message<T: PeerTransport>(
         let Ok(bytes) = resp else {
             continue;
         };
-        let Some(decrypted) = xchacha_decrypt_raw(key, &bytes) else {
+        let Some(decrypted) = context.decrypt(key, &bytes) else {
             log::warn!("[channel] {} response decrypt failed from {url}", msg_type);
             continue;
         };

@@ -182,8 +182,9 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
-    let content =
-        plain_rs::crypto::xchacha_decrypt_raw(&key, &response.bytes().await.unwrap()).unwrap();
+    let content = plain_rs::transport::http_response::Context::new("/peer_graphql", &body)
+        .decrypt(&key, &response.bytes().await.unwrap())
+        .unwrap();
     let content: Value = serde_json::from_slice(&content).unwrap();
     assert!(content.get("errors").is_none(), "{content}");
     let id = content["data"]["renamed"][0]["id"].as_str().unwrap();
@@ -195,30 +196,35 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
             current.port = Some(5443);
             peers::save(&db, &[current], SaveMode::Update).unwrap();
         }
+        let body = wire(json!({"query":"mutation { startAware }"}));
         let response = client
             .post(&public_url)
             .header("c-id", "peer")
-            .body(wire(json!({"query":"mutation { startAware }"})))
+            .body(body.clone())
             .send()
             .await
             .unwrap();
         let content: Value = serde_json::from_slice(
-            &plain_rs::crypto::xchacha_decrypt_raw(&key, &response.bytes().await.unwrap()).unwrap(),
+            &plain_rs::transport::http_response::Context::new("/peer_graphql", &body)
+                .decrypt(&key, &response.bytes().await.unwrap())
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(content["data"]["startAware"], expected);
     }
+    let body =
+        wire(json!({"query":"mutation { channelSystemMessage(type:INVITE,payload:\"invalid\") }"}));
     let response = client
         .post(&public_url)
         .header("c-id", "peer")
-        .body(wire(
-            json!({"query":"mutation { channelSystemMessage(type:INVITE,payload:\"invalid\") }"}),
-        ))
+        .body(body.clone())
         .send()
         .await
         .unwrap();
     let content: Value = serde_json::from_slice(
-        &plain_rs::crypto::xchacha_decrypt_raw(&key, &response.bytes().await.unwrap()).unwrap(),
+        &plain_rs::transport::http_response::Context::new("/peer_graphql", &body)
+            .decrypt(&key, &response.bytes().await.unwrap())
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(content["data"]["channelSystemMessage"], false);
@@ -244,9 +250,20 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
     )
     .unwrap();
     let mut channel_events = server.runtime_state().events.subscribe();
-    let response = client.post(&public_url).header("c-id","peer").body(wire(json!({"query":"mutation Accept($payload:String!) { channelSystemMessage(type:INVITE_ACCEPT,payload:$payload) }","variables":{"payload":json!({"channelId":channel.id,"publicKey":plain_rs::utils::base64::base64_encode(&public_key),"name":"joined","deviceType":"PHONE"}).to_string()}}))).send().await.unwrap();
+    let body = wire(
+        json!({"query":"mutation Accept($payload:String!) { channelSystemMessage(type:INVITE_ACCEPT,payload:$payload) }","variables":{"payload":json!({"channelId":channel.id,"publicKey":plain_rs::utils::base64::base64_encode(&public_key),"name":"joined","deviceType":"PHONE"}).to_string()}}),
+    );
+    let response = client
+        .post(&public_url)
+        .header("c-id", "peer")
+        .body(body.clone())
+        .send()
+        .await
+        .unwrap();
     let content: Value = serde_json::from_slice(
-        &plain_rs::crypto::xchacha_decrypt_raw(&key, &response.bytes().await.unwrap()).unwrap(),
+        &plain_rs::transport::http_response::Context::new("/peer_graphql", &body)
+            .decrypt(&key, &response.bytes().await.unwrap())
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(content["data"]["channelSystemMessage"], true, "{content}");

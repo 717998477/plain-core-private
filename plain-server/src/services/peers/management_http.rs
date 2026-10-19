@@ -29,7 +29,7 @@ pub(crate) async fn query(
     limit: usize,
 ) -> Result<Value> {
     ensure!(
-        base.scheme() == "https" && base.host_str().is_some(),
+        matches!(base.scheme(), "https" | "http") && base.host_str().is_some(),
         "Invalid management address"
     );
     let body = format!(
@@ -40,6 +40,7 @@ pub(crate) async fn query(
     );
     let encrypted = plain_rs::crypto::xchacha_encrypt_raw(key, body.as_bytes())
         .ok_or_else(|| anyhow::anyhow!("invalid_session"))?;
+    let context = plain_rs::transport::http_response::Context::new("/graphql", &encrypted);
     let response = state
         .lan
         .client
@@ -55,7 +56,8 @@ pub(crate) async fn query(
     }
     ensure!(response.status().is_success(), "invalid_session");
     let bytes = super::peer_lan::limited(response, limit).await?;
-    let plain = plain_rs::crypto::xchacha_decrypt_raw(key, &bytes)
+    let plain = context
+        .decrypt(key, &bytes)
         .ok_or_else(|| anyhow::anyhow!("invalid_session"))?;
     let response: Value = serde_json::from_slice(&plain)?;
     if let Some(errors) = response["errors"].as_array() {
@@ -73,3 +75,7 @@ pub(crate) async fn query(
     );
     Ok(response["data"].clone())
 }
+
+#[cfg(all(test, feature = "http_transport"))]
+#[path = "../../../tests/unit/services/peers/management_http.rs"]
+mod tests;

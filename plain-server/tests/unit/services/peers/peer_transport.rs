@@ -80,11 +80,13 @@ async fn rust_falls_back_from_unavailable_socket_and_authenticates_raw_ble_busin
                         plain_rs::crypto::xchacha_decrypt_raw(&[7; 32], &body).unwrap(),
                         b"signed request"
                     );
-                    let bytes = plain_rs::crypto::xchacha_encrypt_raw(
-                        &[7; 32],
-                        br#"{"errors":[{"message":"business rejection"}]}"#,
-                    )
-                    .unwrap();
+                    let bytes =
+                        plain_rs::transport::http_response::Context::new("/peer_graphql", &body)
+                            .encrypt(
+                                &[7; 32],
+                                br#"{"errors":[{"message":"business rejection"}]}"#,
+                            )
+                            .unwrap();
                     json!({"id":request["id"],"result":ble.reply_for_test(&request["params"],plain_rs::protocols::ble::response(200,&bytes).unwrap())})
                 }
                 _ => panic!("{request}"),
