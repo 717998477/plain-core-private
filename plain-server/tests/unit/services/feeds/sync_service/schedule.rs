@@ -1,5 +1,32 @@
 use super::*;
 
+#[tokio::test]
+async fn database_contention_yields_before_waiting_for_feed_schedule_rows() {
+    use std::{future::Future, task::Poll};
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    let held = db.clone();
+    let (locked, ready) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        held.with_conn(|_| {
+            locked.send(()).unwrap();
+            let _ = released.recv_timeout(Duration::from_secs(3));
+        });
+    });
+    ready.recv().unwrap();
+    let settings = UserSettings::default();
+    let mut read = Box::pin(scheduled_feeds(db, &settings, 0));
+    let yielded =
+        std::future::poll_fn(|context| Poll::Ready(read.as_mut().poll(context).is_pending())).await;
+    let _ = release.send(());
+    holder.join().unwrap();
+    assert!(
+        yielded,
+        "Database contention must not block the async runtime"
+    );
+    assert!(read.await.unwrap().0.is_empty());
+}
+
 fn feed(last: Option<&str>) -> FeedRow {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("feeds.db")).unwrap();

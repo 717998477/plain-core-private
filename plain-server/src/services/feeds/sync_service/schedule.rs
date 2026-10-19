@@ -55,6 +55,15 @@ fn due(
     }
     Ok((ready, earliest))
 }
+async fn scheduled_feeds(
+    db: Arc<Db>,
+    settings: &UserSettings,
+    now: i64,
+) -> Result<(Vec<FeedRow>, Option<i64>)> {
+    let settings = settings.clone();
+    tokio::task::spawn_blocking(move || due(&settings, db.feeds_list()?, now)).await?
+}
+
 fn allowed(only_wifi: bool, network: NetworkType) -> bool {
     network != NetworkType::None && (!only_wifi || network == NetworkType::Wifi)
 }
@@ -67,11 +76,12 @@ async fn queue_due(
     if !settings.feed_auto_refresh {
         state.feeds.apply_auto_policy(false, false);
     }
-    let (feeds, _) = due(
+    let (feeds, _) = scheduled_feeds(
+        state.db.clone(),
         &settings,
-        state.db.feeds_list()?,
         chrono::Utc::now().timestamp_millis(),
-    )?;
+    )
+    .await?;
     if feeds.is_empty() {
         return Ok(Vec::new());
     }
@@ -277,7 +287,7 @@ async fn tick(state: &ServerState, previous_wake: &mut Option<Option<i64>>) -> R
         state.feeds.apply_auto_policy(false, false);
     }
     let now = chrono::Utc::now().timestamp_millis();
-    let (feeds, earliest) = due(&settings, state.db.feeds_list()?, now)?;
+    let (feeds, earliest) = scheduled_feeds(state.db.clone(), &settings, now).await?;
     let active_auto = state
         .feeds
         .state
