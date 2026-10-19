@@ -80,22 +80,6 @@ impl PeerRecordMutation {
         .map_err(async_graphql::Error::new)?;
         Ok(true)
     }
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn update_peer_name(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        id: async_graphql::ID,
-        name: String,
-    ) -> async_graphql::Result<bool> {
-        let db = ctx
-            .data::<crate::assembly::server::ServerState>()?
-            .db
-            .clone();
-        tokio::task::spawn_blocking(move || db.update_peer_name(&id, &name))
-            .await?
-            .map_err(async_graphql::Error::new)?;
-        Ok(true)
-    }
 }
 
 #[cfg(all(test, feature = "http_transport"))]

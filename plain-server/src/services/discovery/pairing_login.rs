@@ -69,10 +69,16 @@ pub(super) async fn run(
                     .is_some_and(|s| !matches!(s.phase.as_str(), "CANCELLED" | "FAILED")),
                 "cancelled"
             );
-            state
-                .db
-                .update_peer_name(&saved.id, text(&metadata, "deviceName")?)
-                .map_err(anyhow::Error::msg)?;
+            let name = text(&metadata, "deviceName")?;
+            let changed = state.db.with_conn(|connection| {
+                plain_rs::db::chat_store::peers::update_name(connection, &saved.id, name)
+            })?;
+            if changed > 0 {
+                let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
+                    plain_rs::chat::events::WS_PEER_UPDATED,
+                    json!({"id":saved.id}).to_string(),
+                ));
+            }
             state.pairing_runtime.attempts.transition(
                 state,
                 generation,

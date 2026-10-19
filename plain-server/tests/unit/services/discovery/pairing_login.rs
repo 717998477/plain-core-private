@@ -177,6 +177,12 @@ async fn actual_native_management_uses_encrypted_auth_and_saves_both_grants_once
             .token,
         peer.token
     );
+    state.management.shutdown().await;
+    remote_state
+        .prefs
+        .set_user(plain_rs::prefs::user::keys::DEVICE_NAME, "Reused name")
+        .unwrap();
+    let mut local_events = state.events.subscribe();
     let again = pairing_attempts::start(
         &state,
         Some(remote_id.clone()),
@@ -189,6 +195,22 @@ async fn actual_native_management_uses_encrypted_auth_and_saves_both_grants_once
     .await
     .unwrap();
     phase(&state, &again.generation, &["SUCCEEDED"]).await;
+    let refreshed = plain_rs::db::chat_store::peers::get(&state.db, &remote_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(refreshed.name, "Reused name");
+    assert_eq!(
+        (&refreshed.token, &refreshed.key, &refreshed.public_key),
+        (&peer.token, &peer.key, &peer.public_key)
+    );
+    let mut updated = false;
+    while let Ok(event) = local_events.try_recv() {
+        if event.event_type == plain_rs::chat::events::WS_PEER_UPDATED {
+            updated |= serde_json::from_str::<Value>(&event.payload).unwrap()["id"] == remote_id;
+        }
+    }
+    assert!(updated);
+
     assert_eq!(
         remote_state
             .db

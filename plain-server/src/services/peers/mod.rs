@@ -59,3 +59,6 @@ mod management_http;
 
 #[cfg(feature = "core")]
 mod notifications;
+
+#[cfg(feature = "core")]
+mod metadata;

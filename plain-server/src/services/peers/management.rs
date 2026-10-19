@@ -19,6 +19,16 @@ pub(super) struct Identity {
     pub(super) port: Option<u16>,
 }
 
+impl Identity {
+    pub(super) fn http_url(&self) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&self.url)?;
+        url.set_scheme("https")
+            .map_err(|_| anyhow!("Invalid management address"))?;
+        url.set_query(None);
+        Ok(url)
+    }
+}
+
 struct Worker {
     identity: Identity,
     cancel: watch::Sender<bool>,
@@ -301,10 +311,7 @@ async fn synchronize_clipboard(
     {
         return Ok(());
     }
-    let mut base = reqwest::Url::parse(&identity.url)?;
-    base.set_scheme("https")
-        .map_err(|_| anyhow!("Invalid management address"))?;
-    base.set_query(None);
+    let base = identity.http_url()?;
     let data = super::management_http::query(
         state,
         &base,
@@ -392,6 +399,43 @@ fn next_delay(delay: Duration) -> Duration {
     (delay * 2).min(Duration::from_secs(30))
 }
 
+pub(super) async fn refresh_data(
+    state: &ServerState,
+    id: &str,
+    identity: &Identity,
+    cancelled: &watch::Receiver<bool>,
+) -> Result<()> {
+    let app = match super::metadata::refresh(state, id, identity, cancelled).await {
+        Ok(Some(app)) => Ok(app),
+        Ok(None) => return Ok(()),
+        Err(error) => Err(error),
+    };
+    super::notifications::refresh_from_app(state, id, identity, cancelled, app).await
+}
+
+async fn follow_data(
+    state: &ServerState,
+    id: &str,
+    identity: &Identity,
+    cancelled: &watch::Receiver<bool>,
+    changed: &tokio::sync::Notify,
+) {
+    let mut interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(60),
+        Duration::from_secs(60),
+    );
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        if let Err(error) = refresh_data(state, id, identity, cancelled).await {
+            log::debug!("Peer data refresh failed: {error}");
+        }
+        tokio::select! {
+            _ = interval.tick() => {},
+            _ = changed.notified() => {},
+        }
+    }
+}
+
 async fn run(
     state: ServerState,
     id: String,
@@ -405,7 +449,7 @@ async fn run(
         biased;
         _ = stop.wait_for(|stopped| *stopped) => {},
         _ = cancelled.wait_for(|cancelled| *cancelled) => {},
-        _ = super::notifications::follow(&state, &id, &identity, &publication_cancelled, &changed) => {},
+        _ = follow_data(&state, &id, &identity, &publication_cancelled, &changed) => {},
         _ = connection_loop(state.clone(), id.clone(), identity.clone(), publication_cancelled.clone(), &changed) => {},
     }
 }
@@ -415,7 +459,7 @@ async fn connection_loop(
     id: String,
     identity: Identity,
     mut cancelled: watch::Receiver<bool>,
-    notifications_changed: &tokio::sync::Notify,
+    data_changed: &tokio::sync::Notify,
 ) {
     let key = plain_rs::utils::base64::base64_decode(&identity.token);
     let mut stop = state.stop.clone();
@@ -465,7 +509,7 @@ async fn connection_loop(
                                         }
                                         changed.notify_one();
                                     } else {
-                                        notifications_changed.notify_one();
+                                        data_changed.notify_one();
                                     }
                                     delay = Duration::from_secs(1);
                                 }

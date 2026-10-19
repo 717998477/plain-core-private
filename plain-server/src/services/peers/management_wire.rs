@@ -16,6 +16,7 @@ pub(super) fn event(frame: &[u8], key: &[u8]) -> Result<Option<(String, Value)>>
             | "NOTIFICATION_DELETED"
             | "NOTIFICATION_REFRESHED"
             | "PERMISSIONS_UPDATED"
+            | "DEVICE_NAME_UPDATED"
             | "CLIPBOARD_CHANGED"
     ) {
         return Ok(None);

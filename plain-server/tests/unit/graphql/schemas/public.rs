@@ -39,6 +39,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
     assert!(!sdl.contains("includeTrashed"));
     assert!(!sdl.contains("embeddedAudioLyrics"));
     for removed in [
+        "updatePeerName(",
         "sharedLinkInfo(",
         "sharedFileUrl(",
         "closeAllWebSocketSessions:",

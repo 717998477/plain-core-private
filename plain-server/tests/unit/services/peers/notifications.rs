@@ -1,5 +1,9 @@
+use super::super::management::refresh_data as refresh;
+use super::super::metadata::AppSnapshot as App;
 use super::*;
 use crate::graphql::types::Instant;
+use std::time::Duration;
+use tokio::sync::Notify;
 
 fn fixture() -> (
     Store,
@@ -50,6 +54,7 @@ fn notification(id: &str) -> Notification {
 fn observation(items: Vec<Notification>) -> Result<(App, Vec<Notification>, reqwest::Url)> {
     Ok((
         App {
+            device_name: "Fixture".into(),
             capabilities: vec!["NOTIFICATIONS".into()],
             permissions: vec!["NOTIFICATION_LISTENER".into()],
             url_token: plain_rs::utils::base64::base64_encode(&[9; 32]),
@@ -60,7 +65,12 @@ fn observation(items: Vec<Notification>) -> Result<(App, Vec<Notification>, reqw
 }
 
 fn event(receiver: &mut broadcast::Receiver<WsEvent>) -> serde_json::Value {
-    serde_json::from_str(&receiver.try_recv().unwrap().payload).unwrap()
+    loop {
+        let event = receiver.try_recv().unwrap();
+        if event.event_type == plain_rs::events::PEER_NOTIFICATIONS_UPDATED {
+            return serde_json::from_str(&event.payload).unwrap();
+        }
+    }
 }
 
 #[test]
@@ -389,6 +399,13 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     let remote_state = remote.runtime_state();
     remote_state
         .prefs
+        .set_user(
+            plain_rs::prefs::user::keys::DEVICE_NAME,
+            "Authenticated peer",
+        )
+        .unwrap();
+    remote_state
+        .prefs
         .set("api_permissions", json!(["NOTIFICATION_LISTENER"]))
         .unwrap();
     let session = remote
@@ -495,6 +512,10 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     tokio::time::timeout(Duration::from_secs(10), requested.notified())
         .await
         .unwrap();
+    assert_eq!(
+        peers::get(&state.db, &peer.id).unwrap().unwrap().name,
+        "Authenticated peer"
+    );
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if remote_events.recv().await.unwrap().event_type == "WEB_SOCKET_REGISTERED" {
@@ -504,6 +525,13 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     })
     .await
     .unwrap();
+    remote_state
+        .events
+        .send(WsEvent::broadcast(
+            "DEVICE_NAME_UPDATED",
+            json!("Injected name").to_string(),
+        ))
+        .unwrap();
     remote_state
         .events
         .send(WsEvent::broadcast(
@@ -553,6 +581,10 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     assert_eq!(baseline["group"]["items"][0]["id"], "old");
     assert!(baseline["alerts"].as_array().unwrap().is_empty());
     state.management.shutdown().await;
+    assert_eq!(
+        peers::get(&state.db, &peer.id).unwrap().unwrap().name,
+        "Authenticated peer"
+    );
     let identity = Identity {
         url: format!("wss://127.0.0.1:{port}/?cid={}", session.client_id),
         token: peer.token.clone(),

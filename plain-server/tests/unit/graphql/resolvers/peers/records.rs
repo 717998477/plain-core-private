@@ -81,7 +81,7 @@ async fn native_main_record_queries_preserve_addresses_keys_members_and_checked_
 }
 
 #[tokio::test]
-async fn main_login_logout_and_rename_preserve_pairing_and_live_proxy_addresses() {
+async fn main_login_and_logout_preserve_pairing_and_live_proxy_addresses() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
@@ -109,17 +109,6 @@ async fn main_login_logout_and_rename_preserve_pairing_and_live_proxy_addresses(
     let value = response.data.into_json().unwrap();
     assert_eq!(value["peers"][0]["port"], 9443);
     assert_eq!(value["peers"][0]["token"], "session");
-    let response = executor
-        .execute(async_graphql::Request::new(
-            r#"mutation{updatePeerName(id:"peer-a",name:"Renamed peer")}"#,
-        ))
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let response = executor.execute(async_graphql::Request::new(query)).await;
-    assert_eq!(
-        response.data.into_json().unwrap()["peers"][0]["name"],
-        "Renamed peer"
-    );
     let response = executor
         .execute(async_graphql::Request::new(
             r#"mutation{logoutPeer(id:"peer-a")}"#,
@@ -179,7 +168,6 @@ async fn remote_requests_cannot_access_or_change_local_login_sessions() {
         "{peers{token}}",
         r#"mutation{pairDevice(input:{host:"127.0.0.1:9443",mode:MANAGE}){generation}}"#,
         r#"mutation{logoutPeer(id:"remote")}"#,
-        r#"mutation{updatePeerName(id:"remote",name:"changed")}"#,
     ] {
         let response = crate::graphql::executor::execute_graphql(
             &state.public,
@@ -193,5 +181,30 @@ async fn remote_requests_cannot_access_or_change_local_login_sessions() {
     let rows = plain_rs::db::chat_store::peers::all(&state.db).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].token, "unchanged-token");
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn retired_client_name_mirroring_is_not_available_through_any_main_transport() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let document = r#"mutation{updatePeerName(id:"peer",name:"untrusted")}"#;
+    let native = core
+        .native_graphql()
+        .unwrap()
+        .execute(async_graphql::Request::new(document))
+        .await;
+    let remote = crate::graphql::executor::execute_graphql(
+        &state.public,
+        async_graphql::Request::new(document),
+        crate::graphql::executor::RequestContext::remote(Some(state.clone())),
+    )
+    .await;
+    for response in [native, remote] {
+        assert_eq!(response.errors.len(), 1);
+        assert!(response.errors[0].message.contains("Unknown field"));
+        assert!(response.errors[0].message.contains("updatePeerName"));
+    }
     core.stop_core().await;
 }

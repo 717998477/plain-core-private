@@ -1,17 +1,17 @@
 use super::management::{Identity, current_peer};
+use super::metadata::AppSnapshot;
 use crate::{
     assembly::server::ServerState, graphql::resolvers::notifications::types::Notification,
 };
 use anyhow::{Result, ensure};
 use plain_rs::{chat::enums::DeviceType, db::DPeer, events::WsEvent};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     sync::Mutex,
-    time::Duration,
 };
-use tokio::sync::{Notify, broadcast, watch};
+use tokio::sync::{broadcast, watch};
 
 const LIMIT: usize = 200;
 
@@ -54,24 +54,14 @@ struct State {
 #[derive(Default)]
 pub(crate) struct Store(Mutex<State>);
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct App {
-    capabilities: Vec<String>,
-    permissions: Vec<String>,
-    url_token: String,
-}
-
-impl App {
-    fn allowed(&self) -> bool {
-        self.capabilities
+fn allowed(app: &AppSnapshot) -> bool {
+    app.capabilities
+        .iter()
+        .any(|value| value == "NOTIFICATIONS")
+        && app
+            .permissions
             .iter()
-            .any(|value| value == "NOTIFICATIONS")
-            && self
-                .permissions
-                .iter()
-                .any(|value| value == "NOTIFICATION_LISTENER")
-    }
+            .any(|value| value == "NOTIFICATION_LISTENER")
 }
 
 impl State {
@@ -177,7 +167,7 @@ impl Store {
         &self,
         id: &str,
         identity: &Identity,
-        result: Result<(App, Vec<Notification>, reqwest::Url)>,
+        result: Result<(AppSnapshot, Vec<Notification>, reqwest::Url)>,
         events: &broadcast::Sender<WsEvent>,
     ) -> Result<()> {
         let mut state = self.0.lock().unwrap();
@@ -193,13 +183,13 @@ impl Store {
         match result {
             Ok((app, items, base)) => {
                 validate_snapshot(&app, &items)?;
-                let allowed = app.allowed();
+                let is_allowed = allowed(&app);
                 if peer.url_token != app.url_token {
                     peer.icons.clear();
                     peer.url_token = app.url_token;
                 }
                 let mut projected = Vec::with_capacity(items.len());
-                if allowed {
+                if is_allowed {
                     let previous: HashSet<_> = peer
                         .group
                         .items
@@ -231,7 +221,7 @@ impl Store {
                         projected.push(item);
                     }
                 }
-                peer.baseline = allowed;
+                peer.baseline = is_allowed;
                 peer.group.items = projected;
                 peer.group.capabilities = Some(app.capabilities);
                 peer.group.permissions = app.permissions;
@@ -275,7 +265,7 @@ impl Store {
     }
 }
 
-fn validate_snapshot(app: &App, items: &[Notification]) -> Result<()> {
+fn validate_snapshot(app: &AppSnapshot, items: &[Notification]) -> Result<()> {
     ensure!(items.len() <= LIMIT, "Invalid notification snapshot");
     let mut ids = HashSet::new();
     ensure!(
@@ -285,7 +275,7 @@ fn validate_snapshot(app: &App, items: &[Notification]) -> Result<()> {
         "Invalid notification identities"
     );
     ensure!(
-        !app.allowed()
+        !allowed(app)
             || items.is_empty()
             || plain_rs::utils::base64::base64_decode(&app.url_token).len() == 32,
         "Invalid notification icon key"
@@ -293,26 +283,22 @@ fn validate_snapshot(app: &App, items: &[Notification]) -> Result<()> {
     Ok(())
 }
 
-async fn refresh(
+pub(super) async fn refresh_from_app(
     state: &ServerState,
     id: &str,
     identity: &Identity,
     cancelled: &watch::Receiver<bool>,
+    app: Result<AppSnapshot>,
 ) -> Result<()> {
     if !current_peer(state, id, identity, cancelled).await? {
         return Ok(());
     }
-    let mut base = reqwest::Url::parse(&identity.url)?;
-    base.set_scheme("https")
-        .map_err(|_| anyhow::anyhow!("Invalid management address"))?;
-    base.set_query(None);
+    let base = identity.http_url()?;
     let client_id = state.native_client_id().map_err(anyhow::Error::msg)?;
     let key = plain_rs::utils::base64::base64_decode(&identity.token);
     let result = async {
-        let data = super::management_http::query(state, &base, &client_id, &key,
-            json!({"query":"{ app { capabilities permissions urlToken } }"}), 256 * 1024).await?;
-        let app: App = serde_json::from_value(data["app"].clone())?;
-        let items: Vec<Notification> = if app.allowed() {
+        let app = app?;
+        let items: Vec<Notification> = if allowed(&app) {
             let data = super::management_http::query(state, &base, &client_id, &key,
                 json!({"query":"{ notifications(query:\"\",offset:0,limit:200) { id onlyOnce isClearable appId appName postedAt silent title body actions replyActions } }"}), 4 * 1024 * 1024).await?;
             serde_json::from_value(data["notifications"].clone())?
@@ -336,29 +322,6 @@ async fn refresh(
         })
     })
     .await?
-}
-
-pub(super) async fn follow(
-    state: &ServerState,
-    id: &str,
-    identity: &Identity,
-    cancelled: &watch::Receiver<bool>,
-    changed: &Notify,
-) {
-    let mut interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + Duration::from_secs(60),
-        Duration::from_secs(60),
-    );
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        if let Err(error) = refresh(state, id, identity, cancelled).await {
-            log::debug!("Peer notification sync failed: {error}");
-        }
-        tokio::select! {
-            _ = interval.tick() => {},
-            _ = changed.notified() => {},
-        }
-    }
 }
 
 #[cfg(test)]

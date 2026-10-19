@@ -21,6 +21,7 @@ fn authenticated_notification_events_are_hints_and_clipboard_payloads_keep_the_e
         "NOTIFICATION_DELETED",
         "NOTIFICATION_REFRESHED",
         "PERMISSIONS_UPDATED",
+        "DEVICE_NAME_UPDATED",
         "CLIPBOARD_CHANGED",
     ] {
         let data = serde_json::json!({"id":"fixture","text":"text","sensitive":false});

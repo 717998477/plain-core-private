@@ -158,7 +158,10 @@ fn update_peer_name_renames_only() {
     )
     .expect("login peer");
 
-    db.update_peer_name("p1", "new-name").unwrap();
+    db.with_conn(|connection| {
+        crate::db::chat_store::peers::update_name(connection, "p1", "new-name")
+    })
+    .unwrap();
 
     let peer = db.get_peer_by_id("p1").expect("peer exists");
     assert_eq!(peer.name, "new-name");

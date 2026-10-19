@@ -148,17 +148,6 @@ impl Db {
         Ok(())
     }
 
-    pub fn update_peer_name(&self, id: &str, name: &str) -> Result<(), String> {
-        let now = now_iso();
-        let conn = self.0.lock().unwrap();
-        conn.execute(
-            "UPDATE peers SET name=?1, updated_at=?2 WHERE id=?3",
-            params![name, now, id],
-        )
-        .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
     /// Peers with an active login token (the device-switcher list).
     pub fn get_login_peers(&self) -> Vec<DPeer> {
         let conn = self.0.lock().unwrap();
