@@ -78,17 +78,92 @@ async fn phase(
 async fn confirmation(
     events: &mut tokio::sync::broadcast::Receiver<plain_rs::events::WsEvent>,
 ) -> String {
+    confirmation_request(events).await["requestId"]
+        .as_str()
+        .unwrap()
+        .into()
+}
+
+#[cfg(feature = "http_transport")]
+async fn confirmation_request(
+    events: &mut tokio::sync::broadcast::Receiver<plain_rs::events::WsEvent>,
+) -> Value {
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let event = events.recv().await.unwrap();
             if event.event_type == "WEB_LOGIN_REQUESTED" {
                 let value: Value = serde_json::from_str(&event.payload).unwrap();
-                return value["requestId"].as_str().unwrap().into();
+                return value;
             }
         }
     })
     .await
     .unwrap()
+}
+
+#[cfg(feature = "http_transport")]
+#[tokio::test]
+async fn passwordless_native_management_displays_the_same_code_and_commits_only_after_approval() {
+    let (_local_dir, local, _) = server().await;
+    let (_remote_dir, remote, port) = server().await;
+    let state = local.runtime_state();
+    let remote_state = remote.runtime_state();
+    remote_state.prefs.set("password_type", 2_i32).unwrap();
+    remote_state.prefs.set("auth_two_factor", false).unwrap();
+    let mut events = remote_state.events.subscribe();
+    let remote_id = remote_state.native_client_id().unwrap();
+    let local_id = state.native_client_id().unwrap();
+    let started = pairing_attempts::start(
+        &state,
+        Some(remote_id.clone()),
+        Some(format!("127.0.0.1:{port}")),
+        Some(pairing_attempts::Mode::Manage),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let request = confirmation_request(&mut events).await;
+    let waiting = phase(&state, &started.generation, &["WAITING_CONFIRMATION"]).await;
+    assert_eq!(
+        waiting.verification_code.as_deref(),
+        request["request"]["verificationCode"].as_str()
+    );
+    assert_eq!(waiting.verification_code.unwrap().len(), 35);
+    assert!(remote_state.db.session_get(&local_id).unwrap().is_none());
+    assert!(
+        plain_rs::db::chat_store::peers::all(&state.db)
+            .unwrap()
+            .is_empty()
+    );
+    remote
+        .native_management()
+        .unwrap()
+        .confirm_web_login(request["requestId"].as_str().unwrap().into(), true)
+        .await
+        .unwrap();
+    phase(&state, &started.generation, &["SUCCEEDED"]).await;
+    let peer = plain_rs::db::chat_store::peers::get(&state.db, &remote_id)
+        .unwrap()
+        .unwrap();
+    let paired = plain_rs::db::chat_store::peers::get(&remote_state.db, &local_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(peer.key, paired.key);
+    assert_eq!(
+        peer.token,
+        remote_state
+            .db
+            .session_get(&local_id)
+            .unwrap()
+            .unwrap()
+            .token
+    );
+    assert_eq!(base64_decode(&peer.key).len(), 32);
+    assert_ne!(peer.key, peer.token);
+    local.shutdown().await;
+    remote.shutdown().await;
 }
 
 #[cfg(feature = "http_transport")]

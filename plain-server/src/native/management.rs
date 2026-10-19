@@ -1,6 +1,6 @@
 use crate::assembly::server::ServerState;
 use plain_rs::events::WsEvent;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub use crate::services::http_server::HttpServerState;
@@ -12,6 +12,26 @@ pub use crate::services::settings::updates::AppUpdateStatus;
 pub struct NativeSession {
     pub client_id: String,
     pub token: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeWebLoginRequest {
+    pub request_id: String,
+    pub client_id: String,
+    pub client_ip: String,
+    pub browser_name: String,
+    pub browser_version: String,
+    pub os_name: String,
+    pub os_version: String,
+    pub verification_code: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeWebLoginRequests {
+    pub requests: Vec<NativeWebLoginRequest>,
+    pub next_after: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -138,6 +158,19 @@ impl NativeManagement {
             .decide(&request_id, allowed)
             .await?;
         Ok(true)
+    }
+
+    pub fn web_login_requests(
+        &self,
+        after: Option<String>,
+    ) -> Result<NativeWebLoginRequests, String> {
+        self.state.native_client_id()?;
+        Ok(self
+            .state
+            .login_attempts
+            .lock()
+            .map_err(|_| "Login state unavailable")?
+            .pending_requests(after.as_deref()))
     }
 
     pub async fn stage_app_restore(&self, path: String) -> Result<bool, String> {

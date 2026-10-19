@@ -28,6 +28,12 @@ struct Connection {
     closing: tokio::sync::watch::Sender<Option<(u16, &'static str)>>,
 }
 impl Runtime {
+    pub(crate) fn login_pending(&self, request_id: &str) -> bool {
+        self.connections.lock().unwrap().values().any(|connection| {
+            connection.pending.as_deref() == Some(request_id)
+                && connection.closing.borrow().is_none()
+        })
+    }
     pub(crate) fn snapshot(&self) -> Vec<String> {
         let mut ids: Vec<_> = self
             .connections
@@ -68,9 +74,12 @@ impl Runtime {
             .connections
             .lock()
             .unwrap()
-            .values()
+            .values_mut()
             .find(|c| c.pending.as_deref() == Some(request_id))
-            .map(|c| c.outgoing.clone());
+            .map(|c| {
+                c.pending = None;
+                c.outgoing.clone()
+            });
         if let Some(outgoing) = outgoing {
             tokio::time::timeout(
                 Duration::from_secs(2),
@@ -84,6 +93,9 @@ impl Runtime {
         Ok(())
     }
     pub(crate) fn reject(&self, request_id: &str) {
+        self.fail_login(request_id, "rejected");
+    }
+    pub(crate) fn fail_login(&self, request_id: &str, reason: &'static str) {
         if let Some(c) = self
             .connections
             .lock()
@@ -91,7 +103,7 @@ impl Runtime {
             .values()
             .find(|c| c.pending.as_deref() == Some(request_id))
         {
-            let _ = c.closing.send(Some((1013, "rejected")));
+            let _ = c.closing.send(Some((1013, reason)));
         }
     }
 }
@@ -157,22 +169,64 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
     let mut stream = None;
     let mut receiver = state.events.subscribe();
     let mut pending: Option<String> = None;
+    let mut temporary_channel = None;
+    let mut temporary_started = false;
+    let mut temporary_submitted = false;
+    let deadline = tokio::time::sleep(Duration::from_secs(300));
+    tokio::pin!(deadline);
     loop {
         let message = tokio::select! {
             _ = state.stop.changed() => break,
+            _ = &mut deadline, if matches!(params.auth.as_deref(), Some("1" | "2")) => { let _ = socket.send(close(1008, "login_expired")).await; break; },
             _ = closed.changed() => { let (code, reason) = (*closed.borrow()).unwrap_or((1000, "")); let _ = socket.send(close(code, reason)).await; break; },
             message = outgoing.recv() => match message { Some(message) => message, None => break },
             incoming = socket.next() => {
                 let frame = match incoming {
                     Some(Ok(Message::Binary(frame))) => frame,
                     Some(Ok(Message::Ping(bytes))) => { if socket.send(Message::Pong(bytes)).await.is_err() { break; } continue; },
+                    Some(Ok(Message::Text(text))) if params.auth.as_deref() == Some("2") => {
+                        if temporary_started || text.len() > 4096 || state.prefs.get_or(plain_rs::prefs::system::keys::PASSWORD_TYPE, 2_i32) != 2 {
+                            let _ = socket.send(close(1008, "invalid_login_request")).await;
+                            break;
+                        }
+                        temporary_started = true;
+                        let hello = (|| -> anyhow::Result<_> {
+                            anyhow::ensure!(enabled(&state), "desktop_access_disabled");
+                            crate::http::auth::ws_login::admit_attempt(&state, &params.cid, &ip)?;
+                            let request = serde_json::from_str::<crate::http::auth::login_channel::ClientHello>(&text)?;
+                            let device_id = state.prefs.get_or(plain_rs::prefs::system::keys::CLIENT_ID, String::new());
+                            let signing = crate::services::peers::peer_wire::signing_keypair(&state.prefs)?;
+                            crate::http::auth::login_channel::Channel::accept(&params.cid, &device_id, &request, &signing, chrono::Utc::now().timestamp_millis() as u64)
+                        })();
+                        let (channel, response) = match hello {
+                            Ok(value) => value,
+                            Err(error) => {
+                                let reason = if error.to_string() == "too_many_login_attempts" { "too_many_login_attempts" } else { "invalid_login_request" };
+                                let _ = socket.send(close(1008, reason)).await;
+                                break;
+                            }
+                        };
+                        temporary_channel = Some(channel);
+                        if socket.send(Message::Text(serde_json::to_string(&response).unwrap())).await.is_err() { break; }
+                        continue;
+                    }
                     Some(Ok(Message::Text(_) | Message::Pong(_))) => continue,
                     _ => break,
                 };
                 if !enabled(&state) { let _ = socket.send(close(1008,"desktop_access_disabled")).await; break; }
-                if params.auth.as_deref() == Some("1") {
+                if matches!(params.auth.as_deref(), Some("1" | "2")) {
                     if let Some(request_id) = pending.take() { let _ = crate::http::auth::ws_login::execute(&state, crate::http::auth::ws_login::Request::Cancel { request_id }).await; }
-                    match crate::http::auth::ws_login::execute(&state, crate::http::auth::ws_login::Request::Issue { client_id: params.cid.clone(), client_ip: ip.clone(), frame: plain_rs::utils::base64::base64_encode(&frame) }).await {
+                    let request = if params.auth.as_deref() == Some("2") {
+                        let Some(channel) = temporary_channel.take().filter(|_| !temporary_submitted) else {
+                            let _ = socket.send(close(1008, "invalid_login_request")).await;
+                            break;
+                        };
+                        temporary_submitted = true;
+                        crate::http::auth::ws_login::Request::IssueTemporary { client_id: params.cid.clone(), client_ip: ip.clone(), frame: plain_rs::utils::base64::base64_encode(&frame), channel }
+                    } else {
+                        crate::http::auth::ws_login::Request::Issue { client_id: params.cid.clone(), client_ip: ip.clone(), frame: plain_rs::utils::base64::base64_encode(&frame) }
+                    };
+                    match crate::http::auth::ws_login::execute(&state, request).await {
                         Ok(result) => {
                             if socket.send(Message::Binary(plain_rs::utils::base64::base64_decode(result["frame"].as_str().unwrap_or_default()))).await.is_err() { break; }
                             if result["status"] == "PENDING" {
@@ -188,7 +242,7 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                             continue;
                         },
                         Err(error) => {
-                            let reason = if error.to_string() == "too_many_login_attempts" { "too_many_login_attempts" } else { "invalid_password" };
+                            let reason = match error.to_string().as_str() { "too_many_login_attempts" => "too_many_login_attempts", "desktop_access_disabled" => "desktop_access_disabled", "login_expired" => "login_expired", _ if params.auth.as_deref() == Some("2") => "invalid_login_request", _ => "invalid_password" };
                             let _ = socket.send(close(1013,reason)).await;
                             break;
                         }

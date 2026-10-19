@@ -83,6 +83,7 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
     prefs.set_user("desktop_access", true).unwrap();
     prefs.set("auth_two_factor", true).unwrap();
     prefs.set("password", "secret").unwrap();
+    prefs.set("password_type", 1_i32).unwrap();
     prefs.set("client_id", "phone").unwrap();
     let (private, _) = plain_rs::crypto::ed25519_generate();
     prefs

@@ -16,6 +16,7 @@ fn fixture() -> (tempfile::TempDir, ContentServer) {
     prefs.set_user("desktop_access", true).unwrap();
     prefs.set("auth_two_factor", false).unwrap();
     prefs.set("password", "secret").unwrap();
+    prefs.set("password_type", 1_i32).unwrap();
     prefs.set("client_id", "phone").unwrap();
     let (private, _public) = plain_rs::crypto::ed25519_generate();
     prefs
@@ -270,7 +271,7 @@ async fn malformed_encrypted_frames_consume_the_same_rust_login_limiter() {
 }
 
 #[tokio::test]
-async fn login_pairing_and_password_initialization_use_rust_state_only() {
+async fn login_pairing_and_init_preserve_rust_state_without_revealing_passwords() {
     let (_dir, server) = fixture();
     let state = server.runtime_state();
     let client = plain_rs::crypto::EcdhSession::generate();
@@ -322,8 +323,11 @@ async fn login_pairing_and_password_initialization_use_rust_state_only() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(response["password"], "");
+    assert!(response.get("password").is_none());
+    assert_eq!(response["authenticated"], true);
+    assert_eq!(response["passwordRequired"], true);
     assert!(!response["signaturePublicKey"].as_str().unwrap().is_empty());
+    state.prefs.set("password_type", 2_i32).unwrap();
     let response = graphql::init(
         State(state.clone()),
         axum::extract::ConnectInfo("127.0.0.1:1".parse().unwrap()),
@@ -337,11 +341,10 @@ async fn login_pairing_and_password_initialization_use_rust_state_only() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(response["password"].as_str().unwrap().len(), 6);
-    assert_eq!(
-        state.prefs.get_or("password", String::new()),
-        response["password"]
-    );
+    assert!(response.get("password").is_none());
+    assert_eq!(response["authenticated"], false);
+    assert_eq!(response["passwordRequired"], false);
+    assert_eq!(state.prefs.get_or("password", String::new()), "secret");
 }
 
 #[tokio::test]

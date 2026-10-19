@@ -21,6 +21,10 @@ pub fn run() -> Result<()> {
             keep_data,
         } => crate::cli::uninstall::run(&paths, keep_config, keep_data),
         crate::cli::Cmd::Passwd { stdin } => crate::cli::passwd::run(&paths, stdin),
+        crate::cli::Cmd::Login { command } => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(crate::cli::login::run(&paths, command)),
         crate::cli::Cmd::Update => crate::cli::update::run(&paths),
         crate::cli::Cmd::Bench => crate::cli::bench::run(&paths),
         crate::cli::Cmd::Run {

@@ -31,6 +31,7 @@ type PairingState {
 	mode: PairingMode!
 	phase: String!
 	error: String
+	verificationCode: String
 }
 
 input PeerRecordInput {

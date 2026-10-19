@@ -25,6 +25,8 @@ pub(crate) struct State {
     pub mode: Mode,
     pub phase: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub verification_code: Option<String>,
 }
 impl State {
     pub(crate) fn terminal(&self) -> bool {
@@ -103,6 +105,7 @@ impl Attempts {
             mode,
             phase: "STARTING".into(),
             error: None,
+            verification_code: None,
         };
         let (cancel, stopped) = watch::channel(false);
         let (password, passwords) = mpsc::channel(1);
@@ -125,6 +128,20 @@ impl Attempts {
             );
         }
         Ok((state, stopped, passwords))
+    }
+    pub(crate) fn set_verification_code(&self, state: &ServerState, generation: &str, code: &str) {
+        let mut attempts = self.0.lock().unwrap();
+        if let Some(attempt) = attempts
+            .get_mut(generation)
+            .filter(|attempt| !attempt.state.terminal())
+        {
+            attempt.state.verification_code = Some(code.into());
+            event(
+                state,
+                "PAIRING_STATE_CHANGED",
+                serde_json::to_value(&attempt.state).unwrap(),
+            );
+        }
     }
     pub(crate) fn transition(
         &self,

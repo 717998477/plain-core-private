@@ -5,5 +5,8 @@ pub mod mountinfo;
 #[cfg(all(feature = "unix-platform", unix))]
 pub mod unix;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod local_socket;
+
 #[cfg(all(target_os = "android", feature = "library"))]
 pub mod android;

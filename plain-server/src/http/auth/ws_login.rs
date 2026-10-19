@@ -1,10 +1,3 @@
-//! Web-login token issuance for the main web UI.
-//!
-//! The session token is the key to `/upload`, `/zip`, the token-mode
-//! `/graphql` and the WS session frames, so it must have exactly one issuer.
-//! Rust owns it: the `sessions` row is the single source of truth, and the
-//! host only performs UI confirmation, notifications and socket delivery.
-
 use crate::assembly::server::ServerState;
 use plain_rs::db::SessionRow;
 use serde_json::{Value, json};
@@ -18,20 +11,35 @@ const LOGIN_ATTEMPT_LIMIT: usize = 5;
 const LOGIN_ATTEMPT_WINDOW: Duration = Duration::from_secs(60);
 const MAX_TRACKED_CLIENTS: usize = 256;
 
-/// The key uses the first 32 ASCII bytes of the full SHA-512 hex digest.
 fn hash_to_token(hash: &str) -> Vec<u8> {
     hash.as_bytes().iter().copied().take(32).collect()
 }
 
-/// The full SHA-512 hex digest — this is what the client sends and what
-/// plain-app compares against. The 32-byte ChaCha20 key is a *separate*
-/// truncation of the same hex string, so the two must never be conflated.
 fn password_digest(prefs: &plain_rs::prefs::Prefs) -> String {
     let password = prefs
         .get::<String>(plain_rs::prefs::system::keys::PASSWORD)
         .unwrap_or_default()
         .unwrap_or_default();
     plain_rs::utils::hex::bytes_to_hex(&Sha512::digest(password.as_bytes()))
+}
+
+pub(crate) fn admit_attempt(
+    state: &ServerState,
+    client_id: &str,
+    client_ip: &str,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!client_id.is_empty(), "Client id is required");
+    let allowed = state
+        .login_attempts
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Login state unavailable"))?
+        .acquire(&if client_ip.is_empty() {
+            format!("cid:{client_id}")
+        } else {
+            client_ip.into()
+        });
+    anyhow::ensure!(allowed, "too_many_login_attempts");
+    Ok(())
 }
 
 fn now_ms() -> u64 {
@@ -48,8 +56,6 @@ pub(crate) struct LoginAttempts {
 }
 
 impl LoginAttempts {
-    /// Sliding-window limiter so a wrong password cannot be brute forced from
-    /// one address; keyed by client IP, falling back to the client id.
     fn acquire(&mut self, key: &str) -> bool {
         let now = Instant::now();
         if self.entries.len() > MAX_TRACKED_CLIENTS {
@@ -68,17 +74,106 @@ impl LoginAttempts {
     }
 }
 
-#[derive(Clone)]
 struct Pending {
     client_id: String,
     client_ip: String,
     request: Value,
     at: Instant,
+    protection: Protection,
+}
+
+enum Protection {
+    Password(String),
+    Temporary(super::login_channel::Channel),
+}
+
+impl Protection {
+    fn validate(&self, state: &ServerState, request: &Value) -> anyhow::Result<()> {
+        let password_type = state
+            .prefs
+            .get_or(plain_rs::prefs::system::keys::PASSWORD_TYPE, 2_i32);
+        match self {
+            Self::Password(digest) => anyhow::ensure!(
+                password_type == 1
+                    && *digest == password_digest(&state.prefs)
+                    && text(request, "password") == *digest,
+                "invalid_password"
+            ),
+            Self::Temporary(channel) => {
+                anyhow::ensure!(
+                    password_type == 2 && request.get("password").is_none(),
+                    "invalid_login_request"
+                );
+                anyhow::ensure!(
+                    text(request, "loginContext") == channel.context,
+                    "invalid_login_request"
+                );
+                channel.fresh(now_ms())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn encrypt_response(&self, bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+        match self {
+            Self::Password(digest) => {
+                plain_rs::crypto::xchacha_encrypt_raw(&hash_to_token(digest), bytes)
+                    .ok_or_else(|| anyhow::anyhow!("Response encryption failed"))
+            }
+            Self::Temporary(channel) => channel.encrypt_response(bytes, now_ms()),
+        }
+    }
 }
 
 impl LoginAttempts {
-    pub(crate) fn cancel_client(&mut self, client_id: &str) {
+    pub(crate) fn pending_requests(
+        &self,
+        after: Option<&str>,
+    ) -> crate::native::management::NativeWebLoginRequests {
+        use crate::native::management::{NativeWebLoginRequest, NativeWebLoginRequests};
+        let mut entries = self
+            .pending
+            .iter()
+            .filter(|(id, request)| {
+                after.is_none_or(|after| id.as_str() > after)
+                    && request.at.elapsed() < Duration::from_secs(300)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        let next_after = (entries.len() > 64).then(|| entries[63].0.clone());
+        let display = |value: &str| value.chars().take(128).collect::<String>();
+        let requests = entries
+            .into_iter()
+            .take(64)
+            .map(|(id, request)| NativeWebLoginRequest {
+                request_id: id.clone(),
+                client_id: display(&request.client_id),
+                client_ip: display(&request.client_ip),
+                browser_name: display(&text(&request.request, "browserName")),
+                browser_version: display(&text(&request.request, "browserVersion")),
+                os_name: display(&text(&request.request, "osName")),
+                os_version: display(&text(&request.request, "osVersion")),
+                verification_code: match &request.protection {
+                    Protection::Temporary(channel) => Some(channel.verification_code.clone()),
+                    Protection::Password(_) => None,
+                },
+            })
+            .collect();
+        NativeWebLoginRequests {
+            requests,
+            next_after,
+        }
+    }
+
+    pub(crate) fn cancel_client(&mut self, client_id: &str) -> Vec<String> {
+        let removed = self
+            .pending
+            .iter()
+            .filter(|(_, value)| value.client_id == client_id)
+            .map(|(id, _)| id.clone())
+            .collect();
         self.pending.retain(|_, value| value.client_id != client_id);
+        removed
     }
 }
 
@@ -87,6 +182,12 @@ pub(crate) enum Request {
         client_id: String,
         client_ip: String,
         frame: String,
+    },
+    IssueTemporary {
+        client_id: String,
+        client_ip: String,
+        frame: String,
+        channel: super::login_channel::Channel,
     },
     Complete {
         request_id: String,
@@ -107,14 +208,29 @@ impl Confirmation {
 
     pub async fn decide(&self, request_id: &str, allowed: bool) -> Result<(), String> {
         if allowed {
+            if !self.state.main_ws.login_pending(request_id) {
+                return Err("Login confirmation is no longer pending".into());
+            }
             let result = execute(
                 &self.state,
                 Request::Complete {
                     request_id: request_id.into(),
                 },
             )
-            .await
-            .map_err(|error| error.to_string())?;
+            .await;
+            let result = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    let reason = match error.to_string().as_str() {
+                        "login_expired" | "Login confirmation expired" => "login_expired",
+                        "desktop_access_disabled" => "desktop_access_disabled",
+                        "invalid_password" => "invalid_password",
+                        _ => "invalid_login_request",
+                    };
+                    self.state.main_ws.fail_login(request_id, reason);
+                    return Err(error.to_string());
+                }
+            };
             self.state
                 .main_ws
                 .complete(&self.state, request_id, &result)
@@ -135,17 +251,11 @@ impl Confirmation {
     }
 }
 
-pub(crate) fn reset_password(state: &ServerState) -> anyhow::Result<String> {
-    plain_rs::prefs::system::Command::ResetPassword.apply(&state.prefs)?;
-    let password = state
-        .prefs
-        .get::<String>(plain_rs::prefs::system::keys::PASSWORD)?
-        .ok_or_else(|| anyhow::anyhow!("Missing password"))?;
+pub(crate) fn notify_closed(state: &ServerState, request_id: &str) {
     let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-        "PREFS_UPDATED",
-        "{}".to_owned(),
+        "WEB_LOGIN_CLOSED",
+        json!({"requestId":request_id}).to_string(),
     ));
-    Ok(password)
 }
 
 fn text(value: &Value, field: &str) -> String {
@@ -156,8 +266,6 @@ fn text(value: &Value, field: &str) -> String {
         .to_owned()
 }
 
-/// A peer block is only accepted when it carries a usable port and a real
-/// 32-byte signature key — the same guard plain-app applies before saving.
 fn peer_chat_paired(request: &Value) -> bool {
     let Some(peer) = request.get("peer").filter(|value| !value.is_null()) else {
         return false;
@@ -179,14 +287,8 @@ fn signature_data(
 }
 
 fn sign(prefs: &plain_rs::prefs::Prefs, text: &str) -> anyhow::Result<String> {
-    // `signature_key_pair` is plain-app's JSON keypair, not a bare base64
-    // string. Handing the raw string bytes to ed25519_sign gave it something
-    // that is not 64 bytes, so it returned an empty signature — the login
-    // still reported COMPLETED and the client failed verification with
-    // nothing wrong anywhere on the server.
     let keypair = crate::services::peers::peer_wire::signing_keypair(prefs)?;
     let signature = plain_rs::crypto::ed25519_sign(&keypair, text.as_bytes());
-    // An empty signature is a refusal, never a valid-looking answer.
     anyhow::ensure!(
         !signature.is_empty(),
         "ed25519 signing produced no signature"
@@ -199,8 +301,7 @@ async fn issue(state: &ServerState, request: &Pending) -> anyhow::Result<Value> 
         .prefs
         .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
         .ok_or_else(|| anyhow::anyhow!("device client id is missing"))?;
-    let offered = text(&request.request, "password");
-    anyhow::ensure!(offered == password_digest(&state.prefs), "invalid_password");
+    request.protection.validate(state, &request.request)?;
     let chat_paired = peer_chat_paired(&request.request);
     let keypair = plain_rs::crypto::EcdhSession::generate();
     let peer_public =
@@ -211,17 +312,19 @@ async fn issue(state: &ServerState, request: &Pending) -> anyhow::Result<Value> 
         .ok_or_else(|| anyhow::anyhow!("ECDH shared key computation failed"))?;
     let token = plain_rs::utils::base64::base64_encode(&shared);
     let timestamp = now_ms();
-    let signature = sign(
-        &state.prefs,
-        &signature_data(
-            &device_client_id,
-            "COMPLETED",
-            &ecdh_public_key,
-            timestamp,
-            chat_paired,
-        ),
-    )?;
-    let response = json!({
+    let mut signed = signature_data(
+        &device_client_id,
+        "COMPLETED",
+        &ecdh_public_key,
+        timestamp,
+        chat_paired,
+    );
+    if let Protection::Temporary(channel) = &request.protection {
+        signed.push('|');
+        signed.push_str(&channel.context);
+    }
+    let signature = sign(&state.prefs, &signed)?;
+    let mut response = json!({
         "clientId": device_client_id,
         "status": "COMPLETED",
         "ecdhPublicKey": ecdh_public_key,
@@ -229,6 +332,9 @@ async fn issue(state: &ServerState, request: &Pending) -> anyhow::Result<Value> 
         "timestamp": timestamp,
         "chatPaired": chat_paired,
     });
+    if let Protection::Temporary(channel) = &request.protection {
+        response["loginContext"] = json!(channel.context);
+    }
     if chat_paired {
         let id = &request.client_id;
         let offered_key = text(&request.request["peer"], "signaturePublicKey");
@@ -239,6 +345,9 @@ async fn issue(state: &ServerState, request: &Pending) -> anyhow::Result<Value> 
             );
         }
     }
+    let frame = request
+        .protection
+        .encrypt_response(&serde_json::to_vec(&response)?)?;
     persist(state, request, &token)?;
     if chat_paired {
         let peer = &request.request["peer"];
@@ -261,11 +370,11 @@ async fn issue(state: &ServerState, request: &Pending) -> anyhow::Result<Value> 
             },
         )?;
     }
-    Ok(json!({"status": "COMPLETED", "token": token, "response": response}))
+    Ok(
+        json!({"status": "COMPLETED", "token": token, "response": response, "frame": plain_rs::utils::base64::base64_encode(&frame)}),
+    )
 }
 
-/// The browser's client id is the row key; the device's own client id and the
-/// custom session name/type are preserved from any existing row.
 fn persist(state: &ServerState, request: &Pending, token: &str) -> anyhow::Result<()> {
     let existing = state
         .db
@@ -306,7 +415,10 @@ fn persist(state: &ServerState, request: &Pending, token: &str) -> anyhow::Resul
 }
 
 pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Result<Value> {
-    if matches!(&request, Request::Issue { .. } | Request::Complete { .. }) {
+    if matches!(
+        &request,
+        Request::Issue { .. } | Request::IssueTemporary { .. } | Request::Complete { .. }
+    ) {
         anyhow::ensure!(
             state.prefs.get_user_or("desktop_access", true),
             "desktop_access_disabled"
@@ -314,12 +426,15 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
     }
     let (pending, request_id) = match request {
         Request::Cancel { request_id } => {
-            state
+            let removed = state
                 .login_attempts
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Login state unavailable"))?
                 .pending
                 .remove(&request_id);
+            if removed.is_some() {
+                notify_closed(state, &request_id);
+            }
             return Ok(json!({"cancelled":true}));
         }
         Request::Complete { request_id } => {
@@ -330,34 +445,53 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                 .pending
                 .remove(&request_id)
                 .ok_or_else(|| anyhow::anyhow!("Login confirmation is no longer pending"))?;
+            notify_closed(state, &request_id);
             anyhow::ensure!(
                 pending.at.elapsed() < Duration::from_secs(300),
                 "Login confirmation expired"
             );
             (pending, request_id)
         }
-        Request::Issue {
-            client_id,
-            client_ip,
-            frame,
-        } => {
-            anyhow::ensure!(!client_id.is_empty(), "Client id is required");
-            let allowed = state
-                .login_attempts
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Login state unavailable"))?
-                .acquire(&if client_ip.is_empty() {
-                    format!("cid:{client_id}")
-                } else {
-                    client_ip.clone()
-                });
-            anyhow::ensure!(allowed, "too_many_login_attempts");
-            let key = hash_to_token(&password_digest(&state.prefs));
-            let bytes = plain_rs::crypto::xchacha_decrypt_raw(
-                &key,
-                &plain_rs::utils::base64::base64_decode(&frame),
-            )
-            .ok_or_else(|| anyhow::anyhow!("invalid_password"))?;
+        incoming @ (Request::Issue { .. } | Request::IssueTemporary { .. }) => {
+            let (client_id, client_ip, frame, protection) = match incoming {
+                Request::Issue {
+                    client_id,
+                    client_ip,
+                    frame,
+                } => {
+                    anyhow::ensure!(
+                        state
+                            .prefs
+                            .get_or(plain_rs::prefs::system::keys::PASSWORD_TYPE, 2_i32)
+                            == 1,
+                        "password_required"
+                    );
+                    (
+                        client_id,
+                        client_ip,
+                        frame,
+                        Protection::Password(password_digest(&state.prefs)),
+                    )
+                }
+                Request::IssueTemporary {
+                    client_id,
+                    client_ip,
+                    frame,
+                    channel,
+                } => (client_id, client_ip, frame, Protection::Temporary(channel)),
+                _ => unreachable!(),
+            };
+            if matches!(&protection, Protection::Password(_)) {
+                admit_attempt(state, &client_id, &client_ip)?;
+            }
+            let frame = plain_rs::utils::base64::base64_decode(&frame);
+            let bytes = match &protection {
+                Protection::Password(digest) => {
+                    plain_rs::crypto::xchacha_decrypt_raw(&hash_to_token(digest), &frame)
+                        .ok_or_else(|| anyhow::anyhow!("invalid_password"))?
+                }
+                Protection::Temporary(channel) => channel.decrypt_request(&frame, now_ms())?,
+            };
             let request: Value = serde_json::from_slice(&bytes)?;
             for field in ["browserName", "browserVersion", "osName", "osVersion"] {
                 anyhow::ensure!(
@@ -383,26 +517,33 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                 let _: Vec<String> = serde_json::from_value(peer["ips"].clone())?;
             }
 
-            anyhow::ensure!(
-                text(&request, "password") == password_digest(&state.prefs),
-                "invalid_password"
-            );
+            protection.validate(state, &request)?;
             let pending = Pending {
                 client_id,
                 client_ip,
                 request,
                 at: Instant::now(),
+                protection,
             };
             let id = uuid::Uuid::new_v4().to_string();
-            if peer_chat_paired(&pending.request)
+            if matches!(pending.protection, Protection::Temporary(_))
+                || peer_chat_paired(&pending.request)
                 || state
                     .prefs
                     .get_or(plain_rs::prefs::system::keys::AUTH_TWO_FACTOR, true)
             {
                 let response = json!({"clientId":state.prefs.get_or(plain_rs::prefs::system::keys::CLIENT_ID,String::new()), "status":"PENDING"});
-                let encrypted =
-                    plain_rs::crypto::xchacha_encrypt_raw(&key, &serde_json::to_vec(&response)?)
-                        .ok_or_else(|| anyhow::anyhow!("Response encryption failed"))?;
+                let encrypted = pending
+                    .protection
+                    .encrypt_response(&serde_json::to_vec(&response)?)?;
+                let mut request_facts = pending.request.clone();
+                request_facts
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("verificationCode");
+                if let Protection::Temporary(channel) = &pending.protection {
+                    request_facts["verificationCode"] = json!(channel.verification_code);
+                }
                 let mut attempts = state
                     .login_attempts
                     .lock()
@@ -410,21 +551,18 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                 attempts
                     .pending
                     .retain(|_, item| item.at.elapsed() < Duration::from_secs(300));
-                attempts.cancel_client(&pending.client_id);
-                attempts.pending.insert(id.clone(), pending.clone());
+                for cancelled in attempts.cancel_client(&pending.client_id) {
+                    notify_closed(state, &cancelled);
+                }
+                attempts.pending.insert(id.clone(), pending);
                 return Ok(
-                    json!({"status":"PENDING","requestId":id,"request":pending.request,"frame":plain_rs::utils::base64::base64_encode(&encrypted)}),
+                    json!({"status":"PENDING","requestId":id,"request":request_facts,"frame":plain_rs::utils::base64::base64_encode(&encrypted)}),
                 );
             }
             (pending, id)
         }
     };
     let mut result = issue(state, &pending).await?;
-    let key = hash_to_token(&password_digest(&state.prefs));
-    let bytes =
-        plain_rs::crypto::xchacha_encrypt_raw(&key, &serde_json::to_vec(&result["response"])?)
-            .ok_or_else(|| anyhow::anyhow!("Response encryption failed"))?;
-    result["frame"] = json!(plain_rs::utils::base64::base64_encode(&bytes));
     result["requestId"] = json!(request_id);
     result["request"] = pending.request;
     result["clientIp"] = json!(pending.client_ip);

@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+pub mod login;
 pub(crate) mod storage;
 
 #[derive(Default)]
@@ -34,6 +35,7 @@ pub fn set_password(directory: &Path, cache: &Path, password: &str) -> Result<()
 pub struct HeadlessService {
     core: Arc<ContentServer>,
     host: tokio::task::JoinHandle<Result<(), String>>,
+    login: Option<login::Service>,
     #[cfg(target_os = "linux")]
     watcher: Option<plain_rs::platform::linux::mounts::automount::Watcher>,
 }
@@ -54,6 +56,7 @@ impl HeadlessService {
         let mut service = Self {
             core,
             host,
+            login: None,
             #[cfg(target_os = "linux")]
             watcher: None,
         };
@@ -65,6 +68,12 @@ impl HeadlessService {
     }
 
     async fn start_services(&mut self, paths: &AppPaths, options: Options) -> Result<()> {
+        self.login = login::Service::start(&self.core).await?;
+        if self.login.is_some() {
+            log::info!(
+                "Use plainapp login requests with the same data directory to approve Web access"
+            );
+        }
         #[cfg(target_os = "linux")]
         if options.automount {
             let prefs = self.core.shared_preferences().map_err(anyhow::Error::msg)?;
@@ -132,6 +141,7 @@ impl HeadlessService {
         #[cfg(target_os = "linux")]
         if let Some(watcher) = &mut self.watcher {
             return tokio::select! {
+                result = login::wait(&mut self.login) => result,
                 result = &mut self.host => {
                     result.map_err(anyhow::Error::from)?.map_err(anyhow::Error::msg)?;
                     Err(anyhow!("Headless host session stopped"))
@@ -142,8 +152,13 @@ impl HeadlessService {
                 }
             };
         }
-        (&mut self.host).await?.map_err(anyhow::Error::msg)?;
-        Err(anyhow!("Headless host session stopped"))
+        tokio::select! {
+            result = login::wait(&mut self.login) => result,
+            result = &mut self.host => {
+                result?.map_err(anyhow::Error::msg)?;
+                Err(anyhow!("Headless host session stopped"))
+            }
+        }
     }
 
     pub async fn shutdown(self) {
@@ -154,6 +169,11 @@ impl HeadlessService {
             }
         }
         self.core.stop_core().await;
+        if let Some(login) = self.login {
+            if let Err(error) = login.shutdown().await {
+                log::error!("Local approval service stopped: {error}");
+            }
+        }
         if !self.host.is_finished() {
             let _ = self.host.await;
         }
@@ -193,6 +213,9 @@ fn capabilities() -> Vec<String> {
     }
     if has_command("libreoffice") || has_command("soffice") {
         capabilities.push("DOC_PREVIEW".into());
+    }
+    if login::available() {
+        capabilities.push("LOCAL_LOGIN_APPROVAL".into());
     }
     capabilities
 }

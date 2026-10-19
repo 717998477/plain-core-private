@@ -130,6 +130,7 @@ struct PairingState {
     mode: PairingMode,
     phase: String,
     error: Option<String>,
+    verification_code: Option<String>,
 }
 
 #[derive(Default)]

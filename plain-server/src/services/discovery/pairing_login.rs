@@ -89,9 +89,11 @@ pub(super) async fn run(
             return Ok(());
         }
     }
-    let password = match init["password"].as_str().filter(|p| !p.is_empty()) {
-        Some(password) => password.to_owned(),
-        None => match password {
+    let password_required = init["passwordRequired"]
+        .as_bool()
+        .ok_or_else(|| anyhow::anyhow!("invalid_auth_response"))?;
+    let digest = if password_required {
+        let password = match password {
             Some(password) => password,
             None => {
                 state.pairing_runtime.attempts.transition(
@@ -106,19 +108,23 @@ pub(super) async fn run(
                     .await
                     .ok_or_else(|| anyhow::anyhow!("cancelled"))?
             }
-        },
+        };
+        Some(plain_rs::crypto::sha512_hex(&password))
+    } else {
+        None
     };
-    let digest = plain_rs::crypto::sha512_hex(&password);
-    let key = &digest.as_bytes()[..32];
     let local = super::pairing_runtime::local_device(state).await?;
     ensure!(local.port != 0, "chat_pairing_unavailable");
     let signing = crate::services::peers::peer_wire::signing_keypair(&state.prefs)?;
     let ecdh = EcdhSession::generate();
-    let request = json!({
-        "password":digest,"browserName":"PlainApp","browserVersion":"","osName":"","osVersion":"","isMobile":false,
+    let mut request = json!({
+        "browserName":"PlainApp","browserVersion":"","osName":"","osVersion":"","isMobile":false,
         "ecdhPublicKey":base64_encode(&ecdh.public_key_bytes),
         "peer":{"deviceName":local.name,"port":local.port,"deviceType":local.device_type,"ips":local.ips,"signaturePublicKey":base64_encode(&signing[32..])}
     });
+    if let Some(digest) = &digest {
+        request["password"] = json!(digest);
+    }
     let mut url = base.clone();
     url.set_scheme(if base.scheme() == "https" {
         "wss"
@@ -128,7 +134,7 @@ pub(super) async fn run(
     .map_err(|_| anyhow::anyhow!("Invalid management address"))?;
     url.query_pairs_mut()
         .append_pair("cid", &client_id)
-        .append_pair("auth", "1");
+        .append_pair("auth", if password_required { "1" } else { "2" });
     state
         .pairing_runtime
         .attempts
@@ -136,8 +142,56 @@ pub(super) async fn run(
     let mut socket = crate::services::peers::status_socket::connect(url.as_str())
         .await
         .map_err(|_| anyhow::anyhow!("failed_connect_ws"))?;
-    let encrypted = crypto::xchacha_encrypt_raw(key, &serde_json::to_vec(&request)?)
-        .ok_or_else(|| anyhow::anyhow!("invalid_password"))?;
+    let channel = if password_required {
+        None
+    } else {
+        let (client, hello) = crate::http::auth::login_channel::Client::start(&client_id)?;
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::to_string(&hello)?.into(),
+            ))
+            .await?;
+        let response = loop {
+            use tokio_tungstenite::tungstenite::Message;
+            match socket
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("failed_connect_ws"))??
+            {
+                Message::Text(text) => {
+                    break serde_json::from_str::<crate::http::auth::login_channel::ServerHello>(
+                        &text,
+                    )?;
+                }
+                Message::Ping(bytes) => socket.send(Message::Pong(bytes)).await?,
+                _ => anyhow::bail!("invalid_auth_response"),
+            }
+        };
+        let channel = client.accept(
+            &response,
+            &public_key,
+            &target.target.device_id,
+            chrono::Utc::now().timestamp_millis() as u64,
+        )?;
+        request["loginContext"] = json!(channel.context);
+        state.pairing_runtime.attempts.set_verification_code(
+            state,
+            generation,
+            &channel.verification_code,
+        );
+        Some(channel)
+    };
+    let encrypted = match &channel {
+        Some(channel) => channel.encrypt_request(
+            &serde_json::to_vec(&request)?,
+            chrono::Utc::now().timestamp_millis() as u64,
+        )?,
+        None => crypto::xchacha_encrypt_raw(
+            &digest.as_ref().unwrap().as_bytes()[..32],
+            &serde_json::to_vec(&request)?,
+        )
+        .ok_or_else(|| anyhow::anyhow!("invalid_password"))?,
+    };
     socket
         .send(tokio_tungstenite::tungstenite::Message::Binary(
             encrypted.into(),
@@ -153,8 +207,15 @@ pub(super) async fn run(
         use tokio_tungstenite::tungstenite::Message;
         match frame {
             Message::Binary(data) => {
-                let plain = crypto::xchacha_decrypt_raw(key, &data)
-                    .ok_or_else(|| anyhow::anyhow!("invalid_auth_response"))?;
+                let plain = match &channel {
+                    Some(channel) => channel
+                        .decrypt_response(&data, chrono::Utc::now().timestamp_millis() as u64)?,
+                    None => crypto::xchacha_decrypt_raw(
+                        &digest.as_ref().unwrap().as_bytes()[..32],
+                        &data,
+                    )
+                    .ok_or_else(|| anyhow::anyhow!("invalid_auth_response"))?,
+                };
                 let response: Value = serde_json::from_slice(&plain)
                     .map_err(|_| anyhow::anyhow!("invalid_auth_response"))?;
                 if response["status"] == "PENDING" {
@@ -185,6 +246,16 @@ pub(super) async fn run(
             _ => anyhow::bail!("invalid_auth_response"),
         }
     };
+    match &channel {
+        Some(channel) => ensure!(
+            response["loginContext"].as_str() == Some(channel.context.as_str()),
+            "invalid_auth_response"
+        ),
+        None => ensure!(
+            response.get("loginContext").is_none(),
+            "invalid_auth_response"
+        ),
+    }
     let remote_id = verify_response(
         &response,
         &target.target.device_id,
@@ -303,10 +374,18 @@ fn verify_response(response: &Value, expected: &str, public_key: &str, now: i64)
         (i128::from(now) - i128::from(timestamp)).abs() <= 300_000,
         "signature_verification_failed"
     );
-    let data = format!(
+    let mut data = format!(
         "{id}|COMPLETED|{}|{timestamp}|true",
         text(response, "ecdhPublicKey")?
     );
+    if let Some(context) = response.get("loginContext") {
+        data.push('|');
+        data.push_str(
+            context
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid_auth_response"))?,
+        );
+    }
     ensure!(
         crypto::ed25519_verify(public_key, data.as_bytes(), text(response, "signature")?),
         "signature_verification_failed"

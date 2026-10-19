@@ -1,5 +1,6 @@
 pub mod bench;
 pub mod install;
+pub mod login;
 pub mod passwd;
 pub mod run;
 pub mod uninstall;
@@ -71,6 +72,10 @@ pub(crate) enum Cmd {
     Passwd {
         #[arg(long, help = "Read the new password from standard input")]
         stdin: bool,
+    },
+    Login {
+        #[command(subcommand)]
+        command: login::Command,
     },
     Update,
     Bench,

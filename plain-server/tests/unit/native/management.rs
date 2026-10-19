@@ -132,6 +132,7 @@ async fn native_management_handles_reject_every_operation_after_core_shutdown() 
     );
     stopped!(management.create_session("Fixture".into()));
     stopped!(management.confirm_web_login("fixture".into(), true).await);
+    stopped!(management.web_login_requests(None));
     stopped!(management.stage_app_restore("fixture".into()).await);
     stopped!(management.export_app_backup().await);
     stopped!(management.create_crash_report("fixture".into()).await);

@@ -1,0 +1,22 @@
+{
+  "clientPrivate": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+  "serverPrivate": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+  "signingPublicKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+  "hello": {
+    "protocol": "plain-web-login-v1",
+    "clientId": "browser|测试",
+    "deviceId": "fixture-device",
+    "clientPublicKey": "BG/wO5SSQc4drdQ1GeaWDgqFtBppoFwygQOqK84VlMoWPE91OlW/AdxT9sCwx+7ni0DG/30lqW4igrmJzvccFEo=",
+    "serverPublicKey": "BFUPRxAD89+Xw99QaseX9nIfsaH7e49vg9IkSYplyI4kE2CT1wEuUJpzcVy9CwCjzA/0tcAbP/oZarH7MnA2uOY=",
+    "clientNonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+    "serverNonce": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+    "expiresAt": 301000,
+    "signature": "vIdYvyaSfB+UjlNiDXlwAiTAg4zuSp3v8VsCWfa/p6UW/zu2ryuqs0SzEVhCxrMmTJLw9r6Yvst1mnMTehRPBw=="
+  },
+  "transcript": "[\"plain-web-login-v1\",\"browser|测试\",\"fixture-device\",\"BG/wO5SSQc4drdQ1GeaWDgqFtBppoFwygQOqK84VlMoWPE91OlW/AdxT9sCwx+7ni0DG/30lqW4igrmJzvccFEo=\",\"BFUPRxAD89+Xw99QaseX9nIfsaH7e49vg9IkSYplyI4kE2CT1wEuUJpzcVy9CwCjzA/0tcAbP/oZarH7MnA2uOY=\",\"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=\",\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\",301000]",
+  "context": "o05uQTe2gk1n7PimI/hyOBFV5Yu8LKJBgm+PtIuFlvw=",
+  "requestKey": "ty8GV1EWl8+lEYO/XH6U+Ydyt+q1s1NihVvNhmMYiYg=",
+  "responseKey": "C46pen7MpKUAnnVvBXS0DiHxfEw+31mDTB3HsYqIqGw=",
+  "request": "{\"loginContext\":\"o05uQTe2gk1n7PimI/hyOBFV5Yu8LKJBgm+PtIuFlvw=\",\"browserName\":\"Fixture\"}",
+  "requestFrame": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFXp3KQlUprTUCqzqqKKTStv2WehlRMLIyaZYcvPzv3YqpttM3hvOvjddBOLKeilKpUuEODfPqi1+xb+wMYFhBFvGQOc0LJKrlnqszA4E62hX+Q4jhnQ1K3SonijMA3MyS5SjPqrn36g=="
+}

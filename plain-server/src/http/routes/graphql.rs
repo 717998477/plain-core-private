@@ -261,7 +261,7 @@ pub(crate) async fn shutdown(
 
 pub(crate) async fn init(
     State(state): State<ServerState>,
-    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    ConnectInfo(_remote): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -275,8 +275,6 @@ pub(crate) async fn init(
     if !state.prefs.get_user_or("desktop_access", true) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    // The shell decrypts `/init` with the local URL token, like every other
-    // local request.
     let key = crate::services::sessions::local_key(&state, client_id).or(
         crate::services::sessions::key(&state.db, client_id)
             .ok()
@@ -285,24 +283,14 @@ pub(crate) async fn init(
     let authenticated = key
         .as_ref()
         .is_some_and(|key| plain_rs::crypto::xchacha_decrypt_raw(key, &body).is_some());
-    let password = if !authenticated
-        && state
-            .prefs
-            .get_or(plain_rs::prefs::system::keys::PASSWORD_TYPE, 2_i32)
-            == 2
-    {
-        match crate::http::auth::ws_login::reset_password(&state) {
-            Ok(password) => password,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        }
-    } else {
-        String::new()
-    };
+    let password_required = state
+        .prefs
+        .get_or(plain_rs::prefs::system::keys::PASSWORD_TYPE, 2_i32)
+        == 1;
     let pair = match crate::services::peers::peer_wire::signing_keypair(&state.prefs) {
         Ok(pair) => pair,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let _ = remote;
-    Json(json!({"signaturePublicKey":plain_rs::utils::base64::base64_encode(&pair[32..]),"password":password}))
+    Json(json!({"signaturePublicKey":plain_rs::utils::base64::base64_encode(&pair[32..]),"authenticated":authenticated,"passwordRequired":password_required}))
         .into_response()
 }

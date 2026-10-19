@@ -63,11 +63,14 @@ pub(crate) fn rename(state: &ServerState, client_id: &str, name: &str) -> anyhow
 }
 
 pub(crate) fn delete(state: &ServerState, client_id: &str) -> anyhow::Result<bool> {
-    state
+    let cancelled = state
         .login_attempts
         .lock()
         .map_err(|_| anyhow::anyhow!("Login state unavailable"))?
         .cancel_client(client_id);
+    for request_id in cancelled {
+        crate::http::auth::ws_login::notify_closed(state, &request_id);
+    }
     state.main_ws.close_client(state, Some(client_id));
     Ok(state.db.session_delete(client_id)? > 0)
 }

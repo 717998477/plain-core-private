@@ -73,6 +73,11 @@ fn public_projection_keeps_regular_text_and_binary_buffers_and_excludes_internal
             .into_public()
             .is_none()
     );
+    assert!(
+        WsEvent::broadcast("WEB_LOGIN_CLOSED", "private".into())
+            .into_public()
+            .is_none()
+    );
 }
 
 #[test]
