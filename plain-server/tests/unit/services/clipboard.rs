@@ -3,6 +3,70 @@ use crate::assembly::server::ContentServer;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+#[tokio::test]
+async fn platform_callbacks_before_write_reply_do_not_republish_received_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let (server, _, _) = start(&directory);
+    let state = server.runtime_state();
+    let bridge = Arc::new(server.host_events());
+    let callbacks = bridge.clone();
+    let serving = tokio::spawn(bridge.clone().serve(
+        move |method, params| {
+            let callbacks = callbacks.clone();
+            async move {
+                match method.as_str() {
+                    "systemCapabilities" => Ok(json!(["CLIPBOARD"])),
+                    "systemSetClipboard" => {
+                        let report = json!({"text":params["text"],"sensitive":false}).to_string();
+                        for _ in 0..2 {
+                            callbacks
+                                .publish_text("CLIPBOARD_REPORTED", report.clone())
+                                .await?;
+                        }
+                        Ok(json!(true))
+                    }
+                    _ => Err(format!("unexpected host method {method}")),
+                }
+            }
+        },
+        |_| Ok(()),
+    ));
+    let mut events = state.events.subscribe();
+    let response = server
+        .graphql_executor()
+        .execute(async_graphql::Request::new(
+            r#"mutation { setClipboard(text: "remote callback fixture") }"#,
+        ))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(response.data.into_json().unwrap()["setClipboard"], true);
+    assert_eq!(state.db.clipboard_count_rows().unwrap(), 1);
+    assert!(!state.clipboard_changes.can_send("remote callback fixture"));
+    let mut history_updates = 0;
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event.event_type, "CLIPBOARD_CHANGED");
+        if event.event_type == plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED {
+            history_updates += 1;
+        }
+    }
+    assert_eq!(history_updates, 1);
+    server.shutdown().await;
+    serving.await.unwrap().unwrap();
+    assert!(
+        bridge
+            .publish_text(
+                "CLIPBOARD_REPORTED",
+                json!({
+                    "text":"after shutdown", "sensitive":false,
+                })
+                .to_string()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(state.db.clipboard_count_rows().unwrap(), 1);
+}
+
 async fn call(port: u16, token: &str, query: &str) -> Value {
     let response = reqwest::Client::new()
         .post(format!("http://127.0.0.1:{port}/graphql"))
