@@ -154,6 +154,7 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
         },
     );
     let mut registered = false;
+    let mut stream = None;
     let mut receiver = state.events.subscribe();
     let mut pending: Option<String> = None;
     loop {
@@ -202,6 +203,7 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                     Err(()) => { let _ = socket.send(close(1013,"invalid_request")).await; break; }
                 };
                 if !registered {
+                    stream = Some(plain_rs::protocols::websocket::Stream::new(&frame));
                     registered = true;
                     if let Some(c) = state.main_ws.connections.lock().unwrap().get_mut(&id) { c.registered = true; }
                     state.main_ws.changed(&state);
@@ -223,16 +225,15 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                 let Some(key) = crate::services::sessions::local_key(&state, &params.cid)
                     .or_else(|| crate::services::sessions::key(&state.db, &params.cid).ok().flatten())
                 else { break; };
-                let bytes = if let Some(payload) = event.binary_payload {
-                    let Some(bytes) = plain_rs::protocols::websocket::encode_raw(event.event_type, &payload) else { continue; };
-                    bytes
+                let payload = if let Some(payload) = event.binary_payload {
+                    payload
                 } else {
                     let payload = if event.event_type == plain_rs::chat::events::WS_CHANNELS_UPDATED {
                         serde_json::from_str::<Value>(&event.payload).ok().and_then(|value|value.get("channels").cloned()).map(|value|value.to_string()).unwrap_or(event.payload)
                     } else { event.payload };
-                    let Some(bytes) = plain_rs::protocols::websocket::encode(event.event_type, payload.as_bytes(), &key) else { continue; };
-                    bytes
+                    payload.into_bytes()
                 };
+                let Some(bytes) = stream.as_mut().and_then(|stream| stream.encode(event.event_type, &payload, &key)) else { break; };
                 Message::Binary(bytes)
             }
         };

@@ -6,9 +6,15 @@ pub(super) fn registration(key: &[u8], timestamp: i64) -> Result<Vec<u8>> {
         .ok_or_else(|| anyhow!("Invalid management session key"))
 }
 
-pub(super) fn event(frame: &[u8], key: &[u8]) -> Result<Option<(String, Value)>> {
-    let (kind, body) = plain_rs::protocols::websocket::decode_raw(frame)
-        .ok_or_else(|| anyhow!("Invalid management event frame"))?;
+pub(super) fn event(
+    frame: &[u8],
+    key: &[u8],
+    stream: &mut plain_rs::protocols::websocket::Stream,
+) -> Result<Option<(String, Value)>> {
+    let (kind, plain) = stream
+        .decode(frame, key)
+        .ok_or_else(|| anyhow!("Invalid management event authentication"))?;
+    let kind = kind.as_str();
     if !matches!(
         kind,
         "NOTIFICATION_CREATED"
@@ -21,8 +27,6 @@ pub(super) fn event(frame: &[u8], key: &[u8]) -> Result<Option<(String, Value)>>
     ) {
         return Ok(None);
     }
-    let plain = plain_rs::crypto::xchacha_decrypt_raw(key, body)
-        .ok_or_else(|| anyhow!("Invalid management event authentication"))?;
     if kind != "CLIPBOARD_CHANGED" {
         return Ok(Some((kind.to_owned(), Value::Null)));
     }

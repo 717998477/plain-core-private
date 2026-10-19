@@ -305,6 +305,7 @@ async fn native_event_socket_registers_without_a_session_and_encrypts_events_wit
         chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
     )
     .unwrap();
+    let mut stream = plain_rs::protocols::websocket::Stream::new(&frame);
     socket
         .send(tokio_tungstenite::tungstenite::Message::Binary(
             frame.into(),
@@ -337,12 +338,40 @@ async fn native_event_socket_registers_without_a_session_and_encrypts_events_wit
     let tokio_tungstenite::tungstenite::Message::Binary(bytes) = frame else {
         panic!("Expected encrypted event bytes")
     };
-    let (kind, payload) = plain_rs::protocols::websocket::decode(&bytes, &key).unwrap();
+    let (kind, payload) = stream.decode(&bytes, &key).unwrap();
     assert_eq!(kind, "CONTENT_CHANGED");
     assert_eq!(
         serde_json::from_slice::<Value>(&payload).unwrap(),
         json!({"probe":true})
     );
+    for kind in [
+        "SCREEN_MIRROR_VIDEO",
+        "SCREEN_MIRROR_AUDIO",
+        "IMAGE_EDITOR_UPDATE",
+    ] {
+        let payload = vec![0, 1, 255, 0, 4];
+        state
+            .events
+            .send(WsEvent::broadcast_binary(kind, payload.clone()))
+            .unwrap();
+        let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let tokio_tungstenite::tungstenite::Message::Binary(frame) = message else {
+            panic!("Expected encrypted binary event");
+        };
+        let (_, encrypted) = plain_rs::protocols::websocket::decode_raw(&frame).unwrap();
+        assert_ne!(encrypted, payload);
+        assert_eq!(stream.decode(&frame, &key).unwrap(), (kind.into(), payload));
+        assert!(stream.decode(&frame, &key).is_none());
+        assert!(
+            plain_rs::protocols::websocket::Stream::new(b"another registration")
+                .decode(&frame, &key)
+                .is_none()
+        );
+    }
     assert!(!state.host.connected());
     socket.close(None).await.unwrap();
     core.shutdown().await;
@@ -379,6 +408,7 @@ async fn pairing_success_keeps_native_credentials_out_of_every_network_event_soc
             chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
         )
         .unwrap();
+        let stream = plain_rs::protocols::websocket::Stream::new(&frame);
         socket
             .send(ClientMessage::Binary(frame.into()))
             .await
@@ -393,7 +423,7 @@ async fn pairing_success_keeps_native_credentials_out_of_every_network_event_soc
         .await
         .unwrap();
         assert!(state.main_ws.snapshot().contains(&id));
-        sockets.push((socket, key));
+        sockets.push((socket, key, stream));
     }
     let key = plain_rs::base64_encode(&[19; 32]);
     crate::services::discovery::pairing_runtime::success(
@@ -415,7 +445,7 @@ async fn pairing_success_keeps_native_credentials_out_of_every_network_event_soc
         serde_json::from_str::<Value>(&event.payload).unwrap()["key"],
         key
     );
-    for (socket, session_key) in &mut sockets {
+    for (socket, session_key, stream) in &mut sockets {
         let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
             .await
             .unwrap()
@@ -424,7 +454,7 @@ async fn pairing_success_keeps_native_credentials_out_of_every_network_event_soc
         let ClientMessage::Binary(frame) = message else {
             panic!("Expected encrypted pairing event")
         };
-        let (kind, payload) = plain_rs::protocols::websocket::decode(&frame, session_key).unwrap();
+        let (kind, payload) = stream.decode(&frame, session_key).unwrap();
         assert_eq!(kind, plain_rs::events::WS_PAIRING_SUCCESS);
         assert_eq!(
             serde_json::from_slice::<Value>(&payload).unwrap(),
@@ -439,7 +469,7 @@ async fn pairing_success_keeps_native_credentials_out_of_every_network_event_soc
     ] {
         state.events.send(event).unwrap();
     }
-    for (mut socket, session_key) in sockets {
+    for (mut socket, session_key, mut stream) in sockets {
         let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
             .await
             .unwrap()
@@ -448,7 +478,7 @@ async fn pairing_success_keeps_native_credentials_out_of_every_network_event_soc
         let ClientMessage::Binary(frame) = message else {
             panic!("Expected encrypted content event")
         };
-        let (kind, payload) = plain_rs::protocols::websocket::decode(&frame, &session_key).unwrap();
+        let (kind, payload) = stream.decode(&frame, &session_key).unwrap();
         assert_eq!(kind, "CONTENT_CHANGED");
         assert_eq!(
             serde_json::from_slice::<Value>(&payload).unwrap(),

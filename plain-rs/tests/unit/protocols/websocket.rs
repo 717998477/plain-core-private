@@ -58,3 +58,116 @@ fn malformed_names_numeric_frames_and_wrong_keys_are_rejected() {
     assert!(decode(&frame, &[2; 32]).is_none());
     assert!(decode(b"MESSAGE_CREATED\0", &[1; 32]).is_none());
 }
+
+#[test]
+fn an_authenticated_payload_cannot_be_renamed_or_use_the_old_unbound_cipher() {
+    let key = [7; 32];
+    let frame = encode("CLIPBOARD_CHANGED", br#"{"text":"fixture"}"#, &key).unwrap();
+    let (_, body) = decode_raw(&frame).unwrap();
+    let renamed = encode_raw("DEVICE_NAME_UPDATED", body).unwrap();
+    assert!(decode(&renamed, &key).is_none());
+    let legacy = crate::crypto::xchacha_encrypt_raw(&key, b"{}").unwrap();
+    assert!(decode(&encode_raw("CLIPBOARD_CHANGED", &legacy).unwrap(), &key).is_none());
+}
+
+#[test]
+fn network_events_authenticate_registration_order_name_and_binary_payload_before_advancing() {
+    let key = [7; 32];
+    let mut sender = Stream::new(b"first registration");
+    let mut receiver = Stream::new(b"first registration");
+    let first = sender
+        .encode("CLIPBOARD_CHANGED", br#"{"text":"fixture"}"#, &key)
+        .unwrap();
+    let second = sender
+        .encode("SCREEN_MIRROR_VIDEO", &[0, 1, 255, 0, 4], &key)
+        .unwrap();
+    assert!(receiver.decode(&second, &key).is_none());
+    assert!(
+        Stream::new(b"other registration")
+            .decode(&first, &key)
+            .is_none()
+    );
+    assert!(receiver.decode(&first, &[8; 32]).is_none());
+    let (_, body) = decode_raw(&first).unwrap();
+    let renamed = encode_raw("DEVICE_NAME_UPDATED", body).unwrap();
+    assert!(receiver.decode(&renamed, &key).is_none());
+    let mut tampered = first.clone();
+    *tampered.last_mut().unwrap() ^= 1;
+    assert!(receiver.decode(&tampered, &key).is_none());
+    for length in 0..first.len() {
+        assert!(receiver.decode(&first[..length], &key).is_none());
+    }
+    assert_eq!(
+        receiver.decode(&first, &key).unwrap(),
+        (
+            "CLIPBOARD_CHANGED".into(),
+            br#"{"text":"fixture"}"#.to_vec()
+        )
+    );
+    assert!(receiver.decode(&first, &key).is_none());
+    assert_eq!(
+        receiver.decode(&second, &key).unwrap(),
+        ("SCREEN_MIRROR_VIDEO".into(), vec![0, 1, 255, 0, 4])
+    );
+    assert!(decode(&first, &key).is_none());
+    let old = encode("CLIPBOARD_CHANGED", b"{}", &key).unwrap();
+    assert!(
+        Stream::new(b"first registration")
+            .decode(&old, &key)
+            .is_none()
+    );
+    assert!(sender.encode("invalid", b"x", &key).is_none());
+    assert!(sender.encode("CONTENT_CHANGED", b"x", &[7; 31]).is_none());
+    assert_eq!(sender.next, 2);
+    sender.next = u64::MAX;
+    assert!(sender.encode("CONTENT_CHANGED", b"x", &key).is_none());
+}
+
+#[test]
+fn noble_event_vectors_match_rust_authentication_and_exact_cipher_bytes() {
+    use chacha20poly1305::{
+        XChaCha20Poly1305, XNonce,
+        aead::{Aead, KeyInit, Payload},
+    };
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../testdata/crypto/websocket-event-vectors.json"
+    ))
+    .unwrap();
+    let vectors = vectors.as_array().unwrap();
+    let registration = crate::base64_decode(vectors[0]["registration"].as_str().unwrap());
+    let mut stream = Stream::new(&registration);
+    for (sequence, vector) in vectors.iter().enumerate() {
+        let bytes = |field: &str| crate::base64_decode(vector[field].as_str().unwrap());
+        let key = bytes("key");
+        let frame = bytes("frame");
+        let payload = bytes("payload");
+        let name = vector["name"].as_str().unwrap();
+        let aad = stream.aad(name, sequence as u64);
+        assert_eq!(
+            crate::utils::hex::bytes_to_hex(&aad),
+            vector["aadHex"].as_str().unwrap()
+        );
+        assert_eq!(
+            stream.decode(&frame, &key).unwrap(),
+            (name.to_owned(), payload.clone())
+        );
+        assert_eq!(
+            decode(&bytes("nativeFrame"), &key).unwrap(),
+            (name.to_owned(), payload.clone())
+        );
+        let (_, body) = decode_raw(&frame).unwrap();
+        assert_eq!(
+            XChaCha20Poly1305::new_from_slice(&key)
+                .unwrap()
+                .encrypt(
+                    XNonce::from_slice(&body[8..32]),
+                    Payload {
+                        msg: &payload,
+                        aad: &aad
+                    }
+                )
+                .unwrap(),
+            body[32..]
+        );
+    }
+}

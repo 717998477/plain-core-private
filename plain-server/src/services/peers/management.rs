@@ -477,22 +477,19 @@ async fn connection_loop(
         if let Ok(Ok(mut socket)) = connected {
             let publication_cancelled = cancelled.clone();
             let exchange = async {
-                socket
-                    .send(Message::Binary(
-                        super::management_wire::registration(
-                            &key,
-                            chrono::Utc::now().timestamp_millis(),
-                        )?
-                        .into(),
-                    ))
-                    .await?;
+                let registration = super::management_wire::registration(
+                    &key,
+                    chrono::Utc::now().timestamp_millis(),
+                )?;
+                let mut stream = plain_rs::protocols::websocket::Stream::new(&registration);
+                socket.send(Message::Binary(registration.into())).await?;
                 let changed = tokio::sync::Notify::new();
                 let messages = async {
                     while let Some(message) = socket.next().await {
                         match message? {
                             Message::Binary(frame) => {
                                 if let Some((kind, data)) =
-                                    super::management_wire::event(&frame, &key)?
+                                    super::management_wire::event(&frame, &key, &mut stream)?
                                 {
                                     if kind == "CLIPBOARD_CHANGED" {
                                         if !publish(
