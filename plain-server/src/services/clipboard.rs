@@ -1,5 +1,69 @@
 use crate::assembly::server::ServerState;
 use plain_rs::events::WsEvent;
+use std::sync::Arc;
+use tokio::sync::watch;
+
+pub(crate) struct Capture {
+    pub(crate) text: String,
+    pub(crate) sensitive: bool,
+    pub(crate) eligible: bool,
+}
+
+pub(crate) struct Changes(watch::Sender<Option<Arc<Capture>>>);
+
+impl Default for Changes {
+    fn default() -> Self {
+        Self(watch::channel(None).0)
+    }
+}
+
+impl Changes {
+    pub(crate) fn subscribe(&self) -> watch::Receiver<Option<Arc<Capture>>> {
+        self.0.subscribe()
+    }
+
+    pub(crate) fn can_send(&self, text: &str) -> bool {
+        self.0
+            .borrow()
+            .as_ref()
+            .is_some_and(|capture| capture.eligible && !capture.sensitive && capture.text == text)
+    }
+
+    pub(crate) fn received(&self, text: &str) {
+        self.0.send_if_modified(|current| {
+            if current
+                .as_ref()
+                .is_some_and(|old| old.text == text && !old.eligible && !old.sensitive)
+            {
+                return false;
+            }
+            *current = Some(Arc::new(Capture {
+                text: text.into(),
+                sensitive: false,
+                eligible: false,
+            }));
+            true
+        });
+    }
+
+    fn observe(&self, text: &str, sensitive: bool, inserted: bool) {
+        self.0.send_if_modified(|current| {
+            if !inserted
+                && current
+                    .as_ref()
+                    .is_some_and(|old| old.text == text && old.sensitive == sensitive)
+            {
+                return false;
+            }
+            *current = Some(Arc::new(Capture {
+                text: text.into(),
+                sensitive,
+                eligible: inserted && !sensitive,
+            }));
+            true
+        });
+    }
+}
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -17,7 +81,10 @@ pub(crate) fn record_history(
 ) -> Result<(plain_rs::db::ClipboardRow, bool), String> {
     let result = plain_rs::clipboard::record(db, text, source, "", sensitive)?;
     if result.1 {
-        let _ = events.send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()));
+        let _ = events.send(WsEvent::broadcast(
+            plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED,
+            "{}".into(),
+        ));
     }
     Ok(result)
 }
@@ -29,6 +96,9 @@ pub(crate) fn report(state: &ServerState, payload: &str) -> Result<(), String> {
     }
     let (item, inserted) =
         record_history(&state.db, &state.events, &value.text, "", value.sensitive)?;
+    state
+        .clipboard_changes
+        .observe(&value.text, value.sensitive, inserted);
     if !inserted {
         return Ok(());
     }

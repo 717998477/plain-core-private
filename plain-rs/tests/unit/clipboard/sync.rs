@@ -85,3 +85,27 @@ fn failed_marker_persistence_does_not_claim_success_or_lose_other_peers() {
     assert!(applied(&prefs, "peer", &item("new")).is_err());
     assert_eq!(prefs.entries(), before);
 }
+
+#[test]
+fn sending_is_explicit_and_does_not_inherit_the_default_receive_direction() {
+    let directory = tempfile::tempdir().unwrap();
+    let prefs = Prefs::load(&directory.path().join("prefs.json")).unwrap();
+    assert!(!sends(&prefs, "peer").unwrap());
+    assert!(receives(&prefs, "peer").unwrap());
+    for (direction, send, receive) in [
+        ("off", false, false),
+        ("pull", false, true),
+        ("push", true, false),
+        ("both", true, true),
+    ] {
+        prefs.set(DIRECTIONS, json!({"peer":direction})).unwrap();
+        assert_eq!(sends(&prefs, "peer").unwrap(), send);
+        assert_eq!(receives(&prefs, "peer").unwrap(), receive);
+        assert!(!sends(&prefs, "another").unwrap());
+    }
+    for value in [json!("invalid"), json!(1), Value::Null] {
+        prefs.set(DIRECTIONS, json!({"peer":value})).unwrap();
+        assert!(sends(&prefs, "peer").is_err());
+        assert!(receives(&prefs, "peer").is_err());
+    }
+}

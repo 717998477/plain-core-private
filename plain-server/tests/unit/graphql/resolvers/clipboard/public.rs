@@ -181,7 +181,10 @@ async fn set_clipboard_records_authenticated_source_before_platform_write_and_su
         assert!(response.errors.is_empty(), "{:?}", response.errors);
         assert_eq!(response.data.into_json().unwrap()["setClipboard"], true);
         if index == 0 {
-            assert_eq!(changes.try_recv().unwrap().event_type, "CONTENT_CHANGED");
+            assert_eq!(
+                changes.try_recv().unwrap().event_type,
+                plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED
+            );
         }
         assert!(changes.try_recv().is_err());
     }
@@ -218,7 +221,10 @@ async fn set_clipboard_records_authenticated_source_before_platform_write_and_su
         ))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(events.try_recv().unwrap().event_type, "CONTENT_CHANGED");
+    assert_eq!(
+        events.try_recv().unwrap().event_type,
+        plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED
+    );
     assert!(
         events.try_recv().is_err(),
         "native executor must not duplicate the service event"

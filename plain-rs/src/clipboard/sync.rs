@@ -14,17 +14,31 @@ pub struct Item {
 }
 
 pub fn receives(prefs: &Prefs, peer_id: &str) -> Result<bool> {
+    Ok(matches!(
+        direction(prefs, peer_id)?.as_str(),
+        "pull" | "both"
+    ))
+}
+
+pub fn sends(prefs: &Prefs, peer_id: &str) -> Result<bool> {
+    Ok(matches!(
+        direction(prefs, peer_id)?.as_str(),
+        "push" | "both"
+    ))
+}
+
+fn direction(prefs: &Prefs, peer_id: &str) -> Result<String> {
     let directions = prefs
         .get::<serde_json::Map<String, Value>>(DIRECTIONS)?
         .unwrap_or_default();
     match directions.get(peer_id) {
-        None => Ok(true),
-        Some(Value::String(direction)) => match direction.as_str() {
-            "pull" | "both" => Ok(true),
-            "off" | "push" => Ok(false),
-            _ => anyhow::bail!("Invalid clipboard direction"),
-        },
-        Some(_) => anyhow::bail!("Invalid clipboard direction"),
+        None => Ok("pull".into()),
+        Some(Value::String(direction))
+            if matches!(direction.as_str(), "pull" | "both" | "off" | "push") =>
+        {
+            Ok(direction.clone())
+        }
+        _ => anyhow::bail!("Invalid clipboard direction"),
     }
 }
 

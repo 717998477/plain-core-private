@@ -290,112 +290,7 @@ pub(super) async fn current_peer(
     .await?
 }
 
-async fn synchronize_clipboard(
-    state: &ServerState,
-    peer_id: &str,
-    identity: &Identity,
-    cancelled: &watch::Receiver<bool>,
-) -> Result<()> {
-    if !plain_rs::clipboard::sync::receives(&state.prefs, peer_id)?
-        || !current_peer(state, peer_id, identity, cancelled).await?
-    {
-        return Ok(());
-    }
-    let Some(host_generation) = state.host.generation() else {
-        return Ok(());
-    };
-    let capabilities = crate::services::capabilities::snapshot(&state.host).await?;
-    if !capabilities
-        .iter()
-        .any(|capability| capability == "CLIPBOARD")
-    {
-        return Ok(());
-    }
-    let base = identity.http_url()?;
-    let data = super::management_http::query(
-        state,
-        &base,
-        &state.native_client_id().map_err(anyhow::Error::msg)?,
-        &plain_rs::utils::base64::base64_decode(&identity.token),
-        json!({"query":r#"{ clipboardItems(query:"",offset:0,limit:1) { id text sensitive } }"#}),
-        4 * 1024 * 1024,
-    )
-    .await?;
-    let items: Vec<plain_rs::clipboard::sync::Item> =
-        serde_json::from_value(data["clipboardItems"].clone())?;
-    ensure!(items.len() <= 1, "Invalid clipboard snapshot");
-    if let Some(item) = items.first() {
-        if !state.host.is_current(host_generation)
-            || !current_peer(state, peer_id, identity, cancelled).await?
-            || !plain_rs::clipboard::sync::prepare(&state.prefs, peer_id, item)?
-        {
-            return Ok(());
-        }
-        crate::services::clipboard::record_history(
-            &state.db,
-            &state.events,
-            &item.text,
-            peer_id,
-            false,
-        )
-        .map_err(anyhow::Error::msg)?;
-        let result = state
-            .host
-            .call_current(
-                host_generation,
-                "systemSetClipboard",
-                json!({"text":item.text}),
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-        ensure!(result.as_bool() == Some(true), "Clipboard write failed");
-        plain_rs::clipboard::sync::applied(&state.prefs, peer_id, item)?;
-    }
-    Ok(())
-}
-
-async fn follow_clipboard(
-    state: &ServerState,
-    peer_id: &str,
-    identity: &Identity,
-    cancelled: &watch::Receiver<bool>,
-    changed: &tokio::sync::Notify,
-) {
-    let mut preferences = state.events.subscribe();
-    let mut host_changes = state.host.connection_changes();
-    let mut receives = plain_rs::clipboard::sync::receives(&state.prefs, peer_id).unwrap_or(false);
-    loop {
-        if let Err(error) = synchronize_clipboard(state, peer_id, identity, cancelled).await {
-            log::debug!("Peer clipboard sync failed: {error}");
-        }
-        loop {
-            let refresh = tokio::select! {
-                _ = changed.notified() => true,
-                result = host_changes.changed() => {
-                    if result.is_err() { return; }
-                    true
-                },
-                event = preferences.recv() => match event {
-                    Ok(event) if event.event_type == "PREFS_UPDATED" => {
-                        let enabled = plain_rs::clipboard::sync::receives(&state.prefs, peer_id).unwrap_or(false);
-                        let refresh = enabled && !receives;
-                        receives = enabled;
-                        refresh
-                    },
-                    Ok(event) if event.event_type == "PERMISSIONS_UPDATED" => true,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-                    _ => false,
-                },
-            };
-            if refresh {
-                break;
-            }
-        }
-    }
-}
-
-fn next_delay(delay: Duration) -> Duration {
+pub(super) fn next_delay(delay: Duration) -> Duration {
     (delay * 2).min(Duration::from_secs(30))
 }
 
@@ -404,12 +299,25 @@ pub(super) async fn refresh_data(
     id: &str,
     identity: &Identity,
     cancelled: &watch::Receiver<bool>,
+    clipboard_access: Option<&watch::Sender<Option<bool>>>,
 ) -> Result<()> {
     let app = match super::metadata::refresh(state, id, identity, cancelled).await {
         Ok(Some(app)) => Ok(app),
-        Ok(None) => return Ok(()),
+        Ok(None) => {
+            if let Some(access) = clipboard_access {
+                access.send_replace(None);
+            }
+            return Ok(());
+        }
         Err(error) => Err(error),
     };
+    let clipboard = app.as_ref().ok().map(|app| {
+        app.capabilities.iter().any(|value| value == "CLIPBOARD")
+            && app.permissions.iter().any(|value| value == "CLIPBOARD")
+    });
+    if let Some(access) = clipboard_access {
+        access.send_replace(clipboard);
+    }
     super::notifications::refresh_from_app(state, id, identity, cancelled, app).await
 }
 
@@ -419,6 +327,7 @@ async fn follow_data(
     identity: &Identity,
     cancelled: &watch::Receiver<bool>,
     changed: &tokio::sync::Notify,
+    clipboard_access: watch::Sender<Option<bool>>,
 ) {
     let mut interval = tokio::time::interval_at(
         tokio::time::Instant::now() + Duration::from_secs(60),
@@ -426,7 +335,9 @@ async fn follow_data(
     );
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        if let Err(error) = refresh_data(state, id, identity, cancelled).await {
+        if let Err(error) =
+            refresh_data(state, id, identity, cancelled, Some(&clipboard_access)).await
+        {
             log::debug!("Peer data refresh failed: {error}");
         }
         tokio::select! {
@@ -443,14 +354,17 @@ async fn run(
     mut cancelled: watch::Receiver<bool>,
 ) {
     let changed = tokio::sync::Notify::new();
+    let clipboard_changed = tokio::sync::Notify::new();
+    let (clipboard_access, access) = watch::channel(None);
     let mut stop = state.stop.clone();
     let publication_cancelled = cancelled.clone();
     tokio::select! {
         biased;
         _ = stop.wait_for(|stopped| *stopped) => {},
         _ = cancelled.wait_for(|cancelled| *cancelled) => {},
-        _ = follow_data(&state, &id, &identity, &publication_cancelled, &changed) => {},
-        _ = connection_loop(state.clone(), id.clone(), identity.clone(), publication_cancelled.clone(), &changed) => {},
+        _ = follow_data(&state, &id, &identity, &publication_cancelled, &changed, clipboard_access) => {},
+        _ = connection_loop(state.clone(), id.clone(), identity.clone(), publication_cancelled.clone(), &changed, &clipboard_changed) => {},
+        _ = super::clipboard::follow(&state, &id, &identity, &publication_cancelled, &clipboard_changed, access) => {},
     }
 }
 
@@ -460,6 +374,7 @@ async fn connection_loop(
     identity: Identity,
     mut cancelled: watch::Receiver<bool>,
     data_changed: &tokio::sync::Notify,
+    clipboard_changed: &tokio::sync::Notify,
 ) {
     let key = plain_rs::utils::base64::base64_decode(&identity.token);
     let mut stop = state.stop.clone();
@@ -483,7 +398,7 @@ async fn connection_loop(
                 )?;
                 let mut stream = plain_rs::protocols::websocket::Stream::new(&registration);
                 socket.send(Message::Binary(registration.into())).await?;
-                let changed = tokio::sync::Notify::new();
+                clipboard_changed.notify_one();
                 let messages = async {
                     while let Some(message) = socket.next().await {
                         match message? {
@@ -504,7 +419,7 @@ async fn connection_loop(
                                         {
                                             break;
                                         }
-                                        changed.notify_one();
+                                        clipboard_changed.notify_one();
                                     } else {
                                         data_changed.notify_one();
                                     }
@@ -518,10 +433,7 @@ async fn connection_loop(
                     }
                     Ok::<_, anyhow::Error>(())
                 };
-                tokio::select! {
-                    result = messages => result,
-                    _ = follow_clipboard(&state, &id, &identity, &publication_cancelled, &changed) => Ok(()),
-                }
+                messages.await
             };
             tokio::select! {
                 biased;

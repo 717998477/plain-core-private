@@ -40,7 +40,10 @@ async fn native_report_http_search_delete_and_restart_share_one_clipboard() {
         .await
         .unwrap();
     let changed = events.try_recv().unwrap();
-    assert_eq!(changed.event_type, "CONTENT_CHANGED");
+    assert_eq!(
+        changed.event_type,
+        plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED
+    );
     assert_eq!(changed.payload, "{}");
     assert!(events.try_recv().is_err());
     let page = call(server.port, &token,
@@ -122,7 +125,10 @@ async fn reports_recheck_permission_deduplicate_and_publish_only_nonsensitive_te
     assert!(events.try_recv().is_err());
     prefs.set("api_permissions", json!(["CLIPBOARD"])).unwrap();
     report(&state, &payload).unwrap();
-    assert_eq!(events.try_recv().unwrap().event_type, "CONTENT_CHANGED");
+    assert_eq!(
+        events.try_recv().unwrap().event_type,
+        plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED
+    );
     let event = events.try_recv().unwrap();
     assert_eq!(event.event_type, "CLIPBOARD_CHANGED");
     let body: Value = serde_json::from_str(&event.payload).unwrap();
@@ -143,5 +149,81 @@ async fn reports_recheck_permission_deduplicate_and_publish_only_nonsensitive_te
     }
     assert_eq!(state.db.clipboard_count_rows().unwrap(), 1);
     assert!(events.try_recv().is_err());
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn local_captures_coalesce_duplicates_and_sensitive_or_historical_changes_invalidate_pending_pushes()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let (server, _, prefs) = start(&directory);
+    let state = server.runtime_state();
+    let mut changes = state.clipboard_changes.subscribe();
+    prefs.set("api_permissions", json!(["CLIPBOARD"])).unwrap();
+    report(
+        &state,
+        &json!({"text":"first","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(changes.has_changed().unwrap());
+    let first = changes.borrow_and_update().clone().unwrap();
+    assert!(first.eligible);
+    report(
+        &state,
+        &json!({"text":"first","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(!changes.has_changed().unwrap());
+    report(
+        &state,
+        &json!({"text":"first","sensitive":true}).to_string(),
+    )
+    .unwrap();
+    let secret = changes.borrow_and_update().clone().unwrap();
+    assert!(!secret.eligible && secret.sensitive);
+    report(
+        &state,
+        &json!({"text":"second","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(changes.borrow_and_update().as_ref().unwrap().eligible);
+    report(
+        &state,
+        &json!({"text":"first","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(!changes.borrow_and_update().as_ref().unwrap().eligible);
+    prefs.set("api_permissions", json!([])).unwrap();
+    report(
+        &state,
+        &json!({"text":"disabled","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(!changes.has_changed().unwrap());
+    assert_eq!(state.db.clipboard_count_rows().unwrap(), 2);
+    prefs.set("api_permissions", json!(["CLIPBOARD"])).unwrap();
+    report(
+        &state,
+        &json!({"text":"third","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(changes.borrow_and_update().as_ref().unwrap().eligible);
+    state.clipboard_changes.received("third");
+    assert!(changes.has_changed().unwrap());
+    assert!(!changes.borrow_and_update().as_ref().unwrap().eligible);
+    report(
+        &state,
+        &json!({"text":"third","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(!changes.has_changed().unwrap());
+    state.db.clipboard_delete_query("all:true").unwrap();
+    report(
+        &state,
+        &json!({"text":"third","sensitive":false}).to_string(),
+    )
+    .unwrap();
+    assert!(changes.has_changed().unwrap());
+    assert!(changes.borrow_and_update().as_ref().unwrap().eligible);
     server.shutdown().await;
 }

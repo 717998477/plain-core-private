@@ -158,6 +158,7 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                         if !matches!(
                             field.node.name.node.as_str(),
                             "setClipboard"
+                                | "deleteClipboardItems"
                                 | "advanceAudioSelection"
                                 | "reportAudioPlayback"
                                 | "sendChatItems"

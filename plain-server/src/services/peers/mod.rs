@@ -62,3 +62,6 @@ mod notifications;
 
 #[cfg(feature = "core")]
 mod metadata;
+
+#[cfg(feature = "core")]
+mod clipboard;

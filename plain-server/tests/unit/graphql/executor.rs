@@ -100,6 +100,7 @@ fn service_owned_media_notifications_are_not_repeated_by_aliases_or_fragments() 
 fn cache_only_and_task_owned_mutations_skip_the_generic_content_broadcast() {
     for query in [
         "mutation { preview: cacheSharedFile }",
+        "mutation { deleted: deleteClipboardItems(query: \"all:true\") { affectedCount } }",
         "mutation { cacheRemoteFile cacheZipEntry cacheAudioCover exportAppLogs }",
         "mutation { ...Cache } fragment Cache on Mutation { cacheRemoteFile }",
         "mutation { ... on Mutation { copyFileToDirectory copyFile moveFile renameFile } }",

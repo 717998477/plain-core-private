@@ -1,4 +1,11 @@
-use super::super::management::refresh_data as refresh;
+async fn refresh(
+    state: &crate::assembly::server::ServerState,
+    id: &str,
+    identity: &super::super::management::Identity,
+    cancelled: &tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    super::super::management::refresh_data(state, id, identity, cancelled, None).await
+}
 use super::super::metadata::AppSnapshot as App;
 use super::*;
 use crate::graphql::types::Instant;

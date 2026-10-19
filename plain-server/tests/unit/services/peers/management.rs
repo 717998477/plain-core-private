@@ -1,3 +1,4 @@
+use super::super::clipboard::receive as synchronize_clipboard;
 use super::*;
 use plain_rs::{chat::enums::DeviceType, db::chat_store::SaveMode};
 

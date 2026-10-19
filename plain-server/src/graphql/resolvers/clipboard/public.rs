@@ -68,6 +68,9 @@ impl ClipboardMutation {
             false,
         )
         .map_err(async_graphql::Error::new)?;
+        if let Some(state) = ctx.data_opt::<crate::assembly::server::ServerState>() {
+            state.clipboard_changes.received(&text);
+        }
         let result = ctx
             .data::<Arc<Host>>()?
             .call("systemSetClipboard", serde_json::json!({ "text": text }))
@@ -90,12 +93,20 @@ impl ClipboardMutation {
                 "query is required for bulk mutations — pass 'all:true' to explicitly target everything",
             ));
         }
+        let affected_count = ctx
+            .data::<Arc<Db>>()?
+            .clipboard_delete_query(&query)
+            .map_err(async_graphql::Error::new)?;
+        if affected_count > 0 {
+            let _ = ctx
+                .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?
+                .send(plain_rs::events::WsEvent::broadcast(
+                    plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED,
+                    "{}".into(),
+                ));
+        }
         Ok(ActionResult {
-            affected_count: ctx
-                .data::<Arc<Db>>()?
-                .clipboard_delete_query(&query)
-                .map_err(async_graphql::Error::new)?
-                .try_into()?,
+            affected_count: affected_count.try_into()?,
         })
     }
 }

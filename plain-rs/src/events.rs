@@ -1,3 +1,4 @@
+pub const H_CLIPBOARD_HISTORY_UPDATED: &str = "H_CLIPBOARD_HISTORY_UPDATED";
 pub const MEDIA_LIBRARY_UPDATED: &str = "MEDIA_LIBRARY_UPDATED";
 pub const AUDIO_LIBRARY_UPDATED: &str = "AUDIO_LIBRARY_UPDATED";
 pub const PEER_NOTIFICATIONS_UPDATED: &str = "PEER_NOTIFICATIONS_UPDATED";
@@ -88,7 +89,8 @@ impl WsEvent {
     pub fn is_internal(&self) -> bool {
         matches!(
             self.event_type,
-            "BACKGROUND_EXECUTION_FINISHED"
+            H_CLIPBOARD_HISTORY_UPDATED
+                | "BACKGROUND_EXECUTION_FINISHED"
                 | "EXECUTION_STATE_CHANGED"
                 | HTTP_SERVER_FAILED
                 | HTTP_SERVER_STARTED

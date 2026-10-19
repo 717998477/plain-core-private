@@ -90,3 +90,11 @@ fn aggregated_notifications_are_native_only_and_cannot_be_reported_by_sdk_hosts(
     assert!(event.into_public().is_none());
     assert!(WsEvent::host_text(PEER_NOTIFICATIONS_UPDATED, "{}".into()).is_none());
 }
+
+#[test]
+fn http_clipboard_history_notifications_are_local_and_cannot_be_uploaded() {
+    let event = WsEvent::broadcast(H_CLIPBOARD_HISTORY_UPDATED, "{}".into());
+    assert!(event.is_internal());
+    assert!(event.into_public().is_none());
+    assert!(WsEvent::host_text(H_CLIPBOARD_HISTORY_UPDATED, "{}".into()).is_none());
+}
