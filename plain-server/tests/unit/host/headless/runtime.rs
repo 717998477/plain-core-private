@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(feature = "http_transport")]
+#[path = "runtime/multi_device.rs"]
+mod multi_device;
+
 struct Directory(std::path::PathBuf);
 
 impl Directory {
@@ -21,6 +25,13 @@ async fn access_primitives_report_capabilities_and_grants_without_an_app_busines
     let directory = Directory::new();
     let core = Arc::new(ContentServer::open(&directory.0).unwrap());
     let runtime = Runtime::new(core.clone(), vec!["MEDIA_SCAN".into()]);
+    assert_eq!(
+        runtime
+            .dispatch("peerTransportCapabilities", serde_json::json!({}))
+            .await
+            .unwrap(),
+        serde_json::json!([])
+    );
     assert_eq!(
         runtime
             .dispatch("systemCapabilities", serde_json::json!({}))

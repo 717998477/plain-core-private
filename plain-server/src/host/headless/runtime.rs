@@ -30,6 +30,7 @@ impl Runtime {
             "systemCapabilities" => {
                 serde_json::to_value(&self.capabilities).map_err(|error| error.to_string())
             }
+            "peerTransportCapabilities" => Ok(serde_json::json!([])),
             "systemPermissionFacts" => {
                 crate::host::permission_facts::facts(&["WRITE_EXTERNAL_STORAGE".to_owned()], params)
             }
