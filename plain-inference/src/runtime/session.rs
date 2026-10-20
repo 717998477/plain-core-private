@@ -1,7 +1,7 @@
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     ptr::NonNull,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 #[repr(C)]
 pub struct Input {
@@ -39,6 +39,8 @@ unsafe extern "C" {
         capacity: usize,
     ) -> i32;
 }
+static CONTEXT_LIFECYCLE: Mutex<()> = Mutex::new(());
+
 pub struct Context(NonNull<c_void>);
 unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
@@ -51,6 +53,9 @@ impl Context {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let library = CString::new(library_path()).map_err(|e| e.to_string())?;
         let mut error = [0 as c_char; 2048];
+        let _lifecycle = CONTEXT_LIFECYCLE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let pointer =
             unsafe { plain_onnx_context(library.as_ptr(), error.as_mut_ptr(), error.len()) };
         NonNull::new(pointer)
@@ -64,6 +69,9 @@ impl Context {
 }
 impl Drop for Context {
     fn drop(&mut self) {
+        let _lifecycle = CONTEXT_LIFECYCLE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         unsafe {
             plain_onnx_close_context(self.0.as_ptr());
         }
@@ -192,3 +200,7 @@ fn library_path() -> String {
         name.into()
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/runtime/session.rs"]
+mod tests;
