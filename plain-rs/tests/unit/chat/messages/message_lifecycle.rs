@@ -328,3 +328,113 @@ fn failed_attachment_batch_does_not_claim_imports_or_leave_partial_messages() {
     assert!(db.get_all_chats().is_empty());
     assert_eq!(attachment_refs(&db, &file.id), 1);
 }
+
+fn assert_invalid_attachment(content: Value, db: &Db, file: &app_file_store::ImportResult) {
+    let content = content.to_string();
+    let signature = crate::base64_encode(&[7; 64]);
+    db.upsert_peer(&DPeer::new(
+        "peer",
+        "Fixture",
+        "",
+        Some(1),
+        crate::chat::enums::DeviceType::Phone,
+    ));
+    assert!(
+        create_many(
+            db,
+            &[("local".into(), "".into()), ("peer".into(), "".into())],
+            &content
+        )
+        .is_err(),
+        "accepted outgoing {content}"
+    );
+    assert!(
+        receive(
+            db,
+            "peer",
+            "",
+            &content,
+            &signature,
+            crate::peers::pairing::now_ms()
+        )
+        .is_err(),
+        "accepted incoming {content}"
+    );
+    assert!(db.get_all_chats().is_empty());
+    assert_eq!(
+        db.with_conn(
+            |c| c.query_row("SELECT count(*) FROM chat_receipts", [], |r| r
+                .get::<_, i64>(0))
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(attachment_refs(db, &file.id), 1);
+    assert!(file.real_path.exists());
+}
+
+#[test]
+fn malformed_attachment_lists_never_write_messages_or_receipts() {
+    let (_dir, db, file) = attachment_fixture();
+    for kind in ["FILES", "IMAGES"] {
+        for items in [
+            json!({}),
+            json!(null),
+            json!("items"),
+            json!([null]),
+            json!([42]),
+        ] {
+            assert_invalid_attachment(json!({"type":kind,"value":{"items":items}}), &db, &file);
+        }
+    }
+}
+
+#[test]
+fn invalid_attachment_fields_never_claim_files_or_consume_receipts() {
+    let (_dir, db, file) = attachment_fixture();
+    for kind in ["FILES", "IMAGES"] {
+        for (field, invalid) in [
+            ("size", json!(-1)),
+            ("size", json!(1.5)),
+            ("size", json!("4")),
+            ("size", json!(null)),
+            ("size", json!(u64::MAX)),
+            ("durationMs", json!(-1)),
+            ("durationMs", json!(0.5)),
+            ("duration", json!(-1)),
+            ("duration", json!(i64::MAX)),
+            ("legacyDurationSec", json!(-1)),
+            ("legacyDurationSec", json!(i64::MAX)),
+            ("width", json!(-1)),
+            ("height", json!(i64::MAX)),
+            ("uri", json!(null)),
+            ("uri", json!(42)),
+            ("fileName", json!(42)),
+            ("summary", json!(null)),
+            ("id", json!(false)),
+        ] {
+            let mut item = attachment_item("file", &file);
+            item[field] = invalid;
+            assert_invalid_attachment(json!({"type":kind,"value":{"items":[item]}}), &db, &file);
+        }
+    }
+}
+
+#[test]
+fn valid_attachment_defaults_legacy_duration_and_empty_lists_remain_supported() {
+    let (_dir, db, file) = attachment_fixture();
+    for kind in ["FILES", "IMAGES"] {
+        for item in [
+            json!({"uri":format!("fid:{}", file.fid_suffix),"size":0}),
+            json!({"uri":format!("fid:{}", file.fid_suffix),"size":26,"duration":2}),
+            json!({"uri":format!("fid:{}", file.fid_suffix),"size":26,"legacyDurationSec":2}),
+            json!({"uri":format!("fid:{}", file.fid_suffix),"size":26,"durationMs":null,"duration":null}),
+            json!({"uri":format!("fid:{}", file.fid_suffix),"size":26,"durationMs":3000,"width":320,"height":240,"extra":true}),
+        ] {
+            let content = json!({"type":kind,"value":{"items":[item]}}).to_string();
+            assert_eq!(create(&db, "local", "", &content).unwrap().content, content);
+        }
+        let content = json!({"type":kind,"value":{"items":[]}}).to_string();
+        assert_eq!(create(&db, "local", "", &content).unwrap().content, content);
+    }
+}

@@ -57,6 +57,62 @@ pub(crate) fn validate_content(content: &str) -> Result<()> {
     {
         bail!("invalid chat content envelope");
     }
+    if matches!(value["type"].as_str(), Some("FILES" | "IMAGES")) {
+        let items = value["value"]["items"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("invalid attachment items"))?;
+        for item in items {
+            validate_attachment(item)?;
+        }
+    }
+    Ok(())
+}
+fn validate_attachment(item: &serde_json::Value) -> Result<()> {
+    if !item.is_object()
+        || !item
+            .get("uri")
+            .is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()))
+    {
+        bail!("invalid attachment URI");
+    }
+    if !item
+        .get("size")
+        .is_some_and(|v| v.as_i64().is_some_and(|n| n >= 0))
+    {
+        bail!("invalid attachment size");
+    }
+    for field in ["id", "fileName", "summary"] {
+        if item.get(field).is_some_and(|v| !v.is_string()) {
+            bail!("invalid attachment {field}");
+        }
+    }
+    for field in ["width", "height"] {
+        if item.get(field).is_some_and(|v| {
+            !v.as_i64()
+                .is_some_and(|n| (0..=i64::from(i32::MAX)).contains(&n))
+        }) {
+            bail!("invalid attachment {field}");
+        }
+    }
+    for field in ["durationMs", "duration", "legacyDurationSec"] {
+        if item
+            .get(field)
+            .is_some_and(|v| !v.is_null() && !v.as_i64().is_some_and(|n| n >= 0))
+        {
+            bail!("invalid attachment duration");
+        }
+    }
+    if item
+        .get("durationMs")
+        .is_none_or(serde_json::Value::is_null)
+        && ["duration", "legacyDurationSec"].iter().any(|field| {
+            item.get(field)
+                .and_then(serde_json::Value::as_i64)
+                .is_some_and(|n| n.checked_mul(1000).is_none())
+        })
+    {
+        bail!("invalid attachment duration");
+    }
     Ok(())
 }
 #[derive(serde::Deserialize)]

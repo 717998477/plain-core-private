@@ -214,14 +214,14 @@ fn seed_named_chat(db: &Db, at: &str, uri: &str, name: &str) {
         "",
         &serde_json::json!({
             "type": "FILES",
-            "value": { "items": [ {"uri": uri, "fileName": name} ] }
+            "value": { "items": [ {"uri": uri, "fileName": name, "size": 0} ] }
         })
         .to_string(),
     );
     chat.id = format!("c-{at}");
     chat.created_at = at.to_string();
     chat.updated_at = at.to_string();
-    db.insert_chat(&chat);
+    db.insert_chat(&chat).unwrap();
 }
 
 #[test]
