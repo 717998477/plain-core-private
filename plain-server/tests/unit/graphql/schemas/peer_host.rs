@@ -170,6 +170,7 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
         )
         .unwrap()
     };
+    let mut received_events = server.runtime_state().events.subscribe();
     let public_url = format!("https://127.0.0.1:{https}/peer_graphql");
     let body = wire(
         json!({"query":"mutation Incoming($content:String!) { renamed:createChatItem(content:$content) { ...Fields } } fragment Fields on ChatItem { id fromId channelId content createdAt updatedAt status }", "operationName":"Incoming", "variables":{"content":json!({"type":"TEXT","value":{"text":"hello"}}).to_string()}}),
@@ -190,6 +191,15 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
     let id = content["data"]["renamed"][0]["id"].as_str().unwrap();
     assert_eq!(messages::get(&db, id).unwrap().unwrap().from_id, "peer");
     assert!(content["data"]["renamed"][0]["channelId"].is_null());
+    let event = std::iter::from_fn(|| received_events.try_recv().ok())
+        .take(32)
+        .find(|event| event.event_type == plain_rs::chat::events::WS_MESSAGE_CREATED)
+        .expect("received message event");
+    let stored = messages::get(&db, id).unwrap().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&event.payload).unwrap(),
+        json!([plain_rs::chat::service::chat_to_json(&stored)])
+    );
     for expected in [false, true] {
         if expected {
             let mut current = peers::get(&db, "peer").unwrap().unwrap();

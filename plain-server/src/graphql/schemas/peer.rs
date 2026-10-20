@@ -70,7 +70,7 @@ impl Mutation {
         let item = ChatItem::try_from(received.chat.clone())?;
         let _ = c.state.events.send(plain_rs::events::WsEvent::broadcast(
             plain_rs::chat::events::WS_MESSAGE_CREATED,
-            json!([{"id":received.chat.id}]).to_string(),
+            json!([plain_rs::chat::service::chat_to_json(&received.chat)]).to_string(),
         ));
         if let Ok(content) = serde_json::from_str::<Value>(&received.chat.content) {
             if matches!(content["type"].as_str(), Some("FILES" | "IMAGES")) {
