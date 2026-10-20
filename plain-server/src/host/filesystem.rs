@@ -127,7 +127,7 @@ pub(crate) async fn file(State(state): State<ServerState>, request: Request) -> 
             &plain_rs::utils::base64::base64_decode(&id),
         )
         .ok_or_else(|| anyhow::anyhow!("Invalid file id"))?;
-        let plain = resolve(&state, &String::from_utf8(plain)?).await?;
+        let plain = String::from_utf8(plain)?;
         if plain.starts_with('{') {
             let value: Value = serde_json::from_str(&plain)?;
             let path = resolve(&state, value["path"].as_str().unwrap_or_default()).await?;
@@ -137,7 +137,7 @@ pub(crate) async fn file(State(state): State<ServerState>, request: Request) -> 
                 value["name"].as_str().unwrap_or_default().to_owned(),
             ))
         } else {
-            Ok((plain, String::new(), String::new()))
+            Ok((resolve(&state, &plain).await?, String::new(), String::new()))
         }
     }
     .await;

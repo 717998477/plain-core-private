@@ -160,3 +160,64 @@ async fn fs_serves_fid_uris_from_app_file_store() {
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     assert_eq!(body_bytes(resp).await, b"fid-payload-bytes");
 }
+
+#[tokio::test]
+async fn fs_serves_json_wrapped_references_with_names_and_ranges() {
+    let (_root, _core, state, key) = test_state();
+    let imported = plain_rs::chat::attachments::app_file_store::import_bytes(
+        &state.db,
+        &state.directory,
+        b"fid-payload-bytes",
+        "text/plain",
+    )
+    .unwrap();
+    let uri = format!("fid:{}", imported.fid_suffix);
+    for path in [&uri, "relative.txt"] {
+        if path == "relative.txt" {
+            std::fs::write(state.directory.join(path), b"fid-payload-bytes").unwrap();
+        }
+        let envelope = serde_json::json!({"path":path,"name":"preview.txt"}).to_string();
+        let id = file_id(&key, &envelope);
+        let response = call_fs(
+            &state,
+            &format!("id={id}&dl=1"),
+            &[range_header("bytes=4-10")],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert!(
+            response.headers()[header::CONTENT_DISPOSITION]
+                .to_str()
+                .unwrap()
+                .contains("preview.txt")
+        );
+        assert_eq!(body_bytes(response).await, b"payload");
+    }
+}
+
+#[cfg(feature = "media")]
+#[tokio::test]
+async fn fs_json_wrapped_image_reference_returns_decodable_thumbnail() {
+    let (_root, _core, state, key) = test_state();
+    let bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../plain-rs/testdata/v-prog420.jpg"
+    ));
+    let imported = plain_rs::chat::attachments::app_file_store::import_bytes(
+        &state.db,
+        &state.directory,
+        bytes,
+        "image/jpeg",
+    )
+    .unwrap();
+    let envelope =
+        serde_json::json!({"path":format!("fid:{}", imported.fid_suffix),"name":"preview.jpg"})
+            .to_string();
+    let id = file_id(&key, &envelope);
+    let response = call_fs(&state, &format!("id={id}&w=32&h=32"), &[]).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let thumbnail = image::load_from_memory(&body).unwrap();
+    assert!(thumbnail.width() > 0 && thumbnail.width() <= 32);
+    assert!(thumbnail.height() > 0 && thumbnail.height() <= 32);
+}
