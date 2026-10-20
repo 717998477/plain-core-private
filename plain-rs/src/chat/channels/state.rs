@@ -64,7 +64,10 @@ pub fn apply(db: &Db, actor: &str, id: &str, action: Action) -> Result<DChannel>
         let mut changed=true;
         let mut versioned=false;
         match action {
-            Action::Rename { name } => { channel.name=name.trim().into(); versioned=true; }
+            Action::Rename { name } => {
+                if channel.owner_id.as_deref() != Some(actor) { bail!("Only owner can rename channel"); }
+                channel.name=name.trim().into(); versioned=true;
+            }
             Action::Leave => {
                 if channel.owner_id.as_deref() == Some(actor) { bail!("Owner cannot leave; delete the channel instead"); }
                 channel.status=ChannelStatus::Left;

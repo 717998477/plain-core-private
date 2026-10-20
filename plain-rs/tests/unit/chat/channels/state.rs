@@ -51,6 +51,35 @@ fn owner_cannot_remove_itself_or_change_membership_on_failure() {
 }
 
 #[test]
+fn non_owner_rename_is_rejected_without_changing_any_channel_field() {
+    for (status, membership) in [
+        (ChannelStatus::Joined, Some(ChannelMember::pending("guest"))),
+        (ChannelStatus::Joined, Some(ChannelMember::new("guest"))),
+        (ChannelStatus::Joined, None),
+        (ChannelStatus::Left, None),
+        (ChannelStatus::Kicked, None),
+    ] {
+        let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+        let mut channel = create(&db, "owner", "original").unwrap();
+        let mut members = vec![ChannelMember::new("owner")];
+        members.extend(membership);
+        channel.members = serde_json::to_string(&members).unwrap();
+        channel.status = status;
+        channels::save(&db, std::slice::from_ref(&channel), SaveMode::Update).unwrap();
+        let before = channels::get(&db, &channel.id).unwrap().unwrap();
+        let result = apply(
+            &db,
+            "guest",
+            &before.id,
+            Action::Rename { name: "forbidden".into() },
+        );
+        let after = channels::get(&db, &before.id).unwrap().unwrap();
+        assert_eq!(after, before);
+        assert!(result.unwrap_err().to_string().contains("Only owner"));
+    }
+}
+
+#[test]
 fn creation_mutations_and_invite_validation_preserve_credentials_and_version_rules() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     let channel = create(&db, "owner", "  中文 group  ").unwrap();
