@@ -23,8 +23,6 @@ use std::{
 const ZIP_SEPARATOR: &str = "!zip!/";
 const MAX_ENTRIES: usize = 100_000;
 
-static NEXT_STAGING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 #[derive(Deserialize)]
 pub(crate) struct Params {
     #[serde(default)]
@@ -159,28 +157,19 @@ fn collect_archive_entries(
     Ok(())
 }
 
-/// Extracted entries of one request, deleted with the directory when it ends.
 struct Staging {
-    directory: PathBuf,
+    directory: tempfile::TempDir,
 }
 
 impl Staging {
-    fn create() -> std::io::Result<Self> {
-        let sequence = NEXT_STAGING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let directory =
-            std::env::temp_dir().join(format!("plain-zip-{}-{sequence}", std::process::id()));
-        std::fs::create_dir_all(&directory)?;
-        Ok(Self { directory })
+    fn create(cache: &Path) -> std::io::Result<Self> {
+        Ok(Self {
+            directory: tempfile::Builder::new().prefix("zip-").tempdir_in(cache)?,
+        })
     }
 
     fn entry_path(&self, index: usize) -> PathBuf {
-        self.directory.join(format!("{index}.entry"))
-    }
-}
-
-impl Drop for Staging {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.directory);
+        self.directory.path().join(format!("{index}.entry"))
     }
 }
 
@@ -276,7 +265,7 @@ async fn zip_dir(
         return plain(StatusCode::BAD_REQUEST, "");
     }
     if let Some((archive, inner)) = split_zip_path(&path) {
-        let staging = match Staging::create() {
+        let staging = match Staging::create(state.cache.root()) {
             Ok(staging) => staging,
             Err(_) => {
                 return plain(

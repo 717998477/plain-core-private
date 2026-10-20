@@ -1,5 +1,7 @@
 use super::*;
 
+static NEXT_STAGING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[test]
 fn zip_virtual_paths_split_into_archive_and_prefix() {
     let dir = std::env::temp_dir().join(format!("plain_zip_path_{}", std::process::id()));
@@ -137,10 +139,14 @@ fn scratch(name: &str) -> PathBuf {
 
 #[test]
 fn every_request_stages_into_its_own_directory() {
-    let first = Staging::create().unwrap();
-    let second = Staging::create().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let first = Staging::create(cache.path()).unwrap();
+    let second = Staging::create(cache.path()).unwrap();
+    assert_eq!(first.directory.path().parent(), Some(cache.path()));
+    assert_eq!(second.directory.path().parent(), Some(cache.path()));
     assert_ne!(
-        first.directory, second.directory,
+        first.directory.path(),
+        second.directory.path(),
         "two requests must not share one staging directory"
     );
 
@@ -157,7 +163,8 @@ fn every_request_stages_into_its_own_directory() {
 
 #[test]
 fn a_request_with_many_entries_keeps_them_apart() {
-    let staging = Staging::create().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let staging = Staging::create(cache.path()).unwrap();
     std::fs::write(staging.entry_path(0), b"one").unwrap();
     std::fs::write(staging.entry_path(1), b"two").unwrap();
 
@@ -167,9 +174,10 @@ fn a_request_with_many_entries_keeps_them_apart() {
 
 #[test]
 fn staged_entries_disappear_when_the_request_ends() {
-    let staging = Staging::create().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let staging = Staging::create(cache.path()).unwrap();
     std::fs::write(staging.entry_path(0), b"payload").unwrap();
-    let directory = staging.directory.clone();
+    let directory = staging.directory.path().to_owned();
     assert!(directory.is_dir());
 
     drop(staging);
@@ -185,7 +193,8 @@ fn archive_entries_are_extracted_into_the_request_directory() {
     let dir = scratch("extract");
     let archive = dir.join("pack.zip");
     write_archive(&archive, &[("a.txt", b"alpha"), ("sub/b.txt", b"beta")]);
-    let staging = Staging::create().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let staging = Staging::create(cache.path()).unwrap();
     let mut items = Vec::new();
 
     collect_archive_entries(&archive, "", &staging, &mut items).unwrap();
@@ -197,7 +206,7 @@ fn archive_entries_are_extracted_into_the_request_directory() {
     for (path, _) in &items {
         assert_eq!(
             path.parent(),
-            Some(staging.directory.as_path()),
+            Some(staging.directory.path()),
             "entries must live inside this request's staging directory"
         );
         assert!(path.is_file());
@@ -212,8 +221,9 @@ fn an_unreadable_archive_leaves_no_staged_files_behind() {
     let dir = scratch("broken");
     let archive = dir.join("broken.zip");
     std::fs::write(&archive, b"not a zip at all").unwrap();
-    let staging = Staging::create().unwrap();
-    let directory = staging.directory.clone();
+    let cache = tempfile::tempdir().unwrap();
+    let staging = Staging::create(cache.path()).unwrap();
+    let directory = staging.directory.path().to_owned();
     let mut items = Vec::new();
 
     let failed = collect_archive_entries(&archive, "", &staging, &mut items).is_err();
