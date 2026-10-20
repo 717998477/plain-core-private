@@ -40,7 +40,7 @@ pub fn read(
 
     let probed = super::probe::probe_media(&path_str, kind);
     let duration_ms = probed.duration_ms;
-    let (width, height, rotation, taken_at) = image_facts(&canonical, kind, decode_dimensions);
+    let (width, height, rotation, taken_at) = visual_facts(&canonical, kind, decode_dimensions);
     let available = MediaFileMetadataAvailability {
         tags: kind != "audio" || probed.parsed,
         duration: !matches!(kind, "audio" | "video") || probed.duration_available,
@@ -106,6 +106,28 @@ fn birth_unix_secs(meta: &Metadata) -> Option<i64> {
 
 fn birth_time(meta: &Metadata) -> Option<SystemTime> {
     birth_unix_secs(meta).map(|secs| SystemTime::UNIX_EPOCH + Duration::from_secs(secs as u64))
+}
+
+fn visual_facts(
+    path: &Path,
+    kind: &str,
+    decode_dimensions: impl FnOnce(File) -> Option<(u32, u32)>,
+) -> (i32, i32, Option<i32>, Option<String>) {
+    if kind == "video" {
+        return File::open(path)
+            .ok()
+            .and_then(|mut reader| super::video_info::read(&mut reader))
+            .and_then(|video| {
+                Some((
+                    i32::try_from(video.width).ok()?,
+                    i32::try_from(video.height).ok()?,
+                    Some(video.rotation),
+                    None,
+                ))
+            })
+            .unwrap_or_default();
+    }
+    image_facts(path, kind, decode_dimensions)
 }
 
 fn image_facts(

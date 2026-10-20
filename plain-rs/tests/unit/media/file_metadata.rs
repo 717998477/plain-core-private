@@ -176,14 +176,47 @@ fn timestamps_sort_chronologically_as_text() {
 }
 
 #[test]
-fn video_row_duration_comes_from_the_container_probe() {
+fn video_row_carries_container_duration_and_dimensions() {
     let m = read_file_metadata(&fixture("video-h264-baseline.mp4"), DataType::Video).unwrap();
 
     assert_eq!(m.duration_ms, 6_000);
     assert!(m.artist.is_empty());
     assert_eq!(m.title, "video-h264-baseline");
-    assert_eq!((m.width, m.height, m.rotation), (0, 0, 0));
+    assert_eq!((m.width, m.height, m.rotation), (320, 240, 0));
     assert_eq!(m.taken_at, None);
+}
+
+#[test]
+fn video_catalog_dimensions_use_shared_container_readers_without_an_image_decoder() {
+    for (name, width, height) in [
+        ("video-h264-baseline.mp4", 320, 240),
+        ("video-vp8.mkv", 16, 16),
+        ("video-mjpeg.avi", 16, 16),
+        ("video-wmv2.wmv", 16, 16),
+    ] {
+        let read = super::read(&fixture(name), DataType::Video, |_| {
+            panic!("video metadata must not use an image decoder")
+        })
+        .unwrap();
+        assert_eq!((read.metadata.width, read.metadata.height), (width, height), "{name}");
+        assert!(read.available.dimensions, "{name}");
+        assert!(read.available.rotation, "{name}");
+    }
+}
+
+#[test]
+fn unreadable_video_metadata_remains_unknown_without_invented_dimensions() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("broken.mp4");
+    std::fs::write(&path, b"not a video").unwrap();
+    let read = super::read(&path, DataType::Video, |_| {
+        panic!("invalid video must not be treated as an image")
+    })
+    .unwrap();
+    assert_eq!((read.metadata.width, read.metadata.height, read.metadata.rotation), (0, 0, 0));
+    assert!(!read.available.dimensions);
+    assert!(!read.available.rotation);
+    assert!(!read.available.duration);
 }
 
 #[test]
