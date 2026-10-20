@@ -4,6 +4,53 @@ use crate::db::DPeer;
 use crate::db::chat_store::peers;
 
 #[test]
+fn owner_cannot_remove_itself_or_change_membership_on_failure() {
+    for invite_guest in [false, true] {
+        let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+        let channel = create(&db, "owner", "group").unwrap();
+        if invite_guest {
+            apply(
+                &db,
+                "owner",
+                &channel.id,
+                Action::Invite {
+                    peer: "guest".into(),
+                },
+            )
+            .unwrap();
+        }
+        let before = channels::get(&db, &channel.id).unwrap().unwrap();
+        let failure = apply(
+            &db,
+            "owner",
+            &channel.id,
+            Action::Kick {
+                peer: "owner".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(failure.to_string().contains("Owner cannot remove"));
+        let after = channels::get(&db, &channel.id).unwrap().unwrap();
+        assert_eq!(
+            (
+                after.members,
+                after.version,
+                after.updated_at,
+                after.owner_id,
+                after.key
+            ),
+            (
+                before.members,
+                before.version,
+                before.updated_at,
+                before.owner_id,
+                before.key
+            )
+        );
+    }
+}
+
+#[test]
 fn creation_mutations_and_invite_validation_preserve_credentials_and_version_rules() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     let channel = create(&db, "owner", "  中文 group  ").unwrap();

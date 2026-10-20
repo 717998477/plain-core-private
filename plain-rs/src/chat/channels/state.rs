@@ -78,6 +78,7 @@ pub fn apply(db: &Db, actor: &str, id: &str, action: Action) -> Result<DChannel>
             }
             Action::Kick { peer } => {
                 if channel.owner_id.as_deref() != Some(actor) { bail!("Only owner can remove members"); }
+                if peer == actor { bail!("Owner cannot remove itself; delete the channel instead"); }
                 if !members.iter().any(|m|m.peer_id==peer) { bail!("Not a member"); }
                 members.retain(|m|m.peer_id!=peer); versioned=true;
             }
