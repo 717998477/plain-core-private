@@ -40,6 +40,14 @@ struct Incoming {
     public_key: String,
     target: Target,
     timestamp: i64,
+    received: Instant,
+}
+
+impl Incoming {
+    fn expired(&self) -> bool {
+        self.received.elapsed() >= RESPONSE_TIMEOUT
+            || !crate::peers::pairing::timestamp_ok(self.timestamp)
+    }
 }
 
 impl Sessions {
@@ -64,6 +72,11 @@ impl Sessions {
         if !new && target.device_ip.is_empty() {
             return false;
         }
+        let received = incoming
+            .get(&request.from_id)
+            .filter(|pending| pending.signature == request.signature)
+            .map(|pending| pending.received)
+            .unwrap_or_else(Instant::now);
         incoming.insert(
             request.from_id.clone(),
             Incoming {
@@ -71,6 +84,7 @@ impl Sessions {
                 public_key: request.signature_public_key.clone(),
                 target,
                 timestamp: request.timestamp,
+                received,
             },
         );
         new
@@ -80,15 +94,13 @@ impl Sessions {
             .lock()
             .unwrap()
             .get(id)
-            .filter(|pending| {
-                pending.signature == signature
-                    && crate::peers::pairing::timestamp_ok(pending.timestamp)
-            })
+            .filter(|pending| pending.signature == signature && !pending.expired())
             .map(|pending| pending.target.clone())
     }
     pub fn take_incoming(&self, id: &str, signature: &str) -> Option<Target> {
         let mut incoming = self.1.lock().unwrap();
-        if incoming.get(id)?.signature != signature {
+        let current = incoming.get(id)?;
+        if current.signature != signature || current.expired() {
             return None;
         }
         incoming.remove(id).map(|p| p.target)

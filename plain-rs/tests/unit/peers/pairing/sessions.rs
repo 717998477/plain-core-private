@@ -92,3 +92,58 @@ fn remaining_deadline_and_checked_take_follow_current_generation() {
             .is_none()
     );
 }
+
+fn incoming_request() -> crate::peers::pairing::protocol::PairingRequest {
+    crate::peers::pairing::protocol::PairingRequest {
+        from_id: "peer".into(),
+        from_name: "Fixture".into(),
+        port: 2443,
+        device_type: "PHONE".into(),
+        ecdh_public_key: String::new(),
+        signature_public_key: "identity".into(),
+        timestamp: crate::peers::pairing::now_ms(),
+        ips: vec![],
+        signature: "request".into(),
+        aware_supported: false,
+        from_ip: "127.0.0.1".into(),
+    }
+}
+
+#[test]
+fn incoming_approval_expires_at_response_deadline_and_replay_cannot_extend_it() {
+    let sessions = Sessions::default();
+    let mut request = incoming_request();
+    assert!(sessions.receive(&request));
+    assert!(sessions.incoming_target("peer", "request").is_some());
+    sessions.1.lock().unwrap().get_mut("peer").unwrap().received =
+        Instant::now() - RESPONSE_TIMEOUT;
+    assert!(crate::peers::pairing::timestamp_ok(request.timestamp));
+    assert!(sessions.incoming_target("peer", "request").is_none());
+    assert!(sessions.take_incoming("peer", "request").is_none());
+    request.from_ip = "127.0.0.2".into();
+    assert!(!sessions.receive(&request));
+    assert!(sessions.incoming_target("peer", "request").is_none());
+    assert!(sessions.take_incoming("peer", "request").is_none());
+    request.signature = "replacement".into();
+    request.timestamp += 1;
+    assert!(sessions.receive(&request));
+    assert!(sessions.take_incoming("peer", "request").is_none());
+    assert_eq!(
+        sessions
+            .take_incoming("peer", "replacement")
+            .unwrap()
+            .device_ip,
+        "127.0.0.2"
+    );
+    assert!(sessions.take_incoming("peer", "replacement").is_none());
+}
+
+#[test]
+fn incoming_approval_rechecks_signed_timestamp_when_consuming_request() {
+    let sessions = Sessions::default();
+    let request = incoming_request();
+    assert!(sessions.receive(&request));
+    sessions.1.lock().unwrap().get_mut("peer").unwrap().timestamp = i64::MIN;
+    assert!(sessions.incoming_target("peer", "request").is_none());
+    assert!(sessions.take_incoming("peer", "request").is_none());
+}
