@@ -50,6 +50,16 @@ impl Temporary {
         self.0.clear();
     }
 }
+async fn create_file(path: PathBuf) -> Result<(tokio::fs::File, Temporary)> {
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        Ok((tokio::fs::File::from_std(file), Temporary(path)))
+    })
+    .await?
+}
 async fn commit(source: PathBuf, target: PathBuf) -> Result<Temporary> {
     tokio::task::spawn_blocking(move || {
         std::fs::rename(source, &target)?;
@@ -104,18 +114,16 @@ async fn destination(
         } else {
             parent.join(format!("{stem} ({number}){extension}"))
         };
-        match tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-            .await
-        {
-            Ok(file) => {
+        match create_file(candidate.clone()).await {
+            Ok((file, reservation)) => {
                 drop(file);
-                return Ok((candidate.clone(), Some(Temporary(candidate))));
+                return Ok((candidate, Some(reservation)));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists) => {}
+            Err(error) => return Err(error),
         }
     }
     anyhow::bail!("Shared destination name capacity exceeded")
@@ -140,7 +148,7 @@ async fn download(
     url: String,
     path: &Path,
     expected: i64,
-) -> Result<i64> {
+) -> Result<(i64, Temporary)> {
     ensure!(expected >= 0, "Invalid shared file size");
     let url = super::shared_download::download_url(&url)?;
     let _permit = state.lan.capacity.clone().acquire_owned().await?;
@@ -154,11 +162,7 @@ async fn download(
     if let Some(length) = response.content_length() {
         ensure!(length == expected as u64, "Shared file length mismatch");
     }
-    let mut output = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .await?;
+    let (mut output, temporary) = create_file(path.to_path_buf()).await?;
     let mut stream = response.bytes_stream();
     let mut downloaded = 0_i64;
     let started = std::time::Instant::now();
@@ -194,7 +198,7 @@ async fn download(
     );
     output.flush().await?;
     drop(output);
-    Ok(downloaded)
+    Ok((downloaded, temporary))
 }
 async fn perform(
     state: &ServerState,
@@ -223,8 +227,15 @@ async fn perform(
                 .parent()
                 .ok_or_else(|| anyhow::anyhow!("Missing shared destination parent"))?;
             tokio::fs::create_dir_all(parent).await?;
-            let staging = Temporary(parent.join(format!(".shared-{ticket}.part")));
-            let bytes = download(state, run, ticket, url, &staging.0, target.entry.size).await?;
+            let (bytes, staging) = download(
+                state,
+                run,
+                ticket,
+                url,
+                &parent.join(format!(".shared-{ticket}.part")),
+                target.entry.size,
+            )
+            .await?;
             let committed = commit(staging.0.clone(), target_path.clone()).await?;
             if let Some(reservation) = reservation {
                 reservation.keep();
