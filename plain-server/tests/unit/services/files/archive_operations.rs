@@ -325,3 +325,31 @@ async fn named_internal_archives_reject_invalid_aliases_and_stop_before_creating
     );
     assert!(!output.parent().unwrap().exists());
 }
+
+#[test]
+fn special_entries_are_rejected_before_output_reservation() {
+    for mode in [0o120777u32, 0o010644, 0o020600, 0o060600, 0o140600] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.zip");
+        archive(&source, "entry", b"../neighbor.txt");
+        let mut bytes = std::fs::read(&source).unwrap();
+        let central = bytes
+            .windows(4)
+            .position(|value| value == b"PK\x01\x02")
+            .unwrap();
+        bytes[central + 5] = 3;
+        bytes[central + 38..central + 42].copy_from_slice(&(mode << 16).to_le_bytes());
+        std::fs::write(&source, bytes).unwrap();
+        let neighbor = directory.path().join("neighbor.txt");
+        std::fs::write(&neighbor, b"preserved neighbor").unwrap();
+        let target = directory.path().join("out");
+        let (_sender, stop, cancelled) = running_state();
+        let result = unpack_files(&source, &target, &stop, &cancelled);
+        assert!(
+            matches!(result, Err(ref error) if error == "Unsupported archive entry type"),
+            "mode {mode:o}"
+        );
+        assert!(!target.exists());
+        assert_eq!(std::fs::read(neighbor).unwrap(), b"preserved neighbor");
+    }
+}

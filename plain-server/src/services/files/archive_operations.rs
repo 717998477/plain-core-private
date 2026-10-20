@@ -405,6 +405,12 @@ fn unpack_files(
     for index in 0..zip.len() {
         running(stop, cancelled)?;
         let entry = zip.by_index(index).map_err(|error| error.to_string())?;
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| !matches!(mode & 0o170000, 0 | 0o040000 | 0o100000))
+        {
+            return Err("Unsupported archive entry type".into());
+        }
         entries.push(relative(entry.name())?);
     }
     let (mut output, _) = reserve(target, true)?;
