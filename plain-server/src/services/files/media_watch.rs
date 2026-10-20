@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use notify::event::{EventKind, ModifyKind, RemoveKind};
+use notify::event::{EventKind, ModifyKind};
 use notify::{Event, RecursiveMode, Watcher};
 use plain_rs::enums::DataType;
 
@@ -62,14 +62,22 @@ pub(crate) fn effect_for(path: &Path, kind: &EventKind, is_excluded: bool) -> Ef
                 } else {
                     Effect::Index
                 }
+            } else if path.is_dir() {
+                Effect::RescanSubtree
             } else {
                 Effect::Ignore
             }
         }
-        EventKind::Remove(RemoveKind::Folder) => Effect::RescanSubtree,
         EventKind::Remove(_) => Effect::Forget,
-        // A rename arrives as delete-then-create; the create arm indexes it.
-        EventKind::Modify(ModifyKind::Name(_)) => Effect::Ignore,
+        EventKind::Modify(ModifyKind::Name(_)) => {
+            if path.is_dir() {
+                Effect::RescanSubtree
+            } else if path.is_file() && media_type_of(path).is_some() && !is_excluded {
+                Effect::Index
+            } else {
+                Effect::Forget
+            }
+        }
         EventKind::Modify(_) => {
             if path.is_file() && media_type_of(path).is_some() {
                 if is_excluded {

@@ -104,10 +104,26 @@ impl Db {
     }
 
     pub fn forget_media_file_types(&self, path: &str) -> rusqlite::Result<Vec<i32>> {
+        self.forget_media_path_rows(path, false)
+    }
+
+    pub fn forget_media_path_types(&self, path: &str) -> rusqlite::Result<Vec<i32>> {
+        self.forget_media_path_rows(path, true)
+    }
+
+    fn forget_media_path_rows(&self, path: &str, recursive: bool) -> rusqlite::Result<Vec<i32>> {
+        if path.is_empty() {
+            return Ok(Vec::new());
+        }
+        let prefix = format!(
+            "{}{separator}",
+            path.trim_end_matches(std::path::MAIN_SEPARATOR),
+            separator = std::path::MAIN_SEPARATOR
+        );
         self.audio_transaction(|tx, state| {
             let rows = tx
-                .prepare("SELECT data_type,id FROM media_items WHERE path=?1")?
-                .query_map([path], |row| {
+                .prepare("SELECT data_type,id FROM media_items WHERE path=?1 OR (?2 AND substr(path,1,length(?3))=?3)")?
+                .query_map(params![path, recursive, prefix], |row| {
                     Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -130,7 +146,7 @@ impl Db {
                     }
                 }
             }
-            tx.execute("DELETE FROM media_items WHERE path=?1", [path])?;
+            tx.execute("DELETE FROM media_items WHERE path=?1 OR (?2 AND substr(path,1,length(?3))=?3)", params![path, recursive, prefix])?;
             Ok(rows.into_iter().map(|(kind, _)| kind).collect())
         })
         .map_err(|error| match error {

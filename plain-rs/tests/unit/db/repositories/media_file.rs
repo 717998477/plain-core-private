@@ -192,6 +192,40 @@ fn forgetting_returns_the_exact_committed_types_and_retains_the_count_contract()
 }
 
 #[test]
+fn forgetting_a_directory_removes_descendants_and_preserves_prefix_neighbors() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(&directory.path().join("data.db")).unwrap();
+    let root = directory.path().join("album%_");
+    let nested = root.join("nested/photo.jpg");
+    let neighbor = directory.path().join("album%_-other/photo.jpg");
+    let row_paths = [root.join("one.jpg"), nested, neighbor.clone()];
+    let rows = row_paths
+        .iter()
+        .map(|path| metadata(path.to_str().unwrap()))
+        .collect::<Vec<_>>();
+    db.record_media_files(&rows).unwrap();
+    assert!(
+        db.forget_media_file_types(root.to_str().unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(db.forget_media_path_types("").unwrap().is_empty());
+    let types = db.forget_media_path_types(root.to_str().unwrap()).unwrap();
+    assert_eq!(types, [3, 3]);
+    assert_eq!(db.media_file_count(DataType::Image).unwrap(), 1);
+    assert!(
+        db.media_file_by_path(DataType::Image, neighbor.to_str().unwrap())
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        db.forget_media_path_types(root.to_str().unwrap())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn native_album_grouping_survives_failed_probes_and_clears_removed_album_tags() {
     let directory = tempfile::tempdir().unwrap();
     let db = Db::open(&directory.path().join("data.db")).unwrap();

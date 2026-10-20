@@ -207,7 +207,7 @@ impl NativeMediaCatalog {
                     }
                     crate::services::files::media_watch::Effect::Forget => {
                         let name = path.to_string_lossy().into_owned();
-                        if let Err(error) = catalog.forget_file(&name) {
+                        if let Err(error) = catalog.forget_path(&name) {
                             log::debug!("media watch forget failed: {error}");
                         }
                     }
@@ -488,12 +488,12 @@ impl NativeMediaCatalog {
             .map_err(|error| error.to_string())
     }
 
-    fn forget_file(&self, path: &str) -> Result<usize, String> {
+    fn forget_path(&self, path: &str) -> Result<usize, String> {
         self.state.native_client_id()?;
         let types = self
             .state
             .db
-            .forget_media_file_types(path)
+            .forget_media_path_types(path)
             .map_err(|error| error.to_string())?;
         let count = types.len();
         crate::services::files::catalog_events::publish(&self.state.events, types);

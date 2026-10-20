@@ -708,13 +708,13 @@ async fn native_catalog_records_and_removal_publish_one_typed_change_per_batch()
     assert_eq!(event.event_type, plain_rs::events::MEDIA_LIBRARY_UPDATED);
     assert_eq!(event.payload, r#"{"types":[1]}"#);
     assert!(events.try_recv().is_err());
-    assert_eq!(catalog.forget_file(path.to_str().unwrap()).unwrap(), 1);
+    assert_eq!(catalog.forget_path(path.to_str().unwrap()).unwrap(), 1);
     assert_eq!(
         events.try_recv().unwrap().event_type,
         plain_rs::events::MEDIA_LIBRARY_UPDATED
     );
     assert!(events.try_recv().is_err());
-    assert_eq!(catalog.forget_file(path.to_str().unwrap()).unwrap(), 0);
+    assert_eq!(catalog.forget_path(path.to_str().unwrap()).unwrap(), 0);
     assert!(events.try_recv().is_err());
     core.stop_core().await;
 }

@@ -3,6 +3,7 @@
 //! catalog operation.
 
 use super::*;
+use notify::event::{RemoveKind, RenameMode};
 
 fn included(_: &Path) -> bool {
     false
@@ -85,7 +86,7 @@ fn a_dotfile_is_ignored_but_a_nomedia_marker_rescans() {
 }
 
 #[test]
-fn a_removed_file_is_forgotten_and_a_removed_directory_rescans() {
+fn removed_files_and_directories_are_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gone.mp4");
     std::fs::write(&file, b"x").unwrap();
@@ -99,8 +100,8 @@ fn a_removed_file_is_forgotten_and_a_removed_directory_rescans() {
             &EventKind::Remove(RemoveKind::Folder),
             false
         ),
-        Effect::RescanSubtree,
-        "a directory boundary moved, so its contents have to be re-read"
+        Effect::Forget,
+        "a deleted directory cannot be scanned"
     );
 }
 
@@ -122,17 +123,41 @@ fn an_excluded_path_is_forgotten_rather_than_indexed() {
 }
 
 #[test]
-fn a_rename_does_not_index_the_old_name() {
+fn a_rename_forgets_the_old_path_and_indexes_the_current_file() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("old.mp4");
-    std::fs::write(&path, b"x").unwrap();
+    let old = dir.path().join("old.mp4");
+    let new = dir.path().join("new.mp4");
+    std::fs::write(&old, b"x").unwrap();
+    std::fs::rename(&old, &new).unwrap();
+    for mode in [
+        RenameMode::From,
+        RenameMode::To,
+        RenameMode::Both,
+        RenameMode::Any,
+    ] {
+        let kind = EventKind::Modify(ModifyKind::Name(mode));
+        assert_eq!(effect_for(&old, &kind, false), Effect::Forget);
+        assert_eq!(effect_for(&new, &kind, false), Effect::Index);
+        assert_eq!(effect_for(&new, &kind, true), Effect::Forget);
+    }
+}
+
+#[test]
+fn a_directory_arriving_by_create_or_rename_is_scanned() {
+    let root = tempfile::tempdir().unwrap();
+    let old = root.path().join("old");
+    let new = root.path().join("new");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::rename(&old, &new).unwrap();
+    let kind = EventKind::Modify(ModifyKind::Name(RenameMode::Both));
+    assert_eq!(effect_for(&old, &kind, false), Effect::Forget);
+    assert_eq!(effect_for(&new, &kind, false), Effect::RescanSubtree);
     assert_eq!(
         effect_for(
-            &path,
-            &EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::From)),
+            &new,
+            &EventKind::Create(notify::event::CreateKind::Folder),
             false
         ),
-        Effect::Ignore,
-        "the create arm is what re-indexes a renamed file"
+        Effect::RescanSubtree
     );
 }
