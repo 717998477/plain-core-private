@@ -13,7 +13,7 @@ use plain_rs::files::tasks::Hooks;
 use plain_rs::files::tasks::PrepareResult;
 use plain_rs::files::tasks::Service;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tokio::sync::broadcast;
@@ -50,6 +50,154 @@ impl FileTasks {
             service: Mutex::new(None),
         }
     }
+    pub(crate) async fn external_move(
+        &self,
+        source: &Path,
+        destination: &Path,
+        items: Vec<super::file_task_media::Identity>,
+    ) -> Result<()> {
+        let _lock = self.deletion_lock.lock().await;
+        self.hooks
+            .platform
+            .authorize_metadata_paths(&[
+                source.to_string_lossy().into_owned(),
+                destination.to_string_lossy().into_owned(),
+            ])
+            .await?;
+        self.hooks
+            .platform
+            .authorize(&destination.to_string_lossy(), false)
+            .await?;
+        match tokio::fs::symlink_metadata(source).await {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => bail!("external move source still exists"),
+        }
+        tokio::fs::symlink_metadata(destination).await?;
+        let source = source
+            .to_str()
+            .ok_or_else(|| anyhow!("invalid external source encoding"))?;
+        let destination = destination
+            .to_str()
+            .ok_or_else(|| anyhow!("invalid external destination encoding"))?;
+        let paths = items
+            .iter()
+            .map(|item| {
+                let relative = Path::new(&item.path).strip_prefix(source)?;
+                let path = if relative.as_os_str().is_empty() {
+                    PathBuf::from(destination)
+                } else {
+                    Path::new(destination).join(relative)
+                };
+                Ok((item.path.clone(), path.to_string_lossy().into_owned()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let snapshot = serde_json::json!({"root":source,"items":items});
+        let op = CompletedOp {
+            src: source.to_owned(),
+            dst: destination.to_owned(),
+        };
+        self.hooks.prepare_move(&op, &snapshot).await?;
+        for batch in paths.chunks(64) {
+            let paths = batch
+                .iter()
+                .flat_map(|(source, destination)| [source.clone(), destination.clone()])
+                .collect::<Vec<_>>();
+            self.hooks.platform.scan(&paths).await?;
+        }
+        self.hooks.rebind_move(&op, &snapshot).await?;
+        super::catalog_events::publish(
+            &self.events,
+            snapshot["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item["mediaType"].as_i64().map(|kind| kind as i32)),
+        );
+        Ok(())
+    }
+
+    pub(crate) async fn external_replace(
+        &self,
+        previous: super::file_task_media::Identity,
+        current: &super::file_task_media::Identity,
+    ) -> Result<()> {
+        if previous.path != current.path || current.media_id.is_empty() {
+            bail!("invalid replacement media receipt");
+        }
+        self.hooks.platform.authorize(&current.path, false).await?;
+        if previous.media_type == current.media_type && previous.media_id == current.media_id {
+            return Ok(());
+        }
+        let _lock = self.deletion_lock.lock().await;
+        let op = CompletedOp {
+            src: previous.path.clone(),
+            dst: current.path.clone(),
+        };
+        let snapshot = serde_json::json!({"root":previous.path,"items":[previous.clone()]});
+        self.hooks.prepare_move(&op, &snapshot).await?;
+        if previous.media_type == current.media_type {
+            self.hooks.rebind_move(&op, &snapshot).await?;
+        } else {
+            let index = self.hooks.index.clone();
+            let prefs = self.hooks.prefs.clone();
+            self.hooks
+                .audio
+                .run(move |db, engine| {
+                    let before = plain_rs::media::audio::playback::snapshot(db)?;
+                    let item = plain_rs::files::deletes::Item {
+                        media_type: previous.media_type,
+                        id: previous.media_id,
+                        path: previous.path,
+                    };
+                    index
+                        .update_cache(|db| plain_rs::files::deletes::retire_identity(db, &item))?;
+                    if item.media_type == 1 && before.path == item.path {
+                        plain_rs::media::audio::commands::clear_engine(db, &prefs, engine)?;
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|error| anyhow!(error.message))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn external_remove(
+        &self,
+        root: &Path,
+        items: Vec<super::file_task_media::Identity>,
+    ) -> Result<()> {
+        let _lock = self.deletion_lock.lock().await;
+        let root = root
+            .to_str()
+            .ok_or_else(|| anyhow!("invalid external path encoding"))?;
+        let mut paths = items
+            .iter()
+            .map(|item| item.path.clone())
+            .collect::<Vec<_>>();
+        paths.push(root.to_owned());
+        paths.sort();
+        paths.dedup();
+        let snapshot = serde_json::json!({"root":root,"items":items});
+        let outcome = plain_rs::files::filesystem::deletion::Outcome {
+            removed: true,
+            paths,
+            failures: Vec::new(),
+        };
+        self.finish_deletion(root, root, &snapshot, &outcome)
+            .await?;
+        super::catalog_events::publish(
+            &self.events,
+            snapshot["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item["mediaType"].as_i64().map(|kind| kind as i32)),
+        );
+        Ok(())
+    }
+
     fn service(&self) -> Result<Arc<Service>> {
         let mut service = self
             .service
@@ -240,6 +388,62 @@ impl Hooks for NativeHooks {
     }
 }
 impl NativeHooks {
+    async fn prepare_move(&self, op: &CompletedOp, snapshot: &serde_json::Value) -> Result<()> {
+        let source = crate::services::files::file_task_media::source_root(snapshot)?;
+        let destination =
+            crate::services::files::file_task_media::normalized(std::path::Path::new(&op.dst))
+                .await?;
+        self.duration_cache
+            .invalidate_paths(&[], &[op.src.clone(), op.dst.clone(), source, destination])?;
+        Ok(())
+    }
+    async fn rebind_move(&self, op: &CompletedOp, snapshot: &serde_json::Value) -> Result<()> {
+        let change =
+            crate::services::files::file_task_media::resolve(&self.platform, &op.dst, snapshot)
+                .await?;
+        let removed_sources = change
+            .bindings
+            .iter()
+            .map(|binding| binding.source_path.clone())
+            .collect::<Vec<_>>();
+        let raw_source = op.src.clone();
+        let raw_destination = op.dst.clone();
+        let prefs = self.prefs.clone();
+        let index = self.index.clone();
+        self.audio
+            .run(move |db, engine| {
+                use plain_rs::files::moves as media_moves;
+                use plain_rs::media::audio::playback as audio_playback;
+                let before = audio_playback::snapshot(db)?;
+                let source_prefix = format!("{}/", change.source_root.trim_end_matches('/'));
+                let moved_audio = !before.path.is_empty()
+                    && (before.path == change.source_root
+                        || before.path.starts_with(&source_prefix)
+                        || before.path == raw_source
+                        || before
+                            .path
+                            .starts_with(&format!("{}/", raw_source.trim_end_matches('/'))));
+                let rebind = |db: &Db| {
+                    media_moves::rebind_with_aliases(
+                        db,
+                        &change.bindings,
+                        &change.source_root,
+                        &change.destination_root,
+                        &[(raw_source, raw_destination)],
+                    )
+                };
+                index.update_cache(rebind)?;
+                if moved_audio {
+                    use plain_rs::media::audio::commands;
+                    commands::clear_engine(db, &prefs, engine)?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow!(e.message))?;
+        self.platform.forget_removed(removed_sources).await?;
+        Ok(())
+    }
     fn apply_completed<'a>(
         &'a self,
         kind: FileTaskType,
@@ -248,68 +452,11 @@ impl NativeHooks {
     ) -> HookResult<'a> {
         Box::pin(async move {
             if kind == FileTaskType::Move {
-                let source = crate::services::files::file_task_media::source_root(snapshot)?;
-                let destination = crate::services::files::file_task_media::normalized(
-                    std::path::Path::new(&op.dst),
-                )
-                .await?;
-                self.duration_cache.invalidate_paths(
-                    &[],
-                    &[op.src.clone(), op.dst.clone(), source, destination],
-                )?;
+                self.prepare_move(op, snapshot).await?;
             }
-
             self.completed(kind, op).await?;
             if kind == FileTaskType::Move {
-                let change = crate::services::files::file_task_media::resolve(
-                    &self.platform,
-                    &op.dst,
-                    snapshot,
-                )
-                .await?;
-                let removed_sources = change
-                    .bindings
-                    .iter()
-                    .map(|binding| binding.source_path.clone())
-                    .collect::<Vec<_>>();
-                let raw_source = op.src.clone();
-                let raw_destination = op.dst.clone();
-                let prefs = self.prefs.clone();
-                let index = self.index.clone();
-                self.audio
-                    .run(move |db, engine| {
-                        use plain_rs::files::moves as media_moves;
-                        use plain_rs::media::audio::playback as audio_playback;
-                        let before = audio_playback::snapshot(db)?;
-                        let source_prefix =
-                            format!("{}/", change.source_root.trim_end_matches('/'));
-                        let moved_audio = !before.path.is_empty()
-                            && (before.path == change.source_root
-                                || before.path.starts_with(&source_prefix)
-                                || before.path == raw_source
-                                || before.path.starts_with(&format!(
-                                    "{}/",
-                                    raw_source.trim_end_matches('/')
-                                )));
-                        let rebind = |db: &Db| {
-                            media_moves::rebind_with_aliases(
-                                db,
-                                &change.bindings,
-                                &change.source_root,
-                                &change.destination_root,
-                                &[(raw_source, raw_destination)],
-                            )
-                        };
-                        index.update_cache(rebind)?;
-                        if moved_audio {
-                            use plain_rs::media::audio::commands;
-                            commands::clear_engine(db, &prefs, engine)?;
-                        }
-                        Ok(())
-                    })
-                    .await
-                    .map_err(|e| anyhow!(e.message))?;
-                self.platform.forget_removed(removed_sources).await?;
+                self.rebind_move(op, snapshot).await?;
             }
             Ok(())
         })

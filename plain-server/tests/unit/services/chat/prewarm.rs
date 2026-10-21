@@ -66,15 +66,12 @@ async fn conversation_reads_prepare_once_in_background_and_skip_searches_and_pag
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(request["method"], "peerTransportPrewarmCapabilities");
+    assert_eq!(request["method"], "peerTransportCapabilities");
     tokio::task::yield_now().await;
     assert!(requests.try_recv().is_err());
     state
         .host
-        .reply(
-            generation,
-            json!({"id":request["id"],"result":{"bleReady":false,"awareSupported":false}}),
-        )
+        .reply(generation, json!({"id":request["id"],"result":[]}))
         .unwrap();
     tokio::task::yield_now().await;
     assert!(requests.try_recv().is_err());

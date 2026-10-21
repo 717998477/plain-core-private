@@ -6,6 +6,15 @@ use plain_rs::transport::router::TransportType;
 use plain_rs::transport::router::{Attempt, Outcome};
 use serde_json::{Value, json};
 use std::time::Duration;
+pub(crate) async fn capabilities(
+    host: &crate::host::bridge::Host,
+) -> Result<Vec<TransportType>, String> {
+    if !host.connected() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_value(host.call("peerTransportCapabilities", json!({})).await?)
+        .map_err(|error| error.to_string())
+}
 pub(crate) fn snapshot_event(state: &ServerState) -> plain_rs::events::WsEvent {
     let mut active: Vec<_> = state.transport.active().into_iter().collect();
     active.sort_by(|left, right| left.0.cmp(&right.0));
@@ -92,11 +101,12 @@ async fn send_checked_with_attempt(
     let host = &state.host;
     let router = &state.transport;
     let mut available = vec![TransportType::Lan];
-    if host.connected() {
-        let sdk = host.call("peerTransportCapabilities", json!({})).await?;
-        let sdk: Vec<TransportType> = serde_json::from_value(sdk).map_err(|e| e.to_string())?;
-        available.extend(sdk.into_iter().filter(|kind| *kind != TransportType::Lan));
-    }
+    available.extend(
+        capabilities(host)
+            .await?
+            .into_iter()
+            .filter(|kind| *kind != TransportType::Lan),
+    );
     validate()?;
     let current_peer =
         crate::services::peers::peer_address::current_identity(&state.db, &peer.id, peer)

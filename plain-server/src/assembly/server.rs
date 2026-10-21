@@ -24,6 +24,7 @@ pub(crate) struct ServerState {
     pub(crate) file_platform: Arc<crate::services::files::platform::FilePlatform>,
     pub(crate) feeds: Arc<crate::services::feeds::SyncService>,
     pomodoro_task: Arc<parking_lot::Mutex<Option<JoinHandle<()>>>>,
+    external_index_task: Arc<parking_lot::Mutex<Option<JoinHandle<()>>>>,
     pub(crate) update_checks: Arc<crate::services::settings::updates::Runtime>,
     pub(crate) duration_updates: Arc<crate::services::files::duration_updates::Runtime>,
     pub(crate) duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
@@ -442,6 +443,7 @@ impl ContentServer {
             remote_cache: services.remote_cache.clone(),
             feeds: services.feeds.clone(),
             pomodoro_task: Arc::new(parking_lot::Mutex::new(None)),
+            external_index_task: Default::default(),
             update_checks: Arc::new(crate::services::settings::updates::Runtime::default()),
             duration_cache: services.duration_cache.clone(),
             duration_updates: services.duration_updates.clone(),
@@ -526,6 +528,8 @@ impl ContentServer {
         crate::services::chat::download_queue::start(state.clone());
         crate::services::peers::shared_batch::start(state.clone());
         crate::services::peers::aware::start(state.clone());
+        *state.external_index_task.lock() =
+            Some(crate::services::files::external_index::start(state.clone()));
         state
             .management
             .start(state.clone())
@@ -754,6 +758,11 @@ impl ContentServer {
             .shared_batches
             .shutdown(&self.state.directory)
             .await;
+        let external_index = self.state.external_index_task.lock().take();
+        if let Some(task) = external_index {
+            task.abort();
+            let _ = task.await;
+        }
         self.state.feeds.shutdown().await;
         self.state.download_runtime.shutdown().await;
         self.state.update_checks.download.shutdown().await;

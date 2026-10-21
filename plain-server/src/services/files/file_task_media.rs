@@ -3,7 +3,7 @@ use crate::services::files::file_task_walk::FileWalker;
 use anyhow::{Result, anyhow, bail};
 use plain_rs::files::moves::Binding;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{collections::HashSet, path::Path};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -20,8 +20,13 @@ struct Snapshot {
 }
 async fn lookup(platform: &FilePlatform, paths: &[String]) -> Result<Vec<Identity>> {
     let rows = platform.identities(paths).await?;
+    validate(&rows, paths)?;
+    Ok(rows)
+}
+
+pub(crate) fn validate(rows: &[Identity], paths: &[String]) -> Result<()> {
     let mut seen = HashSet::new();
-    for row in &rows {
+    for row in rows {
         if !matches!(row.media_type, 1 | 2 | 3 | 24)
             || row.media_id.is_empty()
             || !paths.contains(&row.path)
@@ -30,8 +35,9 @@ async fn lookup(platform: &FilePlatform, paths: &[String]) -> Result<Vec<Identit
             bail!("invalid native media identity receipt");
         }
     }
-    Ok(rows)
+    Ok(())
 }
+
 pub(crate) async fn normalized(path: &Path) -> Result<String> {
     let parent = tokio::fs::canonicalize(
         path.parent()
@@ -150,3 +156,7 @@ pub(crate) fn deleted_items(
         })
         .collect())
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/files/file_task_media.rs"]
+mod tests;

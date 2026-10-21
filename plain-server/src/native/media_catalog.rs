@@ -146,21 +146,9 @@ impl NativeMediaCatalog {
         self.scan_directories(vec![reference.to_owned()]).await
     }
 
-    /// Watch the configured source roots so a file that appears, changes or
-    /// leaves keeps the catalog current without a full rescan.
-    ///
-    /// The watcher is held by the core; `stop_core` releases it. Re-watching
-    /// the same roots replaces the previous watch rather than stacking a
-    /// second one.
     #[cfg(feature = "media")]
     pub fn watch_source_directories(&self) -> Result<bool, String> {
         self.state.native_client_id()?;
-        let policy = self.state.media_scans.policy()?;
-        let directory = self
-            .state
-            .directory
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
         let roots = self
             .source_directories()?
             .into_iter()
@@ -175,63 +163,113 @@ impl NativeMediaCatalog {
                 .take();
             return Ok(false);
         }
-        let runtime = tokio::runtime::Handle::try_current().map_err(|error| error.to_string())?;
         let catalog_state = self.state.clone();
-        let handle = crate::services::files::media_watch::start(&roots, move |path, kind| {
-            // `notify` delivers on its own thread, so the work moves onto the
-            // runtime rather than blocking the watcher.
-            let path = path.to_path_buf();
-            let kind = kind.clone();
-            let cache = policy.cache_directory.clone();
-            let excluded_roots = policy.excluded_roots.clone();
-            // The closure is `Fn`, so each delivery takes its own copies.
-            let directory = directory.clone();
-            let catalog_state = catalog_state.clone();
-            runtime.spawn(async move {
-                let excluded = plain_media::scan::is_media_excluded_at(
-                    &path.to_string_lossy(),
-                    &directory,
-                    &cache,
-                    &excluded_roots,
-                );
-                let effect =
-                    crate::services::files::media_watch::effect_for(&path, &kind, excluded);
-                let catalog = crate::native::media_catalog::NativeMediaCatalog::new(catalog_state);
-                match effect {
-                    crate::services::files::media_watch::Effect::Index => {
-                        if let Err(error) = catalog.scan_completed_files(
-                            serde_json::json!({"paths":[path.to_string_lossy()]}),
-                        ) {
-                            log::debug!("media watch index failed: {error}");
-                        }
-                    }
-                    crate::services::files::media_watch::Effect::Forget => {
-                        let name = path.to_string_lossy().into_owned();
-                        if let Err(error) = catalog.forget_path(&name) {
-                            log::debug!("media watch forget failed: {error}");
-                        }
-                    }
-                    crate::services::files::media_watch::Effect::RescanSubtree => {
-                        if let Err(error) = catalog.scan_directory(&path.to_string_lossy()).await {
-                            log::debug!("media watch rescan failed: {error}");
-                        }
-                    }
-                    crate::services::files::media_watch::Effect::Ignore => {}
-                }
-            });
-        })
-        .map_err(|error| error.to_string())?;
+        let handle = crate::services::files::media_watch::start(&roots, move |event| {
+            let catalog = Self::new(catalog_state.clone());
+            async move { catalog.apply_watch_event(event).await }
+        })?;
         let mut slot = self
             .state
             .media_watch
             .lock()
             .map_err(|_| "media watch unavailable")?;
-        if slot.is_some() {
-            // Replacing drops the previous watcher, which stops the old one.
-            *slot = None;
-        }
         *slot = Some(handle);
         Ok(true)
+    }
+
+    #[cfg(feature = "media")]
+    async fn apply_watch_event(&self, event: notify::Event) -> Result<(), String> {
+        use crate::services::files::media_watch::{Effect, effect_for};
+        use notify::event::{EventKind, ModifyKind, RenameMode};
+        if matches!(event.kind, EventKind::Other) {
+            self.scan_directories(self.source_directories()?).await?;
+            return Ok(());
+        }
+        if matches!(
+            event.kind,
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both))
+        ) && event.paths.len() == 2
+        {
+            let source = &event.paths[0];
+            let destination = &event.paths[1];
+            if !source.try_exists().map_err(|error| error.to_string())?
+                && destination
+                    .try_exists()
+                    .map_err(|error| error.to_string())?
+                && self.state.file_platform.watchable(destination)
+            {
+                let items = self.path_identities(source)?;
+                self.state
+                    .files
+                    .external_move(source, destination, items)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if destination.is_dir() {
+                    self.scan_directory(&destination.to_string_lossy()).await?;
+                } else {
+                    self.state
+                        .file_platform
+                        .scan(&[destination.to_string_lossy().into_owned()])
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                return Ok(());
+            }
+        }
+        let policy = self.state.media_scans.policy()?;
+        for path in event.paths {
+            let excluded = plain_media::scan::is_media_excluded_at(
+                &path.to_string_lossy(),
+                &self.state.directory,
+                &policy.cache_directory,
+                &policy.excluded_roots,
+            );
+            match effect_for(&path, &event.kind, excluded) {
+                Effect::Index => {
+                    self.state
+                        .file_platform
+                        .scan(&[path.to_string_lossy().into_owned()])
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                Effect::Forget => {
+                    if !path.try_exists().map_err(|error| error.to_string())? {
+                        let items = self.path_identities(&path)?;
+                        self.state
+                            .files
+                            .external_remove(&path, items)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    } else if excluded {
+                        self.forget_path(&path.to_string_lossy())?;
+                    }
+                }
+                Effect::RescanSubtree => {
+                    let root = if path.is_dir() {
+                        path.as_path()
+                    } else {
+                        path.parent().ok_or("Media directory parent required")?
+                    };
+                    self.scan_directory(&root.to_string_lossy()).await?;
+                }
+                Effect::Ignore => {}
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "media")]
+    fn path_identities(
+        &self,
+        root: &std::path::Path,
+    ) -> Result<Vec<crate::services::files::file_task_media::Identity>, String> {
+        let root = root.to_str().ok_or("Invalid media path encoding")?;
+        let prefix = format!("{}/", root.trim_end_matches('/'));
+        self.state.db.with_conn(|connection| {
+            connection.prepare("SELECT data_type,id,path FROM media_items WHERE path=?1 OR substr(path,1,length(?2))=?2")?
+                .query_map(rusqlite::params![root,prefix], |row| Ok(crate::services::files::file_task_media::Identity { media_type:row.get(0)?, media_id:row.get(1)?, path:row.get(2)? }))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        }).map_err(|error| error.to_string())
     }
 
     #[cfg(feature = "media")]
@@ -304,6 +342,7 @@ impl NativeMediaCatalog {
         let worker_stop = stop.clone();
         let result = async {
             let mut total_files = 0usize;
+            let mut completed_roots = Vec::new();
             for reference in references {
                 session.wait_running().await?;
                 let root =
@@ -399,10 +438,45 @@ impl NativeMediaCatalog {
                         .await?;
                 }
                 let total = producer.await.map_err(|error| error.to_string())??;
+                completed_roots.push(canonical_root);
 
                 total_files = total_files
                     .checked_add(total)
                     .ok_or("Media scan file count overflow")?;
+            }
+            for root in completed_roots {
+                if !tokio::fs::metadata(&root)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .is_dir()
+                {
+                    return Err("Media source became unavailable during reconciliation".into());
+                }
+                for item in self.path_identities(&root)? {
+                    match tokio::fs::symlink_metadata(&item.path).await {
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            self.state
+                                .files
+                                .external_remove(
+                                    std::path::Path::new(&item.path),
+                                    vec![item.clone()],
+                                )
+                                .await
+                                .map_err(|error| error.to_string())?;
+                        }
+                        Err(error) => return Err(error.to_string()),
+                        Ok(_) => {
+                            if plain_media::scan::is_media_excluded_at(
+                                &item.path,
+                                &self.state.directory,
+                                &policy.cache_directory,
+                                &policy.excluded_roots,
+                            ) {
+                                self.forget_path(&item.path)?;
+                            }
+                        }
+                    }
+                }
             }
             session.discovered(total_files)?;
             Ok(())

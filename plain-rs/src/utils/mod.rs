@@ -6,6 +6,7 @@ pub mod dbtime;
 pub mod epoch_millis;
 #[cfg(feature = "crypto")]
 pub use crate::crypto::hash;
+pub mod file_identity;
 pub mod file_uri;
 pub mod hex;
 pub mod hostname;

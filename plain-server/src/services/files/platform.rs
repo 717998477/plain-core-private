@@ -78,6 +78,37 @@ impl FilePlatform {
             .map_err(anyhow::Error::msg)
     }
 
+    pub(crate) fn watchable(&self, path: &Path) -> bool {
+        let Ok(private) = &self.private_roots else {
+            return false;
+        };
+        if !path.is_absolute() || private.iter().any(|root| path.starts_with(root)) {
+            return false;
+        }
+        let parts = path
+            .components()
+            .filter_map(|part| part.as_os_str().to_str())
+            .collect::<Vec<_>>();
+        !parts.iter().any(|part| part.starts_with('.'))
+            && !parts
+                .windows(2)
+                .any(|parts| parts[0] == "Android" && matches!(parts[1], "data" | "obb"))
+    }
+
+    pub(crate) fn indexable(&self, path: &Path) -> bool {
+        self.watchable(path)
+            && matches!(
+                plain_rs::media::catalog_paths::infer_type(&path.to_string_lossy()),
+                "audio" | "video" | "image" | "doc"
+            )
+            && !plain_rs::media::catalog_paths::is_media_excluded_at(
+                &path.to_string_lossy(),
+                &self.directory,
+                &self.cache,
+                &[],
+            )
+    }
+
     pub(crate) fn resolve_reference(&self, path: &str) -> Result<String> {
         super::references::resolve(self.db.clone(), self.directory.clone(), path)
     }
@@ -278,12 +309,14 @@ impl FilePlatform {
             if paths.is_empty() {
                 return Ok(vec![]);
             }
-            return media_rows::identities(
+            let rows = media_rows::identities(
                 self.host
                     .call("fileTaskMediaSnapshot", json!({"paths": paths}))
                     .await
                     .map_err(anyhow::Error::msg)?,
-            );
+            )?;
+            super::file_task_media::validate(&rows, &paths)?;
+            return Ok(rows);
         }
         let db = self.db.clone();
         let paths = serde_json::to_string(paths)?;

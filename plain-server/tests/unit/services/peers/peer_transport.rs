@@ -334,3 +334,32 @@ async fn native_transport_snapshots_follow_current_routes_without_graphql_reads(
     );
     core.stop_core().await;
 }
+
+#[tokio::test]
+async fn shared_capabilities_use_current_host_facts_and_reject_invalid_receipts() {
+    let host = Arc::new(crate::host::bridge::Host::default());
+    assert!(capabilities(&host).await.unwrap().is_empty());
+    let (generation, mut requests) = host.connect();
+    for (facts, expected) in [
+        (
+            json!(["BLE", "AWARE"]),
+            Some(vec![TransportType::Ble, TransportType::Aware]),
+        ),
+        (json!([]), Some(vec![])),
+        (json!({"bleReady":true}), None),
+    ] {
+        let reader = host.clone();
+        let task = tokio::spawn(async move { capabilities(&reader).await });
+        let request = requests.recv().await.unwrap();
+        assert_eq!(request["method"], "peerTransportCapabilities");
+        host.reply(generation, json!({"id":request["id"],"result":facts}))
+            .unwrap();
+        match expected {
+            Some(expected) => assert_eq!(task.await.unwrap().unwrap(), expected),
+            None => assert!(task.await.unwrap().is_err()),
+        }
+        assert!(requests.try_recv().is_err());
+    }
+    host.disconnect(generation);
+    assert!(capabilities(&host).await.unwrap().is_empty());
+}

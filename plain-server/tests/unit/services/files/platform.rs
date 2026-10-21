@@ -458,3 +458,42 @@ fn native_read_access_rechecks_real_targets_and_rejects_missing_or_relative_path
         assert!(authorize_native(&link, false).is_err());
     }
 }
+
+#[tokio::test]
+async fn automatic_indexing_excludes_private_hidden_nomedia_and_app_storage_paths() {
+    let directory = tempfile::Builder::new()
+        .prefix("external-index-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let core =
+        crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
+    let state = core.runtime_state();
+    let public = directory.path().join("public");
+    std::fs::create_dir_all(&public).unwrap();
+    for name in ["image.png", "song.wav", "clip.mp4", "document.txt"] {
+        let path = public.join(name);
+        std::fs::write(&path, b"fixture").unwrap();
+        assert!(state.file_platform.indexable(&path), "{name}");
+    }
+    for path in [
+        state.directory.join("private.png"),
+        state.cache.root().join("cache.png"),
+        public.join(".pending-1-image.png"),
+        public.join(".hidden/image.png"),
+        public.join("Android/data/app/image.png"),
+        public.join("Android/obb/app/image.png"),
+        public.join("archive.zip"),
+    ] {
+        assert!(!state.file_platform.indexable(&path), "{}", path.display());
+    }
+    std::fs::write(public.join(".nomedia"), b"").unwrap();
+    assert!(!state.file_platform.indexable(&public.join("image.png")));
+    assert!(state.file_platform.watchable(&public));
+    assert!(
+        !state
+            .file_platform
+            .watchable(Path::new("relative/image.png"))
+    );
+    assert!(!state.file_platform.watchable(&public.join("../image.png")));
+    core.stop_core().await;
+}

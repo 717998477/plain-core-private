@@ -112,3 +112,9 @@ pub(crate) mod catalog_events;
 
 #[cfg(feature = "core")]
 pub(crate) mod named_copy;
+
+#[cfg(feature = "core")]
+pub(crate) mod external_index;
+
+#[cfg(feature = "core")]
+mod watch_backend;

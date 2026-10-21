@@ -283,3 +283,56 @@ fn forgetting_a_path_drops_the_row_and_its_associated_state() {
         "a path that was never catalogued is not an error"
     );
 }
+
+#[test]
+fn retired_identity_preserves_replacement_and_file_tags_at_the_same_path() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    let old = db
+        .record_media_files(&[catalog_file(DataType::Video, "/root/replaced.mp4")])
+        .unwrap()
+        .remove(0);
+    let new = db
+        .record_media_files(&[catalog_file(DataType::Image, "/root/replaced.mp4")])
+        .unwrap()
+        .remove(0);
+    db.with_conn(|connection| {
+        connection.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('old',?1,2,'first'),('replacement',?2,3,'first'),('file','/root/replaced.mp4',22,'first'),('neighbor','/root/neighbor',22,'first')", params![old.id,new.id])?;
+        connection.execute("INSERT INTO media_play_history(media_id,media_type,position_ms,played_at,play_count) VALUES(?1,2,123,'first',0)", [&old.id])?;
+        Ok::<_,rusqlite::Error>(())
+    }).unwrap();
+    retire_identity(
+        &db,
+        &Item {
+            media_type: 2,
+            id: old.id,
+            path: old.path,
+        },
+    )
+    .unwrap();
+    assert!(
+        db.media_file_by_path(DataType::Video, "/root/replaced.mp4")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        db.media_file_by_path(DataType::Image, "/root/replaced.mp4")
+            .unwrap()
+            .unwrap()
+            .id,
+        new.id
+    );
+    db.with_conn(|connection| {
+        assert_eq!(
+            connection.query_row("SELECT count(*) FROM tag_relations", [], |row| row
+                .get::<_, i64>(0))?,
+            3
+        );
+        assert_eq!(
+            connection.query_row("SELECT count(*) FROM media_play_history", [], |row| row
+                .get::<_, i64>(0))?,
+            0
+        );
+        Ok::<_, rusqlite::Error>(())
+    })
+    .unwrap();
+}

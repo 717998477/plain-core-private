@@ -5,7 +5,6 @@ use futures_util::StreamExt;
 use http_body_util::BodyExt;
 use plain_rs::transport::router::Outcome;
 use plain_rs::transport::router::TransportType;
-use serde_json::json;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
@@ -25,16 +24,13 @@ pub(crate) async fn run(
         .and_then(|s| s.strip_prefix("fsid:"))
         .ok_or_else(|| anyhow::anyhow!("Invalid remote attachment"))?;
     let mut available = vec![TransportType::Lan];
-    if state.host.connected() {
-        let kinds: Vec<TransportType> = serde_json::from_value(
-            state
-                .host
-                .call("peerTransportCapabilities", json!({}))
-                .await
-                .map_err(anyhow::Error::msg)?,
-        )?;
-        available.extend(kinds.into_iter().filter(|k| *k != TransportType::Lan));
-    }
+    available.extend(
+        super::peer_transport::capabilities(&state.host)
+            .await
+            .map_err(anyhow::Error::msg)?
+            .into_iter()
+            .filter(|kind| *kind != TransportType::Lan),
+    );
     let current_peer =
         crate::services::peers::peer_address::current_identity(&state.db, &peer.id, &peer)?;
     let step = state

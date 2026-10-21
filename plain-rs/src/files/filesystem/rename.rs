@@ -71,46 +71,6 @@ pub(crate) fn copy_required(error: &io::Error, overwrite: bool) -> bool {
     }
     false
 }
-#[cfg(unix)]
 pub(crate) fn same_identity(src: &Path, dst: &Path) -> io::Result<bool> {
-    use std::os::unix::fs::MetadataExt;
-    let source = std::fs::metadata(src)?;
-    let destination = std::fs::metadata(dst)?;
-    Ok(source.dev() == destination.dev() && source.ino() == destination.ino())
-}
-#[cfg(windows)]
-pub(crate) fn same_identity(src: &Path, dst: &Path) -> io::Result<bool> {
-    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
-    #[repr(C)]
-    #[derive(Default)]
-    struct Information {
-        attributes: u32,
-        created: [u32; 2],
-        accessed: [u32; 2],
-        written: [u32; 2],
-        volume: u32,
-        size_high: u32,
-        size_low: u32,
-        links: u32,
-        index_high: u32,
-        index_low: u32,
-    }
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetFileInformationByHandle(handle: *mut std::ffi::c_void, info: *mut Information)
-        -> i32;
-    }
-    let identity = |path: &Path| -> io::Result<(u32, u32, u32)> {
-        let file = std::fs::OpenOptions::new()
-            .access_mode(0)
-            .share_mode(7)
-            .custom_flags(0x02000000)
-            .open(path)?;
-        let mut info = Information::default();
-        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok((info.volume, info.index_high, info.index_low))
-    };
-    Ok(identity(src)? == identity(dst)?)
+    crate::utils::file_identity::same(src, dst)
 }

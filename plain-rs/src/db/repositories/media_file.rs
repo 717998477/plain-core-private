@@ -47,7 +47,7 @@ impl Db {
         self.record_media_file_inputs(
             files
                 .iter()
-                .map(|file| (file, MediaFileMetadataAvailability::ALL)),
+                .map(|file| (file, MediaFileMetadataAvailability::ALL, None)),
         )
     }
 
@@ -55,23 +55,39 @@ impl Db {
         &self,
         files: &[MediaFileMetadataRead],
     ) -> rusqlite::Result<Vec<MediaFileRow>> {
-        self.record_media_file_inputs(files.iter().map(|file| (&file.metadata, file.available)))
+        self.record_media_file_inputs(files.iter().map(|file| {
+            (
+                &file.metadata,
+                file.available,
+                file.file_identity.as_deref(),
+            )
+        }))
     }
 
     fn record_media_file_inputs<'a>(
         &self,
-        files: impl IntoIterator<Item = (&'a MediaFileMetadata, MediaFileMetadataAvailability)>,
+        files: impl IntoIterator<
+            Item = (
+                &'a MediaFileMetadata,
+                MediaFileMetadataAvailability,
+                Option<&'a str>,
+            ),
+        >,
     ) -> rusqlite::Result<Vec<MediaFileRow>> {
         self.with_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
             let mut rows = Vec::new();
-            for (file, available) in files {
+            for (file, available, identity) in files {
                 let data_type = kind(file.data_type)?;
+                if let Some(identity) = identity {
+                    relocate_identity(&tx, data_type, &file.path, identity)?;
+                }
+
                 tx.execute(
-                    "INSERT INTO media_items(id,data_type,path,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,taken_at,created_at,updated_at,mime_type,file_name,album,album_artist,album_id)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?24,?25,?26)
-                     ON CONFLICT(data_type,path) DO UPDATE SET album=CASE WHEN ?18 THEN excluded.album ELSE media_items.album END,album_artist=CASE WHEN ?18 THEN excluded.album_artist ELSE media_items.album_artist END,album_id=CASE WHEN ?18 THEN excluded.album_id ELSE media_items.album_id END,title=CASE WHEN ?18 THEN excluded.title ELSE media_items.title END,artist=CASE WHEN ?18 THEN excluded.artist ELSE media_items.artist END,bucket_id=excluded.bucket_id,size_bytes=excluded.size_bytes,duration_ms=CASE WHEN ?19 THEN excluded.duration_ms ELSE media_items.duration_ms END,cover_image_id=CASE WHEN ?20 THEN excluded.cover_image_id ELSE media_items.cover_image_id END,width=CASE WHEN ?21 THEN excluded.width ELSE media_items.width END,height=CASE WHEN ?21 THEN excluded.height ELSE media_items.height END,rotation=CASE WHEN ?22 THEN excluded.rotation ELSE media_items.rotation END,taken_at=CASE WHEN ?23 THEN excluded.taken_at ELSE media_items.taken_at END,updated_at=excluded.updated_at,mime_type=excluded.mime_type,file_name=excluded.file_name",
-                    params![uuid::Uuid::new_v4().to_string(),data_type,file.path,file.title,file.artist,file.bucket_id,file.size_bytes,file.duration_ms,file.cover_image_id,file.width,file.height,file.rotation,file.taken_at.as_deref().map(crate::utils::dbtime::normalize).transpose()?,crate::utils::dbtime::normalize(&file.created_at)?,crate::utils::dbtime::normalize(&file.updated_at)?,crate::utils::mime::mime_from_ext(&file.path),std::path::Path::new(&file.path).file_name().and_then(|name|name.to_str()).unwrap_or(&file.path),available.tags,available.duration,available.cover_image_id,available.dimensions,available.rotation,available.taken_at,file.album,file.album_artist,crate::media::audio::metadata::album_id(&file.album,&file.album_artist,&file.artist)],
+                    "INSERT INTO media_items(id,data_type,path,title,artist,bucket_id,size_bytes,duration_ms,cover_image_id,width,height,rotation,taken_at,created_at,updated_at,mime_type,file_name,album,album_artist,album_id,file_identity)
+                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?24,?25,?26,?27)
+                     ON CONFLICT(data_type,path) DO UPDATE SET album=CASE WHEN ?18 THEN excluded.album ELSE media_items.album END,album_artist=CASE WHEN ?18 THEN excluded.album_artist ELSE media_items.album_artist END,album_id=CASE WHEN ?18 THEN excluded.album_id ELSE media_items.album_id END,title=CASE WHEN ?18 THEN excluded.title ELSE media_items.title END,artist=CASE WHEN ?18 THEN excluded.artist ELSE media_items.artist END,bucket_id=excluded.bucket_id,size_bytes=excluded.size_bytes,duration_ms=CASE WHEN ?19 THEN excluded.duration_ms ELSE media_items.duration_ms END,cover_image_id=CASE WHEN ?20 THEN excluded.cover_image_id ELSE media_items.cover_image_id END,width=CASE WHEN ?21 THEN excluded.width ELSE media_items.width END,height=CASE WHEN ?21 THEN excluded.height ELSE media_items.height END,rotation=CASE WHEN ?22 THEN excluded.rotation ELSE media_items.rotation END,taken_at=CASE WHEN ?23 THEN excluded.taken_at ELSE media_items.taken_at END,updated_at=excluded.updated_at,mime_type=excluded.mime_type,file_name=excluded.file_name,file_identity=CASE WHEN excluded.file_identity<>'' THEN excluded.file_identity ELSE media_items.file_identity END",
+                    params![uuid::Uuid::new_v4().to_string(),data_type,file.path,file.title,file.artist,file.bucket_id,file.size_bytes,file.duration_ms,file.cover_image_id,file.width,file.height,file.rotation,file.taken_at.as_deref().map(crate::utils::dbtime::normalize).transpose()?,crate::utils::dbtime::normalize(&file.created_at)?,crate::utils::dbtime::normalize(&file.updated_at)?,crate::utils::mime::mime_from_ext(&file.path),std::path::Path::new(&file.path).file_name().and_then(|name|name.to_str()).unwrap_or(&file.path),available.tags,available.duration,available.cover_image_id,available.dimensions,available.rotation,available.taken_at,file.album,file.album_artist,crate::media::audio::metadata::album_id(&file.album,&file.album_artist,&file.artist),identity.unwrap_or_default()],
                 )?;
                 rows.push(tx.query_row(&format!("SELECT {COLUMNS} FROM media_items WHERE data_type=?1 AND path=?2"),params![data_type,file.path],from_row)?);
             }
@@ -183,3 +199,52 @@ impl Db {
 #[cfg(test)]
 #[path = "../../../tests/unit/db/repositories/media_file.rs"]
 mod tests;
+
+fn relocate_identity(
+    tx: &rusqlite::Transaction<'_>,
+    data_type: i32,
+    destination: &str,
+    identity: &str,
+) -> rusqlite::Result<()> {
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM media_items WHERE data_type=?1 AND path=?2)",
+        params![data_type, destination],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Ok(());
+    }
+    let mut statement =
+        tx.prepare("SELECT id,path FROM media_items WHERE data_type=?1 AND file_identity=?2")?;
+    let candidates = statement
+        .query_map(params![data_type, identity], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut missing = Vec::new();
+    for (id, path) in candidates {
+        match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing.push((id, path)),
+            Err(error) => return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(error))),
+            Ok(_) => {}
+        }
+    }
+    if missing.len() != 1 {
+        return Ok(());
+    }
+    let (id, source) = &missing[0];
+    tx.execute(
+        "UPDATE media_items SET path=?1 WHERE id=?2",
+        params![destination, id],
+    )?;
+    tx.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) SELECT tag_id,?1,type,created_at FROM tag_relations WHERE type=?2 AND target_key=?3 ON CONFLICT(tag_id,target_key,type) DO UPDATE SET created_at=min(tag_relations.created_at,excluded.created_at)", params![destination,DataType::File.kind(),source])?;
+    tx.execute(
+        "DELETE FROM tag_relations WHERE type=?1 AND target_key=?2",
+        params![DataType::File.kind(), source],
+    )?;
+    tx.execute(
+        "UPDATE image_embeddings SET path=?1 WHERE id=?2 AND path=?3",
+        params![destination, id, source],
+    )?;
+    Ok(())
+}

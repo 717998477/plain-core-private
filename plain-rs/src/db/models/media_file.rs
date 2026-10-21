@@ -41,6 +41,7 @@ impl MediaFileMetadataAvailability {
 
 #[derive(Clone, Debug)]
 pub struct MediaFileMetadataRead {
+    pub file_identity: Option<String>,
     pub metadata: MediaFileMetadata,
     pub available: MediaFileMetadataAvailability,
 }

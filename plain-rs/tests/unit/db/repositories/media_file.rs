@@ -101,6 +101,7 @@ fn unavailable_probe_fields_preserve_current_metadata_but_successful_empty_value
     unknown.size_bytes = 20;
     let preserved = db
         .record_media_file_reads(&[MediaFileMetadataRead {
+            file_identity: None,
             metadata: unknown.clone(),
             available: Default::default(),
         }])
@@ -119,6 +120,7 @@ fn unavailable_probe_fields_preserve_current_metadata_but_successful_empty_value
     assert_eq!(preserved.size_bytes, 20);
     let cleared = db
         .record_media_file_reads(&[MediaFileMetadataRead {
+            file_identity: None,
             metadata: unknown,
             available: MediaFileMetadataAvailability::ALL,
         }])
@@ -148,10 +150,12 @@ fn availability_aware_batches_are_atomic_and_new_unknown_files_are_not_hidden() 
     assert!(
         db.record_media_file_reads(&[
             MediaFileMetadataRead {
+                file_identity: None,
                 metadata: updated,
                 available: MediaFileMetadataAvailability::ALL
             },
             MediaFileMetadataRead {
+                file_identity: None,
                 metadata: invalid,
                 available: Default::default()
             },
@@ -166,6 +170,7 @@ fn availability_aware_batches_are_atomic_and_new_unknown_files_are_not_hidden() 
     );
     let inserted = db
         .record_media_file_reads(&[MediaFileMetadataRead {
+            file_identity: None,
             metadata: metadata("/photos/new.heic"),
             available: Default::default(),
         }])
@@ -247,6 +252,7 @@ fn native_album_grouping_survives_failed_probes_and_clears_removed_album_tags() 
     unreadable.album_artist.clear();
     let retained = db
         .record_media_file_reads(&[MediaFileMetadataRead {
+            file_identity: None,
             metadata: unreadable.clone(),
             available: Default::default(),
         }])
@@ -268,4 +274,141 @@ fn native_album_grouping_survives_failed_probes_and_clears_removed_album_tags() 
     let changed = db.record_media_files(&[one]).unwrap().remove(0);
     assert_eq!(changed.id, rows[0].id);
     assert_ne!(changed.album_id, rows[0].album_id);
+}
+
+fn observed_file(path: &std::path::Path, identity: &str) -> MediaFileMetadataRead {
+    MediaFileMetadataRead {
+        file_identity: Some(identity.to_owned()),
+        metadata: metadata(path.to_str().unwrap()),
+        available: MediaFileMetadataAvailability::ALL,
+    }
+}
+
+#[test]
+fn filesystem_rename_preserves_media_identity_flags_and_both_tag_kinds() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.jpg");
+    let destination = directory.path().join("destination.jpg");
+    std::fs::write(&source, b"owned image").unwrap();
+    let db = Db::open(&directory.path().join("plain.db")).unwrap();
+    let first = db
+        .record_media_file_reads(&[observed_file(&source, "volume:file:birth")])
+        .unwrap()
+        .remove(0);
+    db.with_conn(|connection| {
+        connection.execute("UPDATE media_items SET favorited=1 WHERE id=?1", [&first.id])?;
+        connection.execute("INSERT INTO tag_relations(tag_id,target_key,type,created_at) VALUES('media-tag',?1,?2,'2026-10-21T00:00:00.000Z'),('file-tag',?3,?4,'2026-10-21T00:00:00.000Z')",
+            params![first.id,DataType::Image.kind(),source.to_str().unwrap(),DataType::File.kind()])?;
+        Ok::<_, rusqlite::Error>(())
+    }).unwrap();
+    std::fs::rename(&source, &destination).unwrap();
+    let moved = db
+        .record_media_file_reads(&[observed_file(&destination, "volume:file:birth")])
+        .unwrap()
+        .remove(0);
+    assert_eq!(moved.id, first.id);
+    assert_eq!(moved.created_at, first.created_at);
+    assert!(moved.favorited);
+    assert!(
+        db.media_file_by_path(DataType::Image, source.to_str().unwrap())
+            .unwrap()
+            .is_none()
+    );
+    db.with_conn(|connection| {
+        let media: String = connection.query_row(
+            "SELECT target_key FROM tag_relations WHERE tag_id='media-tag'",
+            [],
+            |row| row.get(0),
+        )?;
+        let file: String = connection.query_row(
+            "SELECT target_key FROM tag_relations WHERE tag_id='file-tag'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(media, first.id);
+        assert_eq!(file, destination.to_str().unwrap());
+        Ok::<_, rusqlite::Error>(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn live_hard_links_and_ambiguous_missing_links_never_steal_another_media_id() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.jpg");
+    let linked = directory.path().join("linked.jpg");
+    let remaining = directory.path().join("remaining.jpg");
+    std::fs::write(&source, b"owned image").unwrap();
+    std::fs::hard_link(&source, &linked).unwrap();
+    std::fs::hard_link(&source, &remaining).unwrap();
+    let db = Db::open(&directory.path().join("plain.db")).unwrap();
+    let a = db
+        .record_media_file_reads(&[observed_file(&source, "shared-file")])
+        .unwrap()
+        .remove(0);
+    let b = db
+        .record_media_file_reads(&[observed_file(&linked, "shared-file")])
+        .unwrap()
+        .remove(0);
+    assert_ne!(a.id, b.id);
+    std::fs::remove_file(&source).unwrap();
+    std::fs::remove_file(&linked).unwrap();
+    let c = db
+        .record_media_file_reads(&[observed_file(&remaining, "shared-file")])
+        .unwrap()
+        .remove(0);
+    assert_ne!(c.id, a.id);
+    assert_ne!(c.id, b.id);
+}
+
+#[test]
+fn content_replacement_retains_path_identity_and_unknown_metadata_does_not_erase_file_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.jpg");
+    std::fs::write(&source, b"before").unwrap();
+    let db = Db::open(&directory.path().join("plain.db")).unwrap();
+    let before = db
+        .record_media_file_reads(&[observed_file(&source, "old-file")])
+        .unwrap()
+        .remove(0);
+    let changed = db
+        .record_media_file_reads(&[observed_file(&source, "replacement-file")])
+        .unwrap()
+        .remove(0);
+    assert_eq!(before.id, changed.id);
+    db.record_media_files(&[metadata(source.to_str().unwrap())])
+        .unwrap();
+    let key: String = db
+        .with_conn(|connection| {
+            connection.query_row(
+                "SELECT file_identity FROM media_items WHERE id=?1",
+                [&before.id],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(key, "replacement-file");
+}
+
+#[test]
+fn media_type_and_file_generation_must_match_before_relocation() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.jpg");
+    let destination = directory.path().join("replacement.jpg");
+    std::fs::write(&source, b"original").unwrap();
+    let db = Db::open(&directory.path().join("plain.db")).unwrap();
+    let before = db
+        .record_media_file_reads(&[observed_file(&source, "volume:file:old-birth")])
+        .unwrap()
+        .remove(0);
+    std::fs::rename(&source, &destination).unwrap();
+    let after = db
+        .record_media_file_reads(&[observed_file(&destination, "volume:file:new-birth")])
+        .unwrap()
+        .remove(0);
+    assert_ne!(before.id, after.id);
+    let mut audio = observed_file(&destination, "volume:file:old-birth");
+    audio.metadata.data_type = DataType::Audio;
+    let audio = db.record_media_file_reads(&[audio]).unwrap().remove(0);
+    assert_ne!(before.id, audio.id);
 }

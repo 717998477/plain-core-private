@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS media_items (
     id TEXT PRIMARY KEY NOT NULL CHECK(length(id)>0),
     data_type INTEGER NOT NULL CHECK(data_type IN (1,2,3,24)),
     path TEXT NOT NULL CHECK(length(path)>0),
+    file_identity TEXT NOT NULL DEFAULT '',
     mime_type TEXT NOT NULL,
     file_name TEXT NOT NULL,
     title TEXT NOT NULL,
@@ -229,6 +230,8 @@ CREATE TABLE IF NOT EXISTS media_items (
 CREATE UNIQUE INDEX IF NOT EXISTS uidx_media_items_data_type_path ON media_items(data_type,path);
 
 CREATE INDEX IF NOT EXISTS idx_media_items_data_type_trashed_updated_at ON media_items(data_type,trashed,updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_media_items_data_type_file_identity ON media_items(data_type,file_identity) WHERE file_identity<>'';
 
 CREATE INDEX IF NOT EXISTS idx_media_items_data_type_trashed_id ON media_items(data_type,trashed,id);
 

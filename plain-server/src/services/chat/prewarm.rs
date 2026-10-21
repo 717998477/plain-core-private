@@ -11,13 +11,13 @@ use serde_json::{Value, json};
 struct Native<'a>(&'a ServerState);
 impl Driver for Native<'_> {
     async fn capabilities(&self) -> Result<Capabilities> {
-        Ok(serde_json::from_value(
-            self.0
-                .host
-                .call("peerTransportPrewarmCapabilities", json!({}))
-                .await
-                .map_err(anyhow::Error::msg)?,
-        )?)
+        let supported = peer_transport::capabilities(&self.0.host)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        Ok(Capabilities {
+            ble_ready: supported.contains(&plain_rs::transport::router::TransportType::Ble),
+            aware_supported: supported.contains(&plain_rs::transport::router::TransportType::Aware),
+        })
     }
     async fn scan(&self, short_id: &str) -> Result<Option<Advertisement>> {
         Ok(serde_json::from_value(

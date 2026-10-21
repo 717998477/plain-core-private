@@ -161,3 +161,30 @@ fn a_directory_arriving_by_create_or_rename_is_scanned() {
         Effect::RescanSubtree
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_file_writes_only_reach_indexing_after_the_writer_closes() {
+    use notify::event::{AccessKind, AccessMode, CreateKind, DataChange};
+    assert!(completed_event(Event::new(EventKind::Create(CreateKind::File))).is_none());
+    assert!(
+        completed_event(Event::new(EventKind::Modify(ModifyKind::Data(
+            DataChange::Content
+        ))))
+        .is_none()
+    );
+    assert!(
+        completed_event(Event::new(EventKind::Access(AccessKind::Open(
+            AccessMode::Read
+        ))))
+        .is_none()
+    );
+    let event = Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)))
+        .add_path("/media/closed.png".into());
+    let event = completed_event(event).unwrap();
+    assert_eq!(event.kind, EventKind::Modify(ModifyKind::Any));
+    assert_eq!(
+        event.paths,
+        vec![std::path::PathBuf::from("/media/closed.png")]
+    );
+}
