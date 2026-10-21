@@ -5,6 +5,7 @@ use crate::db::DPeer;
 use crate::db::Db;
 use crate::db::chat_store::messages;
 use crate::db::chat_store::peers;
+use crate::transport::router::Attempt;
 use anyhow::{Result, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -35,11 +36,18 @@ struct Task {
     ticket: Option<Ticket>,
     last: Instant,
     last_bytes: u64,
+    attempt: Attempt,
 }
 #[derive(Clone)]
 pub enum Effect {
-    Start { task: Snapshot, ticket: Ticket },
-    Cancel { token: String },
+    Start {
+        task: Snapshot,
+        ticket: Ticket,
+        attempt: Attempt,
+    },
+    Cancel {
+        token: String,
+    },
 }
 #[derive(Default)]
 struct State {
@@ -117,6 +125,7 @@ impl Queue {
                 ticket: None,
                 last: Instant::now(),
                 last_bytes: 0,
+                attempt: Attempt::Automatic,
             },
         );
         s.pending.push_back(id.into());
@@ -125,6 +134,21 @@ impl Queue {
         Ok(true)
     }
     pub fn enqueue_message(&self, message_id: &str, peer_id: &str) -> Result<bool> {
+        self.enqueue_message_with_attempt(message_id, peer_id, Attempt::Automatic)
+    }
+    pub fn retry_message(&self, message_id: &str, peer_id: &str) -> Result<bool> {
+        if self.control_message(message_id, Some(peer_id), "retry")? {
+            Ok(true)
+        } else {
+            self.enqueue_message_with_attempt(message_id, peer_id, Attempt::Retry)
+        }
+    }
+    fn enqueue_message_with_attempt(
+        &self,
+        message_id: &str,
+        peer_id: &str,
+        attempt: Attempt,
+    ) -> Result<bool> {
         let mut s = self.state.lock().unwrap();
         self.capacity(&s)?;
         if s.tasks
@@ -196,6 +220,7 @@ impl Queue {
                     ticket: None,
                     last: Instant::now(),
                     last_bytes: 0,
+                    attempt,
                 },
             );
             s.pending.push_back(id);
@@ -232,6 +257,9 @@ impl Queue {
         };
         if !allowed {
             return Ok(false);
+        }
+        if action == "retry" {
+            task.attempt = Attempt::Retry;
         }
         let cancel = task.ticket.take();
         task.snapshot.speed = 0;
@@ -412,6 +440,7 @@ impl Queue {
                     s.effects.push_back(Effect::Start {
                         task: task.snapshot.clone(),
                         ticket,
+                        attempt: std::mem::take(&mut task.attempt),
                     });
                 }
                 Err(error) => {

@@ -62,18 +62,28 @@ pub(crate) fn serialize_view<S: Serializer>(
     view(peer).serialize(serializer)
 }
 pub(crate) fn current(db: &plain_rs::db::Db, id: &str, expected: &DPeer) -> anyhow::Result<DPeer> {
-    let peer = plain_rs::db::chat_store::peers::get(db, id)?
-        .ok_or_else(|| anyhow::anyhow!("Peer removed"))?;
+    let peer = current_identity(db, id, expected)?;
     anyhow::ensure!(
-        peer.id == expected.id
-            && peer.key == expected.key
-            && peer.public_key == expected.public_key
-            && peer.status == expected.status
-            && peer.ip == expected.ip
-            && peer.port == expected.port,
+        peer.ip == expected.ip && peer.port == expected.port,
         "Peer changed"
     );
     Ok(peer)
+}
+pub(crate) fn current_identity(
+    db: &plain_rs::db::Db,
+    id: &str,
+    expected: &DPeer,
+) -> anyhow::Result<DPeer> {
+    let peer = plain_rs::db::chat_store::peers::get(db, id)?
+        .ok_or_else(|| anyhow::anyhow!("Peer removed"))?;
+    anyhow::ensure!(same_identity(&peer, expected), "Peer changed");
+    Ok(peer)
+}
+pub(crate) fn same_identity(peer: &DPeer, expected: &DPeer) -> bool {
+    peer.id == expected.id
+        && peer.key == expected.key
+        && peer.public_key == expected.public_key
+        && peer.status == expected.status
 }
 pub(crate) fn file_url(peer: &DPeer, file_id: &str) -> anyhow::Result<String> {
     let mut url = reqwest::Url::parse(&format!(

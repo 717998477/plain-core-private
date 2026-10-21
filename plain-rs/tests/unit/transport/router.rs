@@ -168,3 +168,64 @@ fn deleting_or_unpairing_a_peer_clears_circuits_and_invalidates_outstanding_rece
     assert!(router.finish_at(&outstanding, failed(), now).is_err());
     assert!(router.begin_at(&peer, &lan, now).unwrap().ticket.is_some());
 }
+
+#[test]
+fn explicit_retry_probes_open_circuit_without_removing_active_tickets_or_unblocking_automatic_routes()
+ {
+    let router = Router::default();
+    let now = Instant::now();
+    let peer = peer("127.0.0.1");
+    let lan = [TransportType::Lan];
+    let active = ticket(router.begin_at(&peer, &lan, now).unwrap());
+    for _ in 0..2 {
+        let failed_ticket = ticket(router.begin_at(&peer, &lan, now).unwrap());
+        router.finish_at(&failed_ticket, failed(), now).unwrap();
+    }
+    assert!(router.begin_at(&peer, &lan, now).unwrap().ticket.is_none());
+    let probe = ticket(
+        router
+            .begin_attempt_at(&peer, &lan, Attempt::Retry, now)
+            .unwrap(),
+    );
+    assert_ne!(probe.id, active.id);
+    assert!(probe.generation > active.generation);
+    assert!(router.begin_at(&peer, &lan, now).unwrap().ticket.is_none());
+    assert!(router.finish_at(&active, failed(), now).is_ok());
+    assert_eq!(router.active().get(&peer.id), Some(&TransportType::Lan));
+    router.finish_at(&probe, Outcome::Connected, now).unwrap();
+    let resumed = ticket(router.begin_at(&peer, &lan, now).unwrap());
+    router.abort(&resumed);
+}
+
+#[test]
+fn explicit_retry_failure_preserves_backoff_and_newer_success_ignores_older_failure() {
+    let router = Router::default();
+    let now = Instant::now();
+    let peer = peer("127.0.0.1");
+    let lan = [TransportType::Lan];
+    for _ in 0..2 {
+        let failed_ticket = ticket(router.begin_at(&peer, &lan, now).unwrap());
+        router.finish_at(&failed_ticket, failed(), now).unwrap();
+    }
+    let first = ticket(
+        router
+            .begin_attempt_at(&peer, &lan, Attempt::Retry, now)
+            .unwrap(),
+    );
+    router.finish_at(&first, failed(), now).unwrap();
+    assert!(router.begin_at(&peer, &lan, now).unwrap().ticket.is_none());
+    let older = ticket(
+        router
+            .begin_attempt_at(&peer, &lan, Attempt::Retry, now)
+            .unwrap(),
+    );
+    let newer = ticket(
+        router
+            .begin_attempt_at(&peer, &lan, Attempt::Retry, now)
+            .unwrap(),
+    );
+    router.finish_at(&newer, Outcome::Connected, now).unwrap();
+    router.finish_at(&older, failed(), now).unwrap();
+    let available = ticket(router.begin_at(&peer, &lan, now).unwrap());
+    router.abort(&available);
+}

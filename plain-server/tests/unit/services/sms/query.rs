@@ -338,3 +338,74 @@ fn query_trash_selector_applies_to_sms_and_mms_even_for_internal_all_reads() {
         assert!(active.mms.unwrap().args.contains(&"2".into()));
     }
 }
+
+#[tokio::test]
+async fn filtered_conversation_rows_and_count_decode_the_actual_android_pair_object_facts() {
+    let db = Db::open(std::path::Path::new(":memory:")).unwrap();
+    let host = Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    let replies = host.clone();
+    let responder = tokio::spawn(async move {
+        let mut calls = Vec::new();
+        for index in 0..4 {
+            let request = requests.recv().await.unwrap();
+            let method = request["method"].as_str().unwrap().to_owned();
+            calls.push(method.clone());
+            let result = if index % 2 == 0 {
+                assert_eq!(method, "systemSmsThreadFacts");
+                assert!(
+                    request["params"]["plans"]["sms"]["args"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("7"))
+                );
+                json!([
+                    {"first":"7","second":"2026-10-16T00:00:00Z"},
+                    {"first":"7","second":"2026-10-16T01:00:00Z"}
+                ])
+            } else {
+                assert_eq!(method, "systemSmsConversationFacts");
+                assert_eq!(request["params"]["ids"], json!(["7"]));
+                json!({"items":[{"id":"7","date":"2026-10-16T01:00:00Z","snippet":"actual thread","messageCount":2,"read":true,"addresses":["55501001"]}],"ownNumbers":[],"snippetCandidates":{}})
+            };
+            replies
+                .reply(generation, json!({"id":request["id"],"result":result}))
+                .unwrap();
+        }
+        calls
+    });
+    let rows = execute(
+        &db,
+        &host,
+        Request::Conversations {
+            query: "thread_id:7".into(),
+            offset: 0,
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows["items"].as_array().unwrap().len(), 1);
+    assert_eq!(rows["items"][0]["id"], "7");
+    assert_eq!(rows["items"][0]["messageCount"], 2);
+    let count = execute(
+        &db,
+        &host,
+        Request::ConversationCount {
+            query: "thread_id:7".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(count, json!({"count":1}));
+    assert_eq!(
+        responder.await.unwrap(),
+        [
+            "systemSmsThreadFacts",
+            "systemSmsConversationFacts",
+            "systemSmsThreadFacts",
+            "systemSmsConversationFacts"
+        ]
+    );
+    host.disconnect(generation);
+}

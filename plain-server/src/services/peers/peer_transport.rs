@@ -1,9 +1,9 @@
 use crate::assembly::server::ServerState;
 use plain_rs::db::DPeer;
-use plain_rs::transport::router::Outcome;
 use plain_rs::transport::router::Router;
 use plain_rs::transport::router::Ticket;
 use plain_rs::transport::router::TransportType;
+use plain_rs::transport::router::{Attempt, Outcome};
 use serde_json::{Value, json};
 use std::time::Duration;
 pub(crate) fn snapshot_event(state: &ServerState) -> plain_rs::events::WsEvent {
@@ -53,6 +53,36 @@ pub(crate) async fn send_checked(
     body: &str,
     validate: impl Fn() -> Result<(), String>,
 ) -> Result<Value, String> {
+    send_checked_with_attempt(
+        state,
+        peer,
+        channel_id,
+        key,
+        body,
+        Attempt::Automatic,
+        validate,
+    )
+    .await
+}
+pub(crate) async fn send_with_attempt(
+    state: &ServerState,
+    peer: &DPeer,
+    channel_id: &str,
+    key: &[u8],
+    body: &str,
+    attempt: Attempt,
+) -> Result<Value, String> {
+    send_checked_with_attempt(state, peer, channel_id, key, body, attempt, || Ok(())).await
+}
+async fn send_checked_with_attempt(
+    state: &ServerState,
+    peer: &DPeer,
+    channel_id: &str,
+    key: &[u8],
+    body: &str,
+    attempt: Attempt,
+    validate: impl Fn() -> Result<(), String>,
+) -> Result<Value, String> {
     if key.len() != 32 {
         return Err("Invalid peer transport key".into());
     }
@@ -67,7 +97,13 @@ pub(crate) async fn send_checked(
         let sdk: Vec<TransportType> = serde_json::from_value(sdk).map_err(|e| e.to_string())?;
         available.extend(sdk.into_iter().filter(|kind| *kind != TransportType::Lan));
     }
-    let mut step = router.begin(peer, &available).map_err(|e| e.to_string())?;
+    validate()?;
+    let current_peer =
+        crate::services::peers::peer_address::current_identity(&state.db, &peer.id, peer)
+            .map_err(|e| e.to_string())?;
+    let mut step = router
+        .begin_with_attempt(&current_peer, &available, attempt)
+        .map_err(|e| e.to_string())?;
     let first = step.ticket.take().ok_or_else(|| {
         step.error
             .unwrap_or_else(|| "Peer transport unavailable".into())
@@ -80,7 +116,7 @@ pub(crate) async fn send_checked(
     loop {
         notify(state);
         validate()?;
-        crate::services::peers::peer_address::current(&state.db, &peer.id, peer)
+        crate::services::peers::peer_address::current_identity(&state.db, &peer.id, peer)
             .map_err(|e| e.to_string())?;
         if pending.ticket.transport == TransportType::Lan {
             let mut stop = state.stop.clone();
@@ -88,8 +124,10 @@ pub(crate) async fn send_checked(
             match response {
                 Ok(response) => {
                     validate()?;
-                    crate::services::peers::peer_address::current(&state.db, &peer.id, peer)
-                        .map_err(|e| e.to_string())?;
+                    crate::services::peers::peer_address::current_identity(
+                        &state.db, &peer.id, peer,
+                    )
+                    .map_err(|e| e.to_string())?;
                     router
                         .finish(&pending.ticket, Outcome::Connected)
                         .map_err(|e| e.to_string())?;
@@ -134,7 +172,7 @@ pub(crate) async fn send_checked(
             Err(_) => return Err("SDK response timed out; delivery is unconfirmed".into()),
             Ok(Ok(response)) => {
                 validate()?;
-                crate::services::peers::peer_address::current(&state.db, &peer.id, peer)
+                crate::services::peers::peer_address::current_identity(&state.db, &peer.id, peer)
                     .map_err(|e| e.to_string())?;
                 router
                     .finish(&pending.ticket, Outcome::Connected)

@@ -190,15 +190,16 @@ async fn a_non_regular_source_is_refused_before_decoding() {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
-async fn a_source_that_vanishes_produces_no_content() {
+async fn a_source_that_vanishes_produces_not_found() {
     let (_dir, core, _cache) = server_with_cache();
     let state = core.runtime_state();
     let source = state.directory.join("missing.bin");
     let rendered = render(&state, request_for(&source)).await;
     assert_eq!(
-        rendered.0, 204,
-        "a source that is not there has no fingerprint and nothing to render"
+        rendered.0, 404,
+        "a missing thumbnail source preserves the resource not-found contract"
     );
+    assert!(rendered.2.is_empty());
     core.stop_core().await;
 }
 
@@ -322,5 +323,29 @@ async fn cancelling_a_pending_sdk_decode_removes_its_token() {
     assert!(call.await.unwrap_err().is_cancelled());
     assert!(state.thumbnails.outputs.lock().unwrap().is_empty());
     assert!(state.thumbnails.submit(token, vec![1]).is_err());
+    core.stop_core().await;
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tokio::test]
+async fn a_corrupt_native_image_returns_bad_request_with_a_json_decoder_error() {
+    let (_directory, core, _cache) = server_with_cache();
+    let state = core.runtime_state();
+    let source = state.directory.join("corrupt.png");
+    write_image(&source, 200, 100);
+    let mut corrupt = std::fs::read(&source).unwrap();
+    corrupt.truncate(33);
+    std::fs::write(&source, &corrupt).unwrap();
+    let (_generation, mut host_requests) = state.host.connect();
+    let rendered = render(&state, request_for(&source)).await;
+    assert_eq!(rendered.0, 400);
+    assert_eq!(header(&rendered.1, "content-type"), "application/json");
+    let error: serde_json::Value = serde_json::from_slice(&rendered.2).unwrap();
+    let object = error.as_object().unwrap();
+    assert_eq!(object.len(), 1);
+    assert!(!object["error"].as_str().unwrap().is_empty());
+    assert_eq!(state.thumbnails.native_decodes.load(Ordering::SeqCst), 1);
+    assert!(host_requests.try_recv().is_err());
+    assert_eq!(std::fs::read(&source).unwrap(), corrupt);
     core.stop_core().await;
 }

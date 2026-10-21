@@ -14,6 +14,12 @@ pub enum TransportType {
     Aware,
     Ble,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Attempt {
+    #[default]
+    Automatic,
+    Retry,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ticket {
@@ -45,6 +51,7 @@ struct Route {
     active: Option<Ticket>,
     errors: Vec<String>,
     deadline: Instant,
+    attempt: Attempt,
 }
 #[derive(Default)]
 struct State {
@@ -58,9 +65,27 @@ pub struct Router {
 }
 impl Router {
     pub fn begin(&self, peer: &DPeer, available: &[TransportType]) -> Result<Step> {
-        self.begin_at(peer, available, Instant::now())
+        self.begin_with_attempt(peer, available, Attempt::Automatic)
     }
+    pub fn begin_with_attempt(
+        &self,
+        peer: &DPeer,
+        available: &[TransportType],
+        attempt: Attempt,
+    ) -> Result<Step> {
+        self.begin_attempt_at(peer, available, attempt, Instant::now())
+    }
+    #[cfg(test)]
     fn begin_at(&self, peer: &DPeer, available: &[TransportType], now: Instant) -> Result<Step> {
+        self.begin_attempt_at(peer, available, Attempt::Automatic, now)
+    }
+    fn begin_attempt_at(
+        &self,
+        peer: &DPeer,
+        available: &[TransportType],
+        attempt: Attempt,
+        now: Instant,
+    ) -> Result<Step> {
         if peer.id.is_empty() {
             bail!("Missing peer");
         }
@@ -85,6 +110,7 @@ impl Router {
             active: None,
             errors: Vec::new(),
             deadline: now + Duration::from_secs(300),
+            attempt,
         };
         let id = crate::utils::short_uuid::short_uuid();
         let step = next(&mut state, &mut route, &id, now)?;
@@ -193,13 +219,15 @@ fn next(state: &mut State, route: &mut Route, id: &str, now: Instant) -> Result<
     while let Some(kind) = route.candidates.get(route.cursor).copied() {
         route.cursor += 1;
         if let Some(circuit) = state.circuits.get_mut(&(route.peer.clone(), kind)) {
-            if circuit.opened.is_some_and(|opened| {
-                now.saturating_duration_since(opened) <= Duration::from_secs(30)
-            }) {
-                continue;
-            }
-            if circuit.opened.take().is_some() {
-                circuit.failures.clear();
+            if let Some(opened) = circuit.opened {
+                if now.saturating_duration_since(opened) <= Duration::from_secs(30) {
+                    if route.attempt == Attempt::Automatic {
+                        continue;
+                    }
+                } else {
+                    circuit.opened = None;
+                    circuit.failures.clear();
+                }
             }
         }
         state.next = state

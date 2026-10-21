@@ -3,7 +3,10 @@ use plain_rs::db::DPeer;
 use plain_rs::transport::contract::PeerTransport;
 use plain_rs::transport::contract::message_response;
 use serde_json::json;
-pub(crate) struct Transport(pub(crate) ServerState);
+pub(crate) struct Transport {
+    state: ServerState,
+    attempt: plain_rs::transport::router::Attempt,
+}
 impl PeerTransport for Transport {
     async fn post<'a>(
         &'a self,
@@ -22,9 +25,15 @@ impl PeerTransport for Transport {
         key: &[u8],
         body: &str,
     ) -> Result<(), String> {
-        let response =
-            crate::services::peers::peer_transport::send(&self.0, peer, channel_id, key, body)
-                .await?;
+        let response = crate::services::peers::peer_transport::send_with_attempt(
+            &self.state,
+            peer,
+            channel_id,
+            key,
+            body,
+            self.attempt,
+        )
+        .await?;
         message_response(&response)
     }
 }
@@ -33,12 +42,20 @@ pub(crate) async fn deliver(
     id: &str,
     recipients: Option<Vec<String>>,
 ) -> anyhow::Result<plain_rs::chat::delivery::Receipt> {
-    deliver_observed(state, id, recipients, |_| {}).await
+    deliver_observed(
+        state,
+        id,
+        recipients,
+        plain_rs::transport::router::Attempt::Automatic,
+        |_| {},
+    )
+    .await
 }
 pub(crate) async fn deliver_observed(
     state: &ServerState,
     id: &str,
     recipients: Option<Vec<String>>,
+    attempt: plain_rs::transport::router::Attempt,
     pending: impl Fn(&plain_rs::db::DChat) + Send + Sync,
 ) -> anyhow::Result<plain_rs::chat::delivery::Receipt> {
     let result = async {
@@ -55,7 +72,10 @@ pub(crate) async fn deliver_observed(
         state
             .delivery
             .send_observed(
-                &Transport(state.clone()),
+                &Transport {
+                    state: state.clone(),
+                    attempt,
+                },
                 &client_id,
                 &key,
                 &token,

@@ -13,8 +13,13 @@ pub(crate) async fn run(
     state: &ServerState,
     task: &plain_rs::chat::attachments::download_queue::Snapshot,
     path: &str,
+    attempt: plain_rs::transport::router::Attempt,
 ) -> Result<()> {
-    let peer = crate::services::peers::peer_address::current(&state.db, &task.peer.id, &task.peer)?;
+    let peer = crate::services::peers::peer_address::current_identity(
+        &state.db,
+        &task.peer.id,
+        &task.peer,
+    )?;
     let file_id = task.file["uri"]
         .as_str()
         .and_then(|s| s.strip_prefix("fsid:"))
@@ -30,7 +35,11 @@ pub(crate) async fn run(
         )?;
         available.extend(kinds.into_iter().filter(|k| *k != TransportType::Lan));
     }
-    let step = state.transport.begin(&peer, &available)?;
+    let current_peer =
+        crate::services::peers::peer_address::current_identity(&state.db, &peer.id, &peer)?;
+    let step = state
+        .transport
+        .begin_with_attempt(&current_peer, &available, attempt)?;
     let ticket = step
         .ticket
         .ok_or_else(|| anyhow::anyhow!(step.error.unwrap_or_else(|| "No peer transport".into())))?;
@@ -45,11 +54,12 @@ pub(crate) async fn run(
         .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
         .filter(|v| !v.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Missing peer actor"))?;
-    let mut file = tokio::fs::File::create(path).await?;
+    let mut file = open_ticket(path).await?;
     let mut bytes = 0;
     loop {
         crate::services::peers::peer_transport::notify(state);
-        crate::services::peers::peer_address::current(&state.db, &peer.id, &peer)?;
+        let peer =
+            crate::services::peers::peer_address::current_identity(&state.db, &peer.id, &peer)?;
         let unavailable = match pending.ticket.transport {
             TransportType::Lan => {
                 let url = crate::services::peers::peer_address::file_url(&peer, file_id)?;
@@ -114,7 +124,9 @@ pub(crate) async fn run(
             TransportType::Ble => {
                 let mut offset = 0u64;
                 loop {
-                    crate::services::peers::peer_address::current(&state.db, &peer.id, &peer)?;
+                    crate::services::peers::peer_address::current_identity(
+                        &state.db, &peer.id, &peer,
+                    )?;
                     let response = crate::services::peers::peer_sdk::ble(
                         state,
                         &peer,
@@ -156,7 +168,7 @@ pub(crate) async fn run(
         }
     }
     ensure!(bytes == task.total, "Attachment byte count mismatch");
-    crate::services::peers::peer_address::current(&state.db, &peer.id, &peer)?;
+    crate::services::peers::peer_address::current_identity(&state.db, &peer.id, &peer)?;
     file.flush().await?;
     file.sync_all().await?;
     drop(file);
@@ -183,3 +195,15 @@ async fn write(
     );
     Ok(())
 }
+
+async fn open_ticket(path: &str) -> std::io::Result<tokio::fs::File> {
+    tokio::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .await
+}
+
+#[cfg(test)]
+#[path = "../../../tests/unit/services/peers/peer_download.rs"]
+mod tests;

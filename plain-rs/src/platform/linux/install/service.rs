@@ -77,8 +77,22 @@ pub fn uninstall(
 }
 
 pub fn restart() -> Result<()> {
-    let status = std::process::Command::new("systemctl")
-        .args(["restart", "plainapp.service"])
+    restart_service(&mut std::process::Command::new("systemd-run"))
+}
+
+fn restart_service(command: &mut std::process::Command) -> Result<()> {
+    let status = command
+        .args([
+            "--scope",
+            "--quiet",
+            "--collect",
+            "--no-ask-password",
+            "--",
+            "systemctl",
+            "--no-block",
+            "restart",
+            "plainapp.service",
+        ])
         .status()?;
     anyhow::ensure!(status.success(), "service restart failed");
     Ok(())

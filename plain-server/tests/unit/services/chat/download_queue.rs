@@ -242,3 +242,98 @@ async fn paused_generation_and_shutdown_reject_late_bytes_and_release_transfer_f
         0
     );
 }
+
+#[tokio::test]
+async fn explicit_download_retry_roots_probe_open_transport_and_commit_exact_bytes() {
+    use plain_rs::transport::router::{Outcome, TransportType};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (root, fresh) in [
+        ("retryChatDownload(id:\"retry\")", false),
+        ("retryDownload(messageId:\"retry\",peerId:\"peer\")", false),
+        ("retryDownload(messageId:\"retry\",peerId:\"peer\")", true),
+    ] {
+        let (dir, server, state) = fixture();
+        let peer = plain_rs::db::chat_store::peers::get(&state.db, "peer")
+            .unwrap()
+            .unwrap();
+        for _ in 0..2 {
+            let ticket = state
+                .transport
+                .begin(&peer, &[TransportType::Ble])
+                .unwrap()
+                .ticket
+                .unwrap();
+            state
+                .transport
+                .finish(
+                    &ticket,
+                    Outcome::Unavailable {
+                        error: "offline".into(),
+                    },
+                )
+                .unwrap();
+        }
+        let (generation, mut requests) = state.host.connect();
+        let host = state.host.clone();
+        let ble = state.ble_transport.clone();
+        let exchanges = Arc::new(AtomicUsize::new(0));
+        let count = exchanges.clone();
+        let responder = tokio::spawn(async move {
+            while let Some(request) = requests.recv().await {
+                let result = match request["method"].as_str().unwrap() {
+                    "peerTransportCapabilities" => json!(["BLE"]),
+                    "peerTransportBleExchange" => {
+                        let plain_rs::protocols::ble::Request::FileChunk {
+                            file_id, offset, ..
+                        } = ble.request_for_test(&request["params"])
+                        else {
+                            panic!("Expected file request")
+                        };
+                        assert_eq!(file_id, "retry");
+                        assert_eq!(offset, 0);
+                        count.fetch_add(1, Ordering::SeqCst);
+                        ble.reply_for_test(
+                            &request["params"],
+                            plain_rs::protocols::ble::response(200, b"abc").unwrap(),
+                        )
+                    }
+                    "peerTransportSocketCloseAll" => json!(true),
+                    _ => panic!("{request}"),
+                };
+                host.reply(generation, json!({"id":request["id"],"result":result}))
+                    .unwrap();
+            }
+        });
+        seed_chat(&state, "retry", 3);
+        if !fresh {
+            assert!(state.downloads.enqueue("retry", "retry", "peer").unwrap());
+            let failed = terminal(&state, "retry").await.unwrap();
+            assert_eq!(
+                failed["error"],
+                "All peer transports unavailable or temporarily blocked"
+            );
+            assert_eq!(exchanges.load(Ordering::SeqCst), 0);
+        }
+        let native = server.native_graphql().unwrap();
+        let response = native
+            .execute(async_graphql::Request::new(format!("mutation {{{root}}}")))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert!(terminal(&state, "retry").await.is_none());
+        assert_eq!(exchanges.load(Ordering::SeqCst), 1);
+        let chat = plain_rs::db::chat_store::messages::get(&state.db, "retry")
+            .unwrap()
+            .unwrap();
+        let content: Value = serde_json::from_str(&chat.content).unwrap();
+        let uri = content["value"]["items"][0]["uri"].as_str().unwrap();
+        let hash = uri.strip_prefix("fid:").unwrap().split('.').next().unwrap();
+        let record = state.db.app_file_get(hash).unwrap().unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join(record.real_path)).unwrap(),
+            b"abc"
+        );
+        state.host.disconnect(generation);
+        responder.abort();
+        server.shutdown().await;
+    }
+}

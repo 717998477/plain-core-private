@@ -39,7 +39,11 @@ pub(crate) fn start(state: ServerState) {
                             let _ = job.await;
                         }
                     }
-                    Effect::Start { task, ticket } => {
+                    Effect::Start {
+                        task,
+                        ticket,
+                        attempt,
+                    } => {
                         let state = state.clone();
                         let token = task.generation.clone();
                         let job = tokio::spawn(async move {
@@ -47,6 +51,7 @@ pub(crate) fn start(state: ServerState) {
                                 &state,
                                 &task,
                                 &ticket.path,
+                                attempt,
                             )
                             .await;
                             let error = result.err().map(|e| e.to_string());

@@ -168,9 +168,7 @@ async fn deliver(
                     let latest = peers::get(&state.db, &peer.id)
                         .map_err(|e| e.to_string())?
                         .ok_or("Peer not found")?;
-                    if serde_json::to_value(&latest).map_err(|e| e.to_string())?
-                        != serde_json::to_value(&peer).map_err(|e| e.to_string())?
-                    {
+                    if !crate::services::peers::peer_address::same_identity(&latest, &peer) {
                         return Err("Peer changed before send".into());
                     }
                     Ok(())

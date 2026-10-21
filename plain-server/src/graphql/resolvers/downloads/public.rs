@@ -79,13 +79,6 @@ impl DownloadMutation {
         message_id: async_graphql::ID,
         peer_id: async_graphql::ID,
     ) -> async_graphql::Result<bool> {
-        run(ctx, move |queue| {
-            if queue.control_message(&message_id, Some(&peer_id), "retry")? {
-                Ok(true)
-            } else {
-                queue.enqueue_message(&message_id, &peer_id)
-            }
-        })
-        .await
+        run(ctx, move |queue| queue.retry_message(&message_id, &peer_id)).await
     }
 }

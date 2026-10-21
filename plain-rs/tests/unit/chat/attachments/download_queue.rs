@@ -39,7 +39,7 @@ fn status(queue: &Queue, id: &str) -> String {
 }
 fn start(queue: &Queue) -> (Snapshot, Ticket) {
     match queue.effect().unwrap() {
-        Effect::Start { task, ticket } => (task, ticket),
+        Effect::Start { task, ticket, .. } => (task, ticket),
         _ => panic!("expected start"),
     }
 }
@@ -288,4 +288,68 @@ fn committed_downloads_release_all_queue_capacity_without_client_remove_requests
             b"abc"
         );
     }
+}
+
+#[test]
+fn explicit_retry_intent_is_consumed_only_by_its_accepted_download_generation() {
+    let (_dir, _db, queue) = fixture(2);
+    assert!(queue.enqueue("message", "0", "peer").unwrap());
+    let Some(Effect::Start { task, attempt, .. }) = queue.effect() else {
+        panic!("Expected start")
+    };
+    assert_eq!(attempt, Attempt::Automatic);
+    assert!(!queue.control("0", "retry").unwrap());
+    queue
+        .finish(&task.id, &task.generation, Some("offline".into()))
+        .unwrap();
+    assert!(queue.control("0", "retry").unwrap());
+    let Some(Effect::Start {
+        task: retried,
+        attempt,
+        ..
+    }) = queue.effect()
+    else {
+        panic!("Expected retry start")
+    };
+    assert_eq!(attempt, Attempt::Retry);
+    assert_ne!(retried.generation, task.generation);
+    assert!(
+        !queue
+            .finish(&task.id, &task.generation, Some("late".into()))
+            .unwrap()
+    );
+    assert_eq!(
+        queue.state.lock().unwrap().tasks["0"].attempt,
+        Attempt::Automatic
+    );
+    assert!(queue.enqueue("message", "1", "peer").unwrap());
+    let Some(Effect::Start { attempt, .. }) = queue.effect() else {
+        panic!("Expected neighbor start")
+    };
+    assert_eq!(attempt, Attempt::Automatic);
+    assert!(
+        queue.snapshot()["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|task| task.get("attempt").is_none())
+    );
+}
+
+#[test]
+fn message_retry_marks_both_existing_failed_tasks_and_fresh_fallback_tasks() {
+    let (_dir, _db, queue) = fixture(1);
+    assert!(queue.retry_message("message", "peer").unwrap());
+    let Some(Effect::Start { task, attempt, .. }) = queue.effect() else {
+        panic!("Expected start")
+    };
+    assert_eq!(attempt, Attempt::Retry);
+    queue
+        .finish(&task.id, &task.generation, Some("offline".into()))
+        .unwrap();
+    assert!(queue.retry_message("message", "peer").unwrap());
+    let Some(Effect::Start { attempt, .. }) = queue.effect() else {
+        panic!("Expected retry start")
+    };
+    assert_eq!(attempt, Attempt::Retry);
 }

@@ -531,3 +531,94 @@ async fn destructive_path_batches_validate_every_target_before_touching_any_file
     assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }
+
+async fn whole_selection_preflight_case(sdk: bool) {
+    for kind in [FileTaskType::Copy, FileTaskType::Move] {
+        let directory = tempfile::tempdir().unwrap();
+        let core = ContentServer::open(&directory.path().join("core")).unwrap();
+        let state = core.runtime_state();
+        if sdk {
+            state.file_platform.use_sdk_for_test();
+        }
+        let (generation, mut requests) = state.host.connect();
+        let host = state.host.clone();
+        let receipts = Arc::new(Mutex::new(Vec::<String>::new()));
+        let observed = receipts.clone();
+        let worker = tokio::spawn(async move {
+            while let Some(request) = requests.recv().await {
+                let method = request["method"].as_str().unwrap().to_owned();
+                observed.lock().unwrap().push(method.clone());
+                host.reply(generation, json!({"id":request["id"],"result":if method == "systemPermissionFacts" { json!({"granted":{"WRITE_EXTERNAL_STORAGE":true}}) } else { json!(true) }})).unwrap();
+            }
+        });
+        let source = directory.path().join("selected-first.bin");
+        let destination = directory.path().join("first-result.bin");
+        let missing = directory.path().join("selected-second-missing.bin");
+        let missing_destination = directory.path().join("second-result.bin");
+        std::fs::write(&source, b"first selected exact bytes").unwrap();
+        let client = state.native_client_id().unwrap();
+        let before = state.files.list(client.clone()).await.unwrap();
+        let result = state
+            .files
+            .create(
+                &client,
+                kind,
+                "whole-selection",
+                vec![
+                    FileTaskOp {
+                        src: source.to_string_lossy().into_owned(),
+                        dst: destination.to_string_lossy().into_owned(),
+                        overwrite: false,
+                    },
+                    FileTaskOp {
+                        src: missing.to_string_lossy().into_owned(),
+                        dst: missing_destination.to_string_lossy().into_owned(),
+                        overwrite: false,
+                    },
+                ],
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "a missing selected source was admitted: {result:?}"
+        );
+        assert_eq!(
+            result
+                .unwrap_err()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            serde_json::to_value(state.files.list(client).await.unwrap()).unwrap(),
+            serde_json::to_value(before).unwrap()
+        );
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            b"first selected exact bytes"
+        );
+        assert!(!destination.exists());
+        assert!(!missing_destination.exists());
+        let calls = receipts.lock().unwrap().clone();
+        if sdk {
+            assert_eq!(calls, vec!["systemPermissionFacts"]);
+        } else {
+            assert!(calls.is_empty());
+        }
+        worker.abort();
+        let _ = worker.await;
+        core.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn sdk_admission_checks_every_selected_source_before_recording_a_task_or_running_the_first_operation()
+ {
+    whole_selection_preflight_case(true).await;
+}
+
+#[tokio::test]
+async fn native_admission_keeps_the_same_whole_selection_contract_for_copy_and_move() {
+    whole_selection_preflight_case(false).await;
+}

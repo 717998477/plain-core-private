@@ -73,3 +73,59 @@ async fn direct_tls_peer_exchange_uses_xchacha_and_current_identity_without_host
     a.shutdown().await;
     b.shutdown().await;
 }
+
+#[tokio::test]
+async fn queued_peer_send_uses_refreshed_address_with_unchanged_pairing() {
+    let (_a, a, kp, _) = root("a");
+    let (_b, b, bkp, _) = root("b");
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    let (_, https) = b
+        .start_public(
+            0,
+            0,
+            cert.cert.pem().into_bytes(),
+            cert.key_pair.serialize_pem().into_bytes(),
+        )
+        .await
+        .unwrap();
+    let state = a.runtime_state();
+    let remote = peer("b", 1, &bkp[32..]);
+    peers::save(&state.db, &[remote.clone()], SaveMode::Insert).unwrap();
+    peers::save(
+        &b.runtime_state().db,
+        &[peer("a", 443, &kp[32..])],
+        SaveMode::Insert,
+    )
+    .unwrap();
+    let wire =
+        plain_rs::transport::contract::signed_request(&kp, "query { __typename }", json!({}), "")
+            .unwrap();
+    let capacity = state
+        .lan
+        .capacity
+        .clone()
+        .acquire_many_owned(4)
+        .await
+        .unwrap();
+    let call = crate::services::peers::peer_transport::send(&state, &remote, "", &[7; 32], &wire);
+    tokio::pin!(call);
+    assert!(futures_util::poll!(&mut call).is_pending());
+    let mut refreshed = remote.clone();
+    refreshed.ip = "127.0.0.1".into();
+    refreshed.port = Some(https);
+    peers::save(&state.db, &[refreshed], SaveMode::Update).unwrap();
+    drop(capacity);
+    let response = call.await.unwrap();
+    assert_eq!(response["data"]["__typename"], "Query");
+    let mut without_address = remote.clone();
+    without_address.ip.clear();
+    let response =
+        crate::services::peers::peer_transport::send(&state, &without_address, "", &[7; 32], &wire)
+            .await
+            .unwrap();
+    assert_eq!(response["data"]["__typename"], "Query");
+    assert!(state.transport.active().is_empty());
+    assert_eq!(state.lan.capacity.available_permits(), 4);
+    a.shutdown().await;
+    b.shutdown().await;
+}

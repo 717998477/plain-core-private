@@ -145,7 +145,7 @@ pub(crate) async fn retry(state: &ServerState, id: String) -> Result<DChat> {
         let mut stop = state.stop.clone();
         let result = tokio::select! {
             _=stop.changed()=>Err(anyhow::anyhow!("Chat service stopped")),
-            result=crate::services::chat::chat_delivery::deliver_observed(&state,&id,None,|chat| {
+            result=crate::services::chat::chat_delivery::deliver_observed(&state,&id,None,plain_rs::transport::router::Attempt::Retry,|chat| {
                 if let Some(sender)=sender.lock().unwrap().take() {let _=sender.send(Ok(chat.clone()));}
             })=>result.and_then(|receipt|receipt.chat.ok_or_else(||anyhow::anyhow!("Message unavailable"))),
         };

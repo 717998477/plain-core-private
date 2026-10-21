@@ -87,6 +87,7 @@ impl FileTasks {
             bail!("absolute file paths required");
         }
         self.hooks.authorize(kind, &ops).await?;
+        preflight_sources(&ops).await?;
         self.service()?.create(client_id, kind, title, ops)
     }
     pub async fn execute(
@@ -156,6 +157,17 @@ impl FileTasks {
         tokio::task::spawn_blocking(move || service.list(&client_id)).await?
     }
 }
+async fn preflight_sources(ops: &[FileTaskOp]) -> Result<()> {
+    let sources = ops.iter().map(|op| op.src.clone()).collect::<Vec<_>>();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        for source in sources {
+            std::fs::metadata(source)?;
+        }
+        Ok(())
+    })
+    .await?
+}
+
 pub(crate) fn named_directory(directory: &str, name: &str) -> Result<PathBuf> {
     if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\\', '\0']) {
         bail!("invalid file name");

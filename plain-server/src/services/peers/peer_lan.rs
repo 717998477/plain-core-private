@@ -47,7 +47,7 @@ pub(crate) async fn send(
         .await
         .map_err(|e| Failure::Fatal(e.to_string()))?;
     validate().map_err(Failure::Fatal)?;
-    let peer = crate::services::peers::peer_address::current(&state.db, &peer.id, peer)
+    let peer = crate::services::peers::peer_address::current_identity(&state.db, &peer.id, peer)
         .map_err(|e| Failure::Fatal(e.to_string()))?;
     let actor = state
         .prefs

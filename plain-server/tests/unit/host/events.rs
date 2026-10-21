@@ -28,12 +28,16 @@ async fn cancelled_audio_snapshot_read_is_retried_before_consuming_queued_events
     }
     let (locked, ready) = tokio::sync::oneshot::channel();
     let (release, released) = tokio::sync::oneshot::channel();
-    let db = state.db.clone();
-    let holder = tokio::task::spawn_blocking(move || {
-        db.with_conn(|_| {
-            locked.send(()).unwrap();
-            let _ = released.blocking_recv();
-        });
+    let audio = state.audio.clone();
+    let holder = tokio::spawn(async move {
+        audio
+            .run_playback(move |_, _| {
+                locked.send(()).unwrap();
+                let _ = released.blocking_recv();
+                Ok(())
+            })
+            .await
+            .unwrap();
     });
     ready.await.unwrap();
     {

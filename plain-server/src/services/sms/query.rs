@@ -389,6 +389,14 @@ fn page(
         .take(limit.max(0) as usize)
         .collect())
 }
+#[derive(Deserialize)]
+struct ThreadMatch {
+    #[serde(rename = "first")]
+    thread_id: String,
+    #[serde(rename = "second")]
+    date: String,
+}
+
 async fn matched_conversation_facts(
     db: &plain_rs::db::Db,
     host: &crate::host::bridge::Host,
@@ -401,13 +409,17 @@ async fn matched_conversation_facts(
         .as_mut()
         .into_iter()
         .for_each(|m| m.clauses.retain(|c| !c.starts_with("date ")));
-    let hits: Vec<(String, String)> = serde_json::from_value(
+    let hits: Vec<ThreadMatch> = serde_json::from_value(
         host.call("systemSmsThreadFacts", json!({"plans":plans}))
             .await
             .map_err(anyhow::Error::msg)?,
     )?;
     let mut latest = std::collections::HashMap::<String, String>::new();
-    for (id, date) in hits {
+    for ThreadMatch {
+        thread_id: id,
+        date,
+    } in hits
+    {
         if id.is_empty() {
             continue;
         }

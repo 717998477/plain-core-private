@@ -276,7 +276,7 @@ pub(crate) async fn response(state: &ServerState, request: Request) -> Response 
             )
                 .into_response()
         }
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => (StatusCode::BAD_REQUEST, Json(json!({"error":error}))).into_response(),
     }
 }
