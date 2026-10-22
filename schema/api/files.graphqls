@@ -223,7 +223,6 @@ extend type Mutation {
 	deleteTrashedFile(path: String!): Boolean!
 	extractZipArchive(path: String!, target: String!): String!
 	importAppFile(source: String!, fileName: String!, mimeType: String!, deleteSource: Boolean!): AppFile!
-	importNoteImage(source: String!, fileName: String!): String!
 	mergeAppFileChunks(fileId: String!, totalChunks: Int!, fileName: String!, totalSize: Long!): MergeTask!
 	"""
 	Starts the merge and returns immediately; completion arrives over the
@@ -254,7 +253,6 @@ extend type Query {
 	"""
 	fileCount(root: String!, query: String!): Int!
 	fileInfo(path: String!, fileName: String): FileInfo!
-	filePaths(paths: [String!]!): [String]!
 	fileTasks(query: String!, offset: Int!, limit: Int!): [FileTask!]!
 	"""
 	One page of a directory listing, filtered and sorted by the search

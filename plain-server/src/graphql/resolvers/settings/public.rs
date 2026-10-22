@@ -29,13 +29,6 @@ impl PrefsQuery {
         let state = ctx.data::<crate::assembly::server::ServerState>()?;
         Ok(Json(state.store.get()?.get_json(&key)?.unwrap_or(Value::Null)))
     }
-    async fn scan_history(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<String>> {
-        let state = ctx.data::<crate::assembly::server::ServerState>()?;
-        Ok(state.db.with_conn(|conn| -> rusqlite::Result<Vec<String>> {
-            let mut query = conn.prepare("SELECT text FROM scan_history ORDER BY id DESC")?;
-            query.query_map([], |row| row.get(0))?.collect()
-        })?)
-    }
 
 }
 
@@ -75,16 +68,6 @@ impl PrefsMutation {
         let state = ctx.data::<crate::assembly::server::ServerState>()?;
         Ok(state.store.get()?.set_json(&key, value.0)?)
     }
-    async fn add_scan_history(&self, ctx: &Context<'_>, text: String) -> async_graphql::Result<bool> {
-        let state = ctx.data::<crate::assembly::server::ServerState>()?;
-        state.db.with_conn(|conn| conn.execute("INSERT INTO scan_history(text) VALUES (?1)", [&text]))?;
-        Ok(true)
-    }
-    async fn remove_scan_history(&self, ctx: &Context<'_>, text: String) -> async_graphql::Result<bool> {
-        let state = ctx.data::<crate::assembly::server::ServerState>()?;
-        state.db.with_conn(|conn| conn.execute("DELETE FROM scan_history WHERE text = ?1", [&text]))?;
-        Ok(true)
-    }
 
 }
 
@@ -101,12 +84,6 @@ pub(crate) fn allowed(ctx: &Context<'_>, key: &str) -> bool {
 }
 pub(crate) fn authorize(ctx: &Context<'_>, key: &str) -> async_graphql::Result<()> {
     if !allowed(ctx, key) { return Err(async_graphql::Error::new("Preference is not accessible")); }
-    Ok(())
-}
-pub(crate) fn require_local(ctx: &Context<'_>) -> async_graphql::Result<()> {
-    if ctx.data_opt::<crate::graphql::executor::RequestOrigin>() != Some(&crate::graphql::executor::RequestOrigin::Local) {
-        return Err(async_graphql::Error::new("Local access required"));
-    }
     Ok(())
 }
 

@@ -313,3 +313,9 @@ impl NativeManagement {
 #[cfg(test)]
 #[path = "../../tests/unit/native/management.rs"]
 mod tests;
+
+mod preferences;
+mod files;
+mod peers;
+mod discovery;
+mod casting;

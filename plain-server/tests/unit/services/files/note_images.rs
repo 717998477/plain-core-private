@@ -3,25 +3,16 @@ use crate::assembly::server::ContentServer;
 use serde_json::json;
 
 #[tokio::test]
-async fn main_import_preserves_image_bytes_and_resolves_duplicate_names_in_rust() {
+async fn native_import_preserves_image_bytes_and_resolves_duplicate_names_in_rust() {
     let directory = tempfile::tempdir().unwrap();
     let core = ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let source = directory.path().join("source.png");
     std::fs::write(&source, b"image bytes").unwrap();
     let (_generation, mut requests) = state.host.connect();
-    let schema = core.native_graphql().unwrap();
     for name in ["picture.png", "picture (1).png"] {
-        let request = async_graphql::Request::new(
-            r#"mutation($source:String!){importNoteImage(source:$source,fileName:"picture.png")}"#,
-        )
-        .variables(async_graphql::Variables::from_json(
-            json!({"source":source}),
-        ));
-        let response = schema.execute(request).await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
-        let data = response.data.into_json().unwrap();
-        assert_eq!(data["importNoteImage"], format!("app://note-images/{name}"));
+        let reference = core.native_management().unwrap().import_note_image(source.to_string_lossy().into_owned(), "picture.png".into()).await.unwrap();
+        assert_eq!(reference, format!("app://note-images/{name}"));
         assert_eq!(
             std::fs::read(
                 plain_rs::data_paths::DataPaths::new(directory.path())

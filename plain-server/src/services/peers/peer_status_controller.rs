@@ -23,8 +23,7 @@ impl Controller {
     }
 }
 
-#[derive(async_graphql::Enum, Clone, Copy, PartialEq, Eq, Debug)]
-#[graphql(name = "PeerStatusAction")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     Reconnect,
 }

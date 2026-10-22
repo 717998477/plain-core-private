@@ -7,20 +7,6 @@ input DlnaMediaInput {
 	audio: Boolean! = false
 }
 
-enum DlnaReceiverAction {
-	RETRY
-	REMOVE_RULE
-	ACCEPT
-	REJECT
-}
-
-input DlnaReceiverInput {
-	action: DlnaReceiverAction!
-	ip: String
-	allowed: Boolean
-	remember: Boolean
-}
-
 type DlnaRenderer {
 	udn: String!
 	name: String!
@@ -61,7 +47,6 @@ extend type Mutation {
 	addDlnaItem(item: DlnaMediaInput!): DlnaSenderState!
 	castDlnaMedia(item: DlnaMediaInput!): DlnaSenderState!
 	clearDlnaItems: DlnaSenderState!
-	controlDlnaReceiver(input: DlnaReceiverInput!): JSON!
 	dlnaCast(rendererUdn: String!, url: String!, title: String!, mime: String!, type: MediaDataType!): Boolean!
 	exitDlna: DlnaSenderState!
 	pauseDlna: DlnaSenderState!
@@ -77,6 +62,5 @@ extend type Mutation {
 }
 
 extend type Query {
-	dlnaReceiver: JSON!
 	dlnaRenderers: [DlnaRenderer!]!
 }

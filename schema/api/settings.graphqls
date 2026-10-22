@@ -1,18 +1,15 @@
+"""
+A scalar that can represent any JSON value.
+"""
+scalar JSON
+
 extend type Mutation {
-    clearNotificationFilterApps: ActionResult!
-    removePref(key: String!): Boolean!
-    resetAdbToken: Boolean!
-    resetPassword: Boolean!
-    resetUrlToken: Boolean!
-    setNotificationFilterMode(mode: String!): ActionResult!
-    setPref(key: String!, value: JSON!): Boolean!
-    setSavedValue(key: String!, value: JSON!): Boolean!
-    addScanHistory(text: String!): Boolean!
-    removeScanHistory(text: String!): Boolean!
+	removePref(key: String!): Boolean!
+	setPref(key: String!, value: JSON!): Boolean!
+	setSavedValue(key: String!, value: JSON!): Boolean!
 }
+
 extend type Query {
-    tlsCertificateSignature: [Int!]!
-    prefs: JSON!
-    savedValue(key: String!): JSON!
-    scanHistory: [String!]!
+	prefs: JSON!
+	savedValue(key: String!): JSON!
 }

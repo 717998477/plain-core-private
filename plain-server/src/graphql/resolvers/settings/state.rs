@@ -1,7 +1,6 @@
-use crate::graphql::types::ActionResult;
 use crate::services::settings::security_preferences::SecurityPreferences;
 use crate::services::settings::preferences::Preferences;
-use async_graphql::{Context, Object, Result};
+use async_graphql::{Context, Result};
 use plain_rs::{events::WsEvent, prefs::Prefs};
 use serde_json::Value;
 use std::sync::Arc;
@@ -12,48 +11,6 @@ fn prefs<'a>(ctx: &'a Context<'_>) -> Result<&'a Arc<Prefs>> {
 }
 fn events<'a>(ctx: &'a Context<'_>) -> Option<&'a broadcast::Sender<WsEvent>> {
     ctx.data_opt::<broadcast::Sender<WsEvent>>()
-}
-#[derive(Default)]
-pub struct PreferencesMutation;
-#[Object]
-impl PreferencesMutation {
-    async fn reset_password(&self, ctx: &Context<'_>) -> Result<bool> {
-        super::public::require_local(ctx)?;
-        security_preferences(ctx)?.reset_password()?;
-        Ok(true)
-    }
-    async fn reset_url_token(&self, ctx: &Context<'_>) -> Result<bool> {
-        super::public::require_local(ctx)?;
-        security_preferences(ctx)?.reset_url_token()?;
-        Ok(true)
-    }
-    async fn reset_adb_token(&self, ctx: &Context<'_>) -> Result<bool> {
-        super::public::require_local(ctx)?;
-        security_preferences(ctx)?.reset_adb_token()?;
-        Ok(true)
-    }
-    async fn set_notification_filter_mode(
-        &self,
-        ctx: &Context<'_>,
-        mode: String,
-    ) -> Result<ActionResult> {
-        super::public::require_local(ctx)?;
-        let changed = preferences(ctx)?
-            .action(plain_rs::prefs::settings::Action::SetNotificationMode(mode))
-            .await?;
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
-    }
-    async fn clear_notification_filter_apps(&self, ctx: &Context<'_>) -> Result<ActionResult> {
-        super::public::require_local(ctx)?;
-        let changed = preferences(ctx)?
-            .action(plain_rs::prefs::settings::Action::ClearNotificationApps)
-            .await?;
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
-    }
 }
 #[cfg(all(test, feature = "core"))]
 #[path = "../../../../tests/unit/graphql/resolvers/settings/state.rs"]

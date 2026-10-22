@@ -273,39 +273,9 @@ async fn main_identity_rename_and_pairing_code_use_shared_preferences_and_refuse
             ["signaturePublicKey"],
         public_key
     );
-    let code = executor
-        .execute(async_graphql::Request::new("{pairingCode}"))
-        .await;
-    assert!(
-        !code.errors.is_empty(),
-        "an inactive public listener must not generate an unusable QR code"
-    );
-    let remote = crate::graphql::executor::execute_graphql(
-        &state.public,
-        async_graphql::Request::new("{pairingCode}"),
-        crate::graphql::executor::RequestContext::remote(Some(state.clone())),
-    )
-    .await;
-    assert_eq!(remote.errors[0].message, "no_permission");
-    let current = executor
-        .execute(async_graphql::Request::new(
-            r#"{ isPairingRequestCurrent(id:"absent",signature:"stale") }"#,
-        ))
-        .await;
-    assert!(current.errors.is_empty());
-    assert_eq!(
-        current.data.into_json().unwrap()["isPairingRequestCurrent"],
-        false
-    );
-    let remote = crate::graphql::executor::execute_graphql(
-        &state.public,
-        async_graphql::Request::new(
-            r#"{ isPairingRequestCurrent(id:"absent",signature:"stale") }"#,
-        ),
-        crate::graphql::executor::RequestContext::remote(Some(state.clone())),
-    )
-    .await;
-    assert_eq!(remote.errors[0].message, "no_permission");
+    let management = core.native_management().unwrap();
+    assert!(management.pairing_code().await.is_err(), "An inactive listener cannot produce a usable QR code");
+    assert!(!management.is_pairing_request_current("absent".into(), "stale".into()).unwrap());
     core.stop_core().await;
     for document in [
         identity,

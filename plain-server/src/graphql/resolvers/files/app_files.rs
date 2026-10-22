@@ -7,21 +7,6 @@ use std::sync::Arc;
 pub struct AppFilesMutation;
 #[Object]
 impl AppFilesMutation {
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn import_note_image(
-        &self,
-        ctx: &Context<'_>,
-        source: String,
-        file_name: String,
-    ) -> async_graphql::Result<String> {
-        crate::services::files::note_images::import(
-            ctx.data::<crate::assembly::server::ServerState>()?,
-            &source,
-            &file_name,
-        )
-        .await
-        .map_err(async_graphql::Error::new)
-    }
 
     async fn import_app_file(
         &self,

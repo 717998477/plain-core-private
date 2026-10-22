@@ -48,10 +48,6 @@ input PeerRecordInput {
 	updatedAt: Instant!
 }
 
-enum PeerStatusAction {
-	RECONNECT
-}
-
 type Sim {
 	id: ID!
 	label: String!
@@ -61,17 +57,13 @@ type Sim {
 
 extend type Mutation {
 	cancelPairing(generation: String!): Boolean!
-	controlPeerStatus(action: PeerStatusAction!): Boolean!
 	deletePeer(id: ID!): Boolean!
-	logoutPeer(id: ID!): Boolean!
 	pairDevice(input: PairingDeviceInput!): PairingState!
 	respondToPairing(input: PairingRequestInput!, accepted: Boolean!): Boolean!
 	unpairPeer(id: ID!): Boolean!
 }
 
 extend type Query {
-	isPairingRequestCurrent(id: ID!, signature: String!): Boolean!
-	pairingCode: String!
 	pairingStates: [PairingState!]!
 	peerFileUrl(id: ID!, expected: PeerRecordInput!, fileId: String!): String!
 	peers: [Peer!]!

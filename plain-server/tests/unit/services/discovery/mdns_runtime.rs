@@ -181,13 +181,7 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
     let debug_a = uuid::Uuid::new_v4();
     let debug_b = uuid::Uuid::new_v4();
     let token_string = token.clone();
-    let debug = execute(
-        &state,
-        Request::DebugStart {
-            token: debug_a.to_string(),
-        },
-    )
-    .await;
+    let debug = crate::native::management::NativeManagement::new(state.clone()).acquire_mdns_debug_session(debug_a.to_string()).await.unwrap();
     assert_eq!(debug["scanning"], true);
     assert_eq!(debug["capturing"], true);
     let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -222,53 +216,23 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
                 .unwrap()
                 .contains("_plainapp._tcp.local")
     }));
-    execute(
-        &state,
-        Request::DebugStart {
-            token: debug_b.to_string(),
-        },
-    )
-    .await;
+    crate::native::management::NativeManagement::new(state.clone()).acquire_mdns_debug_session(debug_b.to_string()).await.unwrap();
     execute(&state, Request::Stop {}).await;
     assert_eq!(
         state.mdns.snapshot()["scanning"],
         true,
         "Debug leases must keep scanning independently of manual stop"
     );
-    execute(
-        &state,
-        Request::DebugStop {
-            token: debug_a.to_string(),
-        },
-    )
-    .await;
+    crate::native::management::NativeManagement::new(state.clone()).release_mdns_debug_session(debug_a.to_string()).await.unwrap();
     assert_eq!(state.mdns.snapshot()["scanning"], true);
-    execute(
-        &state,
-        Request::DebugStop {
-            token: debug_b.to_string(),
-        },
-    )
-    .await;
+    crate::native::management::NativeManagement::new(state.clone()).release_mdns_debug_session(debug_b.to_string()).await.unwrap();
     assert_eq!(state.mdns.snapshot()["scanning"], false);
     assert_eq!(state.mdns.snapshot()["capturing"], false);
     assert_eq!(state.mdns.snapshot()["packetsIn"], json!([]));
     assert_eq!(state.mdns.snapshot()["packetsOut"], json!([]));
     execute(&state, Request::Start {}).await;
-    execute(
-        &state,
-        Request::DebugStart {
-            token: debug_a.to_string(),
-        },
-    )
-    .await;
-    execute(
-        &state,
-        Request::DebugStop {
-            token: debug_a.to_string(),
-        },
-    )
-    .await;
+    crate::native::management::NativeManagement::new(state.clone()).acquire_mdns_debug_session(debug_a.to_string()).await.unwrap();
+    crate::native::management::NativeManagement::new(state.clone()).release_mdns_debug_session(debug_a.to_string()).await.unwrap();
     assert_eq!(
         state.mdns.snapshot()["scanning"],
         true,
@@ -300,13 +264,7 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
         .await
         .unwrap();
     assert_eq!(state.mdns.snapshot()["scanning"], true);
-    execute(
-        &state,
-        Request::DebugStart {
-            token: debug_a.to_string(),
-        },
-    )
-    .await;
+    crate::native::management::NativeManagement::new(state.clone()).acquire_mdns_debug_session(debug_a.to_string()).await.unwrap();
     execute(
         &state,
         Request::Release {
@@ -316,13 +274,7 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
     )
     .await;
     assert_eq!(state.mdns.snapshot()["scanning"], true);
-    execute(
-        &state,
-        Request::DebugStop {
-            token: debug_a.to_string(),
-        },
-    )
-    .await;
+    crate::native::management::NativeManagement::new(state.clone()).release_mdns_debug_session(debug_a.to_string()).await.unwrap();
     assert_eq!(state.mdns.snapshot()["scanning"], false);
     state.host.disconnect(generation);
     responder.abort();

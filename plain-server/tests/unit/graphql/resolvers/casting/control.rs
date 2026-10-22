@@ -520,41 +520,17 @@ impl MainDlnaClient {
             ))
             .map_err(|error| error.to_string());
         }
-        let field = match action.as_str() {
-            "snapshot" if input.as_object().unwrap().len() == 1 => "dlnaReceiver",
-            "rules" if input.as_object().unwrap().len() == 1 => "dlnaReceiver",
-            _ => "controlDlnaReceiver",
+        use crate::services::casting::receiver::control::Request;
+        let request: Request = serde_json::from_value(input).map_err(|error| error.to_string())?;
+        let management = crate::native::management::NativeManagement::new(self.1.clone());
+        let result = match request {
+            Request::Snapshot {} => management.dlna_receiver().await?,
+            Request::Rules {} => management.dlna_receiver().await?["rules"].clone(),
+            Request::Retry {} => management.retry_dlna_receiver().await?,
+            Request::RemoveRule { ip, allowed } => management.remove_dlna_rule(ip, allowed).await?,
+            Request::Accept { remember } => management.accept_dlna_cast(remember).await?,
+            Request::Reject { remember } => management.reject_dlna_cast(remember).await?,
         };
-        let request = if field == "controlDlnaReceiver" {
-            for name in ["action", "state"] {
-                if let Some(value) = input[name].as_str() {
-                    let mut converted = String::new();
-                    for (index, letter) in value.chars().enumerate() {
-                        if index > 0 && letter.is_uppercase() {
-                            converted.push('_');
-                        }
-                        converted.extend(letter.to_uppercase());
-                    }
-                    input[name] = json!(converted);
-                }
-            }
-            async_graphql::Request::new(
-                "mutation($input:DlnaReceiverInput!){controlDlnaReceiver(input:$input)}",
-            )
-            .variables(async_graphql::Variables::from_json(json!({"input":input})))
-        } else {
-            async_graphql::Request::new(format!("{{{field}}}"))
-        };
-        let result = self.0.execute(request).await;
-        if let Some(error) = result.errors.first() {
-            return Err(error.message.clone());
-        }
-        let result = result.data.into_json().map_err(|error| error.to_string())?;
-        let value = if action == "rules" {
-            &result[field]["rules"]
-        } else {
-            &result[field]
-        };
-        serde_json::to_string(value).map_err(|error| error.to_string())
+        serde_json::to_string(&result).map_err(|error| error.to_string())
     }
 }

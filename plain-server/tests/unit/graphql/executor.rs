@@ -164,18 +164,12 @@ async fn backup_uses_native_management_and_has_no_remote_graphql_entry() {
 #[test]
 fn runtime_controls_and_viewer_exports_do_not_trigger_generic_content_refreshes() {
     for document in [
-        "mutation{controlPeerStatus(action:RECONNECT)}",
         r#"mutation{acquireDiscovery(token:"token") releaseDiscovery(token:"token")}"#,
-        r#"mutation{acquireMdnsDebugSession(token:"token"){debugSessionCount}}"#,
-        "mutation{controlDlnaReceiver(input:{action:ACCEPT,remember:false})}",
-        r#"mutation{importPomodoroSound(source:"source")}"#,
-        "mutation{...Control} fragment Control on Mutation{alias:controlPeerStatus(action:RECONNECT)}",
+        "mutation{...Control} fragment Control on Mutation{alias:releaseDiscovery(token:\"token\")}",
     ] {
         assert!(!content_changes(&Request::new(document)), "{document}");
     }
-    assert!(content_changes(&Request::new(
-        "mutation{controlPeerStatus(action:RECONNECT) createNote}"
-    )));
+    assert!(content_changes(&Request::new("mutation{releaseDiscovery(token:\"token\") createNote}")));
 }
 
 #[test]

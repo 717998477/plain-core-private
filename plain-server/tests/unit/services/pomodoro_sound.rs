@@ -3,7 +3,7 @@ use crate::assembly::server::ContentServer;
 use serde_json::json;
 
 #[tokio::test]
-async fn main_import_replaces_sound_in_the_owned_layout_without_host_calls() {
+async fn native_import_replaces_sound_in_the_owned_layout_without_host_calls() {
     let directory = tempfile::tempdir().unwrap();
     let core = ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
@@ -12,18 +12,8 @@ async fn main_import_replaces_sound_in_the_owned_layout_without_host_calls() {
     let destination = plain_rs::data_paths::DataPaths::new(directory.path()).pomodoro_sound();
     for bytes in [b"first sound".as_slice(), b"replacement sound".as_slice()] {
         std::fs::write(&source, bytes).unwrap();
-        let request = async_graphql::Request::new(
-            "mutation($source:String!){importPomodoroSound(source:$source)}",
-        )
-        .variables(async_graphql::Variables::from_json(
-            json!({"source":format!("file://{}",source.display())}),
-        ));
-        let response = core.native_graphql().unwrap().execute(request).await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
-        assert_eq!(
-            response.data.into_json().unwrap()["importPomodoroSound"],
-            "app://audio/pomodoro_sound.mp3"
-        );
+        let reference = core.native_management().unwrap().import_pomodoro_sound(format!("file://{}", source.display())).await.unwrap();
+        assert_eq!(reference, "app://audio/pomodoro_sound.mp3");
         assert_eq!(std::fs::read(&destination).unwrap(), bytes);
         assert!(source.exists());
         assert_eq!(

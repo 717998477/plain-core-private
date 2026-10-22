@@ -39,6 +39,29 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
     assert!(!sdl.contains("includeTrashed"));
     assert!(!sdl.contains("embeddedAudioLyrics"));
     for removed in [
+        "resetPassword:",
+        "resetUrlToken:",
+        "resetAdbToken:",
+        "setNotificationFilterMode(",
+        "clearNotificationFilterApps:",
+        "pairingCode:",
+        "isPairingRequestCurrent(",
+        "logoutPeer(",
+        "controlPeerStatus(",
+        "filePaths(",
+        "importNoteImage(",
+        "importPomodoroSound(",
+        "dlnaReceiver:",
+        "controlDlnaReceiver(",
+        "scanHistory:",
+        "addScanHistory(",
+        "removeScanHistory(",
+        "acquireMdnsDebugSession(",
+        "releaseMdnsDebugSession(",
+        "input DlnaReceiverInput",
+        "enum DlnaReceiverAction",
+        "enum PeerStatusAction",
+        "tlsCertificateSignature:",
         "updatePeerName(",
         "sharedLinkInfo(",
         "sharedFileUrl(",
@@ -96,8 +119,8 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "setMdnsCapture(",
         "updateSettings(",
         "updateSystemSettings(",
-        "SettingsInput",
-        "SystemSettingsInput",
+        "input SettingsInput {",
+        "input SystemSettingsInput {",
         "SystemSettingsAction",
         "type SettingsUpdate",
         "forwardChatItem(",
@@ -126,13 +149,6 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "images(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Image!]!"
     ));
     assert!(sdl.contains("imageCount(query: String!): Int!"));
-    for reset in [
-        "resetPassword: Boolean!",
-        "resetUrlToken: Boolean!",
-        "resetAdbToken: Boolean!",
-    ] {
-        assert!(sdl.contains(reset));
-    }
     let image = sdl
         .split("type Image implements MediaItem {")
         .nth(1)

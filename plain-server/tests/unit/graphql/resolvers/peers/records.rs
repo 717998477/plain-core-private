@@ -109,12 +109,7 @@ async fn main_login_and_logout_preserve_pairing_and_live_proxy_addresses() {
     let value = response.data.into_json().unwrap();
     assert_eq!(value["peers"][0]["port"], 9443);
     assert_eq!(value["peers"][0]["token"], "session");
-    let response = executor
-        .execute(async_graphql::Request::new(
-            r#"mutation{logoutPeer(id:"peer-a")}"#,
-        ))
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert!(core.native_management().unwrap().logout_peer("peer-a".into()).await.unwrap());
     let response = executor.execute(async_graphql::Request::new(query)).await;
     assert_eq!(
         response.data.into_json().unwrap()["peers"][0]["token"],
@@ -167,7 +162,6 @@ async fn remote_requests_cannot_access_or_change_local_login_sessions() {
     for document in [
         "{peers{token}}",
         r#"mutation{pairDevice(input:{host:"127.0.0.1:9443",mode:MANAGE}){generation}}"#,
-        r#"mutation{logoutPeer(id:"remote")}"#,
     ] {
         let response = crate::graphql::executor::execute_graphql(
             &state.public,

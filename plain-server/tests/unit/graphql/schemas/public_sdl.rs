@@ -74,7 +74,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Query",
         "settings",
-        resolvers::settings::tls::TlsQuery,
         resolvers::settings::public::PrefsQuery
     );
     group!(
@@ -86,7 +85,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Query",
         "casting",
-        resolvers::casting::receiver::DlnaReceiverQuery,
         resolvers::casting::sender::DlnaSenderQuery
     );
     group!(
@@ -214,20 +212,16 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Mutation",
         "settings",
-        resolvers::settings::state::PreferencesMutation,
         resolvers::settings::public::PrefsMutation
     );
     group!(
         "Mutation",
         "casting",
-        resolvers::casting::receiver::DlnaReceiverMutation,
         resolvers::casting::sender::DlnaSenderMutation
     );
     group!(
         "Mutation",
         "peers",
-        resolvers::peers::records::PeerRecordMutation,
-        resolvers::peers::runtime::PeerRuntimeMutation,
         resolvers::peers::public::PeersMutation
     );
     group!(

@@ -138,24 +138,6 @@ pub struct PeersQuery;
 
 #[Object]
 impl PeersQuery {
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn pairing_code(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
-        let reply = crate::services::discovery::discovery_advertisement::execute(
-            ctx.data::<crate::assembly::server::ServerState>()?,
-            crate::services::discovery::discovery_advertisement::Request::Reply {},
-        )
-        .await?;
-        let mut payload: plain_rs::discovery::pairing_code::Payload =
-            serde_json::from_value(reply)?;
-        payload.ips.retain(|address| {
-            address
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| !address.is_loopback() && !address.is_unspecified())
-        });
-        plain_rs::discovery::pairing_code::format(&payload).ok_or_else(|| {
-            async_graphql::Error::new("Reachable pairing address and active listener required")
-        })
-    }
 
     async fn pairing_states(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<PairingState>> {
         let value = crate::services::discovery::pairing_runtime::execute(
@@ -164,19 +146,6 @@ impl PeersQuery {
         )
         .await?;
         Ok(serde_json::from_value(value)?)
-    }
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn is_pairing_request_current(
-        &self,
-        ctx: &Context<'_>,
-        id: async_graphql::ID,
-        signature: String,
-    ) -> async_graphql::Result<bool> {
-        Ok(ctx
-            .data::<crate::assembly::server::ServerState>()?
-            .pairing
-            .incoming_target(&id, &signature)
-            .is_some())
     }
     async fn peers(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Peer>> {
         let state = ctx.data::<crate::assembly::server::ServerState>()?;

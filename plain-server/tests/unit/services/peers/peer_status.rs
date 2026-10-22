@@ -283,19 +283,8 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
 }
 
 async fn control(server: &ContentServer, action: &str) -> Result<bool, String> {
-    let response = server
-        .native_graphql()?
-        .execute(async_graphql::Request::new(format!(
-            "mutation {{ controlPeerStatus(action: {action}) }}"
-        )))
-        .await;
-    if let Some(error) = response.errors.first() {
-        return Err(error.message.clone());
+    match action {
+        "RECONNECT" => server.native_management()?.reconnect_peers().await,
+        _ => Err("Unsupported peer control".into()),
     }
-    response
-        .data
-        .into_json()
-        .map_err(|error| error.to_string())?["controlPeerStatus"]
-        .as_bool()
-        .ok_or("Missing peer status result".into())
 }

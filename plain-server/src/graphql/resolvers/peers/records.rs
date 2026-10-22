@@ -60,28 +60,6 @@ impl PeerRecordQuery {
         .map_err(|error| async_graphql::Error::new(error.to_string()))
     }
 }
-#[derive(Default)]
-pub struct PeerRecordMutation;
-#[async_graphql::Object]
-impl PeerRecordMutation {
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn logout_peer(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        id: async_graphql::ID,
-    ) -> async_graphql::Result<bool> {
-        let state = ctx.data::<crate::assembly::server::ServerState>()?.clone();
-        tokio::task::spawn_blocking(move || {
-            let _commit = state.pairing_runtime.commit.lock().unwrap();
-            state.pairing_runtime.attempts.cancel_peer(&state, &id);
-            state.db.logout_peer(&id)
-        })
-        .await?
-        .map_err(async_graphql::Error::new)?;
-        Ok(true)
-    }
-}
-
 #[cfg(all(test, feature = "http_transport"))]
 #[path = "../../../../tests/unit/graphql/resolvers/peers/records.rs"]
 mod tests;

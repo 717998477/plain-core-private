@@ -144,20 +144,6 @@ impl MdnsMutation {
         Ok(true)
     }
 
-    async fn acquire_mdns_debug_session(
-        &self,
-        ctx: &Context<'_>,
-        token: String,
-    ) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::DebugStart { token }).await
-    }
-    async fn release_mdns_debug_session(
-        &self,
-        ctx: &Context<'_>,
-        token: String,
-    ) -> async_graphql::Result<MdnsState> {
-        control(ctx, Request::DebugStop { token }).await
-    }
 }
 
 #[cfg(all(test, feature = "http_transport"))]

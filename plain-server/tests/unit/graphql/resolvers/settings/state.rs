@@ -1,10 +1,6 @@
 use super::*;
-use async_graphql::{EmptySubscription, MergedObject, Schema};
-#[derive(MergedObject)]
-struct Mutations(
-    PreferencesMutation,
-    crate::graphql::resolvers::settings::public::PrefsMutation,
-);
+use async_graphql::{EmptySubscription, Schema};
+type Mutations = crate::graphql::resolvers::settings::public::PrefsMutation;
 fn fixture() -> (
     tempfile::TempDir,
     Schema<crate::graphql::resolvers::settings::public::PrefsQuery, Mutations, EmptySubscription>,
@@ -16,10 +12,7 @@ fn fixture() -> (
     let (events, receiver) = broadcast::channel(32);
     let schema = Schema::build(
         crate::graphql::resolvers::settings::public::PrefsQuery,
-        Mutations(
-            PreferencesMutation,
-            crate::graphql::resolvers::settings::public::PrefsMutation,
-        ),
+        crate::graphql::resolvers::settings::public::PrefsMutation,
         EmptySubscription,
     )
     .data(prefs)
@@ -163,51 +156,6 @@ async fn runtime_security_preferences_validate_before_publishing() {
     }
 }
 
-#[tokio::test]
-async fn app_preference_actions_execute_through_the_main_mutations() {
-    let (_directory, schema, mut events) = fixture();
-    for selection in [
-        r#"setNotificationFilterMode(mode:"allowlist")"#,
-        "clearNotificationFilterApps",
-    ] {
-        let response = schema
-            .execute(format!("mutation {{ {selection} {{ affectedCount }} }}"))
-            .await;
-        assert!(
-            response.errors.is_empty(),
-            "{selection}: {:?}",
-            response.errors
-        );
-        let affected = response
-            .data
-            .into_json()
-            .unwrap()
-            .as_object()
-            .unwrap()
-            .values()
-            .next()
-            .unwrap()["affectedCount"]
-            .as_i64()
-            .unwrap();
-        let mut count = 0;
-        while let Ok(event) = events.try_recv() {
-            if event.event_type == "PREFS_UPDATED" {
-                count += 1;
-            }
-        }
-        assert_eq!(
-            count, affected,
-            "one changed action publishes once; unchanged actions publish nothing"
-        );
-    }
-    let response = schema.execute("{prefs}").await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let settings = response.data.into_json().unwrap()["prefs"].clone();
-    assert_eq!(
-        settings["notification_filter"],
-        serde_json::json!({"mode":"allowlist","apps":[]})
-    );
-}
 
 #[tokio::test]
 async fn result_only_user_patch_does_not_read_unselected_system_settings() {
@@ -216,16 +164,13 @@ async fn result_only_user_patch_does_not_read_unselected_system_settings() {
     plain_rs::prefs::security::bootstrap(&prefs).unwrap();
     prefs
         .set(
-            "unused_setting",
+            "volume_alias",
             serde_json::json!("malformed unrelated system data"),
         )
         .unwrap();
     let schema = Schema::build(
         crate::graphql::resolvers::settings::public::PrefsQuery,
-        Mutations(
-            PreferencesMutation,
-            crate::graphql::resolvers::settings::public::PrefsMutation,
-        ),
+        crate::graphql::resolvers::settings::public::PrefsMutation,
         EmptySubscription,
     )
     .data(prefs.clone())
@@ -275,41 +220,4 @@ async fn remote_cannot_write_remove_or_reset_local_security_settings() {
         assert!(!response.errors.is_empty(), "{document}");
         assert!(events.try_recv().is_err());
     }
-}
-
-#[tokio::test]
-async fn explicit_resets_generate_rust_owned_values_without_returning_secrets() {
-    let (directory, schema, mut events) = fixture();
-    let prefs = Prefs::load(&directory.path().join("prefs.json")).unwrap();
-    let before = plain_rs::prefs::security::snapshot(&prefs).unwrap();
-    let response = schema
-        .execute("mutation{resetPassword resetUrlToken resetAdbToken}")
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(
-        response.data.into_json().unwrap(),
-        serde_json::json!({"resetPassword":true,"resetUrlToken":true,"resetAdbToken":true})
-    );
-    let persisted = Prefs::load(&directory.path().join("prefs.json")).unwrap();
-    let after = plain_rs::prefs::security::snapshot(&persisted).unwrap();
-    assert_ne!(after.password, before.password);
-    assert_ne!(after.url_token, before.url_token);
-    assert_ne!(after.adb_token, before.adb_token);
-    assert_eq!(after.client_id, before.client_id);
-    assert_eq!(after.signature_public_key, before.signature_public_key);
-    assert_eq!(
-        plain_rs::utils::base64::base64_decode_checked(&after.url_token)
-            .unwrap()
-            .len(),
-        32
-    );
-    assert_eq!(after.password.len(), 6);
-    assert_eq!(after.adb_token.len(), 32);
-    assert_eq!(
-        (0..3)
-            .map(|_| events.try_recv().unwrap().event_type)
-            .collect::<Vec<_>>(),
-        ["PREFS_UPDATED", "PREFS_UPDATED", "PREFS_UPDATED"]
-    );
-    assert!(events.try_recv().is_err());
 }

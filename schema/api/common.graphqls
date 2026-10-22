@@ -23,11 +23,6 @@ enum FileSortBy {
 
 scalar Instant
 
-"""
-A scalar that can represent any JSON value.
-"""
-scalar JSON
-
 scalar Long
 
 """

@@ -33,29 +33,6 @@ pub struct FilesQuery;
 
 #[Object]
 impl FilesQuery {
-    #[graphql(guard = "crate::http::auth::public_gate::LocalOwner")]
-    async fn file_paths(
-        &self,
-        ctx: &Context<'_>,
-        paths: Vec<String>,
-    ) -> async_graphql::Result<Vec<Option<String>>> {
-        let db = ctx.data::<std::sync::Arc<plain_rs::db::Db>>()?;
-        let directory = ctx
-            .data::<crate::assembly::services::Services>()?
-            .device
-            .directory();
-        Ok(crate::services::files::references::resolve_many(
-            paths,
-            |path| {
-                crate::services::files::references::resolve(
-                    db.clone(),
-                    directory.to_path_buf(),
-                    path,
-                )
-                .ok()
-            },
-        ))
-    }
 
     async fn indexed_files(
         &self,

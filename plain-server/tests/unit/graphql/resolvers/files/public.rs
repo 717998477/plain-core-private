@@ -555,17 +555,13 @@ async fn native_main_image_info_reads_directly_without_media_host_dispatch() {
 }
 
 #[tokio::test]
-async fn batched_file_paths_use_main_schema_data_without_platform_requests() {
+async fn batched_file_paths_use_native_rust_data_without_platform_requests() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let (_generation, mut requests) = state.host.connect();
-    let request = || {
-        async_graphql::Request::new("query($paths:[String!]!){filePaths(paths:$paths)}").variables(async_graphql::Variables::from_json(serde_json::json!({"paths":["app://icons/image.png","app://../outside","fid:invalid","file:///tmp/file%20name.png","app://icons/image.png"]})))
-    };
-    let response = core.graphql_executor().execute(request()).await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let values = response.data.into_json().unwrap()["filePaths"].clone();
+    let paths = vec!["app://icons/image.png", "app://../outside", "fid:invalid", "file:///tmp/file%20name.png", "app://icons/image.png"];
+    let values = serde_json::to_value(core.native_management().unwrap().file_paths(paths.into_iter().map(str::to_owned).collect()).unwrap()).unwrap();
     assert_eq!(
         values[0],
         directory
@@ -579,19 +575,12 @@ async fn batched_file_paths_use_main_schema_data_without_platform_requests() {
     assert_eq!(values[3], "/tmp/file name.png");
     assert_eq!(values[0], values[4]);
     assert!(requests.try_recv().is_err());
-    let remote = crate::graphql::executor::execute_graphql(
-        &state.public,
-        request(),
-        crate::graphql::executor::RequestContext::remote(Some(state.clone())),
-    )
-    .await;
-    assert!(!remote.errors.is_empty());
     drop(state);
     core.shutdown().await;
 }
 
 #[tokio::test]
-async fn native_file_actions_resolve_registered_attachments_through_the_main_schema() {
+async fn native_file_actions_resolve_registered_attachments_without_graphql() {
     let directory = tempfile::tempdir().unwrap();
     let core =
         crate::assembly::server::ContentServer::open(&directory.path().join("core")).unwrap();
@@ -612,21 +601,9 @@ async fn native_file_actions_resolve_registered_attachments_through_the_main_sch
         .to_str()
         .unwrap();
     let (_generation, mut requests) = state.host.connect();
-    let response = core
-        .native_graphql()
-        .unwrap()
-        .execute(
-            async_graphql::Request::new("query($paths:[String!]!){filePaths(paths:$paths)}")
-                .variables(async_graphql::Variables::from_json(json!({"paths":[
-                    format!("fid:{suffix}"), format!("fid:{}.wrong",file.id), "documents/plain.txt"
-                ]}))),
-        )
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let paths = response.data.into_json().unwrap()["filePaths"]
-        .as_array()
-        .unwrap()
-        .clone();
+    let paths = serde_json::to_value(core.native_management().unwrap().file_paths(vec![
+        format!("fid:{suffix}"), format!("fid:{}.wrong", file.id), "documents/plain.txt".into(),
+    ]).unwrap()).unwrap();
     let resolved = std::path::PathBuf::from(paths[0].as_str().unwrap());
     assert!(resolved.is_absolute());
     assert_eq!(std::fs::read(resolved).unwrap(), b"attachment");
@@ -641,21 +618,7 @@ async fn native_file_actions_resolve_registered_attachments_through_the_main_sch
         &state.directory,
         &file.id,
     ).unwrap());
-    let released = core
-        .native_graphql()
-        .unwrap()
-        .execute(
-            async_graphql::Request::new("query($paths:[String!]!){filePaths(paths:$paths)}")
-                .variables(async_graphql::Variables::from_json(
-                    json!({"paths":[format!("fid:{suffix}")]}),
-                )),
-        )
-        .await;
-    assert!(released.errors.is_empty(), "{:?}", released.errors);
-    assert_eq!(
-        released.data.into_json().unwrap()["filePaths"],
-        json!([null])
-    );
+    assert_eq!(core.native_management().unwrap().file_paths(vec![format!("fid:{suffix}")]).unwrap(), vec![None]);
     assert!(requests.try_recv().is_err());
     core.stop_core().await;
 }

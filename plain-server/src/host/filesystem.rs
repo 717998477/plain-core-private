@@ -360,7 +360,7 @@ pub(crate) async fn serve(
             );
         let thumbnail = query(request, "w").and_then(|value| value.parse::<u32>().ok());
         if starts_view && thumbnail.is_none_or(|width| width > 200) {
-            if let Err(error) = plain_rs::recent_files::add(state.store.get().map_err(|e| e.to_string())?.as_ref(), path) {
+            if let Err(error) = plain_rs::recent_files::add(state.store.get()?.as_ref(), path) {
                 log::warn!("Recent file update failed: {error}");
             }
         }
