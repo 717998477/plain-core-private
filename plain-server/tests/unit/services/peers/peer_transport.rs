@@ -268,6 +268,10 @@ async fn native_transport_snapshots_follow_current_routes_without_graphql_reads(
     let bridge = core.host_events();
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
     );
     assert_eq!(
@@ -317,7 +321,13 @@ async fn native_transport_snapshots_follow_current_routes_without_graphql_reads(
             ))
             .unwrap();
     }
-    assert_eq!(bridge.next_event().await.unwrap()["reconcile"], true);
+    let reconcile = bridge.next_event().await.unwrap();
+    assert_eq!(reconcile["type"], "CONTENT_CHANGED");
+    assert_eq!(reconcile["reconcile"], true);
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"

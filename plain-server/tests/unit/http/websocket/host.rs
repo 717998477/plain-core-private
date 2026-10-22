@@ -612,6 +612,10 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
     let bridge = core.host_events();
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
     );
     let initial = bridge.next_event().await.unwrap();
@@ -667,7 +671,13 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
             .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
             .unwrap();
     }
-    assert_eq!(bridge.next_event().await.unwrap()["reconcile"], true);
+    let reconcile = bridge.next_event().await.unwrap();
+    assert_eq!(reconcile["type"], "CONTENT_CHANGED");
+    assert_eq!(reconcile["reconcile"], true);
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
@@ -701,6 +711,10 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
 
     let replacement = core.host_events();
     assert!(bridge.next_event().await.is_none());
+    assert_eq!(
+        replacement.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
     assert_eq!(
         replacement.next_event().await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
