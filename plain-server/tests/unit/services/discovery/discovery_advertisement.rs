@@ -31,9 +31,9 @@ async fn native_advertisements_use_current_preferences_without_host_calls() {
     assert_eq!(first["platform"], std::env::consts::OS.to_uppercase());
     state
         .prefs
-        .set_user("device_name", "Current device")
+        .set("device_name", "Current device")
         .unwrap();
-    state.prefs.set_user("https_port", 3443).unwrap();
+    state.prefs.set("https_port", 3443).unwrap();
     let second = execute(&state, Request::Reply {}).await.unwrap();
     assert_eq!(second["name"], "Current device");
     assert_eq!(second["port"], 0);
@@ -57,7 +57,7 @@ async fn first_start_advertises_the_persisted_generated_mdns_name() {
         .await;
     let directory = tempfile::tempdir().unwrap();
     let (core, state) = core_with_host(directory.path());
-    let hostname = plain_rs::prefs::system::snapshot(&state.prefs)
+    let hostname = plain_rs::prefs::security::snapshot(&state.prefs)
         .unwrap()
         .mdns_hostname;
     let label = hostname.strip_suffix(".local").unwrap();

@@ -11,7 +11,7 @@ fn item(id: &str) -> Item {
 #[test]
 fn first_observation_seeds_history_without_writing_and_reload_preserves_deduplication() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("system_prefs.json");
+    let path = directory.path().join("prefs.json");
     let prefs = Prefs::load(&path).unwrap();
     assert!(!prepare(&prefs, "peer", &item("old")).unwrap());
     assert!(!prepare(&prefs, "peer", &item("old")).unwrap());

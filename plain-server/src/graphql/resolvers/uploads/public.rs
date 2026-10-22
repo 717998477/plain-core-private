@@ -53,7 +53,7 @@ fn plain(status: StatusCode, body: impl Into<String>) -> Response {
 }
 
 fn desktop_access_allowed(state: &ServerState) -> bool {
-    state.prefs.get_user_or("desktop_access", true)
+    state.prefs.get_or("desktop_access", true)
 }
 
 /// The session token Rust issued, straight from the `sessions` row.

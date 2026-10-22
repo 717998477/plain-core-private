@@ -53,67 +53,77 @@ async fn reads_come_from_the_rust_store() {
         crate::graphql::schemas::public::build(host, events, prefs.clone(), db, dir.path().into());
 
     prefs.set("device_name", "Pixel").unwrap();
-    prefs.set_user("recent_search", json!(["a", "b"])).unwrap();
+    prefs.set("editor_wrap_content", json!(true)).unwrap();
 
-    let response = schema.execute(r#"query { userPrefs }"#).await;
+    let response = schema.execute(r#"query { prefs }"#).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().unwrap();
     assert_eq!(prefs.get::<String>("device_name").unwrap().unwrap(), "Pixel");
-    assert_eq!(data["userPrefs"]["recent_search"], json!(["a", "b"]));
-    // The two snapshots are disjoint stores: a user pref is not a system one.
-    assert!(prefs.get::<serde_json::Value>("recent_search").unwrap().is_none());
-    assert!(data["userPrefs"].get("device_name").is_none());
+    assert_eq!(data["prefs"]["editor_wrap_content"], json!(true));
+    assert_eq!(data["prefs"]["device_name"], "Pixel");
+    prefs.set("http_port", 8080).unwrap();
+    prefs.set("master_secret", "not public").unwrap();
+    let response = schema.execute("{prefs}").await;
+    let data = response.data.into_json().unwrap();
+    assert!(data["prefs"].get("http_port").is_none());
+    assert!(data["prefs"].get("master_secret").is_none());
+    let response = schema.execute(async_graphql::Request::new("{prefs}")
+        .data(crate::graphql::executor::RequestOrigin::Local)).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    assert_eq!(data["prefs"]["http_port"], 8080);
+    assert!(data["prefs"].get("master_secret").is_none());
+
 }
 
 #[tokio::test]
 async fn preference_writes_and_removal_use_rust_storage_without_host_calls() {
     let (_directory, schema) = fixture(|method, _| panic!("Unexpected host call: {method}"));
     let response = schema
-        .execute(r#"mutation { setUserPref(key:"recent_search",value:["x"]) }"#)
+        .execute(r#"mutation { setPref(key:"editor_wrap_content",value:true) }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["setUserPref"], true);
-    let response = schema.execute("{userPrefs}").await;
+    assert_eq!(response.data.into_json().unwrap()["setPref"], true);
+    let response = schema.execute("{prefs}").await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
-        response.data.into_json().unwrap()["userPrefs"]["recent_search"],
-        json!(["x"])
+        response.data.into_json().unwrap()["prefs"]["editor_wrap_content"],
+        json!(true)
     );
     let response = schema
-        .execute(r#"mutation { removeUserPref(key:"recent_search") }"#)
+        .execute(r#"mutation { removePref(key:"editor_wrap_content") }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let response = schema.execute("{userPrefs}").await;
+    let response = schema.execute("{prefs}").await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert!(
-        response.data.into_json().unwrap()["userPrefs"]
-            .get("recent_search")
+        response.data.into_json().unwrap()["prefs"]
+            .get("editor_wrap_content")
             .is_none()
     );
 }
 
-/// The key ends up in a file name and a JSON object; anything outside this
-/// set is refused before it can reach either.
+/// Unknown keys are rejected before the store is changed.
 #[tokio::test]
 async fn pref_keys_outside_the_safe_set_are_refused() {
     let (_dir, schema) = fixture(|method, _| panic!("the platform must not be asked: {method}"));
     for key in ["", "has space", "a/b", "a$b", "emoji🎉"] {
         let response = schema
             .execute(&format!(
-                r#"mutation {{ setUserPref(key:{key:?}, value:"1") }}"#
+                r#"mutation {{ setPref(key:{key:?}, value:"1") }}"#
             ))
             .await;
         assert_eq!(response.errors.len(), 1, "{key}");
-        assert_eq!(response.errors[0].message, "invalid_pref_key", "{key}");
+        assert_eq!(response.errors[0].message, "Preference is not accessible", "{key}");
     }
     let response = schema
         .execute(&format!(
-            r#"mutation {{ removeUserPref(key:"{}") }}"#,
+            r#"mutation {{ removePref(key:"{}") }}"#,
             "a".repeat(129)
         ))
         .await;
     assert_eq!(response.errors.len(), 1);
-    assert_eq!(response.errors[0].message, "invalid_pref_key");
+    assert_eq!(response.errors[0].message, "Preference is not accessible");
 }
 
 /// The cap is on bytes, not characters - a multi-byte value would slip past
@@ -124,7 +134,7 @@ async fn an_oversized_pref_value_is_refused_by_its_byte_length() {
     // 33_000 four-byte characters is ~132 KB of JSON but only 33k characters.
     let payload: String = std::iter::repeat_n(char::from_u32(0x1F600).unwrap(), 33_000).collect();
     let value = serde_json::to_string(&payload).unwrap();
-    let document = format!("mutation {{ setUserPref(key: \"big\", value: {value}) }}");
+    let document = format!("mutation {{ setPref(key: \"locale\", value: {value}) }}");
     let response = schema.execute(&document).await;
     assert_eq!(response.errors.len(), 1);
     assert_eq!(response.errors[0].message, "invalid_pref_value");
@@ -134,32 +144,42 @@ async fn an_oversized_pref_value_is_refused_by_its_byte_length() {
 async fn a_value_just_under_the_cap_is_accepted() {
     let (_dir, schema) = fixture(|method, _| panic!("Unexpected host call: {method}"));
     let response = schema
-        .execute(r#"mutation { setUserPref(key:"ok", value:"0123456789") }"#)
+        .execute(r#"mutation { setPref(key:"locale", value:"0123456789") }"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
 }
 
 #[test]
-fn the_safe_key_set_is_the_one_the_platform_allows() {
-    for key in ["a", "A", "0", "a_b", "a-b", "a.b", "screen_mirror_quality"] {
-        assert!(validate_key(key).is_ok(), "{key}");
-    }
-    for key in ["", "a b", "a/b", "a$b", "a:b", "ä"] {
-        assert_eq!(
-            validate_key(key).unwrap_err().message,
-            "invalid_pref_key",
-            "{key}"
-        );
+fn only_registered_keys_are_accessible_for_each_origin() {
+    use plain_rs::prefs::pref_keys::accessible;
+    assert!(accessible("locale", false));
+    assert!(accessible("locale", true));
+    assert!(!accessible("http_port", false));
+    assert!(accessible("http_port", true));
+    for key in ["master_secret", "client_id", "unknown", "", "admin:password"] {
+        assert!(!accessible(key, false));
+        assert!(!accessible(key, true));
     }
 }
 
-#[test]
-fn preference_keys_reject_empty_unsafe_and_overlong_names() {
-    for key in ["homeFeatures", "with_underscores", "a-b.c"] {
-        assert!(validate_key(key).is_ok());
+#[cfg(feature = "core")]
+#[tokio::test]
+async fn saved_data_uses_kv_and_drafts_are_scoped_to_the_full_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let schema = core.native_graphql().unwrap();
+    for (key, value) in [("chat_input_text:peer:one", "peer draft"), ("chat_input_text:channel:one", "channel draft"), ("quick_note_draft", "note")] {
+        let document = format!(r#"mutation {{ setSavedValue(key:{key:?},value:{value:?}) }}"#);
+        let response = schema.execute(async_graphql::Request::new(document)).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let response = schema.execute(async_graphql::Request::new(format!("{{savedValue(key:{key:?})}}"))).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.into_json().unwrap()["savedValue"], value);
     }
-    let long_key = "x".repeat(129);
-    for key in ["", "a/b", "a b", "admin:password", "é", &long_key] {
-        assert!(validate_key(key).is_err(), "accepted {key:?}");
+    assert!(core.runtime_state().prefs.get::<Value>("quick_note_draft").unwrap().is_none());
+    for key in ["chat_input_text:peer:", "chat_input_text:unknown:one", "master_secret", "http_port"] {
+        let response = schema.execute(async_graphql::Request::new(format!(r#"mutation {{ setSavedValue(key:{key:?},value:"x") }}"#))).await;
+        assert!(!response.errors.is_empty(), "{key}");
     }
+    core.stop_core().await;
 }

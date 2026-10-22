@@ -3,7 +3,7 @@ use serde_json::Value;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct UserSettingsPatch {
+pub struct SettingsPatch {
     pub http_port: Option<i32>,
     pub https_port: Option<i32>,
     pub dark_theme: Option<i32>,
@@ -11,7 +11,7 @@ pub struct UserSettingsPatch {
     pub pdf_follow_dark_theme: Option<bool>,
     pub keep_awake: Option<bool>,
     pub locale: Option<String>,
-    pub service: Option<bool>,
+    pub background_service_enabled: Option<bool>,
     pub desktop_access: Option<bool>,
     pub dlna: Option<bool>,
     pub developer_mode: Option<bool>,
@@ -33,20 +33,12 @@ pub struct UserSettingsPatch {
     pub editor_wrap_content: Option<bool>,
     pub editor_font_size: Option<i32>,
     pub editor_status_bar: Option<bool>,
-    pub last_file_path: Option<Value>,
-    pub scan_history: Option<Value>,
-    pub audio_playlist: Option<Value>,
-    pub chat_input_text: Option<String>,
     pub nearby_discoverable: Option<bool>,
     pub ai_image_search_enabled: Option<bool>,
     pub notification_filter: Option<Value>,
     pub pomodoro_settings: Option<Value>,
-    pub video_playlist: Option<Value>,
-    pub home_features: Option<String>,
-    pub quick_note_draft: Option<String>,
+    pub app_home_features: Option<String>,
     pub launcher_shortcuts: Option<String>,
-    pub recent_searches: Option<Value>,
-    pub recent_save_dirs: Option<Value>,
     pub audio_sort_by: Option<i32>,
     pub video_sort_by: Option<i32>,
     pub image_sort_by: Option<i32>,

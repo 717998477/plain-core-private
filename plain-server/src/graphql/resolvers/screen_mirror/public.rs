@@ -86,7 +86,7 @@ impl ScreenMirrorQuery {
         ctx: &Context<'_>,
     ) -> async_graphql::Result<ScreenMirrorQuality> {
         let stored =
-            plain_rs::prefs::user::snapshot(ctx.data_unchecked::<Arc<plain_rs::prefs::Prefs>>())?
+            plain_rs::prefs::settings::snapshot(ctx.data_unchecked::<Arc<plain_rs::prefs::Prefs>>())?
                 .screen_mirror_quality;
         Ok(quality(&stored))
     }
@@ -143,8 +143,8 @@ impl ScreenMirrorMutation {
         mode: ScreenMirrorMode,
     ) -> async_graphql::Result<bool> {
         let quality = serde_json::json!({"mode":mode.name(),"resolution":if mode==ScreenMirrorMode::Smooth {720}else{1080}});
-        crate::graphql::resolvers::settings::state::user_preferences(ctx)?
-            .set(plain_rs::prefs::user::keys::SCREEN_MIRROR_QUALITY, quality)
+        crate::graphql::resolvers::settings::state::preferences(ctx)?
+            .set(plain_rs::prefs::pref_keys::SCREEN_MIRROR_QUALITY, quality)
             .await?;
         Ok(true)
     }

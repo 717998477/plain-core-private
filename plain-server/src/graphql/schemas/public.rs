@@ -163,14 +163,15 @@ pub fn build(
         directory.clone(),
         host.clone(),
         prefs.clone(),
+        services.store.clone(),
         services.index.clone(),
         events.clone(),
     );
     let mobile = crate::mobile::Runtime::new(
         host.clone(),
-        prefs.clone(),
         db.clone(),
         directory.clone(),
+        services.store.clone(),
         events.clone(),
     );
     build_with_runtime(host, events, prefs, db, services, models, mobile)

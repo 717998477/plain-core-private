@@ -89,7 +89,7 @@ pub fn parse_device_desc(body: &[u8]) -> DiscoveredDevice {
     while let Some(ev) = r.next_event() {
         match ev {
             Event::Start { name } => {
-                if name == "service" {
+                if name == "background_service_enabled" {
                     in_service = true;
                     cur_service = UpnpService::default();
                 } else {
@@ -97,7 +97,7 @@ pub fn parse_device_desc(body: &[u8]) -> DiscoveredDevice {
                 }
             }
             Event::End { name } => {
-                if name == "service" {
+                if name == "background_service_enabled" {
                     if cur_service.service_type.contains("AVTransport:1")
                         || cur_service.service_id.contains("AVTransport")
                     {

@@ -1,6 +1,6 @@
 use plain_rs::{
     events::WsEvent,
-    prefs::{Prefs, sms_sends},
+    sms_sends,
 };
 use std::{
     sync::Arc,
@@ -9,7 +9,7 @@ use std::{
 use tokio::sync::{Notify, broadcast, watch};
 
 pub(crate) struct Runtime {
-    prefs: Arc<Prefs>,
+    store: Arc<plain_rs::kv::LazyDb>,
     events: broadcast::Sender<WsEvent>,
     changed: Notify,
 }
@@ -30,9 +30,10 @@ pub(crate) fn now() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 impl Runtime {
-    pub fn new(prefs: Arc<Prefs>, events: broadcast::Sender<WsEvent>) -> Arc<Self> {
+    pub(crate) fn store(&self) -> anyhow::Result<Arc<plain_rs::kv::Db>> { self.store.get() }
+    pub fn new(store: Arc<plain_rs::kv::LazyDb>, events: broadcast::Sender<WsEvent>) -> Arc<Self> {
         Arc::new(Self {
-            prefs,
+            store,
             events,
             changed: Notify::new(),
         })
@@ -43,18 +44,18 @@ impl Runtime {
         client_request_id: Option<String>,
         parts: usize,
     ) -> anyhow::Result<()> {
-        sms_sends::register(&self.prefs, id, client_request_id, parts, now())?;
+        sms_sends::register(self.store.get()?.as_ref(), id, client_request_id, parts, now())?;
         self.changed.notify_one();
         Ok(())
     }
     pub fn cancel(&self, id: &str) -> anyhow::Result<()> {
-        sms_sends::cancel(&self.prefs, id)?;
+        sms_sends::cancel(self.store.get()?.as_ref(), id)?;
         self.changed.notify_one();
         Ok(())
     }
     pub fn report(&self, report: Report) -> anyhow::Result<()> {
         if let Some(result) = sms_sends::record(
-            &self.prefs,
+            self.store.get()?.as_ref(),
             &report.request_id,
             report.part_index,
             report.part_count,
@@ -75,8 +76,8 @@ impl Runtime {
         Ok(())
     }
     pub fn replay(&self) -> anyhow::Result<()> {
-        sms_sends::tick(&self.prefs, now())?;
-        for value in sms_sends::pending(&self.prefs)? {
+        sms_sends::tick(self.store.get()?.as_ref(), now())?;
+        for value in sms_sends::pending(self.store.get()?.as_ref())? {
             if let Some(result) = value.result() {
                 self.publish(result)?;
             }
@@ -84,7 +85,7 @@ impl Runtime {
         Ok(())
     }
     fn advance(&self) -> anyhow::Result<()> {
-        for result in sms_sends::tick(&self.prefs, now())? {
+        for result in sms_sends::tick(self.store.get()?.as_ref(), now())? {
             self.publish(result)?;
         }
         Ok(())
@@ -96,7 +97,7 @@ impl Runtime {
                 if let Err(error) = owner.advance() {
                     log::error!("SMS send tracking: {error}");
                 }
-                let deadline = sms_sends::pending(&owner.prefs)
+                let deadline = owner.store.get().and_then(|store| sms_sends::pending(&store))
                     .ok()
                     .and_then(|rows| rows.into_iter().map(|row| row.deadline()).min());
                 let wait = async {

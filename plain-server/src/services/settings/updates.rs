@@ -2,7 +2,7 @@ use crate::assembly::server::ServerState;
 use anyhow::{Result, anyhow, ensure};
 use plain_rs::{
     events::WsEvent,
-    prefs::system::UpdateInfo,
+    prefs::security::UpdateInfo,
     updates::{Release, Source},
 };
 use std::{sync::OnceLock, time::Duration};
@@ -31,16 +31,18 @@ fn client() -> Result<&'static reqwest::Client> {
         .map_err(|error| anyhow!(error.clone()))
 }
 
+pub(crate) fn info(state: &ServerState) -> Result<UpdateInfo> {
+    Ok(state.store.get()?.get_json("update_info")?.unwrap_or_default())
+}
+
 pub(super) fn update(state: &ServerState, patch: serde_json::Value) -> Result<()> {
-    let changed = plain_rs::prefs::system::Command::PatchUpdate {
-        patch: serde_json::from_value(patch)?,
-    }
-    .apply(&state.prefs)?;
-    if changed {
-        let _ = state
-            .events
-            .send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
-    }
+    let patch: plain_rs::prefs::security::UpdatePatch = serde_json::from_value(patch)?;
+    state.store.get()?.update_json("update_info", |info: &mut UpdateInfo| {
+        patch.apply(info);
+        Ok(())
+    })?;
+    state.prefs.notify_changed();
+    let _ = state.events.send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
     Ok(())
 }
 
@@ -60,8 +62,8 @@ pub(crate) async fn check(state: &ServerState, automatic: bool) -> Result<AppUpd
     crate::services::capabilities::require(&state.host, "APP_UPDATES").await?;
     let mut cache = state.update_checks.cache.lock().await;
     let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis())?;
-    let info = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
-    if automatic && !plain_rs::updates::due(&info, now_ms) {
+    let info = info(state)?;
+    if automatic && !plain_rs::updates::due(&info, state.prefs.get_or("auto_check_update", true), now_ms) {
         return Ok(AppUpdateStatus::NotDue);
     }
     attempt(state, &mut cache).await
@@ -95,7 +97,7 @@ pub(crate) async fn snapshot(
 fn project(
     state: &ServerState,
 ) -> Result<crate::graphql::resolvers::app::capability_types::AppUpdate> {
-    let info = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
+    let info = info(state)?;
     let version = state
         .host
         .startup_property("appVersion")
@@ -107,7 +109,7 @@ fn project(
             current_version: plain_rs::updates::normalized_version(version),
             latest_version: latest.map(|release| release.version.clone()),
             has_update: latest.is_some_and(|release| {
-                plain_rs::updates::available_version(&release.version, version, &info.skip_version)
+                plain_rs::updates::available_version(&release.version, version, &state.prefs.get_or("skip_version", String::new()))
             }),
             url: latest
                 .map(|release| release.url.clone())
@@ -188,13 +190,13 @@ async fn fetch(state: &ServerState) -> Result<AppUpdateStatus> {
     }
     let release: Release = serde_json::from_slice(&bytes)?;
     let latest = plain_rs::updates::release_info(&release, &source)?;
-    let mut info: UpdateInfo = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
-    let available = plain_rs::updates::apply_release(&mut info, version, &abis, &source, &release);
+    let mut info: UpdateInfo = info(state)?;
+    let available = plain_rs::updates::apply_release(&mut info, version, &state.prefs.get_or("skip_version", String::new()), &abis, &source, &release);
     let mut patch = serde_json::json!({"latestRelease":latest});
     if available {
         patch.as_object_mut().unwrap().extend(serde_json::json!({"newVersion":info.new_version,"log":info.log,"publishDate":info.publish_date,"size":info.size,"downloadUrl":info.download_url}).as_object().unwrap().clone());
     }
-    let previous = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
+    let previous = self::info(state)?;
     if previous.new_version != info.new_version
         || previous.download_url != info.download_url
         || previous.size != info.size
@@ -211,26 +213,16 @@ async fn fetch(state: &ServerState) -> Result<AppUpdateStatus> {
     Ok(AppUpdateStatus::Available)
 }
 
-pub(crate) async fn apply_settings(
+pub(crate) async fn set_setting(
     state: &ServerState,
-    command: plain_rs::prefs::system::Command,
+    key: &str,
+    value: serde_json::Value,
 ) -> Result<bool> {
     let _cache = state.update_checks.cache.lock().await;
-    let before = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
-    let mut changed = command.apply(&state.prefs)?;
-    let after = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
-    if before.new_version != after.new_version
-        || before.download_url != after.download_url
-        || before.size != after.size
-        || before.skip_version != after.skip_version
-    {
+    let changed = plain_rs::prefs::security::set_entry(&state.prefs, key, value)?;
+    if changed && key == "skip_version" {
         state.update_checks.download.invalidate();
-        changed |= plain_rs::prefs::system::Command::PatchUpdate {
-            patch: serde_json::from_value(serde_json::json!({"downloadedApkPath":""}))?,
-        }
-        .apply(&state.prefs)?;
-    }
-    if changed {
+        update(state, serde_json::json!({"downloadedApkPath":""}))?;
         super::update_download::Runtime::schedule_reconcile(state);
     }
     Ok(changed)

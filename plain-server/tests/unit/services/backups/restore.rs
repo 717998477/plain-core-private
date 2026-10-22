@@ -4,10 +4,10 @@ use std::io::Cursor;
 fn archive() -> Vec<u8> {
     let source = tempfile::tempdir().unwrap();
     let paths = plain_rs::data_paths::DataPaths::new(source.path());
-    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&paths.system_prefs()).unwrap());
+    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&paths.prefs()).unwrap());
     plain_rs::prefs::identity::ensure_identity(&prefs);
-    prefs.set_user("device_name", "restored device").unwrap();
-    let db = plain_rs::db::Db::open_with_prefs(&paths.database(), prefs.clone()).unwrap();
+    prefs.set("device_name", "restored device").unwrap();
+    let db = plain_rs::db::Db::open(&paths.database()).unwrap();
     db.with_conn(|conn| conn.execute_batch("CREATE TABLE restore_fixture (value TEXT); INSERT INTO restore_fixture VALUES ('snapshot');").unwrap());
     let store = plain_rs::kv::LazyDb::new(paths.kv());
     store
@@ -64,9 +64,9 @@ fn assert_restored(directory: &Path) {
             .unwrap(),
         "snapshot"
     );
-    let prefs = plain_rs::prefs::Prefs::load(&paths.system_prefs()).unwrap();
+    let prefs = plain_rs::prefs::Prefs::load(&paths.prefs()).unwrap();
     assert_eq!(
-        prefs.get_user::<String>("device_name").unwrap().as_deref(),
+        prefs.get::<String>("device_name").unwrap().as_deref(),
         Some("restored device")
     );
     let kv = plain_rs::kv::Db::open(&paths.kv()).unwrap();
@@ -82,9 +82,9 @@ fn assert_restored(directory: &Path) {
 fn staging_keeps_live_stores_untouched_and_startup_replaces_closed_stores() {
     let directory = tempfile::tempdir().unwrap();
     let paths = plain_rs::data_paths::DataPaths::new(directory.path());
-    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&paths.system_prefs()).unwrap());
-    prefs.set_user("device_name", "live device").unwrap();
-    let db = plain_rs::db::Db::open_with_prefs(&paths.database(), prefs.clone()).unwrap();
+    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&paths.prefs()).unwrap());
+    prefs.set("device_name", "live device").unwrap();
+    let db = plain_rs::db::Db::open(&paths.database()).unwrap();
     db.with_conn(|conn| conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE live_fixture (value TEXT); INSERT INTO live_fixture VALUES ('live');").unwrap());
     let kv = plain_rs::kv::Db::open(&paths.kv()).unwrap();
     kv.insert(b"old-only", b"live").unwrap();
@@ -98,7 +98,7 @@ fn staging_keeps_live_stores_untouched_and_startup_replaces_closed_stores() {
         "live"
     );
     assert_eq!(
-        prefs.get_user::<String>("device_name").unwrap().as_deref(),
+        prefs.get::<String>("device_name").unwrap().as_deref(),
         Some("live device")
     );
     assert!(kv.get(b"restored").unwrap().is_none());

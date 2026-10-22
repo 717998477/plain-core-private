@@ -20,7 +20,7 @@ async fn set_enabled(core: &ContentServer, enabled: bool) -> async_graphql::Resp
         .unwrap()
         .execute(
             async_graphql::Request::new(
-                "mutation($value:JSON!){setUserPref(key:\"dlna\",value:$value)}",
+                "mutation($value:JSON!){setPref(key:\"dlna\",value:$value)}",
             )
             .variables(async_graphql::Variables::from_json(
                 json!({"value":enabled}),

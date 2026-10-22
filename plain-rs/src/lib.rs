@@ -119,3 +119,6 @@ pub use utils::hostname::platform_hostname;
 
 #[cfg(feature = "library")]
 pub mod sessions;
+
+pub mod sms_sends;
+pub mod recent_files;

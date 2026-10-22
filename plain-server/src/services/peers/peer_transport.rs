@@ -231,7 +231,7 @@ pub(crate) fn aware_config_for_peer(
     );
     let actor = state
         .prefs
-        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+        .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Missing local identity"))?;
     Ok(AwareConnectionConfig {
@@ -241,7 +241,7 @@ pub(crate) fn aware_config_for_peer(
             Some(plain_rs::utils::base64::base64_encode(&key))
         },
         is_client: actor < peer.id,
-        local_port: state.prefs.get_user::<u16>("https_port")?.unwrap_or(8443),
+        local_port: state.prefs.get::<u16>("https_port")?.unwrap_or(8443),
     })
 }
 #[cfg(test)]

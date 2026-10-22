@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 const DIRECTIONS: &str = "clipboard_directions";
-const APPLIED: &str = "clipboard_applied";
+const APPLIED: &str = "clipboard_last_item";
 
 #[derive(Deserialize)]
 pub struct Item {
@@ -42,45 +42,32 @@ fn direction(prefs: &Prefs, peer_id: &str) -> Result<String> {
     }
 }
 
-pub fn prepare(prefs: &Prefs, peer_id: &str, item: &Item) -> Result<bool> {
+pub fn prepare(prefs: &Prefs, store: &crate::kv::Db, peer_id: &str, item: &Item) -> Result<bool> {
     if !receives(prefs, peer_id)? || item.sensitive {
         return Ok(false);
     }
     ensure!(!item.id.is_empty(), "Missing clipboard item identity");
     super::validate_text(&item.text).map_err(anyhow::Error::msg)?;
-    Ok(prefs.update_system(|map| {
-        let mut applied = applied_ids(map)?;
+    Ok(store.update_json(APPLIED, |map: &mut serde_json::Map<String, Value>| {
+        let mut applied: std::collections::BTreeMap<String, String> = serde_json::from_value(Value::Object(map.clone()))?;
         match applied.get(peer_id) {
             Some(id) => Ok(id != &item.id),
             None => {
                 applied.insert(peer_id.into(), item.id.clone());
-                map.insert(
-                    APPLIED.into(),
-                    serde_json::to_value(applied).map_err(crate::prefs::PrefsError::Encode)?,
-                );
+                *map = serde_json::to_value(applied)?.as_object().unwrap().clone();
                 Ok(false)
             }
         }
     })?)
 }
 
-pub fn applied(prefs: &Prefs, peer_id: &str, item: &Item) -> Result<()> {
-    Ok(prefs.update_system(|map| {
-        let mut applied = applied_ids(map)?;
+pub fn applied(store: &crate::kv::Db, peer_id: &str, item: &Item) -> Result<()> {
+    Ok(store.update_json(APPLIED, |map: &mut serde_json::Map<String, Value>| {
+        let mut applied: std::collections::BTreeMap<String, String> = serde_json::from_value(Value::Object(map.clone()))?;
         applied.insert(peer_id.into(), item.id.clone());
-        map.insert(
-            APPLIED.into(),
-            serde_json::to_value(applied).map_err(crate::prefs::PrefsError::Encode)?,
-        );
+        *map = serde_json::to_value(applied)?.as_object().unwrap().clone();
         Ok(())
     })?)
-}
-
-fn applied_ids(
-    map: &serde_json::Map<String, Value>,
-) -> crate::prefs::Result<std::collections::BTreeMap<String, String>> {
-    serde_json::from_value(map.get(APPLIED).cloned().unwrap_or_else(|| json!({})))
-        .map_err(crate::prefs::PrefsError::Decode)
 }
 
 #[cfg(test)]

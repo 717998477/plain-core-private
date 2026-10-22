@@ -27,7 +27,7 @@ async fn enabling_without_http_defers_platform_work_and_retry() {
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let (_, mut requests) = state.host.connect();
-    state.prefs.set_user("dlna", true).unwrap();
+    state.prefs.set("dlna", true).unwrap();
     reconcile(&state).await.unwrap();
     assert!(!state.dlna.is_running());
     assert!(retry_locked(&state).await.is_err());

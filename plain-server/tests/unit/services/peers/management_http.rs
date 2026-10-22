@@ -11,15 +11,15 @@ async fn a_captured_response_cannot_answer_a_fresh_encrypted_request() {
     let remote_state = remote.runtime_state();
     remote_state
         .prefs
-        .set_user("device_name", "First name")
+        .set("device_name", "First name")
         .unwrap();
     let session = remote
         .native_management()
         .unwrap()
         .create_session("Response fixture".into())
         .unwrap();
-    remote_state.prefs.set_user("http_port", 0).unwrap();
-    remote_state.prefs.set_user("https_port", 0).unwrap();
+    remote_state.prefs.set("http_port", 0).unwrap();
+    remote_state.prefs.set("https_port", 0).unwrap();
     let (_, port) = remote.start_configured_public().await.unwrap();
     let client = remote_state.lan.client.clone();
     let captured = Arc::new(Mutex::new(None::<Vec<u8>>));
@@ -82,7 +82,7 @@ async fn a_captured_response_cannot_answer_a_fresh_encrypted_request() {
     assert_eq!(first["app"]["deviceName"], "First name");
     remote_state
         .prefs
-        .set_user("device_name", "Second name")
+        .set("device_name", "Second name")
         .unwrap();
     let replayed = query(
         &local.runtime_state(),

@@ -33,7 +33,7 @@ async fn server() -> (
     server
         .runtime_state()
         .prefs
-        .set_user("device_name", "Fixture")
+        .set("device_name", "Fixture")
         .unwrap();
     let certificate = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let (_, port) = server
@@ -109,7 +109,7 @@ async fn passwordless_native_management_displays_the_same_code_and_commits_only_
     let state = local.runtime_state();
     let remote_state = remote.runtime_state();
     remote_state.prefs.set("password_type", 2_i32).unwrap();
-    remote_state.prefs.set("auth_two_factor", false).unwrap();
+    remote_state.prefs.set("login_require_approval", false).unwrap();
     let mut events = remote_state.events.subscribe();
     let remote_id = remote_state.native_client_id().unwrap();
     let local_id = state.native_client_id().unwrap();
@@ -255,7 +255,7 @@ async fn actual_native_management_uses_encrypted_auth_and_saves_both_grants_once
     state.management.shutdown().await;
     remote_state
         .prefs
-        .set_user(plain_rs::prefs::user::keys::DEVICE_NAME, "Reused name")
+        .set(plain_rs::prefs::pref_keys::DEVICE_NAME, "Reused name")
         .unwrap();
     let mut local_events = state.events.subscribe();
     let again = pairing_attempts::start(

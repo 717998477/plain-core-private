@@ -5,7 +5,7 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
     let (key, public) = plain_rs::crypto::ed25519_generate();
-    prefs.set_user("device_name", "Actual tablet").unwrap();
+    prefs.set("device_name", "Actual tablet").unwrap();
     prefs.set("client_id", "actor").unwrap();
     prefs
         .set(

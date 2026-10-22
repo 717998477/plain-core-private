@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const RECEIPTS_KEY: &str = "sms_send_receipts";
+const RECEIPTS_KEY: &str = "sms_send_requests";
 const RECEIPT_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 const MAX_RECEIPTS: usize = 1024;
 
@@ -73,7 +73,7 @@ pub(crate) async fn execute(
 ) -> anyhow::Result<Value> {
     anyhow::ensure!(!request.number.trim().is_empty(), "phone number is empty");
     let configured: Vec<String> =
-        prefs.get_or(plain_rs::prefs::system::keys::API_PERMISSIONS, Vec::new());
+        prefs.get_or(plain_rs::prefs::pref_keys::API_PERMISSIONS, Vec::new());
     anyhow::ensure!(permission_allowed(&configured), "no_permission");
     crate::services::capabilities::require(host, "SMS").await?;
     let request_id = request
@@ -103,13 +103,13 @@ pub(crate) async fn execute(
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_millis() as u64;
-        let mut receipts: Vec<Receipt> = prefs.get_or(RECEIPTS_KEY, Vec::new());
+        let mut receipts: Vec<Receipt> = sends.store()?.get_json(RECEIPTS_KEY)?.unwrap_or_default();
         if !claim(&mut receipts, key, &payload_hash, now_ms)? {
             return Ok(json!({"sent":true,"duplicate":true}));
         }
         // Persist the idempotency claim before asking the platform to dispatch.
         // This makes an ambiguous timeout/retry at-most-once across restarts.
-        prefs.set(RECEIPTS_KEY, &receipts)?;
+        sends.store()?.set_json(RECEIPTS_KEY, &receipts)?;
     }
     let parts: Vec<String> = serde_json::from_value(
         host.call(

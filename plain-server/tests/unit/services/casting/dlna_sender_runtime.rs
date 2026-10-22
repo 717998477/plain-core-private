@@ -178,7 +178,7 @@ async fn sender_controls_use_soap_and_release_the_original_subscription() {
         !rows.iter().any(|row| row.1.contains("#Stop")),
         "Exit retains receiver playback"
     );
-    state.prefs.set_user("service", true).unwrap();
+    state.prefs.set("background_service_enabled", true).unwrap();
     state.cast.snapshot.lock().unwrap().items = vec![
         Item {
             path: "/video.mp4".into(),

@@ -273,7 +273,7 @@ async fn playback_joins_the_queue_state_and_the_player_state() {
     schema
         .data::<Arc<Prefs>>()
         .unwrap()
-        .set_user("audio_play_mode", 2)
+        .set("audio_play_mode", 2)
         .unwrap();
     let played = query(
         &schema,
@@ -921,7 +921,7 @@ async fn raw_album_art_is_encoded_only_when_selected_with_the_current_url_token(
     .data(prefs.clone())
     .finish();
     prefs
-        .remove(plain_rs::prefs::system::keys::URL_TOKEN)
+        .remove(plain_rs::prefs::pref_keys::URL_TOKEN)
         .unwrap();
     for document in [
         "{ audio { title } }",
@@ -939,7 +939,7 @@ async fn raw_album_art_is_encoded_only_when_selected_with_the_current_url_token(
     for key in [[3u8; 32], [5u8; 32]] {
         let token = plain_rs::utils::base64::base64_encode(&key);
         prefs
-            .set(plain_rs::prefs::system::keys::URL_TOKEN, &token)
+            .set(plain_rs::prefs::pref_keys::URL_TOKEN, &token)
             .unwrap();
         let response = schema.execute(document).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);

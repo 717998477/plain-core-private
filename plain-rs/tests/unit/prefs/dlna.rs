@@ -23,7 +23,7 @@ fn enabled_defaults_false_and_roundtrips() {
     assert!(
         Prefs::load(prefs.path())
             .unwrap()
-            .get_user_or("dlna", false)
+            .get_or("dlna", false)
     );
 }
 

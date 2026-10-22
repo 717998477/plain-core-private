@@ -48,8 +48,7 @@ impl AudioCommandsMutation {
             ctx.data::<Arc<Prefs>>()?,
             &["WRITE_EXTERNAL_STORAGE"],
         )?;
-        let report = ctx
-            .data::<Arc<Audio>>()?
+        let report = super::public::audio(ctx)?
             .run_playback(move |db, _| {
                 playback::report_selection(
                     db,
@@ -84,8 +83,7 @@ impl AudioCommandsMutation {
             ));
         }
         let prefs = ctx.data::<Arc<Prefs>>()?.clone();
-        let selection = ctx
-            .data::<Arc<Audio>>()?
+        let selection = super::public::audio(ctx)?
             .run_playback(move |db, engine| {
                 use commands::Engine;
                 let current = playback::snapshot(db)?;

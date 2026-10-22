@@ -2,13 +2,13 @@ use plain_rs::{events::WsEvent, prefs::Prefs};
 use serde_json::Value;
 use tokio::sync::broadcast;
 
-pub(crate) struct UserPreferences<'a> {
+pub(crate) struct Preferences<'a> {
     pub(crate) prefs: &'a Prefs,
     pub(crate) events: Option<&'a broadcast::Sender<WsEvent>>,
     pub(crate) server: Option<&'a crate::assembly::server::ServerState>,
 }
 
-impl<'a> UserPreferences<'a> {
+impl<'a> Preferences<'a> {
     pub(crate) fn from_server(state: &'a crate::assembly::server::ServerState) -> Self {
         Self {
             prefs: &state.prefs,
@@ -19,29 +19,29 @@ impl<'a> UserPreferences<'a> {
 
     pub(crate) async fn patch(
         &self,
-        patch: plain_rs::prefs::user::UserSettingsPatch,
+        patch: plain_rs::prefs::settings::SettingsPatch,
     ) -> anyhow::Result<bool> {
-        self.update(move |prefs| plain_rs::prefs::user::patch(prefs, patch))
+        self.update(move |prefs| plain_rs::prefs::settings::patch(prefs, patch))
             .await
     }
 
     pub(crate) async fn set(&self, key: &str, value: Value) -> anyhow::Result<bool> {
         self.update(move |prefs| {
-            match plain_rs::prefs::user::set_entry(prefs, key, value.clone())? {
+            match plain_rs::prefs::settings::set_entry(prefs, key, value.clone())? {
                 Some(changed) => Ok(changed),
-                None => Ok(prefs.set_user(key, value)?),
+                None => Ok(prefs.set(key, value)?),
             }
         })
         .await
     }
 
     pub(crate) async fn remove(&self, key: &str) -> anyhow::Result<bool> {
-        self.update(move |prefs| Ok(prefs.remove_user(key)?)).await
+        self.update(move |prefs| Ok(prefs.remove(key)?)).await
     }
 
     pub(crate) async fn action(
         &self,
-        action: plain_rs::prefs::user::Action,
+        action: plain_rs::prefs::settings::Action,
     ) -> anyhow::Result<bool> {
         self.update(move |prefs| action.apply(prefs)).await
     }
@@ -50,15 +50,20 @@ impl<'a> UserPreferences<'a> {
         &self,
         write: impl FnOnce(&Prefs) -> anyhow::Result<bool>,
     ) -> anyhow::Result<bool> {
-        let before = plain_rs::prefs::user::snapshot(self.prefs)?;
+        let before = plain_rs::prefs::settings::snapshot(self.prefs)?;
+        let before_model = self.prefs.get_or("ai_image_search_model", String::from("default"));
         let changed = write(self.prefs)?;
-        let after = plain_rs::prefs::user::snapshot(self.prefs)?;
+        let after = plain_rs::prefs::settings::snapshot(self.prefs)?;
         if changed {
             if let Some(events) = self.events {
                 let _ = events.send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
             }
         }
         if let Some(state) = self.server {
+            if after.ai_image_search_enabled && before_model != self.prefs.get_or("ai_image_search_model", String::from("default")) {
+                state.image_models.shutdown().await;
+                state.image_models.enable(false).await.map_err(anyhow::Error::msg)?;
+            }
             if before.desktop_access && !after.desktop_access {
                 state.main_ws.close_client(state, None);
             }
@@ -93,5 +98,5 @@ impl<'a> UserPreferences<'a> {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/services/settings/user_preferences.rs"]
+#[path = "../../../tests/unit/services/settings/preferences.rs"]
 mod tests;

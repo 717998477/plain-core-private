@@ -47,7 +47,7 @@ async fn deliver(
     );
     let actor = state
         .prefs
-        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+        .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
         .unwrap_or_default();
     ensure!(!actor.is_empty(), "Missing client identity");
     match kind {
@@ -97,7 +97,7 @@ async fn deliver(
             | ChannelSystemMessageType::InviteAccept
     ) {
         Device {
-            name: plain_rs::prefs::user::snapshot(&state.prefs)?.device_name,
+            name: plain_rs::prefs::settings::snapshot(&state.prefs)?.device_name,
             device_type: crate::services::discovery::discovery_advertisement::device_type(state)
                 .await?,
         }

@@ -30,10 +30,6 @@ pub fn path_from_file_id(id: &str, prefs: &plain_rs::prefs::Prefs) -> Result<Str
     }
     // Some URL parsers turn '+' into ' ' in query strings.
     let id = id.replace(' ', "+");
-    log::debug!(
-        "[path_from_file_id] id (first 40 chars): {}",
-        &id[..id.len().min(40)]
-    );
 
     let ciphertext = base64_decode(&id).ok_or_else(|| {
         log::debug!("[path_from_file_id] base64 decode of id failed");
@@ -42,7 +38,7 @@ pub fn path_from_file_id(id: &str, prefs: &plain_rs::prefs::Prefs) -> Result<Str
     log::debug!("[path_from_file_id] ciphertext len: {}", ciphertext.len());
 
     let token = prefs
-        .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
+        .get::<String>(plain_rs::prefs::pref_keys::URL_TOKEN)
         .ok()
         .flatten()
         .filter(|t| !t.is_empty())
@@ -50,16 +46,9 @@ pub fn path_from_file_id(id: &str, prefs: &plain_rs::prefs::Prefs) -> Result<Str
             log::debug!("[path_from_file_id] no url_token found in prefs");
             FileIdError::Forbidden
         })?;
-    log::debug!(
-        "[path_from_file_id] token: {}",
-        &token[..token.len().min(20)]
-    );
 
     let key = base64_decode(&token).ok_or_else(|| {
-        log::debug!(
-            "[path_from_file_id] base64 decode of token failed, token='{}'",
-            token
-        );
+        log::debug!("[path_from_file_id] base64 decode of token failed");
         FileIdError::Forbidden
     })?;
     log::debug!("[path_from_file_id] key len: {} (expected 32)", key.len());
@@ -81,7 +70,6 @@ pub fn path_from_file_id(id: &str, prefs: &plain_rs::prefs::Prefs) -> Result<Str
         FileIdError::Forbidden
     })?;
     let path = extract_path(&path);
-    log::debug!("[path_from_file_id] resolved to: {}", path);
     Ok(path)
 }
 

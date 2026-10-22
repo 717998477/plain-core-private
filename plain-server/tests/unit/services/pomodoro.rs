@@ -13,7 +13,7 @@ fn fixture() -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let db = Arc::new(Db::open(&directory.path().join("plain.db")).unwrap());
     let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
-    let mut settings = plain_rs::prefs::user::UserSettings::default().pomodoro_settings;
+    let mut settings = plain_rs::prefs::settings::Settings::default().pomodoro_settings;
     for (key, value) in [
         ("workDurationMin", 1),
         ("shortBreakDurationMin", 2),
@@ -22,7 +22,7 @@ fn fixture() -> Fixture {
     ] {
         settings[key] = json!(value);
     }
-    prefs.set_user("pomodoro_settings", settings).unwrap();
+    prefs.set("pomodoro_settings", settings).unwrap();
     let (events, _) = broadcast::channel(128);
     Fixture {
         _directory: directory,
@@ -147,7 +147,7 @@ fn progress_does_not_write_statistics_and_pause_adjust_and_settings_preserve_sta
     settings["workDurationMin"] = json!(3);
     service
         .prefs
-        .set_user("pomodoro_settings", settings)
+        .set("pomodoro_settings", settings)
         .unwrap();
     assert_eq!(service.tick_at(now).unwrap().time_left_sec, 180);
     assert!(service.command_at("adjust", Some(-1), now).is_err());

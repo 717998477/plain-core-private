@@ -91,7 +91,7 @@ pub fn play_mode(
 ) -> DomainResult<crate::media::audio::play_mode::MediaPlayMode> {
     use crate::media::audio::play_mode::MediaPlayMode;
     let ordinal = prefs
-        .get_user::<i32>(PREF_AUDIO_MODE)
+        .get::<i32>(PREF_AUDIO_MODE)
         .map_err(|e| DomainError::Other(e.to_string()))?
         .unwrap_or(MediaPlayMode::Repeat.ordinal());
     MediaPlayMode::from_ordinal(ordinal)
@@ -104,7 +104,7 @@ pub fn save_audio_mode(prefs: &crate::prefs::Prefs, mode: &str) -> DomainResult<
     let mode = crate::media::audio::play_mode::MediaPlayMode::from_name(mode.trim())
         .ok_or_else(|| DomainError::Other("invalid audio play mode".into()))?;
     prefs
-        .set_user(PREF_AUDIO_MODE, mode.ordinal())
+        .set(PREF_AUDIO_MODE, mode.ordinal())
         .map_err(|e| DomainError::Other(e.to_string()))
 }
 

@@ -6,8 +6,7 @@ fn all_platforms_derive_one_layout_from_the_data_root() {
     let paths = DataPaths::new(&directory);
     for (actual, relative) in [
         (paths.database(), "plain.db"),
-        (paths.system_prefs(), "system_prefs.json"),
-        (paths.user_prefs(), "user_prefs.json"),
+        (paths.prefs(), "prefs.json"),
         (paths.kv(), "fjall"),
         (paths.note_images(), "note-images"),
         (paths.audio(), "audio"),

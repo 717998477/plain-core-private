@@ -25,12 +25,12 @@ fn update_policy_selects_configured_asset_and_preserves_user_and_download_state(
     ] {
         let mut info = UpdateInfo {
             downloaded_apk_path: "downloaded".into(),
-            auto_check_update: false,
             ..Default::default()
         };
         assert!(apply_release(
             &mut info,
             "3.3.25",
+            "",
             &[abi.into()],
             &source(),
             &release()
@@ -40,7 +40,6 @@ fn update_policy_selects_configured_asset_and_preserves_user_and_download_state(
         assert_eq!(info.publish_date, "created");
         assert_eq!(info.log, "Changes");
         assert_eq!(info.downloaded_apk_path, "downloaded");
-        assert!(!info.auto_check_update);
     }
 }
 #[test]
@@ -52,7 +51,6 @@ fn skipped_current_and_older_versions_do_not_overwrite_existing_offer() {
         ("3.3.25", "4.0.0"),
     ] {
         let mut info = UpdateInfo {
-            skip_version: skip.into(),
             new_version: "existing".into(),
             ..Default::default()
         };
@@ -60,6 +58,7 @@ fn skipped_current_and_older_versions_do_not_overwrite_existing_offer() {
         assert!(!apply_release(
             &mut info,
             current,
+            skip,
             &[],
             &source(),
             &release()
@@ -76,6 +75,7 @@ fn missing_asset_retains_release_details_without_silently_selecting_another_arch
     assert!(apply_release(
         &mut info,
         "3.3.25",
+        "",
         &["arm64-v8a".into()],
         &source(),
         &release
@@ -90,11 +90,10 @@ fn automatic_checks_observe_user_setting_day_boundary_and_clock_rollback() {
         check_update_time: 100,
         ..Default::default()
     };
-    assert!(!due(&info, 100 + 86_400_000));
-    assert!(due(&info, 101 + 86_400_000));
-    assert!(!due(&info, 0));
-    info.auto_check_update = false;
-    assert!(!due(&info, u64::MAX));
+    assert!(!due(&info, true, 100 + 86_400_000));
+    assert!(due(&info, true, 101 + 86_400_000));
+    assert!(!due(&info, true, 0));
+    assert!(!due(&info, false, u64::MAX));
 }
 #[test]
 fn availability_uses_the_same_three_component_comparison_as_the_app_baseline() {
@@ -102,9 +101,8 @@ fn availability_uses_the_same_three_component_comparison_as_the_app_baseline() {
         new_version: "3.4.2".into(),
         ..Default::default()
     };
-    assert!(available(&info, "3.4.1"));
-    info.skip_version = "3.4.2".into();
-    assert!(!available(&info, "3.4.1"));
+    assert!(available(&info, "3.4.1", ""));
+    assert!(!available(&info, "3.4.1", "3.4.2"));
     assert_eq!(Version::parse("3.4.invalid"), Version::parse("3.4.0"));
     assert_eq!(Version::parse("3.4.2.extra"), Version::parse("3.4.2"));
     assert!(serde_json::from_str::<Release>(r#"{"body":"missing tag"}"#).is_err());

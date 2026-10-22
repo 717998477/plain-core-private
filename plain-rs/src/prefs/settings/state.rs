@@ -3,7 +3,7 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
-pub struct UserSettings {
+pub struct Settings {
     pub http_port: i32,
     pub https_port: i32,
     pub dark_theme: i32,
@@ -11,7 +11,7 @@ pub struct UserSettings {
     pub pdf_follow_dark_theme: bool,
     pub keep_awake: bool,
     pub locale: String,
-    pub service: bool,
+    pub background_service_enabled: bool,
     pub desktop_access: bool,
     pub dlna: bool,
     pub developer_mode: bool,
@@ -33,20 +33,12 @@ pub struct UserSettings {
     pub editor_wrap_content: bool,
     pub editor_font_size: i32,
     pub editor_status_bar: bool,
-    pub last_file_path: Value,
-    pub scan_history: Value,
-    pub audio_playlist: Value,
-    pub chat_input_text: String,
     pub nearby_discoverable: bool,
     pub ai_image_search_enabled: bool,
     pub notification_filter: Value,
     pub pomodoro_settings: Value,
-    pub video_playlist: Value,
-    pub home_features: String,
-    pub quick_note_draft: String,
+    pub app_home_features: String,
     pub launcher_shortcuts: String,
-    pub recent_searches: Value,
-    pub recent_save_dirs: Value,
     pub audio_sort_by: i32,
     pub video_sort_by: i32,
     pub image_sort_by: i32,
@@ -54,7 +46,7 @@ pub struct UserSettings {
     pub file_sort_by: i32,
     pub package_sort_by: i32,
 }
-impl Default for UserSettings {
+impl Default for Settings {
     fn default() -> Self {
         Self {
             http_port: 8080,
@@ -64,7 +56,7 @@ impl Default for UserSettings {
             pdf_follow_dark_theme: false,
             keep_awake: true,
             locale: String::new(),
-            service: false,
+            background_service_enabled: false,
             desktop_access: true,
             dlna: false,
             developer_mode: false,
@@ -85,20 +77,12 @@ impl Default for UserSettings {
             editor_wrap_content: true,
             editor_font_size: 14,
             editor_status_bar: true,
-            last_file_path: serde_json::json!({"rootPath":"","fullPath":"","selectedPath":""}),
-            scan_history: serde_json::json!([]),
-            audio_playlist: serde_json::json!([]),
-            chat_input_text: String::new(),
             nearby_discoverable: true,
             ai_image_search_enabled: false,
             notification_filter: serde_json::json!({"mode":"blacklist","apps":[]}),
             pomodoro_settings: serde_json::json!({"workDurationMin":25,"shortBreakDurationMin":5,"longBreakDurationMin":15,"pomodorosBeforeLongBreak":4,"showNotification":true,"playSoundOnComplete":true,"soundPath":"","originalSoundName":""}),
-            video_playlist: serde_json::json!([]),
-            home_features: "IMAGES|VIDEOS|AUDIO|DOCS|FILES|NOTES|FEEDS".into(),
-            quick_note_draft: String::new(),
+            app_home_features: "IMAGES|VIDEOS|AUDIO|DOCS|FILES|NOTES|FEEDS".into(),
             launcher_shortcuts: "NOTES|DOCS|FEEDS|POMODORO_TIMER".into(),
-            recent_searches: serde_json::json!([]),
-            recent_save_dirs: serde_json::json!([]),
             audio_sort_by: 1,
             video_sort_by: 6,
             image_sort_by: 6,

@@ -249,7 +249,7 @@ async fn main_identity_rename_and_pairing_code_use_shared_preferences_and_refuse
     let value = response.data.into_json().unwrap();
     assert_eq!(value["app"]["clientId"], executor.client_id());
     let settings =
-        serde_json::to_value(core.native_management().unwrap().system_settings().unwrap()).unwrap();
+        serde_json::to_value(core.native_management().unwrap().prefs_snapshot().unwrap()).unwrap();
     assert_eq!(
         plain_rs::utils::base64::base64_decode(settings["signaturePublicKey"].as_str().unwrap())
             .len(),
@@ -269,7 +269,7 @@ async fn main_identity_rename_and_pairing_code_use_shared_preferences_and_refuse
     let value = response.data.into_json().unwrap();
     assert_eq!(value["app"]["deviceName"], "Shared device");
     assert_eq!(
-        serde_json::to_value(core.native_management().unwrap().system_settings().unwrap()).unwrap()
+        serde_json::to_value(core.native_management().unwrap().prefs_snapshot().unwrap()).unwrap()
             ["signaturePublicKey"],
         public_key
     );

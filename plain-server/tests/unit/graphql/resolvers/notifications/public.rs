@@ -232,7 +232,7 @@ fn sms_refresh_hints_follow_notification_permissions_filters_and_event_kinds() {
         assert!(receiver.try_recv().is_err());
     }
     prefs
-        .set_user("notification_filter", json!({"mode":"allowlist","apps":[]}))
+        .set("notification_filter", json!({"mode":"allowlist","apps":[]}))
         .unwrap();
     publish(
         &prefs,

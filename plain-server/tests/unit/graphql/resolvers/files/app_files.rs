@@ -7,7 +7,7 @@ async fn file_import_dedupe_release_and_restart_use_core_storage() {
     let dir = tempfile::tempdir().unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[14; 32]);
     let prefs =
-        Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system_prefs.json")).unwrap());
+        Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
     prefs
         .set(
             "api_permissions",

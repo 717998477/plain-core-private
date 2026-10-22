@@ -14,7 +14,7 @@ fn private_prepare_uses_persisted_signing_identity_and_current_peer_keys() {
             .unwrap()
             .as_nanos()
     ));
-    let prefs = Prefs::load(&dir.join("system_prefs.json")).unwrap();
+    let prefs = Prefs::load(&dir.join("prefs.json")).unwrap();
     let (key, public) = ed25519_generate();
     prefs.set("client_id", "actor").unwrap();
     prefs

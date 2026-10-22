@@ -5,7 +5,7 @@ fn notifications_apply_preferences_literal_text_and_instant_order() {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Prefs::load(&dir.path().join("prefs.json")).unwrap();
     prefs
-        .set_user(
+        .set(
             "notification_filter",
             json!({"mode":"allowlist","apps":["allowed"]}),
         )

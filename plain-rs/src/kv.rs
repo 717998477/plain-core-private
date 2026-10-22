@@ -9,6 +9,7 @@ pub struct Db(Arc<Inner>);
 
 struct Inner {
     database: fjall::Database,
+    json_lock: Mutex<()>,
     keyspace: fjall::Keyspace,
 }
 
@@ -30,7 +31,7 @@ impl Db {
         let keyspace = database
             .keyspace(KEYSPACE, fjall::KeyspaceCreateOptions::default)
             .context("open fjall keyspace")?;
-        let inner = Arc::new(Inner { database, keyspace });
+        let inner = Arc::new(Inner { database, keyspace, json_lock: Mutex::new(()) });
         opened.insert(path, Arc::downgrade(&inner));
         Ok(Self(inner))
     }
@@ -68,6 +69,46 @@ impl Db {
             .keyspace
             .iter()
             .map(|guard| guard.into_inner().map_err(Into::into))
+    }
+    pub fn get_json<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        self.get(key)?.map(|bytes| serde_json::from_slice(&bytes).map_err(Into::into)).transpose()
+    }
+    pub fn set_json<T: serde::Serialize>(&self, key: &str, value: T) -> Result<bool> {
+        let _lock = self.0.json_lock.lock().unwrap();
+        let value = serde_json::to_vec(&value)?;
+        if self.get(key)?.as_deref() == Some(value.as_slice()) { return Ok(false); }
+        self.insert(key, value)?;
+        self.flush()?;
+        Ok(true)
+    }
+    pub fn update_json<T: serde::Serialize + serde::de::DeserializeOwned + Default, R>(
+        &self, key: &str, change: impl FnOnce(&mut T) -> Result<R>,
+    ) -> Result<R> {
+        let _lock = self.0.json_lock.lock().unwrap();
+        let mut value = self.get_json(key)?.unwrap_or_default();
+        let result = change(&mut value)?;
+        self.insert(key, serde_json::to_vec(&value)?)?;
+        self.flush()?;
+        Ok(result)
+    }
+    pub fn update_json_prefix<R>(&self, prefix: &str, change: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> Result<R>) -> Result<R> {
+        let _lock = self.0.json_lock.lock().unwrap();
+        let mut values = serde_json::Map::new();
+        for entry in self.scan_prefix(prefix) {
+            let (key, value) = entry?;
+            values.insert(std::str::from_utf8(&key)?.to_owned(), serde_json::from_slice(&value)?);
+        }
+        let previous = values.clone();
+        let result = change(&mut values)?;
+        let mut batch = self.batch();
+        for key in previous.keys().filter(|key| !values.contains_key(*key)) { batch.remove(key); }
+        for (key, value) in &values {
+            anyhow::ensure!(key.starts_with(prefix), "Invalid state key");
+            if previous.get(key) != Some(value) { batch.insert(key, serde_json::to_vec(value)?); }
+        }
+        self.apply_batch(batch)?;
+        self.flush()?;
+        Ok(result)
     }
     pub fn backup_to(&self, path: &Path, cancelled: impl Fn() -> bool) -> Result<()> {
         if cancelled() {
@@ -133,6 +174,10 @@ pub struct LazyDb {
 }
 
 impl LazyDb {
+    pub fn from_open(path: PathBuf, db: Arc<Db>) -> Self {
+        Self { path, db: Mutex::new(Some(db)) }
+    }
+
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,

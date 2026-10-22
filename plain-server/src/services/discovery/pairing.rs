@@ -18,7 +18,7 @@ pub(crate) struct Device {
 }
 fn actor(prefs: &Prefs) -> Result<String> {
     prefs
-        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+        .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Missing pairing identity"))
 }

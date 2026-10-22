@@ -42,7 +42,7 @@ fn invalid_fixed_directory_prevents_store_initialization() {
     std::fs::write(paths.audio(), b"file in place of directory").unwrap();
     assert!(DataDirectory::open(directory.path(), &directory.path().join("cache")).is_err());
     assert!(!paths.database().exists());
-    assert!(!paths.system_prefs().exists());
+    assert!(!paths.prefs().exists());
     assert!(!paths.kv().exists());
     assert_eq!(
         std::fs::read(paths.audio()).unwrap(),
@@ -56,7 +56,7 @@ fn invalid_pending_restore_prevents_store_initialization() {
     std::fs::write(paths.pending_restore(), b"invalid marker").unwrap();
     assert!(DataDirectory::open(directory.path(), &directory.path().join("cache")).is_err());
     assert!(!paths.database().exists());
-    assert!(!paths.system_prefs().exists());
+    assert!(!paths.prefs().exists());
     assert!(!paths.kv().exists());
 }
 #[test]

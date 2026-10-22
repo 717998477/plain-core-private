@@ -178,7 +178,7 @@ impl FilePlatform {
             }
         }
         let mut items = Vec::new();
-        for path in plain_rs::prefs::recent::get_recent_files(prefs, 500)? {
+        for path in plain_rs::recent_files::list(self.db.key_values().ok_or_else(|| anyhow!("KV store unavailable"))?.as_ref(), 500)? {
             let Ok(entry) = plain_rs::files::filesystem::stat(Path::new(&path)).await else {
                 continue;
             };

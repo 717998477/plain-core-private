@@ -191,7 +191,7 @@ pub fn ensure_samba_password(password: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn set_user_password(password: &str) -> Result<()> {
+pub fn set_password(password: &str) -> Result<()> {
     ensure_unix_user()?;
     ensure_samba_password(password)
 }

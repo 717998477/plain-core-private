@@ -79,9 +79,9 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
     let dir = tempfile::tempdir().unwrap();
     let prefs =
         std::sync::Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
-    prefs.set_user("service", true).unwrap();
-    prefs.set_user("desktop_access", true).unwrap();
-    prefs.set("auth_two_factor", true).unwrap();
+    prefs.set("background_service_enabled", true).unwrap();
+    prefs.set("desktop_access", true).unwrap();
+    prefs.set("login_require_approval", true).unwrap();
     prefs.set("password", "secret").unwrap();
     prefs.set("password_type", 1_i32).unwrap();
     prefs.set("client_id", "phone").unwrap();
@@ -207,7 +207,7 @@ fn public_fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServe
     let prefs = std::sync::Arc::new(
         plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap(),
     );
-    prefs.set_user("desktop_access", true).unwrap();
+    prefs.set("desktop_access", true).unwrap();
     let core = crate::assembly::server::ContentServer::start(
         directory.path(),
         &plain_rs::utils::base64::base64_encode(&[4; 32]),

@@ -102,7 +102,7 @@ async fn quality_is_read_from_the_single_rust_store() {
     schema
         .data::<Arc<plain_rs::prefs::Prefs>>()
         .unwrap()
-        .set_user(
+        .set(
             "screen_mirror_quality",
             json!({"mode":"SMOOTH","resolution":720}),
         )

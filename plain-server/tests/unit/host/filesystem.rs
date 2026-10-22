@@ -3,7 +3,7 @@ use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{HeaderName, StatusCode, header};
 use axum::response::Response;
-use plain_rs::prefs::recent;
+use plain_rs::recent_files as recent;
 
 fn test_state() -> (tempfile::TempDir, ContentServer, ServerState, Vec<u8>) {
     let directory = tempfile::tempdir().unwrap();
@@ -109,16 +109,16 @@ async fn fs_recent_tracked_once_per_view_not_per_chunk() {
 
     call_fs(&state, &format!("id={id}"), &[range_header("bytes=4-9")]).await;
     assert!(
-        recent::get_recent_files(&state.prefs, 10)
+        recent::list(state.store.get().unwrap().as_ref(), 10)
             .unwrap()
             .is_empty()
     );
 
     call_fs(&state, &format!("id={id}"), &[range_header("bytes=0-9")]).await;
-    assert_eq!(recent::get_recent_files(&state.prefs, 10).unwrap().len(), 1);
+    assert_eq!(recent::list(state.store.get().unwrap().as_ref(), 10).unwrap().len(), 1);
 
     call_fs(&state, &format!("id={id}"), &[]).await;
-    assert_eq!(recent::get_recent_files(&state.prefs, 10).unwrap().len(), 1);
+    assert_eq!(recent::list(state.store.get().unwrap().as_ref(), 10).unwrap().len(), 1);
 }
 
 #[cfg(feature = "media")]

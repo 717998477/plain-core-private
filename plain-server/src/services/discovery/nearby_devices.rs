@@ -38,7 +38,7 @@ impl Context {
         if device.id
             == self
                 .prefs
-                .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+                .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
                 .unwrap_or_default()
         {
             return Ok(false);

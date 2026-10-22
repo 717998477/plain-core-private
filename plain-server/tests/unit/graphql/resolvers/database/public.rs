@@ -7,7 +7,7 @@ fn fixture() -> (tempfile::TempDir, PublicSchema) {
     let path = plain_rs::data_paths::DataPaths::new(dir.path()).database();
     let prefs =
         Arc::new(plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(dir.path())).unwrap());
-    let db = Arc::new(plain_rs::db::Db::open_with_prefs(&path, prefs.clone()).unwrap());
+    let db = Arc::new(plain_rs::db::Db::open(&path).unwrap());
     db.with_conn(|conn| conn.execute_batch("CREATE TABLE test_rows (key TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'untitled', size INTEGER, ratio REAL, bytes BLOB); INSERT INTO test_rows VALUES('a','First',42,1.5,NULL),('b','Second',43,2.5,NULL);").unwrap());
     let host = Arc::new(crate::host::bridge::Host::default());
     let (events, _) = tokio::sync::broadcast::channel(16);

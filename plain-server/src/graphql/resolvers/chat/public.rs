@@ -433,7 +433,7 @@ mod tests;
 
 fn actor(ctx: &Context<'_>) -> async_graphql::Result<String> {
     ctx.data::<Arc<plain_rs::prefs::Prefs>>()?
-        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+        .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
         .filter(|actor| !actor.is_empty())
         .ok_or_else(|| async_graphql::Error::new("Missing client identity"))
 }

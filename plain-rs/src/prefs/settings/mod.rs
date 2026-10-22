@@ -1,18 +1,18 @@
 mod actions;
-pub mod keys;
+use super::pref_keys as keys;
 mod patch;
 mod state;
 mod validation;
 use super::{Prefs, PrefsError, Result};
 pub use actions::Action;
-pub use patch::UserSettingsPatch;
+pub use patch::SettingsPatch;
 use serde_json::{Map, Value};
-pub use state::UserSettings;
+pub use state::Settings;
 use validation::validate;
 
-pub fn snapshot(prefs: &Prefs) -> Result<UserSettings> {
-    let entries: Map<String, Value> = prefs.user_entries().into_iter().collect();
-    let mut settings = UserSettings::default();
+pub fn snapshot(prefs: &Prefs) -> Result<Settings> {
+    let entries: Map<String, Value> = prefs.entries().into_iter().collect();
+    let mut settings = Settings::default();
     if let Some(value) = entries.get(keys::HTTP_PORT) {
         settings.http_port = serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
     }
@@ -36,8 +36,8 @@ pub fn snapshot(prefs: &Prefs) -> Result<UserSettings> {
     if let Some(value) = entries.get(keys::LOCALE) {
         settings.locale = serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
     }
-    if let Some(value) = entries.get(keys::SERVICE) {
-        settings.service = serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
+    if let Some(value) = entries.get(keys::BACKGROUND_SERVICE_ENABLED) {
+        settings.background_service_enabled = serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
     }
     if let Some(value) = entries.get(keys::DESKTOP_ACCESS) {
         settings.desktop_access =
@@ -116,22 +116,7 @@ pub fn snapshot(prefs: &Prefs) -> Result<UserSettings> {
         settings.editor_status_bar =
             serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
     }
-    if let Some(value) = entries.get(keys::LAST_FILE_PATH) {
-        settings.last_file_path =
-            serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
-    }
-    if let Some(value) = entries.get(keys::SCAN_HISTORY) {
-        settings.scan_history =
-            serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
-    }
-    if let Some(value) = entries.get(keys::AUDIO_PLAYLIST) {
-        settings.audio_playlist =
-            serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
-    }
-    if let Some(value) = entries.get(keys::CHAT_INPUT_TEXT) {
-        settings.chat_input_text =
-            serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
-    }
+
     if let Some(value) = entries.get(keys::NEARBY_DISCOVERABLE) {
         settings.nearby_discoverable =
             serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
@@ -148,30 +133,17 @@ pub fn snapshot(prefs: &Prefs) -> Result<UserSettings> {
         settings.pomodoro_settings =
             serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
     }
-    if let Some(value) = entries.get(keys::VIDEO_PLAYLIST) {
-        settings.video_playlist =
+
+    if let Some(value) = entries.get(keys::APP_HOME_FEATURES) {
+        settings.app_home_features =
             serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
     }
-    if let Some(value) = entries.get(keys::HOME_FEATURES) {
-        settings.home_features =
-            serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
-    }
-    if let Some(value) = entries.get(keys::QUICK_NOTE_DRAFT) {
-        settings.quick_note_draft =
-            serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
-    }
+
     if let Some(value) = entries.get(keys::LAUNCHER_SHORTCUTS) {
         settings.launcher_shortcuts =
             serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
     }
-    if let Some(value) = entries.get(keys::RECENT_SEARCHES) {
-        settings.recent_searches =
-            serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
-    }
-    if let Some(value) = entries.get(keys::RECENT_SAVE_DIRS) {
-        settings.recent_save_dirs =
-            serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
-    }
+
     if let Some(value) = entries.get(keys::AUDIO_SORT_BY) {
         settings.audio_sort_by =
             serde_json::from_value(value.clone()).map_err(PrefsError::Decode)?;
@@ -198,10 +170,10 @@ pub fn snapshot(prefs: &Prefs) -> Result<UserSettings> {
     Ok(settings)
 }
 
-pub fn patch(prefs: &Prefs, patch: UserSettingsPatch) -> anyhow::Result<bool> {
+pub fn patch(prefs: &Prefs, patch: SettingsPatch) -> anyhow::Result<bool> {
     validate(&patch)?;
     let mut changed = false;
-    prefs.update_user(|entries| {
+    prefs.update(|entries| {
         if let Some(value) = patch.http_port {
             let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
             if entries.get(keys::HTTP_PORT) != Some(&value) {
@@ -251,10 +223,10 @@ pub fn patch(prefs: &Prefs, patch: UserSettingsPatch) -> anyhow::Result<bool> {
                 changed = true;
             }
         }
-        if let Some(value) = patch.service {
+        if let Some(value) = patch.background_service_enabled {
             let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::SERVICE) != Some(&value) {
-                entries.insert(keys::SERVICE.into(), value);
+            if entries.get(keys::BACKGROUND_SERVICE_ENABLED) != Some(&value) {
+                entries.insert(keys::BACKGROUND_SERVICE_ENABLED.into(), value);
                 changed = true;
             }
         }
@@ -398,34 +370,7 @@ pub fn patch(prefs: &Prefs, patch: UserSettingsPatch) -> anyhow::Result<bool> {
                 changed = true;
             }
         }
-        if let Some(value) = patch.last_file_path {
-            let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::LAST_FILE_PATH) != Some(&value) {
-                entries.insert(keys::LAST_FILE_PATH.into(), value);
-                changed = true;
-            }
-        }
-        if let Some(value) = patch.scan_history {
-            let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::SCAN_HISTORY) != Some(&value) {
-                entries.insert(keys::SCAN_HISTORY.into(), value);
-                changed = true;
-            }
-        }
-        if let Some(value) = patch.audio_playlist {
-            let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::AUDIO_PLAYLIST) != Some(&value) {
-                entries.insert(keys::AUDIO_PLAYLIST.into(), value);
-                changed = true;
-            }
-        }
-        if let Some(value) = patch.chat_input_text {
-            let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::CHAT_INPUT_TEXT) != Some(&value) {
-                entries.insert(keys::CHAT_INPUT_TEXT.into(), value);
-                changed = true;
-            }
-        }
+
         if let Some(value) = patch.nearby_discoverable {
             let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
             if entries.get(keys::NEARBY_DISCOVERABLE) != Some(&value) {
@@ -454,27 +399,15 @@ pub fn patch(prefs: &Prefs, patch: UserSettingsPatch) -> anyhow::Result<bool> {
                 changed = true;
             }
         }
-        if let Some(value) = patch.video_playlist {
+
+        if let Some(value) = patch.app_home_features {
             let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::VIDEO_PLAYLIST) != Some(&value) {
-                entries.insert(keys::VIDEO_PLAYLIST.into(), value);
+            if entries.get(keys::APP_HOME_FEATURES) != Some(&value) {
+                entries.insert(keys::APP_HOME_FEATURES.into(), value);
                 changed = true;
             }
         }
-        if let Some(value) = patch.home_features {
-            let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::HOME_FEATURES) != Some(&value) {
-                entries.insert(keys::HOME_FEATURES.into(), value);
-                changed = true;
-            }
-        }
-        if let Some(value) = patch.quick_note_draft {
-            let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::QUICK_NOTE_DRAFT) != Some(&value) {
-                entries.insert(keys::QUICK_NOTE_DRAFT.into(), value);
-                changed = true;
-            }
-        }
+
         if let Some(value) = patch.launcher_shortcuts {
             let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
             if entries.get(keys::LAUNCHER_SHORTCUTS) != Some(&value) {
@@ -482,20 +415,7 @@ pub fn patch(prefs: &Prefs, patch: UserSettingsPatch) -> anyhow::Result<bool> {
                 changed = true;
             }
         }
-        if let Some(value) = patch.recent_searches {
-            let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::RECENT_SEARCHES) != Some(&value) {
-                entries.insert(keys::RECENT_SEARCHES.into(), value);
-                changed = true;
-            }
-        }
-        if let Some(value) = patch.recent_save_dirs {
-            let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-            if entries.get(keys::RECENT_SAVE_DIRS) != Some(&value) {
-                entries.insert(keys::RECENT_SAVE_DIRS.into(), value);
-                changed = true;
-            }
-        }
+
         if let Some(value) = patch.audio_sort_by {
             let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
             if entries.get(keys::AUDIO_SORT_BY) != Some(&value) {
@@ -555,7 +475,7 @@ pub fn set_entry(prefs: &Prefs, key: &str, value: Value) -> anyhow::Result<Optio
         keys::PDF_FOLLOW_DARK_THEME => "pdfFollowDarkTheme",
         keys::KEEP_AWAKE => "keepAwake",
         keys::LOCALE => "locale",
-        keys::SERVICE => "service",
+        keys::BACKGROUND_SERVICE_ENABLED => "backgroundServiceEnabled",
         keys::DESKTOP_ACCESS => "desktopAccess",
         keys::DLNA => "dlna",
         keys::DEVELOPER_MODE => "developerMode",
@@ -576,20 +496,12 @@ pub fn set_entry(prefs: &Prefs, key: &str, value: Value) -> anyhow::Result<Optio
         keys::EDITOR_WRAP_CONTENT => "editorWrapContent",
         keys::EDITOR_FONT_SIZE => "editorFontSize",
         keys::EDITOR_STATUS_BAR => "editorStatusBar",
-        keys::LAST_FILE_PATH => "lastFilePath",
-        keys::SCAN_HISTORY => "scanHistory",
-        keys::AUDIO_PLAYLIST => "audioPlaylist",
-        keys::CHAT_INPUT_TEXT => "chatInputText",
         keys::NEARBY_DISCOVERABLE => "nearbyDiscoverable",
         keys::AI_IMAGE_SEARCH_ENABLED => "aiImageSearchEnabled",
         keys::NOTIFICATION_FILTER => "notificationFilter",
         keys::POMODORO_SETTINGS => "pomodoroSettings",
-        keys::VIDEO_PLAYLIST => "videoPlaylist",
-        keys::HOME_FEATURES => "homeFeatures",
-        keys::QUICK_NOTE_DRAFT => "quickNoteDraft",
+        keys::APP_HOME_FEATURES => "appHomeFeatures",
         keys::LAUNCHER_SHORTCUTS => "launcherShortcuts",
-        keys::RECENT_SEARCHES => "recentSearches",
-        keys::RECENT_SAVE_DIRS => "recentSaveDirs",
         keys::AUDIO_SORT_BY => "audioSortBy",
         keys::VIDEO_SORT_BY => "videoSortBy",
         keys::IMAGE_SORT_BY => "imageSortBy",

@@ -4,16 +4,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", content = "value", rename_all = "camelCase")]
 pub enum Action {
-    RecordSearch(String),
-    RemoveSearch(String),
-    RecordSaveDirectory(String),
     ToggleNotificationApp(String),
     SetNotificationMode(String),
     ClearNotificationApps,
 }
 impl Action {
     pub fn apply(self, prefs: &Prefs) -> anyhow::Result<bool> {
-        let record = matches!(&self, Self::RecordSearch(_));
         let toggle = matches!(&self, Self::ToggleNotificationApp(_));
         if let Self::SetNotificationMode(ref mode) = self {
             anyhow::ensure!(
@@ -22,43 +18,9 @@ impl Action {
             );
         }
         let mut changed = false;
-        prefs.update_user(|entries| {
-            let defaults = UserSettings::default();
+        prefs.update(|entries| {
+            let defaults = Settings::default();
             let (key, value) = match self {
-                Self::RecordSearch(term) | Self::RemoveSearch(term) => {
-                    let mut items: Vec<String> = serde_json::from_value(
-                        entries
-                            .get(keys::RECENT_SEARCHES)
-                            .cloned()
-                            .unwrap_or(defaults.recent_searches),
-                    )
-                    .map_err(PrefsError::Decode)?;
-                    items.retain(|item| !same_term(item, &term));
-                    if record {
-                        items.insert(0, term);
-                        items.truncate(10);
-                    }
-                    (
-                        keys::RECENT_SEARCHES,
-                        serde_json::to_value(items).map_err(PrefsError::Encode)?,
-                    )
-                }
-                Self::RecordSaveDirectory(path) => {
-                    let mut items: Vec<String> = serde_json::from_value(
-                        entries
-                            .get(keys::RECENT_SAVE_DIRS)
-                            .cloned()
-                            .unwrap_or(defaults.recent_save_dirs),
-                    )
-                    .map_err(PrefsError::Decode)?;
-                    items.retain(|item| item != &path);
-                    items.insert(0, path);
-                    items.truncate(5);
-                    (
-                        keys::RECENT_SAVE_DIRS,
-                        serde_json::to_value(items).map_err(PrefsError::Encode)?,
-                    )
-                }
                 Self::ToggleNotificationApp(app) | Self::SetNotificationMode(app) => {
                     let mut filter = entries
                         .get(keys::NOTIFICATION_FILTER)

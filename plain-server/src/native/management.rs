@@ -36,10 +36,16 @@ pub struct NativeWebLoginRequests {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeSystemSettings {
+pub struct NativePrefs {
     #[serde(flatten)]
-    state: plain_rs::prefs::system::SystemState,
+    state: plain_rs::prefs::security::SecurityState,
     app_update_available: bool,
+    update_info: plain_rs::prefs::security::UpdateInfo,
+    auto_check_update: bool,
+    skip_version: String,
+    onboarding_completed: bool,
+    #[serde(flatten)]
+    settings: plain_rs::prefs::settings::Settings,
 }
 
 #[derive(Clone)]
@@ -52,9 +58,9 @@ impl NativeManagement {
         Self { state }
     }
 
-    pub fn system_settings(&self) -> Result<NativeSystemSettings, String> {
+    pub fn prefs_snapshot(&self) -> Result<NativePrefs, String> {
         self.state.native_client_id()?;
-        let state = plain_rs::prefs::system::snapshot(&self.state.prefs)
+        let state = plain_rs::prefs::security::snapshot(&self.state.prefs)
             .map_err(|error| error.to_string())?;
         let version = self
             .state
@@ -62,33 +68,40 @@ impl NativeManagement {
             .startup_property("appVersion")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
-        let app_update_available = plain_rs::updates::available(&state.update_info, version);
-        Ok(NativeSystemSettings {
+        let update_info = crate::services::settings::updates::info(&self.state).map_err(|e| e.to_string())?;
+        let skip_version = self.state.prefs.get_or("skip_version", String::new());
+        let app_update_available = plain_rs::updates::available(&update_info, version, &skip_version);
+        Ok(NativePrefs {
             state,
             app_update_available,
+            update_info,
+            skip_version,
+            auto_check_update: self.state.prefs.get_or("auto_check_update", true),
+            onboarding_completed: self.state.store.get().map_err(|e| e.to_string())?
+                .get_json("onboarding_completed").map_err(|e| e.to_string())?.unwrap_or(false),
+            settings: plain_rs::prefs::settings::snapshot(&self.state.prefs).map_err(|e| e.to_string())?,
         })
     }
 
-    pub fn user_settings(&self) -> Result<plain_rs::prefs::user::UserSettings, String> {
+    pub fn complete_onboarding(&self) -> Result<bool, String> {
         self.state.native_client_id()?;
-        plain_rs::prefs::user::snapshot(&self.state.prefs).map_err(|error| error.to_string())
-    }
-
-    pub fn system_preferences(&self) -> Result<serde_json::Value, String> {
-        self.state.native_client_id()?;
-        Ok(serde_json::Value::Object(
-            plain_rs::prefs::system::public_entries(&self.state.prefs),
-        ))
+        let changed = self.state.store.get().map_err(|e| e.to_string())?
+            .set_json("onboarding_completed", true).map_err(|e| e.to_string())?;
+        if changed {
+            self.state.prefs.notify_changed();
+            let _ = self.state.events.send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
+        }
+        Ok(changed)
     }
 
     pub async fn toggle_notification_app(&self, package_name: String) -> Result<bool, String> {
         self.state.native_client_id()?;
-        crate::services::settings::user_preferences::UserPreferences {
+        crate::services::settings::preferences::Preferences {
             prefs: &self.state.prefs,
             events: Some(&self.state.events),
             server: Some(&self.state),
         }
-        .action(plain_rs::prefs::user::Action::ToggleNotificationApp(
+        .action(plain_rs::prefs::settings::Action::ToggleNotificationApp(
             package_name,
         ))
         .await
@@ -254,7 +267,7 @@ impl NativeManagement {
 
     pub fn verify_adb_token(&self, token: String) -> Result<bool, String> {
         self.state.native_client_id()?;
-        plain_rs::prefs::system::verify_adb_token(&self.state.prefs, &token)
+        plain_rs::prefs::security::verify_adb_token(&self.state.prefs, &token)
             .map_err(|error| error.to_string())
     }
 

@@ -106,7 +106,7 @@ impl Runtime {
     pub(crate) async fn update_hostname(self: &Arc<Self>, state: &ServerState) -> Result<()> {
         let hostname = state
             .prefs
-            .get::<String>(plain_rs::prefs::system::keys::MDNS_HOSTNAME)?
+            .get::<String>(plain_rs::prefs::pref_keys::MDNS_HOSTNAME)?
             .ok_or_else(|| anyhow::anyhow!("Missing hostname"))?;
         {
             let guard = self.session.lock().unwrap();
@@ -196,13 +196,13 @@ impl Runtime {
         }
         let id = state
             .prefs
-            .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+            .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
             .unwrap_or_default();
         ensure!(!id.is_empty(), "Missing client identity");
         let hostname = Arc::new(RwLock::new(
             state
                 .prefs
-                .get::<String>(plain_rs::prefs::system::keys::MDNS_HOSTNAME)?
+                .get::<String>(plain_rs::prefs::pref_keys::MDNS_HOSTNAME)?
                 .filter(|hostname| !hostname.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("Missing mDNS hostname"))?,
         ));

@@ -65,7 +65,7 @@ impl Audio {
             return Ok(self.album_file_id.clone());
         }
         let token = prefs(ctx)
-            .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
+            .get::<String>(plain_rs::prefs::pref_keys::URL_TOKEN)
             .map_err(|error| async_graphql::Error::new(error.to_string()))?
             .ok_or_else(|| async_graphql::Error::new("Missing URL token"))?;
         let id = plain_rs::chat::messages::content::make_file_id(&self.album_art_uri, &token);
@@ -376,7 +376,11 @@ impl AudioQuery {
             })
             .await?;
         let mode = domain::play_mode(prefs(ctx))?;
-        let player = host_call(ctx, "systemAudioPlaybackState", json!({})).await?;
+        let player = if is_local(ctx) {
+            host_call(ctx, "systemAudioPlaybackState", json!({})).await?
+        } else {
+            json!({"isPlaying": false, "positionMs": current.position_ms})
+        };
         Ok(AudioPlayback {
             revision: Long(current.revision),
             media_id: media_id.map(Into::into),
@@ -427,9 +431,9 @@ impl AudioMutation {
         ctx: &Context<'_>,
         mode: MediaPlayMode,
     ) -> async_graphql::Result<bool> {
-        crate::graphql::resolvers::settings::state::update_user(
+        crate::graphql::resolvers::settings::state::update(
             ctx,
-            plain_rs::prefs::user::UserSettingsPatch {
+            plain_rs::prefs::settings::SettingsPatch {
                 audio_play_mode: Some(mode.ordinal()),
                 ..Default::default()
             },
@@ -438,20 +442,15 @@ impl AudioMutation {
         Ok(true)
     }
     async fn clear_audio_queue(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        audio(ctx)?.run(|db, _| domain::clear_queue(db)).await?;
         let prefs = prefs(ctx).clone();
-        audio(ctx)?
-            .run(move |db, engine| {
-                plain_rs::media::audio::commands::command(
-                    db,
-                    &prefs,
-                    engine,
-                    plain_rs::media::audio::commands::Action::Clear,
-                    0,
-                    1.0,
-                )
-            })
-            .await?;
+        let local = is_local(ctx);
+        audio(ctx)?.run(move |db, engine| {
+            domain::clear_queue(db)?;
+            if local {
+                plain_rs::media::audio::commands::clear_engine(db, &prefs, engine)?;
+            }
+            Ok(())
+        }).await?;
         notify_playback(ctx)?;
         Ok(true)
     }
@@ -462,11 +461,12 @@ impl AudioMutation {
         media_id: async_graphql::ID,
     ) -> async_graphql::Result<bool> {
         let prefs = prefs(ctx).clone();
+        let local = is_local(ctx);
         audio(ctx)?
             .run(move |db, engine| {
                 let current = db.audio_current_media_id().as_deref() == Some(media_id.as_str());
                 domain::remove_queued(db, media_id.as_str())?;
-                if current && domain::get_audio_current(db)?.is_empty() {
+                if local && current && domain::get_audio_current(db)?.is_empty() {
                     plain_rs::media::audio::commands::clear_engine(db, &prefs, engine)?;
                 }
                 Ok(())
@@ -726,15 +726,20 @@ fn history(row: PlayHistory) -> async_graphql::Result<AudioPlayHistory> {
     })
 }
 
-fn audio<'a>(ctx: &'a Context<'_>) -> async_graphql::Result<&'a Arc<AudioService>> {
-    ctx.data::<Arc<AudioService>>()
+pub(crate) fn is_local(ctx: &Context<'_>) -> bool {
+    ctx.data_opt::<crate::graphql::executor::RequestOrigin>() == Some(&crate::graphql::executor::RequestOrigin::Local)
+}
+
+pub(crate) fn audio(ctx: &Context<'_>) -> async_graphql::Result<AudioService> {
+    let service = ctx.data::<Arc<AudioService>>()?;
+    Ok(if is_local(ctx) { service.as_ref().clone() } else { service.remote() })
 }
 
 fn library_sort(
     ctx: &Context<'_>,
 ) -> async_graphql::Result<crate::graphql::resolvers::files::types::FileSortBy> {
     crate::graphql::resolvers::files::types::FileSortBy::from_ordinal(
-        plain_rs::prefs::user::snapshot(prefs(ctx))?.audio_sort_by,
+        plain_rs::prefs::settings::snapshot(prefs(ctx))?.audio_sort_by,
     )
 }
 

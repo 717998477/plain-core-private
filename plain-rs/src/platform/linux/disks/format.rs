@@ -138,7 +138,7 @@ fn unmount_mountpoints<F: FnMut(&str)>(mountpoints: &[String], mut on_unmount: F
 }
 
 pub fn format_disk_single_partition<F: FnMut(&str)>(
-    prefs: &std::sync::Arc<crate::prefs::Prefs>,
+    store: &std::sync::Arc<crate::kv::Db>,
     disk_path: &str,
     mut on_unmount: F,
     events: &crate::platform::linux::mounts::automount::EventSink,
@@ -235,7 +235,7 @@ pub fn format_disk_single_partition<F: FnMut(&str)>(
     run_cmd("mkfs.ext4", &["-F", "-L", "plainapp", &part_path])?;
 
     drop(release_auto_mount);
-    crate::platform::linux::mounts::automount::ensure_mounted_usb_volumes(prefs, events)?;
+    crate::platform::linux::mounts::automount::ensure_mounted_usb_volumes(store, events)?;
 
     Ok(())
 }

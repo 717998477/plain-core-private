@@ -19,7 +19,7 @@ async fn execute(state: &ServerState, request: Request) -> anyhow::Result<Value>
     if let Some(permission) = delete_permission(&request.provider) {
         let configured: Vec<String> = state
             .prefs
-            .get_or(plain_rs::prefs::system::keys::API_PERMISSIONS, Vec::new());
+            .get_or(plain_rs::prefs::pref_keys::API_PERMISSIONS, Vec::new());
         anyhow::ensure!(
             configured.iter().any(|name| name == permission),
             "no_permission"

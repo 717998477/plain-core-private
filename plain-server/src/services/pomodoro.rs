@@ -25,7 +25,7 @@ pub struct PomodoroSettings {
 }
 impl Default for PomodoroSettings {
     fn default() -> Self {
-        serde_json::from_value(plain_rs::prefs::user::UserSettings::default().pomodoro_settings)
+        serde_json::from_value(plain_rs::prefs::settings::Settings::default().pomodoro_settings)
             .expect("Default pomodoro settings")
     }
 }
@@ -88,7 +88,7 @@ impl Service {
     }
     pub fn settings(&self) -> anyhow::Result<PomodoroSettings> {
         let settings: PomodoroSettings = serde_json::from_value(
-            plain_rs::prefs::user::snapshot(&self.prefs)?.pomodoro_settings,
+            plain_rs::prefs::settings::snapshot(&self.prefs)?.pomodoro_settings,
         )?;
         anyhow::ensure!(
             (1..=1440).contains(&settings.work_duration_min)

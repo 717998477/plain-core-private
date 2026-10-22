@@ -3,9 +3,9 @@ use super::*;
 #[tokio::test]
 async fn native_part_reports_publish_one_result_and_replay_the_durable_outbox() {
     let directory = tempfile::tempdir().unwrap();
-    let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    let store = Arc::new(plain_rs::kv::LazyDb::new(directory.path().join("fjall")));
     let (events, mut received) = broadcast::channel(16);
-    let runtime = Runtime::new(prefs.clone(), events.clone());
+    let runtime = Runtime::new(store.clone(), events.clone());
     runtime
         .register("send".into(), Some("request".into()), 2)
         .unwrap();
@@ -28,7 +28,7 @@ async fn native_part_reports_publish_one_result_and_replay_the_durable_outbox() 
     );
     runtime.report(report(1)).unwrap();
     assert!(received.try_recv().is_err());
-    let restored = Runtime::new(prefs, events);
+    let restored = Runtime::new(store, events);
     restored.replay().unwrap();
     assert_eq!(received.recv().await.unwrap().payload, event.payload);
     restored.cancel("send").unwrap();

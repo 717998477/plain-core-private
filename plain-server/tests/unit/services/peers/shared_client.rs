@@ -199,7 +199,7 @@ async fn main_share_links_use_root_secret_ports_and_revocation_without_host() {
             plain_rs::utils::base64::base64_encode(&[5; 32]),
         )
         .unwrap();
-    state.prefs.set_user("https_port", 2443).unwrap();
+    state.prefs.set("https_port", 2443).unwrap();
     let path = dir.path().join("file.txt");
     std::fs::write(&path, b"fixture").unwrap();
     let service = plain_rs::files::shares::Service::new(state.db.clone(), state.prefs.clone());
@@ -245,7 +245,7 @@ async fn root_candidates_preserve_foreign_self_unbound_and_deduplicated_endpoint
     assert_eq!(foreign[0].host, "10.0.0.9");
     assert_eq!(foreign[0].port, 8443);
     expected.peer_info.id = "local".into();
-    state.prefs.set_user("https_port", 9999).unwrap();
+    state.prefs.set("https_port", 9999).unwrap();
     let own = candidates(&state, &expected, false).unwrap();
     assert_eq!(own[0].host, "127.0.0.1");
     assert_eq!(own[0].port, 9999);
@@ -253,12 +253,12 @@ async fn root_candidates_preserve_foreign_self_unbound_and_deduplicated_endpoint
         own.iter()
             .any(|link| link.host == "10.0.0.9" && link.port == 8443)
     );
-    state.prefs.set_user("https_port", 0).unwrap();
+    state.prefs.set("https_port", 0).unwrap();
     let unbound = candidates(&state, &expected, false).unwrap();
     assert_eq!(unbound.len(), 1);
     assert_eq!(unbound[0].host, "10.0.0.9");
     assert_eq!(unbound[0].port, 8443);
-    state.prefs.set_user("https_port", 9999).unwrap();
+    state.prefs.set("https_port", 9999).unwrap();
     expected.peer_info.ip = "127.0.0.1".into();
     expected.peer_info.port = 9999;
     assert_eq!(

@@ -128,6 +128,8 @@ pub struct DeviceStatus {
 #[graphql(complex)]
 pub struct App {
     pub client_id: String,
+    /// Explicit read-only exception: authenticated clients need this existing
+    /// file-access key. Generic prefs never expose it or allow writing it.
     pub url_token: String,
     pub http_port: i32,
     pub https_port: i32,
@@ -234,7 +236,7 @@ impl App {
         let grants = self.granted_permissions(ctx).await?;
         let configured: Vec<String> = ctx
             .data::<Arc<plain_rs::prefs::Prefs>>()?
-            .get_or(plain_rs::prefs::system::keys::API_PERMISSIONS, Vec::new());
+            .get_or(plain_rs::prefs::pref_keys::API_PERMISSIONS, Vec::new());
         let local = crate::http::auth::public_gate::is_local(ctx);
         let mut permissions: Vec<_> = grants
             .iter()
@@ -340,8 +342,8 @@ impl DeviceQuery {
     /// port it listens on and the token that authorises it.
     async fn app(&self, ctx: &Context<'_>) -> async_graphql::Result<App> {
         let prefs = ctx.data::<Arc<plain_rs::prefs::Prefs>>()?;
-        let user = plain_rs::prefs::user::snapshot(prefs)?;
-        let system = plain_rs::prefs::system::snapshot(prefs)?;
+        let user = plain_rs::prefs::settings::snapshot(prefs)?;
+        let system = plain_rs::prefs::security::snapshot(prefs)?;
         let (http_port, https_port) = match ctx.data_opt::<crate::assembly::server::ServerState>() {
             Some(state) => state
                 .public_ports()
@@ -462,9 +464,9 @@ impl DeviceMutation {
         ctx: &Context<'_>,
         name: String,
     ) -> async_graphql::Result<bool> {
-        crate::graphql::resolvers::settings::state::update_user(
+        crate::graphql::resolvers::settings::state::update(
             ctx,
-            plain_rs::prefs::user::UserSettingsPatch {
+            plain_rs::prefs::settings::SettingsPatch {
                 device_name: Some(name),
                 ..Default::default()
             },

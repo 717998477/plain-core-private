@@ -57,7 +57,7 @@ impl ServerState {
         &self,
     ) -> Result<(u16, u16, Vec<u8>, Vec<u8>), String> {
         let settings =
-            plain_rs::prefs::user::snapshot(&self.prefs).map_err(|error| error.to_string())?;
+            plain_rs::prefs::settings::snapshot(&self.prefs).map_err(|error| error.to_string())?;
         let http = u16::try_from(settings.http_port).map_err(|error| error.to_string())?;
         let https = u16::try_from(settings.https_port).map_err(|error| error.to_string())?;
         let identity = self

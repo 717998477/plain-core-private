@@ -5,12 +5,11 @@ use std::io::Read;
 async fn export_uses_owned_snapshots_and_preserves_attachment_bytes_without_host_calls() {
     let directory = tempfile::tempdir().unwrap();
     let paths = plain_rs::data_paths::DataPaths::new(directory.path());
-    let prefs = Arc::new(Prefs::load(&paths.system_prefs()).unwrap());
-    prefs.set("backup-test", "system").unwrap();
-    prefs.set_user("backup-test", "user").unwrap();
-    let db = Arc::new(Db::open_with_prefs(&paths.database(), prefs.clone()).unwrap());
+    let prefs = Arc::new(Prefs::load(&paths.prefs()).unwrap());
+    prefs.set("backup-test", "user").unwrap();
+    let db = Arc::new(Db::open(&paths.database()).unwrap());
     db.with_conn(|conn| conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE backup_values (id INTEGER PRIMARY KEY,value TEXT); INSERT INTO backup_values VALUES (1,'committed');").unwrap());
-    let store = Arc::new(LazyDb::new(paths.kv()));
+    let store = Arc::new(LazyDb::from_open(paths.kv(), db.key_values().unwrap()));
     store
         .get()
         .unwrap()
@@ -62,7 +61,7 @@ async fn export_uses_owned_snapshots_and_preserves_attachment_bytes_without_host
     );
     let kv = plain_rs::kv::Db::open(&restored.path().join("files/fjall")).unwrap();
     assert_eq!(kv.get(b"binary").unwrap().unwrap().as_ref(), [0u8, 255, 3]);
-    for (name, expected) in [("system_prefs.json", "system"), ("user_prefs.json", "user")] {
+    for (name, expected) in [("prefs.json", "user")] {
         let mut json = String::new();
         zip.by_name(&format!("files/{name}"))
             .unwrap()
@@ -82,8 +81,8 @@ async fn export_uses_owned_snapshots_and_preserves_attachment_bytes_without_host
 fn cancellation_removes_staging_and_keeps_source_data() {
     let directory = tempfile::tempdir().unwrap();
     let paths = plain_rs::data_paths::DataPaths::new(directory.path());
-    let prefs = Prefs::load(&paths.system_prefs()).unwrap();
-    let db = Db::open_with_prefs(&paths.database(), Arc::new(Prefs::in_memory())).unwrap();
+    let prefs = Prefs::load(&paths.prefs()).unwrap();
+    let db = Db::open(&paths.database()).unwrap();
     let store = LazyDb::new(paths.kv());
     let roots = roots(directory.path(), &directory.path().join("cache"));
     let calls = std::cell::Cell::new(0usize);

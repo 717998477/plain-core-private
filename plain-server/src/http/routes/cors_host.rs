@@ -34,7 +34,7 @@ pub(crate) async fn apply(
                     && origin.port_or_known_default() == authority.port_or_known_default()
             });
         if !same_origin
-            && !state.prefs.get_user_or("allow_any_host", false)
+            && !state.prefs.get_or("allow_any_host", false)
             && !state.build_debug.load(std::sync::atomic::Ordering::Relaxed)
         {
             return StatusCode::FORBIDDEN.into_response();

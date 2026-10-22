@@ -14,9 +14,7 @@ fn setup() -> (tempfile::TempDir, ContentServer, ServerState, Identity) {
     )
     .unwrap();
     let identity = Identity::from(
-        &plain_rs::prefs::system::snapshot(&state.prefs)
-            .unwrap()
-            .update_info,
+        &crate::services::settings::updates::info(&state).unwrap(),
     );
     (dir, core, state, identity)
 }
@@ -74,9 +72,7 @@ async fn complete_stream_is_published_with_identity_and_restored_without_client_
         Path::new(&path).parent().unwrap().parent().unwrap(),
         state.cache.app_updates()
     );
-    let info = plain_rs::prefs::system::snapshot(&state.prefs)
-        .unwrap()
-        .update_info;
+    let info = crate::services::settings::updates::info(&state).unwrap();
     assert_eq!(restored(&state, &info).unwrap(), Some(path.clone()));
     let mut progress = Vec::new();
     while let Ok(event) = events.try_recv() {
@@ -167,9 +163,7 @@ async fn truncated_or_failed_streams_remove_staging_and_never_publish_a_download
             0
         );
         assert!(
-            plain_rs::prefs::system::snapshot(&state.prefs)
-                .unwrap()
-                .update_info
+            crate::services::settings::updates::info(&state).unwrap()
                 .downloaded_apk_path
                 .is_empty()
         );
@@ -275,9 +269,7 @@ async fn changed_release_or_missing_artifact_cannot_be_reported_as_completed() {
         .unwrap();
     assert_ne!(snapshot.status, AppUpdateDownloadStatus::Completed);
     assert!(
-        plain_rs::prefs::system::snapshot(&state.prefs)
-            .unwrap()
-            .update_info
+        crate::services::settings::updates::info(&state).unwrap()
             .downloaded_apk_path
             .is_empty()
     );
@@ -355,15 +347,10 @@ async fn settings_changes_cancel_the_current_transfer_and_clear_its_persisted_ar
     let (cancel, receiver) = watch::channel(false);
     state.update_checks.download.state.lock().unwrap().cancel = Some(cancel);
     updates::update(&state, json!({"downloadedApkPath":"/not-owned/package"})).unwrap();
-    let command = plain_rs::prefs::system::Command::PatchUpdate {
-        patch: serde_json::from_value(json!({"skipVersion":"999.0.0"})).unwrap(),
-    };
-    assert!(updates::apply_settings(&state, command).await.unwrap());
+    assert!(updates::set_setting(&state, "skip_version", json!("999.0.0")).await.unwrap());
     assert!(*receiver.borrow());
     assert!(
-        plain_rs::prefs::system::snapshot(&state.prefs)
-            .unwrap()
-            .update_info
+        crate::services::settings::updates::info(&state).unwrap()
             .downloaded_apk_path
             .is_empty()
     );

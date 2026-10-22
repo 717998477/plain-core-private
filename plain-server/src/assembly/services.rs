@@ -40,9 +40,11 @@ impl Services {
         directory: std::path::PathBuf,
         cache: plain_rs::cache_paths::CachePaths,
     ) -> Self {
-        let store = Arc::new(plain_rs::kv::LazyDb::new(plain_rs::kv::default_db_path(
-            &directory,
-        )));
+        let path = plain_rs::kv::default_db_path(&directory);
+        let store = Arc::new(match db.key_values() {
+            Some(store) => plain_rs::kv::LazyDb::from_open(path, store),
+            None => plain_rs::kv::LazyDb::new(path),
+        });
         let duration_cache = Arc::new(plain_rs::media::duration_cache::DurationCache::with_store(
             store.clone(),
         ));
@@ -102,7 +104,7 @@ impl Services {
             prefs.clone(),
         );
         let sms_sends =
-            crate::services::sms::send_runtime::Runtime::new(prefs.clone(), events.clone());
+            crate::services::sms::send_runtime::Runtime::new(store.clone(), events.clone());
         let logs = Arc::new(crate::services::logs::Logs::new(&directory));
         let remote_cache = Arc::new(crate::services::files::remote_cache::RemoteCache::new(
             cache.root().to_owned(),

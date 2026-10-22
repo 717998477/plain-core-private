@@ -232,15 +232,15 @@ async fn actual_management_socket_authenticates_and_relays_only_decrypted_native
         .unwrap()
         .create_session("Fixture manager".into())
         .unwrap();
-    remote_state.prefs.set_user("http_port", 0).unwrap();
-    remote_state.prefs.set_user("https_port", 0).unwrap();
+    remote_state.prefs.set("http_port", 0).unwrap();
+    remote_state.prefs.set("https_port", 0).unwrap();
     let (_, tls_port) = remote.start_configured_public().await.unwrap();
     let directory = tempfile::tempdir().unwrap();
     let data = directory.path().join("data");
     std::fs::create_dir_all(&data).unwrap();
     let prefs = plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(&data)).unwrap();
     prefs
-        .set(plain_rs::prefs::system::keys::CLIENT_ID, &session.client_id)
+        .set(plain_rs::prefs::pref_keys::CLIENT_ID, &session.client_id)
         .unwrap();
     let manager = crate::assembly::server::ContentServer::open_with_cache(
         &data,
@@ -395,8 +395,8 @@ async fn encrypted_clipboard_sync_seeds_baseline_retries_failed_writes_and_reche
         .unwrap()
         .create_session("Fixture sync".into())
         .unwrap();
-    remote_state.prefs.set_user("http_port", 0).unwrap();
-    remote_state.prefs.set_user("https_port", 0).unwrap();
+    remote_state.prefs.set("http_port", 0).unwrap();
+    remote_state.prefs.set("https_port", 0).unwrap();
     let (_, port) = remote.start_configured_public().await.unwrap();
     let (_directory, manager, state) = fixture().await;
     state.prefs.set("client_id", &session.client_id).unwrap();

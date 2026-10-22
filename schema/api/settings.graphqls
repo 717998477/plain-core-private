@@ -1,19 +1,18 @@
 extend type Mutation {
-	clearNotificationFilterApps: ActionResult!
-	recordRecentSaveDirectory(path: String!): ActionResult!
-	recordRecentSearch(query: String!): ActionResult!
-	removeRecentSearch(query: String!): ActionResult!
-	removeSystemPref(key: String!): ActionResult!
-	removeUserPref(key: String!): Boolean!
-	resetAdbToken: Boolean!
-	resetPassword: Boolean!
-	resetUrlToken: Boolean!
-	setNotificationFilterMode(mode: String!): ActionResult!
-	setSystemPref(key: String!, value: JSON!): ActionResult!
-	setUserPref(key: String!, value: JSON!): Boolean!
+    clearNotificationFilterApps: ActionResult!
+    removePref(key: String!): Boolean!
+    resetAdbToken: Boolean!
+    resetPassword: Boolean!
+    resetUrlToken: Boolean!
+    setNotificationFilterMode(mode: String!): ActionResult!
+    setPref(key: String!, value: JSON!): Boolean!
+    setSavedValue(key: String!, value: JSON!): Boolean!
+    addScanHistory(text: String!): Boolean!
+    removeScanHistory(text: String!): Boolean!
 }
-
 extend type Query {
-	tlsCertificateSignature: [Int!]!
-	userPrefs: JSON!
+    tlsCertificateSignature: [Int!]!
+    prefs: JSON!
+    savedValue(key: String!): JSON!
+    scanHistory: [String!]!
 }

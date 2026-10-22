@@ -1,5 +1,5 @@
 mod command;
-pub mod keys;
+use super::pref_keys as keys;
 mod update;
 pub use command::Command;
 pub use update::{ReleaseInfo, UpdateInfo, UpdatePatch};
@@ -11,16 +11,14 @@ use serde_json::{Map, Value};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SystemState {
+pub struct SecurityState {
     pub password: String,
     pub password_type: i32,
-    pub auth_two_factor: bool,
+    pub login_require_approval: bool,
     pub rotate_url_token_on_restart: bool,
     pub adb_token: String,
-    pub update_info: UpdateInfo,
     pub url_token: String,
     pub api_permissions: Vec<String>,
-    pub onboarding_completed: bool,
     pub client_id: String,
     pub mdns_hostname: String,
     pub signature_public_key: String,
@@ -57,7 +55,7 @@ pub fn random_password(length: usize) -> String {
 }
 
 pub fn bootstrap(prefs: &Prefs) -> Result<()> {
-    prefs.update_system(|map| {
+    prefs.update(|map| {
         ensure(map, CLIENT_ID, crate::short_uuid::short_uuid)?;
         ensure(map, SIGNATURE_KEY_PAIR, || {
             crate::base64_encode(&crate::ed25519_generate().0)
@@ -75,8 +73,8 @@ pub fn bootstrap(prefs: &Prefs) -> Result<()> {
         if !map.contains_key(PASSWORD_TYPE) {
             put(map, PASSWORD_TYPE, 2)?;
         }
-        if !map.contains_key(AUTH_TWO_FACTOR) {
-            put(map, AUTH_TWO_FACTOR, true)?;
+        if !map.contains_key(LOGIN_REQUIRE_APPROVAL) {
+            put(map, LOGIN_REQUIRE_APPROVAL, true)?;
         }
         runtime_defaults(map)?;
         Ok(())
@@ -116,6 +114,8 @@ fn parse_log_level(value: &str) -> anyhow::Result<log::LevelFilter> {
 }
 
 pub fn set_entry(prefs: &Prefs, key: &str, value: Value) -> anyhow::Result<bool> {
+    if key == "auto_check_update" { anyhow::ensure!(value.is_boolean(), "Invalid auto check update setting"); }
+    if key == "skip_version" { anyhow::ensure!(value.is_string(), "Invalid skipped version"); }
     let command = match key {
         PASSWORD => Some(Command::SetPassword {
             password: serde_json::from_value(value.clone())?,
@@ -123,7 +123,7 @@ pub fn set_entry(prefs: &Prefs, key: &str, value: Value) -> anyhow::Result<bool>
         PASSWORD_TYPE => Some(Command::SetPasswordType {
             value: serde_json::from_value(value.clone())?,
         }),
-        AUTH_TWO_FACTOR => Some(Command::SetTwoFactor {
+        LOGIN_REQUIRE_APPROVAL => Some(Command::SetLoginRequireApproval {
             enabled: serde_json::from_value(value.clone())?,
         }),
         ROTATE_URL_TOKEN_ON_RESTART => Some(Command::SetRotateUrlToken {
@@ -132,9 +132,6 @@ pub fn set_entry(prefs: &Prefs, key: &str, value: Value) -> anyhow::Result<bool>
         MDNS_HOSTNAME => Some(Command::SetMdnsHostname {
             hostname: serde_json::from_value(value.clone())?,
         }),
-        UPDATE_INFO => Some(Command::PatchUpdate {
-            patch: serde_json::from_value(value.clone())?,
-        }),
         API_PERMISSIONS if value.is_object() => Some(Command::PatchApiPermissions {
             permissions: serde_json::from_value(value.clone())?,
         }),
@@ -142,11 +139,7 @@ pub fn set_entry(prefs: &Prefs, key: &str, value: Value) -> anyhow::Result<bool>
             permissions: serde_json::from_value(value.clone())?,
         }),
         CLIENT_ID | SIGNATURE_KEY_PAIR | MASTER_SECRET | URL_TOKEN | ADB_TOKEN => {
-            anyhow::bail!("Read-only system preference")
-        }
-        ONBOARDING_COMPLETED => {
-            anyhow::ensure!(value.is_boolean(), "Invalid onboarding state");
-            None
+            anyhow::bail!("Rust-only preference")
         }
         _ => None,
     };
@@ -181,7 +174,7 @@ pub fn remove_entry(prefs: &Prefs, key: &str) -> Result<bool> {
 }
 
 pub fn ensure_signing_keypair(prefs: &Prefs) -> anyhow::Result<Vec<u8>> {
-    prefs.update_system(|map| {
+    prefs.update(|map| {
         ensure(map, SIGNATURE_KEY_PAIR, || {
             crate::base64_encode(&crate::ed25519_generate().0)
         })
@@ -201,27 +194,25 @@ pub fn signing_keypair(prefs: &Prefs) -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub fn snapshot(prefs: &Prefs) -> anyhow::Result<SystemState> {
+pub fn snapshot(prefs: &Prefs) -> anyhow::Result<SecurityState> {
     let map: Map<String, Value> = prefs.entries().into_iter().collect();
     let keypair = signing_keypair(prefs)?;
-    Ok(SystemState {
+    Ok(SecurityState {
         password: read(&map, PASSWORD)?,
         password_type: map
             .get(PASSWORD_TYPE)
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?
             .unwrap_or(2),
-        auth_two_factor: map
-            .get(AUTH_TWO_FACTOR)
+        login_require_approval: map
+            .get(LOGIN_REQUIRE_APPROVAL)
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?
             .unwrap_or(true),
         rotate_url_token_on_restart: read(&map, ROTATE_URL_TOKEN_ON_RESTART)?,
         adb_token: read(&map, ADB_TOKEN)?,
-        update_info: read(&map, UPDATE_INFO)?,
         url_token: read(&map, URL_TOKEN)?,
         api_permissions: read(&map, API_PERMISSIONS)?,
-        onboarding_completed: read(&map, ONBOARDING_COMPLETED)?,
         client_id: read(&map, CLIENT_ID)?,
         mdns_hostname: read(&map, MDNS_HOSTNAME)?,
         signature_public_key: crate::base64_encode(
@@ -269,15 +260,6 @@ pub(crate) fn generate_mdns_hostname() -> String {
         .map(|_| alphabet[rng.gen_range(0..alphabet.len())] as char)
         .collect();
     format!("{label}.local")
-}
-
-/// Diagnostic entries exclude secrets that must stay in the core.
-pub fn public_entries(prefs: &Prefs) -> Map<String, Value> {
-    prefs
-        .entries()
-        .into_iter()
-        .filter(|(key, _)| ![SIGNATURE_KEY_PAIR, MASTER_SECRET].contains(&key.as_str()))
-        .collect()
 }
 
 pub fn verify_adb_token(prefs: &Prefs, token: &str) -> Result<bool> {

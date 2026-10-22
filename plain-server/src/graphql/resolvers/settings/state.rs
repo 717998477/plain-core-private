@@ -1,7 +1,7 @@
 use crate::graphql::types::ActionResult;
-use crate::services::settings::system_preferences::SystemPreferences;
-use crate::services::settings::user_preferences::UserPreferences;
-use async_graphql::{Context, Json, Object, Result};
+use crate::services::settings::security_preferences::SecurityPreferences;
+use crate::services::settings::preferences::Preferences;
+use async_graphql::{Context, Object, Result};
 use plain_rs::{events::WsEvent, prefs::Prefs};
 use serde_json::Value;
 use std::sync::Arc;
@@ -13,92 +13,42 @@ fn prefs<'a>(ctx: &'a Context<'_>) -> Result<&'a Arc<Prefs>> {
 fn events<'a>(ctx: &'a Context<'_>) -> Option<&'a broadcast::Sender<WsEvent>> {
     ctx.data_opt::<broadcast::Sender<WsEvent>>()
 }
-fn notify(ctx: &Context<'_>, changed: bool) {
-    if changed {
-        if let Some(events) = events(ctx) {
-            let _ = events.send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
-        }
-    }
-}
 #[derive(Default)]
 pub struct PreferencesMutation;
 #[Object]
 impl PreferencesMutation {
-    async fn set_system_pref(
-        &self,
-        ctx: &Context<'_>,
-        key: String,
-        value: Json<Value>,
-    ) -> Result<ActionResult> {
-        validate_key(&key)?;
-        let changed = system_preferences(ctx)?.set(&key, value.0).await?;
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
-    }
-    async fn remove_system_pref(&self, ctx: &Context<'_>, key: String) -> Result<ActionResult> {
-        validate_dynamic_key(&key)?;
-        let changed = plain_rs::prefs::system::remove_entry(prefs(ctx)?, &key)?;
-        notify(ctx, changed);
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
-    }
     async fn reset_password(&self, ctx: &Context<'_>) -> Result<bool> {
-        system_preferences(ctx)?.reset_password()?;
+        super::public::require_local(ctx)?;
+        security_preferences(ctx)?.reset_password()?;
         Ok(true)
     }
     async fn reset_url_token(&self, ctx: &Context<'_>) -> Result<bool> {
-        system_preferences(ctx)?.reset_url_token()?;
+        super::public::require_local(ctx)?;
+        security_preferences(ctx)?.reset_url_token()?;
         Ok(true)
     }
     async fn reset_adb_token(&self, ctx: &Context<'_>) -> Result<bool> {
-        system_preferences(ctx)?.reset_adb_token()?;
+        super::public::require_local(ctx)?;
+        security_preferences(ctx)?.reset_adb_token()?;
         Ok(true)
-    }
-    async fn record_recent_search(&self, ctx: &Context<'_>, query: String) -> Result<ActionResult> {
-        let changed = user_preferences(ctx)?
-            .action(plain_rs::prefs::user::Action::RecordSearch(query))
-            .await?;
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
-    }
-    async fn remove_recent_search(&self, ctx: &Context<'_>, query: String) -> Result<ActionResult> {
-        let changed = user_preferences(ctx)?
-            .action(plain_rs::prefs::user::Action::RemoveSearch(query))
-            .await?;
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
-    }
-    async fn record_recent_save_directory(
-        &self,
-        ctx: &Context<'_>,
-        path: String,
-    ) -> Result<ActionResult> {
-        let changed = user_preferences(ctx)?
-            .action(plain_rs::prefs::user::Action::RecordSaveDirectory(path))
-            .await?;
-        Ok(ActionResult {
-            affected_count: i32::from(changed),
-        })
     }
     async fn set_notification_filter_mode(
         &self,
         ctx: &Context<'_>,
         mode: String,
     ) -> Result<ActionResult> {
-        let changed = user_preferences(ctx)?
-            .action(plain_rs::prefs::user::Action::SetNotificationMode(mode))
+        super::public::require_local(ctx)?;
+        let changed = preferences(ctx)?
+            .action(plain_rs::prefs::settings::Action::SetNotificationMode(mode))
             .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
         })
     }
     async fn clear_notification_filter_apps(&self, ctx: &Context<'_>) -> Result<ActionResult> {
-        let changed = user_preferences(ctx)?
-            .action(plain_rs::prefs::user::Action::ClearNotificationApps)
+        super::public::require_local(ctx)?;
+        let changed = preferences(ctx)?
+            .action(plain_rs::prefs::settings::Action::ClearNotificationApps)
             .await?;
         Ok(ActionResult {
             affected_count: i32::from(changed),
@@ -109,50 +59,12 @@ impl PreferencesMutation {
 #[path = "../../../../tests/unit/graphql/resolvers/settings/state.rs"]
 mod tests;
 
-fn validate_key(key: &str) -> Result<()> {
-    if key.is_empty()
-        || key.len() > 128
-        || !key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
-    {
-        return Err(async_graphql::Error::new("invalid_pref_key"));
-    }
-    Ok(())
-}
-
-fn validate_dynamic_key(key: &str) -> Result<()> {
-    validate_key(key)?;
-    if [
-        plain_rs::prefs::system::keys::PASSWORD,
-        plain_rs::prefs::system::keys::PASSWORD_TYPE,
-        plain_rs::prefs::system::keys::AUTH_TWO_FACTOR,
-        plain_rs::prefs::system::keys::ROTATE_URL_TOKEN_ON_RESTART,
-        plain_rs::prefs::system::keys::ADB_TOKEN,
-        plain_rs::prefs::system::keys::URL_TOKEN,
-        plain_rs::prefs::system::keys::MASTER_SECRET,
-        plain_rs::prefs::system::keys::UPDATE_INFO,
-        plain_rs::prefs::system::keys::API_PERMISSIONS,
-        plain_rs::prefs::system::keys::CLIENT_ID,
-        plain_rs::prefs::system::keys::MDNS_HOSTNAME,
-        plain_rs::prefs::system::keys::SIGNATURE_KEY_PAIR,
-        plain_rs::prefs::system::keys::ONBOARDING_COMPLETED,
-    ]
-    .contains(&key)
-    {
-        return Err(async_graphql::Error::new(
-            "Use the system settings operation",
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(all(test, feature = "core", feature = "http_transport"))]
 #[path = "../../../../tests/unit/graphql/resolvers/settings/http.rs"]
 mod http_tests;
 
-pub(crate) fn user_preferences<'a>(ctx: &'a Context<'_>) -> Result<UserPreferences<'a>> {
-    Ok(UserPreferences {
+pub(crate) fn preferences<'a>(ctx: &'a Context<'_>) -> Result<Preferences<'a>> {
+    Ok(Preferences {
         prefs: prefs(ctx)?,
         events: events(ctx),
         #[cfg(feature = "core")]
@@ -160,18 +72,51 @@ pub(crate) fn user_preferences<'a>(ctx: &'a Context<'_>) -> Result<UserPreferenc
     })
 }
 
-pub(crate) async fn update_user(
+pub(crate) async fn update(
     ctx: &Context<'_>,
-    patch: plain_rs::prefs::user::UserSettingsPatch,
+    patch: plain_rs::prefs::settings::SettingsPatch,
 ) -> Result<bool> {
-    Ok(user_preferences(ctx)?.patch(patch).await?)
+    let fields = serde_json::to_value(&patch)?;
+    for (field, value) in fields.as_object().unwrap() {
+        if value.is_null() { continue; }
+        let key = match field.as_str() {
+            "feedAutoRefreshIntervalSec" => "feed_auto_refresh_interval".to_owned(),
+            "packageSortBy" => "pkg_sort_by".to_owned(),
+            _ => field.chars().flat_map(|c| if c.is_ascii_uppercase() { vec!['_', c.to_ascii_lowercase()] } else { vec![c] }).collect(),
+        };
+        super::public::authorize(ctx, &key)?;
+    }
+    Ok(preferences(ctx)?.patch(patch).await?)
 }
 
-fn system_preferences<'a>(ctx: &'a Context<'_>) -> Result<SystemPreferences<'a>> {
-    Ok(SystemPreferences {
+fn security_preferences<'a>(ctx: &'a Context<'_>) -> Result<SecurityPreferences<'a>> {
+    Ok(SecurityPreferences {
         prefs: prefs(ctx)?,
         events: events(ctx),
         #[cfg(feature = "core")]
         server: ctx.data_opt::<crate::assembly::server::ServerState>(),
     })
+}
+
+pub(crate) async fn set_pref(ctx: &Context<'_>, key: &str, value: Value) -> Result<bool> {
+    super::public::authorize(ctx, key)?;
+    if key == "ai_image_search_model" && !matches!(value.as_str(), Some("default" | "imported")) {
+        return Err(async_graphql::Error::new("Unknown image search model"));
+    }
+    if security_key(key) {
+        Ok(security_preferences(ctx)?.set(key, value).await?)
+    } else {
+        Ok(preferences(ctx)?.set(key, value).await?)
+    }
+}
+
+fn security_key(key: &str) -> bool {
+    matches!(key, "password" | "password_type" | "login_require_approval" | "rotate_url_token_on_restart" | "api_permissions" | "mdns_hostname" | "dev_token" | "log_level" | "auto_check_update" | "skip_version")
+}
+pub(crate) async fn remove_pref(ctx: &Context<'_>, key: &str) -> Result<bool> {
+    if security_key(key) {
+        Ok(security_preferences(ctx)?.remove(key).await?)
+    } else {
+        Ok(preferences(ctx)?.remove(key).await?)
+    }
 }

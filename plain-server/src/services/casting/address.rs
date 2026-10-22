@@ -2,7 +2,7 @@ use crate::assembly::server::ServerState;
 
 pub(crate) async fn device_name(state: &ServerState) -> Result<String, String> {
     let settings =
-        plain_rs::prefs::user::snapshot(&state.prefs).map_err(|error| error.to_string())?;
+        plain_rs::prefs::settings::snapshot(&state.prefs).map_err(|error| error.to_string())?;
     if !settings.device_name.is_empty() {
         return Ok(settings.device_name);
     }
@@ -26,7 +26,7 @@ pub(crate) async fn http_address(state: &ServerState) -> Result<(String, String)
     let port = match state.public_ports().await {
         Some((http, _)) => http,
         None => u16::try_from(
-            plain_rs::prefs::user::snapshot(&state.prefs)
+            plain_rs::prefs::settings::snapshot(&state.prefs)
                 .map_err(|error| error.to_string())?
                 .http_port,
         )

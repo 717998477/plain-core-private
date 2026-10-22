@@ -10,8 +10,8 @@ async fn native_cache_accounting_and_clear_preserve_application_data_without_hos
     cache.initialize(directory.path()).unwrap();
     let persistent = [
         paths.database(),
-        paths.system_prefs(),
-        paths.user_prefs(),
+        paths.prefs(),
+        paths.prefs(),
         paths.note_images().join("note.png"),
         paths.audio().join("sound.mp3"),
         paths.tls_identity(),

@@ -3,14 +3,14 @@ fn fixture() -> (tempfile::TempDir, Arc<Service>) {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Db::open(&dir.path().join("db")).unwrap());
     let prefs =
-        Arc::new(Prefs::load_pair(&dir.path().join("system"), &dir.path().join("user")).unwrap());
+        Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
     prefs
         .set(
             "master_secret",
             crate::utils::base64::base64_encode(&[7; 32]),
         )
         .unwrap();
-    prefs.set_user("service", true).unwrap();
+    prefs.set("background_service_enabled", true).unwrap();
     (dir, Service::new(db, prefs))
 }
 fn create(service: &Service, paths: Vec<PathBuf>) -> ShareRow {
@@ -140,9 +140,9 @@ fn fresh_auth_revocation_expiry_and_disabled_service() {
             .len(),
         32
     );
-    s.prefs.set_user("service", false).unwrap();
+    s.prefs.set("background_service_enabled", false).unwrap();
     assert!(s.active(&row.id, true).unwrap().is_none());
-    s.prefs.set_user("service", true).unwrap();
+    s.prefs.set("background_service_enabled", true).unwrap();
     s.update(
         &row.id,
         "expired",

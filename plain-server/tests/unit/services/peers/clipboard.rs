@@ -42,8 +42,8 @@ async fn fixture() -> (
         .unwrap()
         .create_session("Clipboard send fixture".into())
         .unwrap();
-    remote_state.prefs.set_user("http_port", 0).unwrap();
-    remote_state.prefs.set_user("https_port", 0).unwrap();
+    remote_state.prefs.set("http_port", 0).unwrap();
+    remote_state.prefs.set("https_port", 0).unwrap();
     let (_, port) = remote.start_configured_public().await.unwrap();
     let local = ContentServer::open_with_cache(
         &directory.path().join("local/data"),

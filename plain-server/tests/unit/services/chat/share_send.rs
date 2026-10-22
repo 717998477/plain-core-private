@@ -238,7 +238,7 @@ async fn a_committed_folder_share_survives_a_later_delivery_error() {
     state
         .prefs
         .set(
-            plain_rs::prefs::system::keys::SIGNATURE_KEY_PAIR,
+            plain_rs::prefs::pref_keys::SIGNATURE_KEY_PAIR,
             "invalid signing fixture",
         )
         .unwrap();

@@ -1,7 +1,7 @@
 use super::*;
 fn fixture() -> (tempfile::TempDir, Prefs) {
     let dir = tempfile::tempdir().unwrap();
-    let prefs = Prefs::load(&dir.path().join("system_prefs.json")).unwrap();
+    let prefs = Prefs::load(&dir.path().join("prefs.json")).unwrap();
     (dir, prefs)
 }
 #[test]
@@ -12,12 +12,12 @@ fn defaults_are_complete_and_partial_patch_does_not_reset_other_settings() {
     assert!(settings.keep_awake);
     assert!(settings.desktop_access);
     assert_eq!(
-        settings.home_features,
+        settings.app_home_features,
         "IMAGES|VIDEOS|AUDIO|DOCS|FILES|NOTES|FEEDS"
     );
     patch(
         &prefs,
-        UserSettingsPatch {
+        SettingsPatch {
             editor_font_size: Some(20),
             ..Default::default()
         },
@@ -25,7 +25,7 @@ fn defaults_are_complete_and_partial_patch_does_not_reset_other_settings() {
     .unwrap();
     patch(
         &prefs,
-        UserSettingsPatch {
+        SettingsPatch {
             keep_awake: Some(false),
             ..Default::default()
         },
@@ -35,79 +35,34 @@ fn defaults_are_complete_and_partial_patch_does_not_reset_other_settings() {
     assert_eq!(result.editor_font_size, 20);
     assert!(!result.keep_awake);
 }
-#[test]
-fn recent_lists_deduplicate_and_enforce_their_limits() {
-    let (_dir, prefs) = fixture();
-    for i in 0..12 {
-        Action::RecordSearch(format!("term{i}"))
-            .apply(&prefs)
-            .unwrap();
-    }
-    Action::RecordSearch("TERM5".into()).apply(&prefs).unwrap();
-    let recent = snapshot(&prefs).unwrap().recent_searches;
-    assert_eq!(recent.as_array().unwrap().len(), 10);
-    assert_eq!(recent[0], "TERM5");
-    assert_eq!(
-        recent
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|v| v.as_str().unwrap().eq_ignore_ascii_case("term5"))
-            .count(),
-        1
-    );
-    for i in 0..7 {
-        Action::RecordSaveDirectory(format!("dir{i}"))
-            .apply(&prefs)
-            .unwrap();
-    }
-    Action::RecordSaveDirectory("dir3".into())
-        .apply(&prefs)
-        .unwrap();
-    assert_eq!(
-        snapshot(&prefs)
-            .unwrap()
-            .recent_save_dirs
-            .as_array()
-            .unwrap()
-            .len(),
-        5
-    );
-    set_entry(&prefs, keys::RECENT_SEARCHES, serde_json::json!([]))
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        snapshot(&prefs).unwrap().recent_searches,
-        serde_json::json!([])
-    );
-}
+
 #[test]
 fn invalid_patch_and_failed_write_leave_store_unchanged() {
     let (dir, prefs) = fixture();
-    let before = prefs.user_entries();
+    let before = prefs.entries();
     assert!(
         patch(
             &prefs,
-            UserSettingsPatch {
+            SettingsPatch {
                 http_port: Some(70000),
                 ..Default::default()
             }
         )
         .is_err()
     );
-    assert_eq!(before, prefs.user_entries());
-    std::fs::create_dir(dir.path().join("user_prefs.json.tmp")).unwrap();
+    assert_eq!(before, prefs.entries());
+    std::fs::create_dir(dir.path().join("prefs.json.tmp")).unwrap();
     assert!(
         patch(
             &prefs,
-            UserSettingsPatch {
+            SettingsPatch {
                 keep_awake: Some(false),
                 ..Default::default()
             }
         )
         .is_err()
     );
-    assert_eq!(before, prefs.user_entries());
+    assert_eq!(before, prefs.entries());
 }
 #[test]
 fn notification_actions_are_atomic_and_reject_invalid_modes() {
@@ -147,74 +102,37 @@ fn notification_actions_are_atomic_and_reject_invalid_modes() {
 #[test]
 fn structured_values_reject_unusable_shapes_without_writing() {
     let (_dir, prefs) = fixture();
-    let before = prefs.user_entries();
+    let before = prefs.entries();
     for input in [
-        UserSettingsPatch {
+        SettingsPatch {
             notification_filter: Some(serde_json::json!({"mode":"other","apps":[]})),
             ..Default::default()
         },
-        UserSettingsPatch {
+        SettingsPatch {
             screen_mirror_quality: Some(serde_json::json!({"mode":"HD","resolution":0})),
             ..Default::default()
         },
-        UserSettingsPatch {
+        SettingsPatch {
             pomodoro_settings: Some(serde_json::json!({})),
-            ..Default::default()
-        },
-        UserSettingsPatch {
-            recent_searches: Some(serde_json::json!([1])),
-            ..Default::default()
-        },
-        UserSettingsPatch {
-            video_playlist: Some(serde_json::json!([{"path":"video"}])),
             ..Default::default()
         },
     ] {
         assert!(patch(&prefs, input).is_err());
-        assert_eq!(before, prefs.user_entries());
+        assert_eq!(before, prefs.entries());
     }
 }
 
-#[test]
-fn recent_searches_keep_simple_unicode_case_matching() {
-    let (_dir, prefs) = fixture();
-    for (first, second) in [("İ", "i"), ("ς", "σ"), ("ß", "ẞ")] {
-        set_entry(&prefs, keys::RECENT_SEARCHES, serde_json::json!([]))
-            .unwrap()
-            .unwrap();
-        Action::RecordSearch(first.into()).apply(&prefs).unwrap();
-        Action::RecordSearch(second.into()).apply(&prefs).unwrap();
-        assert_eq!(
-            snapshot(&prefs).unwrap().recent_searches,
-            serde_json::json!([second])
-        );
-    }
-    set_entry(&prefs, keys::RECENT_SEARCHES, serde_json::json!([]))
-        .unwrap()
-        .unwrap();
-    Action::RecordSearch("ß".into()).apply(&prefs).unwrap();
-    Action::RecordSearch("s".into()).apply(&prefs).unwrap();
-    assert_eq!(
-        snapshot(&prefs)
-            .unwrap()
-            .recent_searches
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-}
 
 #[test]
-fn listener_ports_are_owned_by_user_settings_and_ignore_system_entries() {
+fn listener_ports_use_the_single_preferences_store() {
     let (_directory, prefs) = fixture();
     prefs.set("http_port", 9090).unwrap();
     prefs.set("https_port", 9443).unwrap();
     let initial = snapshot(&prefs).unwrap();
-    assert_eq!((initial.http_port, initial.https_port), (8080, 8443));
+    assert_eq!((initial.http_port, initial.https_port), (9090, 9443));
     patch(
         &prefs,
-        UserSettingsPatch {
+        SettingsPatch {
             http_port: Some(8180),
             https_port: Some(8543),
             ..Default::default()
@@ -223,6 +141,6 @@ fn listener_ports_are_owned_by_user_settings_and_ignore_system_entries() {
     .unwrap();
     let configured = snapshot(&prefs).unwrap();
     assert_eq!((configured.http_port, configured.https_port), (8180, 8543));
-    assert_eq!(prefs.get::<i32>("http_port").unwrap(), Some(9090));
-    assert_eq!(prefs.get::<i32>("https_port").unwrap(), Some(9443));
+    assert_eq!(prefs.get::<i32>("http_port").unwrap(), Some(8180));
+    assert_eq!(prefs.get::<i32>("https_port").unwrap(), Some(8543));
 }

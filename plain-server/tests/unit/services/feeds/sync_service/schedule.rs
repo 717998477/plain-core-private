@@ -14,7 +14,7 @@ async fn database_contention_yields_before_waiting_for_feed_schedule_rows() {
         });
     });
     ready.recv().unwrap();
-    let settings = UserSettings::default();
+    let settings = Settings::default();
     let mut read = Box::pin(scheduled_feeds(db, &settings, 0));
     let yielded =
         std::future::poll_fn(|context| Poll::Ready(read.as_mut().poll(context).is_pending())).await;
@@ -44,7 +44,7 @@ fn feed(last: Option<&str>) -> FeedRow {
 }
 #[test]
 fn restart_enqueues_one_current_refresh_instead_of_replaying_missed_periods() {
-    let settings = UserSettings {
+    let settings = Settings {
         feed_auto_refresh_interval: 3600,
         ..Default::default()
     };
@@ -66,7 +66,7 @@ fn restart_enqueues_one_current_refresh_instead_of_replaying_missed_periods() {
 }
 #[test]
 fn disabled_automatic_refresh_produces_no_tasks_or_system_wake() {
-    let settings = UserSettings {
+    let settings = Settings {
         feed_auto_refresh: false,
         ..Default::default()
     };

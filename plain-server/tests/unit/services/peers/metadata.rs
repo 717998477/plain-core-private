@@ -164,8 +164,8 @@ async fn encrypted_app_observations_work_without_notification_support_and_cannot
     let remote_state = remote.runtime_state();
     remote_state
         .prefs
-        .set_user(
-            plain_rs::prefs::user::keys::DEVICE_NAME,
+        .set(
+            plain_rs::prefs::pref_keys::DEVICE_NAME,
             "Authenticated name",
         )
         .unwrap();
@@ -174,8 +174,8 @@ async fn encrypted_app_observations_work_without_notification_support_and_cannot
         .unwrap()
         .create_session("Fixture metadata".into())
         .unwrap();
-    remote_state.prefs.set_user("http_port", 0).unwrap();
-    remote_state.prefs.set_user("https_port", 0).unwrap();
+    remote_state.prefs.set("http_port", 0).unwrap();
+    remote_state.prefs.set("https_port", 0).unwrap();
     let (_, port) = remote.start_configured_public().await.unwrap();
     let (generation, mut requests) = remote_state.host.connect();
     let hold = Arc::new(AtomicBool::new(true));

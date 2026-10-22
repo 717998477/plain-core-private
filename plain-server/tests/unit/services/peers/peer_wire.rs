@@ -14,7 +14,7 @@ fn signing_current_peer_and_channel_keys_and_authenticated_crypto_roundtrip() {
             .unwrap()
             .as_nanos()
     ));
-    let prefs = Prefs::load(&dir.join("system_prefs.json")).unwrap();
+    let prefs = Prefs::load(&dir.join("prefs.json")).unwrap();
     let (key, public) = ed25519_generate();
     prefs
         .set("signature_key_pair", base64_encode(&key))

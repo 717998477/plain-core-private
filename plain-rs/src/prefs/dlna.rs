@@ -10,11 +10,11 @@ const SEP: char = '|';
 
 /// Whether the DLNA receiver is enabled in host preferences.
 pub fn enabled(prefs: &Prefs) -> bool {
-    prefs.get_user_or("dlna", false)
+    prefs.get_or("dlna", false)
 }
 
 pub fn set_enabled(prefs: &Prefs, enabled: bool) -> Result<bool, crate::prefs::PrefsError> {
-    prefs.set_user("dlna", enabled)
+    prefs.set("dlna", enabled)
 }
 
 /// Decode an `ip|name` sender entry persisted by the allowed/denied
@@ -28,7 +28,7 @@ pub fn decode_sender_entry(entry: &str) -> (String, String) {
 
 /// The `ip|name` sender list persisted under `key`.
 pub fn senders(prefs: &Prefs, key: &str) -> Vec<String> {
-    prefs.get_user_or::<Vec<String>>(key, Vec::new())
+    prefs.get_or::<Vec<String>>(key, Vec::new())
 }
 
 /// Mirrors plain-app's `containsIp`.
@@ -37,7 +37,7 @@ pub fn senders_contain_ip(entries: &[String], ip: &str) -> bool {
 }
 
 fn set_sender_list(prefs: &Prefs, key: &str, entries: &[String]) {
-    let _ = prefs.set_user(key, entries);
+    let _ = prefs.set(key, entries);
 }
 
 /// Replace any existing entry for `ip` (any previous name) then add

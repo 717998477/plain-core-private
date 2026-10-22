@@ -3,7 +3,7 @@ use crate::db::Db;
 use crate::error::{DomainError, DomainResult};
 use std::sync::{Arc, Mutex};
 
-const CURRENT_PREF: &str = "audio_current_media_id";
+
 
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -57,20 +57,25 @@ impl State {
 pub(crate) struct Runtime {
     state: Mutex<State>,
     restored: Mutex<bool>,
-    prefs: Arc<crate::prefs::Prefs>,
+    store: Option<Arc<crate::kv::Db>>,
+    key: &'static str,
 }
 
 impl Runtime {
-    pub fn new(prefs: Arc<crate::prefs::Prefs>) -> DomainResult<Self> {
+    pub fn new(store: Option<Arc<crate::kv::Db>>, key: &'static str) -> DomainResult<Self> {
         let mut state = State::new(String::new());
-        state.current_media_id = prefs
-            .get::<String>(CURRENT_PREF)
-            .map_err(|error| DomainError::Other(error.to_string()))?;
-        Ok(Self {
-            state: Mutex::new(state),
-            restored: Mutex::new(false),
-            prefs,
-        })
+        state.current_media_id = match &store {
+            Some(store) => store.get(key)
+                .map_err(|e| DomainError::Other(e.to_string()))?
+                .map(|value| String::from_utf8(value.to_vec()))
+                .transpose().map_err(|e| DomainError::Other(e.to_string()))?,
+            None => None,
+        };
+        Ok(Self { state: Mutex::new(state), restored: Mutex::new(false), store, key })
+    }
+
+    pub fn key_values(&self) -> Option<Arc<crate::kv::Db>> {
+        self.store.clone()
     }
 
     pub fn restore_needed(&self) -> bool {
@@ -111,30 +116,15 @@ impl Runtime {
         let result = db.with_conn(|connection| -> DomainResult<T> {
             let transaction = connection.unchecked_transaction()?;
             let result = operation(&transaction, &mut next)?;
-            let previous = state.current_media_id.clone();
-            let stored = next.current_media_id.clone();
-            let saved = self
-                .prefs
-                .get::<String>(CURRENT_PREF)
-                .map_err(|error| DomainError::Other(error.to_string()))?;
-            if stored != previous {
-                match &stored {
-                    Some(id) => self.prefs.set(CURRENT_PREF, id),
-                    None => self.prefs.remove(CURRENT_PREF),
+            transaction.commit()?;
+            if next.current_media_id != state.current_media_id {
+                if let Some(store) = &self.store {
+                    match &next.current_media_id {
+                        Some(id) => store.insert(self.key, id.as_bytes()),
+                        None => store.remove(self.key),
+                    }.map_err(|e| DomainError::Other(e.to_string()))?;
+                    store.flush().map_err(|e| DomainError::Other(e.to_string()))?;
                 }
-                .map_err(|error| DomainError::Other(error.to_string()))?;
-            }
-            if let Err(error) = transaction.commit() {
-                if stored != previous {
-                    match saved {
-                        Some(saved) => self.prefs.set(CURRENT_PREF, &saved),
-                        None => self.prefs.remove(CURRENT_PREF),
-                    }
-                    .map_err(|restore| {
-                        DomainError::Other(format!("{error}; restore queue preferences: {restore}"))
-                    })?;
-                }
-                return Err(error.into());
             }
             Ok(result)
         })?;

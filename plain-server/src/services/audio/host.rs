@@ -8,7 +8,9 @@ use std::sync::{
 };
 use tokio::sync::{Mutex, Semaphore};
 
+#[derive(Clone)]
 pub struct Audio {
+    local: bool,
     db: Arc<Db>,
     host: Arc<Host>,
     lock: Arc<Mutex<()>>,
@@ -30,6 +32,7 @@ impl Audio {
         cache: std::path::PathBuf,
     ) -> Self {
         Self {
+            local: true,
             db,
             host,
             lock: Arc::new(Mutex::new(())),
@@ -39,6 +42,10 @@ impl Audio {
             cache,
         }
     }
+    pub fn remote(&self) -> Self {
+        Self { local: false, db: Arc::new(self.db.remote_audio()), ..self.clone() }
+    }
+
     pub async fn run<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&Db, &mut HostLibrary) -> DomainResult<T> + Send + 'static,
@@ -97,6 +104,7 @@ impl Audio {
             self.cache.clone(),
         );
         let host = self.host.clone();
+        let local = self.local;
         let restored_host = self.restored_host.clone();
         tokio::task::spawn_blocking(move || {
             let generation = host.generation();
@@ -108,7 +116,7 @@ impl Audio {
                 Preparation::Current => library.restore_current()?,
                 Preparation::None => {}
             }
-            if uses_playback && let Some(generation) = generation {
+            if local && uses_playback && let Some(generation) = generation {
                 if !host.is_current(generation) {
                     return Err(plain_rs::error::DomainError::Other(
                         "host disconnected".into(),

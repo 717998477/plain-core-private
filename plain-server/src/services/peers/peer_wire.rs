@@ -63,7 +63,7 @@ pub(crate) fn prepare(db: &Db, prefs: &Prefs, id: &str, operation: Operation) ->
     })
 }
 pub(crate) fn signing_keypair(prefs: &Prefs) -> Result<Vec<u8>> {
-    plain_rs::prefs::system::signing_keypair(prefs)
+    plain_rs::prefs::security::signing_keypair(prefs)
 }
 #[cfg(test)]
 #[path = "../../../tests/unit/services/peers/peer_wire.rs"]

@@ -67,7 +67,7 @@ async fn subscriptions_reuse_unchanged_parameters_and_refresh_live_key_role_and_
     peer.port = Some(5443);
     peers::save(&state.db, &[peer], SaveMode::Update).unwrap();
     state.prefs.set("client_id", "z-local").unwrap();
-    state.prefs.set_user("https_port", 6443).unwrap();
+    state.prefs.set("https_port", 6443).unwrap();
     runtime.refresh(&state).await.unwrap();
     assert_eq!(messages.lock().unwrap().len(), 2);
     assert_eq!(

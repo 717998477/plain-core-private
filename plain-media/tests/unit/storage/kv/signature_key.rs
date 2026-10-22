@@ -31,7 +31,7 @@ fn persisted_as_base64_keypair_like_plain_desktop() {
     // The preference is the base64 of the 64-byte keypair — readable on
     // all shells share the core storage shape.
     let stored = prefs
-        .get::<String>(plain_rs::prefs::system::keys::SIGNATURE_KEY_PAIR)
+        .get::<String>(plain_rs::prefs::pref_keys::SIGNATURE_KEY_PAIR)
         .unwrap()
         .expect("keypair pref written");
     let bytes = plain_rs::utils::base64::base64_decode_checked(&stored).unwrap();
@@ -54,12 +54,12 @@ fn corrupted_identity_is_refused_without_replacement() {
     let (_dir, prefs) = test_prefs("corrupt");
     SignatureKey::new(&prefs).ensure().unwrap();
     prefs
-        .set(plain_rs::prefs::system::keys::SIGNATURE_KEY_PAIR, "short")
+        .set(plain_rs::prefs::pref_keys::SIGNATURE_KEY_PAIR, "short")
         .unwrap();
     assert!(SignatureKey::new(&prefs).ensure().is_err());
     assert_eq!(
         prefs
-            .get::<String>(plain_rs::prefs::system::keys::SIGNATURE_KEY_PAIR)
+            .get::<String>(plain_rs::prefs::pref_keys::SIGNATURE_KEY_PAIR)
             .unwrap()
             .as_deref(),
         Some("short")

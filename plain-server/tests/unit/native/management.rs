@@ -16,6 +16,11 @@ async fn retired_management_roots_are_unavailable_to_local_and_authenticated_rem
         ("systemSettings", "{systemSettings{password}}"),
         ("userSettings", "{userSettings{service}}"),
         ("systemPrefs", "{systemPrefs}"),
+        ("userPrefs", "{userPrefs}"),
+        ("setSystemPref", r#"mutation{setSystemPref(key:"locale",value:"en"){affectedCount}}"#),
+        ("setUserPref", r#"mutation{setUserPref(key:"locale",value:"en")}"#),
+        ("removeSystemPref", r#"mutation{removeSystemPref(key:"locale"){affectedCount}}"#),
+        ("removeUserPref", r#"mutation{removeUserPref(key:"locale")}"#),
         (
             "toggleNotificationApp",
             "mutation{toggleNotificationApp(packageName:\"fixture\"){affectedCount}}",
@@ -137,9 +142,9 @@ async fn native_management_handles_reject_every_operation_after_core_shutdown() 
     stopped!(management.export_app_backup().await);
     stopped!(management.create_crash_report("fixture".into()).await);
     stopped!(management.verify_adb_token("fixture".into()));
-    stopped!(management.system_settings());
-    stopped!(management.user_settings());
-    stopped!(management.system_preferences());
+    stopped!(management.prefs_snapshot());
+    stopped!(management.prefs_snapshot());
+    stopped!(management.prefs_snapshot());
     stopped!(management.toggle_notification_app("fixture".into()).await);
     stopped!(management.start_app_update_download().await);
     stopped!(management.cancel_app_update_download().await);
@@ -161,15 +166,12 @@ async fn native_preference_reads_and_notification_changes_preserve_shared_state_
         .prefs
         .set("url_token", "fixture-resource-token")
         .unwrap();
-    let system = serde_json::to_value(management.system_settings().unwrap()).unwrap();
+    let system = serde_json::to_value(management.prefs_snapshot().unwrap()).unwrap();
     assert_eq!(system["password"], "fixture-password");
     assert_eq!(system["urlToken"], "fixture-resource-token");
-    for private in ["signature_key_pair", "master_secret"] {
+    for private in ["signatureKeyPair", "masterSecret"] {
         assert!(
-            management
-                .system_preferences()
-                .unwrap()
-                .get(private)
+            system.get(private)
                 .is_none()
         );
     }
@@ -182,7 +184,7 @@ async fn native_preference_reads_and_notification_changes_preserve_shared_state_
                 .unwrap()
         );
         assert_eq!(
-            management.user_settings().unwrap().notification_filter["apps"],
+            serde_json::to_value(management.prefs_snapshot().unwrap()).unwrap()["notificationFilter"]["apps"],
             expected
         );
         let mut changed = 0;

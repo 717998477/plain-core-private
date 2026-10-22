@@ -162,7 +162,6 @@ async fn disabled_prefetcher_stays_silent() {
     init_from_config(
         &cfg,
         db,
-        std::sync::Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap()),
     );
     let before = processed_count();
     on_scan_complete();

@@ -12,7 +12,6 @@ use std::sync::OnceLock;
 
 mod events;
 mod keyvalue;
-mod password;
 #[allow(dead_code)]
 mod signature_key;
 pub mod storage_alias;
@@ -20,7 +19,6 @@ mod url_token;
 
 pub use events::EventLog;
 pub use keyvalue::{device_display_name, server_client_id};
-pub use password::PasswordStore;
 pub use signature_key::SignatureKey;
 pub use storage_alias as storage;
 pub use url_token::UrlToken;

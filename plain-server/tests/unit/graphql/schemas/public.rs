@@ -6,7 +6,7 @@ use std::sync::Arc;
 fn sdl() -> String {
     let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
     let dir = tempfile::tempdir().unwrap();
-    let prefs = Arc::new(Prefs::load(&dir.path().join("system_prefs.json")).unwrap());
+    let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
     let (events, _) = tokio::sync::broadcast::channel(16);
     build(
         Arc::new(crate::host::bridge::Host::default()),
@@ -94,9 +94,9 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "updateMdnsPublication:",
         "unpublishMdns:",
         "setMdnsCapture(",
-        "updateUserSettings(",
+        "updateSettings(",
         "updateSystemSettings(",
-        "UserSettingsInput",
+        "SettingsInput",
         "SystemSettingsInput",
         "SystemSettingsAction",
         "type SettingsUpdate",
@@ -390,7 +390,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
 async fn public_schema_pomodoro_roots_execute() {
     let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
     let dir = tempfile::tempdir().unwrap();
-    let prefs = Arc::new(Prefs::load(&dir.path().join("system_prefs.json")).unwrap());
+    let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
     let (events, _) = tokio::sync::broadcast::channel(16);
     let schema = build(
         Arc::new(crate::host::bridge::Host::default()),
@@ -567,7 +567,7 @@ async fn no_root_field_fails_for_unregistered_schema_data() {
 
     let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
     let dir = tempfile::tempdir().unwrap();
-    let prefs = Arc::new(Prefs::load(&dir.path().join("system_prefs.json")).unwrap());
+    let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
     let (events, _) = tokio::sync::broadcast::channel(16);
     let probe_prefs = prefs.clone();
     let host = Arc::new(crate::host::bridge::Host::default());

@@ -9,7 +9,7 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
     prefs.set("client_id", "actor").unwrap();
-    prefs.set_user("service", true).unwrap();
+    prefs.set("background_service_enabled", true).unwrap();
     let server = crate::assembly::server::ContentServer::start(
         dir.path(),
         &plain_rs::utils::base64::base64_encode(&[3; 32]),
@@ -203,7 +203,7 @@ async fn incoming_exchange(
 async fn nearby_discovery_uses_the_existing_raw_channel_and_shared_identity() {
     let (_dir, server) = fixture();
     let state = server.runtime_state();
-    state.prefs.set_user("device_name", "BLE fixture").unwrap();
+    state.prefs.set("device_name", "BLE fixture").unwrap();
     let bytes = incoming_exchange(
         server.port,
         ble::NEARBY_CHAR_UUID,

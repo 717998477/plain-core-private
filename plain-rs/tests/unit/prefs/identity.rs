@@ -28,7 +28,7 @@ fn ensure_identity_generates_and_persists_all_three_keys() {
         Some(id.client_id.as_str())
     );
     assert_eq!(
-        prefs.get_user::<String>("device_name").unwrap().as_deref(),
+        prefs.get::<String>("device_name").unwrap().as_deref(),
         Some(id.device_name.as_str())
     );
     assert_eq!(
@@ -57,9 +57,9 @@ fn ensure_identity_is_idempotent_and_reuses_stored_values() {
 #[test]
 fn ensure_identity_normalizes_stored_device_name() {
     let prefs = tmp_prefs("normalize");
-    prefs.set_user("device_name", "Box.local").unwrap();
+    prefs.set("device_name", "Box.local").unwrap();
     assert_eq!(ensure_identity(&prefs).device_name, "Box");
-    prefs.set_user("device_name", "  ").unwrap();
+    prefs.set("device_name", "  ").unwrap();
     let regenerated = ensure_identity(&prefs).device_name;
     assert!(!regenerated.is_empty(), "blank name regenerates");
 }

@@ -16,7 +16,7 @@ pub(crate) fn local_key(state: &ServerState, client_id: &str) -> Option<Vec<u8>>
     }
     let token = state
         .prefs
-        .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
+        .get::<String>(plain_rs::prefs::pref_keys::URL_TOKEN)
         .ok()??;
     let key = plain_rs::utils::base64::base64_decode(&token);
     (key.len() == 32).then_some(key)

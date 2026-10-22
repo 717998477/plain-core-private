@@ -83,9 +83,9 @@ fn attachment_normalization_preserves_count_and_ignores_smil() {
 fn runtime(directory: &std::path::Path, host: Arc<Host>) -> Arc<Runtime> {
     Runtime::new(
         host,
-        Arc::new(Prefs::load(&directory.join("prefs.json")).unwrap()),
         Arc::new(Db::open(&directory.join("plain.db")).unwrap()),
         directory.to_path_buf(),
+        Arc::new(plain_rs::kv::LazyDb::new(directory.join("fjall"))),
         broadcast::channel(16).0,
     )
 }

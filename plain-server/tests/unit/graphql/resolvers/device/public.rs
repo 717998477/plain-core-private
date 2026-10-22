@@ -40,14 +40,14 @@ fn fixture(
 ) -> (tempfile::TempDir, PublicSchema) {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
-    plain_rs::prefs::system::bootstrap(&prefs).unwrap();
+    plain_rs::prefs::security::bootstrap(&prefs).unwrap();
     prefs.set("client_id", "c1").unwrap();
     prefs.set("url_token", "dG9rZW4=").unwrap();
     prefs.set("api_permissions", vec!["READ_SMS"]).unwrap();
-    prefs.set_user("http_port", 8080).unwrap();
-    prefs.set_user("https_port", 8443).unwrap();
-    prefs.set_user("device_name", "Pixel 8").unwrap();
-    prefs.set_user("developer_mode", true).unwrap();
+    prefs.set("http_port", 8080).unwrap();
+    prefs.set("https_port", 8443).unwrap();
+    prefs.set("device_name", "Pixel 8").unwrap();
+    prefs.set("developer_mode", true).unwrap();
     let db = Arc::new(Db::open(&dir.path().join("data.db")).unwrap());
     let host = Arc::new(Host::with_startup_properties(json!({"deviceType":"PHONE","buildChannel":"GITHUB","downloadsDir":"/downloads","debug":false}).as_object().unwrap().clone()).unwrap());
     stub(host.clone(), handler);

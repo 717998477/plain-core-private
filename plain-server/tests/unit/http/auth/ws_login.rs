@@ -183,7 +183,7 @@ fn signing_uses_the_core_keypair() {
             .unwrap()
             .as_nanos()
     ));
-    let prefs = Prefs::load(&dir.join("system_prefs.json")).unwrap();
+    let prefs = Prefs::load(&dir.join("prefs.json")).unwrap();
     let (keypair, public) = plain_rs::crypto::ed25519_generate();
     prefs
         .set(
@@ -214,7 +214,7 @@ fn signing_a_broken_keypair_is_an_error_not_an_empty_signature() {
             .unwrap()
             .as_nanos()
     ));
-    let prefs = Prefs::load(&dir.join("system_prefs.json")).unwrap();
+    let prefs = Prefs::load(&dir.join("prefs.json")).unwrap();
     prefs.set("signature_key_pair", "AAAA").unwrap();
     assert!(sign(&prefs, "device|COMPLETED|pk|42").is_err());
 }
@@ -233,7 +233,7 @@ async fn passwordless_server() -> (
     let server = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = server.runtime_state();
     state.prefs.set("password_type", 2_i32).unwrap();
-    state.prefs.set("auth_two_factor", false).unwrap();
+    state.prefs.set("login_require_approval", false).unwrap();
     state.prefs.set("password", "unexposed-password").unwrap();
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let (port, _) = server

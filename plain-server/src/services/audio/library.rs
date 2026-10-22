@@ -32,7 +32,10 @@ impl HostLibrary {
     pub fn refresh(&mut self) -> DomainResult<()> {
         if crate::platform::audio_catalog::uses_system_catalog() {
             self.db.use_platform_audio_catalog()?;
-            let ids = self.db.audio_reference_ids()?;
+            let mut ids = self.db.audio_reference_ids()?;
+            for id in self.db.audio_selected_ids() {
+                if !ids.contains(&id) { ids.push(id); }
+            }
             let rows: Vec<AudioMedia> = if ids.is_empty() {
                 Vec::new()
             } else {

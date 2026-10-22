@@ -1,7 +1,7 @@
 use super::*;
 fn fixture() -> (tempfile::TempDir, Prefs) {
     let dir = tempfile::tempdir().unwrap();
-    let prefs = Prefs::load(&dir.path().join("system_prefs.json")).unwrap();
+    let prefs = Prefs::load(&dir.path().join("prefs.json")).unwrap();
     (dir, prefs)
 }
 #[test]
@@ -15,7 +15,7 @@ fn bootstrap_is_stable_and_snapshot_never_contains_private_secrets() {
         serde_json::to_value(snapshot(&prefs).unwrap()).unwrap()
     );
     assert_eq!(first["passwordType"], 2);
-    assert_eq!(first["authTwoFactor"], true);
+    assert_eq!(first["loginRequireApproval"], true);
     assert!(!first["clientId"].as_str().unwrap().is_empty());
     assert_eq!(signing_keypair(&prefs).unwrap().len(), 64);
     assert!(first.get("masterSecret").is_none());
@@ -63,32 +63,6 @@ fn parallel_permission_updates_do_not_lose_changes() {
         .is_err()
     );
 }
-#[test]
-fn update_patch_preserves_other_fields_and_write_failure_does_not_publish_state() {
-    let (dir, prefs) = fixture();
-    bootstrap(&prefs).unwrap();
-    Command::PatchUpdate {
-        patch: serde_json::from_value(
-            serde_json::json!({"skipVersion":"4.0","autoCheckUpdate":false}),
-        )
-        .unwrap(),
-    }
-    .apply(&prefs)
-    .unwrap();
-    Command::PatchUpdate {
-        patch: serde_json::from_value(serde_json::json!({"downloadedApkPath":"download.apk"}))
-            .unwrap(),
-    }
-    .apply(&prefs)
-    .unwrap();
-    let info = snapshot(&prefs).unwrap().update_info;
-    assert_eq!(info.skip_version, "4.0");
-    assert!(!info.auto_check_update);
-    let before = prefs.entries();
-    std::fs::create_dir(dir.path().join("system_prefs.json.tmp")).unwrap();
-    assert!(Command::ResetPassword.apply(&prefs).is_err());
-    assert_eq!(before, prefs.entries());
-}
 
 #[test]
 fn runtime_preferences_use_shared_defaults_and_persist_only_system_values() {
@@ -103,10 +77,10 @@ fn runtime_preferences_use_shared_defaults_and_persist_only_system_values() {
     set_entry(&prefs, DEV_TOKEN, serde_json::json!("development")).unwrap();
     set_entry(&prefs, LOG_LEVEL, serde_json::json!("warn")).unwrap();
     bootstrap(&prefs).unwrap();
-    let reloaded = Prefs::load(&dir.path().join("system_prefs.json")).unwrap();
+    let reloaded = Prefs::load(&dir.path().join("prefs.json")).unwrap();
     assert_eq!(dev_token(&reloaded).unwrap(), "development");
     assert_eq!(log_level(&reloaded).unwrap(), log::LevelFilter::Warn);
-    assert!(reloaded.user_entries().is_empty());
+    assert!(!reloaded.entries().is_empty());
     for value in [
         serde_json::json!("invalid"),
         serde_json::json!(1),
@@ -128,7 +102,7 @@ fn key_value_settings_validate_protected_fields_and_patch_permissions_atomically
     let before = prefs.entries();
     for (key, value) in [
         (PASSWORD_TYPE, serde_json::json!(4)),
-        (AUTH_TWO_FACTOR, serde_json::json!("false")),
+        (LOGIN_REQUIRE_APPROVAL, serde_json::json!("false")),
         (URL_TOKEN, serde_json::json!("client-supplied")),
         (SIGNATURE_KEY_PAIR, serde_json::json!("client-supplied")),
         (MDNS_HOSTNAME, serde_json::json!("invalid.example")),

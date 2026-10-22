@@ -17,7 +17,7 @@ fn hash_to_token(hash: &str) -> Vec<u8> {
 
 fn password_digest(prefs: &plain_rs::prefs::Prefs) -> String {
     let password = prefs
-        .get::<String>(plain_rs::prefs::system::keys::PASSWORD)
+        .get::<String>(plain_rs::prefs::pref_keys::PASSWORD)
         .unwrap_or_default()
         .unwrap_or_default();
     plain_rs::utils::hex::bytes_to_hex(&Sha512::digest(password.as_bytes()))
@@ -91,7 +91,7 @@ impl Protection {
     fn validate(&self, state: &ServerState, request: &Value) -> anyhow::Result<()> {
         let password_type = state
             .prefs
-            .get_or(plain_rs::prefs::system::keys::PASSWORD_TYPE, 2_i32);
+            .get_or(plain_rs::prefs::pref_keys::PASSWORD_TYPE, 2_i32);
         match self {
             Self::Password(digest) => anyhow::ensure!(
                 password_type == 1
@@ -299,7 +299,7 @@ fn sign(prefs: &plain_rs::prefs::Prefs, text: &str) -> anyhow::Result<String> {
 async fn issue(state: &ServerState, request: &Pending) -> anyhow::Result<Value> {
     let device_client_id = state
         .prefs
-        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+        .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
         .ok_or_else(|| anyhow::anyhow!("device client id is missing"))?;
     request.protection.validate(state, &request.request)?;
     let chat_paired = peer_chat_paired(&request.request);
@@ -420,7 +420,7 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
         Request::Issue { .. } | Request::IssueTemporary { .. } | Request::Complete { .. }
     ) {
         anyhow::ensure!(
-            state.prefs.get_user_or("desktop_access", true),
+            state.prefs.get_or("desktop_access", true),
             "desktop_access_disabled"
         );
     }
@@ -462,7 +462,7 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                     anyhow::ensure!(
                         state
                             .prefs
-                            .get_or(plain_rs::prefs::system::keys::PASSWORD_TYPE, 2_i32)
+                            .get_or(plain_rs::prefs::pref_keys::PASSWORD_TYPE, 2_i32)
                             == 1,
                         "password_required"
                     );
@@ -530,9 +530,9 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                 || peer_chat_paired(&pending.request)
                 || state
                     .prefs
-                    .get_or(plain_rs::prefs::system::keys::AUTH_TWO_FACTOR, true)
+                    .get_or(plain_rs::prefs::pref_keys::LOGIN_REQUIRE_APPROVAL, true)
             {
-                let response = json!({"clientId":state.prefs.get_or(plain_rs::prefs::system::keys::CLIENT_ID,String::new()), "status":"PENDING"});
+                let response = json!({"clientId":state.prefs.get_or(plain_rs::prefs::pref_keys::CLIENT_ID,String::new()), "status":"PENDING"});
                 let encrypted = pending
                     .protection
                     .encrypt_response(&serde_json::to_vec(&response)?)?;

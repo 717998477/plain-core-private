@@ -1,25 +1,12 @@
-//! Unified preferences storage for the Plain* apps — separate flat
-//! string→JSON maps in `<data_dir>/system_prefs.json` and
-//! `<data_dir>/user_prefs.json`, shared by the server, plain-desktop,
-//! and plain-app. System state and user-configurable settings have
-//! independent files and key spaces.
-//!
-//! The whole map is kept in memory (it is a few KB) and every mutation
-//! rewrites its file atomically (write a temporary sibling + rename), so
-//! each file on disk is complete and pretty-printed for hand editing.
-//! Every host shares one `Arc<Prefs>` per process — there is exactly one
-//! writer, no stale caches. Media rows / sessions / events live in each
-//! app's own store; the user library (audio queue/playlists/history,
-//! tags, favorite folders, chat) lives in SQLite.
-
+//! One instance, one flat preferences file: prefs.json.
+pub mod pref_keys;
 pub mod dlna;
 pub mod identity;
 pub mod media;
 pub mod samba;
-pub mod sms_sends;
 pub mod storage;
-pub mod system;
-pub mod user;
+pub mod security;
+pub mod settings;
 
 pub use identity::{AppIdentity, ensure_identity, ensure_mdns_hostname, ensure_url_token};
 
@@ -59,6 +46,7 @@ pub fn try_get_default() -> Option<Arc<Prefs>> {
 /// `?` converts into the hosts' anyhow / GraphQL error types.
 #[derive(Debug)]
 pub enum PrefsError {
+    UnknownKey(String),
     Read {
         path: PathBuf,
         source: std::io::Error,
@@ -79,6 +67,7 @@ pub enum PrefsError {
 impl fmt::Display for PrefsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            PrefsError::UnknownKey(key) => write!(f, "Unknown preference: {key}"),
             PrefsError::Read { path, source } => {
                 write!(f, "read prefs {}: {source}", path.display())
             }
@@ -97,6 +86,7 @@ impl fmt::Display for PrefsError {
 impl std::error::Error for PrefsError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            PrefsError::UnknownKey(_) => None,
             PrefsError::Read { source, .. } | PrefsError::Write { source, .. } => Some(source),
             PrefsError::Parse { source, .. }
             | PrefsError::Encode(source)
@@ -107,297 +97,82 @@ impl std::error::Error for PrefsError {
 
 pub type Result<T> = std::result::Result<T, PrefsError>;
 
-#[derive(Clone, Copy, Debug)]
-pub enum PrefsType {
-    User,
-    System,
-}
-
 pub struct Prefs {
-    change_hook: RwLock<Option<Arc<dyn Fn(PrefsType) + Send + Sync>>>,
-    system: PrefsStore,
-    user: PrefsStore,
-}
-
-impl std::fmt::Debug for Prefs {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Prefs")
-            .field("system_path", &self.system.path)
-            .field("user_path", &self.user.path)
-            .finish()
-    }
-}
-
-/// Location of the preferences file inside the app data dir.
-pub fn default_path(data_dir: &Path) -> PathBuf {
-    crate::data_paths::DataPaths::new(data_dir).system_prefs()
-}
-
-impl Prefs {
-    pub fn set_change_hook(&self, hook: Option<Arc<dyn Fn(PrefsType) + Send + Sync>>) {
-        *self.change_hook.write().unwrap() = hook;
-    }
-
-    fn changed(&self, prefs_type: PrefsType) {
-        let hook = self.change_hook.read().unwrap().clone();
-        if let Some(hook) = hook {
-            hook(prefs_type);
-        }
-    }
-
-    pub fn in_memory() -> Self {
-        Self {
-            change_hook: RwLock::new(None),
-            system: PrefsStore::in_memory(),
-            user: PrefsStore::in_memory(),
-        }
-    }
-
-    /// Load the preferences at `path`. A missing file starts empty; a
-    /// malformed file is an error (the file is hand-editable, so parse
-    /// failures should be loud, not silently discarded).
-    pub fn load(path: &Path) -> Result<Self> {
-        let user_path = path.with_file_name("user_prefs.json");
-        Self::load_pair(path, &user_path)
-    }
-
-    /// Load the system and user preference files independently.
-    pub fn load_pair(system_path: &Path, user_path: &Path) -> Result<Self> {
-        Ok(Self {
-            change_hook: RwLock::new(None),
-            system: PrefsStore::load(system_path)?,
-            user: PrefsStore::load(user_path)?,
-        })
-    }
-
-    /// Absolute path of the system preferences file.
-    pub fn path(&self) -> &Path {
-        &self.system.path
-    }
-
-    /// Absolute path of the user preferences file.
-    pub fn user_path(&self) -> &Path {
-        &self.user.path
-    }
-
-    pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
-        self.system.get(key)
-    }
-
-    pub fn get_or<T: DeserializeOwned>(&self, key: &str, default: T) -> T {
-        self.system.get_or(key, default)
-    }
-
-    pub fn set<T: Serialize>(&self, key: &str, value: T) -> Result<bool> {
-        let changed = self.system.set(key, value)?;
-        if changed {
-            self.changed(PrefsType::System);
-        }
-        Ok(changed)
-    }
-
-    pub fn remove(&self, key: &str) -> Result<bool> {
-        let changed = self.system.remove(key)?;
-        if changed {
-            self.changed(PrefsType::System);
-        }
-        Ok(changed)
-    }
-
-    pub(crate) fn update_system<T>(
-        &self,
-        update: impl FnOnce(&mut Map<String, Value>) -> Result<T>,
-    ) -> Result<T> {
-        let mut stored = self.system.inner.write().unwrap();
-        let mut next = stored.clone();
-        let result = update(&mut next)?;
-        if next != *stored {
-            self.system.save(&next)?;
-            *stored = next;
-            drop(stored);
-            self.changed(PrefsType::System);
-        }
-        Ok(result)
-    }
-
-    pub(crate) fn update_user<T>(
-        &self,
-        update: impl FnOnce(&mut Map<String, Value>) -> Result<T>,
-    ) -> Result<T> {
-        let mut stored = self.user.inner.write().unwrap();
-        let mut next = stored.clone();
-        let result = update(&mut next)?;
-        if next != *stored {
-            self.user.save(&next)?;
-            *stored = next;
-            drop(stored);
-            self.changed(PrefsType::User);
-        }
-        Ok(result)
-    }
-
-    pub fn clear(&self) -> Result<()> {
-        if self.system.clear()? {
-            self.changed(PrefsType::System);
-        }
-        Ok(())
-    }
-
-    pub fn entries(&self) -> Vec<(String, Value)> {
-        self.system.entries()
-    }
-
-    pub fn entries_sorted(&self) -> Vec<(String, String)> {
-        self.system.entries_sorted()
-    }
-
-    pub fn get_user<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
-        self.user.get(key)
-    }
-
-    pub fn get_user_or<T: DeserializeOwned>(&self, key: &str, default: T) -> T {
-        self.user.get_or(key, default)
-    }
-
-    pub fn set_user<T: Serialize>(&self, key: &str, value: T) -> Result<bool> {
-        let changed = self.user.set(key, value)?;
-        if changed {
-            self.changed(PrefsType::User);
-        }
-        Ok(changed)
-    }
-
-    pub fn remove_user(&self, key: &str) -> Result<bool> {
-        let changed = self.user.remove(key)?;
-        if changed {
-            self.changed(PrefsType::User);
-        }
-        Ok(changed)
-    }
-
-    pub fn clear_user(&self) -> Result<()> {
-        if self.user.clear()? {
-            self.changed(PrefsType::User);
-        }
-        Ok(())
-    }
-
-    pub fn user_entries(&self) -> Vec<(String, Value)> {
-        self.user.entries()
-    }
-
-    pub fn user_entries_sorted(&self) -> Vec<(String, String)> {
-        self.user.entries_sorted()
-    }
-}
-
-struct PrefsStore {
     path: PathBuf,
     inner: RwLock<Map<String, Value>>,
+    change_hook: RwLock<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
-
-impl PrefsStore {
-    fn in_memory() -> Self {
-        Self {
-            path: PathBuf::new(),
-            inner: RwLock::new(Map::new()),
-        }
+impl fmt::Debug for Prefs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Prefs").field("path", &self.path).finish()
     }
-
-    fn load(path: &Path) -> Result<Self> {
+}
+pub fn default_path(data_dir: &Path) -> PathBuf {
+    crate::data_paths::DataPaths::new(data_dir).prefs()
+}
+impl Prefs {
+    pub fn set_change_hook(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
+        *self.change_hook.write().unwrap() = hook;
+    }
+    pub fn notify_changed(&self) {
+        let hook = self.change_hook.read().unwrap().clone();
+        if let Some(hook) = hook { hook(); }
+    }
+    pub fn in_memory() -> Self {
+        Self { path: PathBuf::new(), inner: RwLock::new(Map::new()), change_hook: RwLock::new(None) }
+    }
+    pub fn load(path: &Path) -> Result<Self> {
         let inner = match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text).map_err(|source| PrefsError::Parse {
-                path: path.to_path_buf(),
-                source,
-            })?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Map::new(),
-            Err(source) => {
-                return Err(PrefsError::Read {
-                    path: path.to_path_buf(),
-                    source,
-                });
-            }
+            Ok(text) => serde_json::from_str(&text).map_err(|source| PrefsError::Parse { path: path.to_owned(), source })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Map::new(),
+            Err(source) => return Err(PrefsError::Read { path: path.to_owned(), source }),
         };
-        Ok(Self {
-            path: path.to_path_buf(),
-            inner: RwLock::new(inner),
-        })
+        Ok(Self { path: path.to_owned(), inner: RwLock::new(inner), change_hook: RwLock::new(None) })
     }
-
-    /// Read one entry, deserialized from its JSON value.
-    fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
-        match self.inner.read().unwrap().get(key) {
-            None => Ok(None),
-            Some(v) => Ok(Some(
-                serde_json::from_value(v.clone()).map_err(PrefsError::Decode)?,
-            )),
-        }
+    pub fn path(&self) -> &Path { &self.path }
+    pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        self.inner.read().unwrap().get(key).map(|value| serde_json::from_value(value.clone()).map_err(PrefsError::Decode)).transpose()
     }
-
-    /// Read one entry, or `default` when absent / not deserializable.
-    fn get_or<T: DeserializeOwned>(&self, key: &str, default: T) -> T {
+    pub fn get_or<T: DeserializeOwned>(&self, key: &str, default: T) -> T {
         self.get(key).unwrap_or(None).unwrap_or(default)
     }
-
-    /// Write one entry and persist the file. Returns whether the value
-    /// changed (skips the disk write when it did not).
-    fn set<T: Serialize>(&self, key: &str, value: T) -> Result<bool> {
-        let new = serde_json::to_value(value).map_err(PrefsError::Encode)?;
-        let mut inner = self.inner.write().unwrap();
-        if inner.get(key) == Some(&new) {
-            return Ok(false);
-        }
-        let mut next = inner.clone();
-        next.insert(key.to_string(), new);
-        self.save(&next)?;
-        *inner = next;
-        Ok(true)
+    pub fn set<T: Serialize>(&self, key: &str, value: T) -> Result<bool> {
+        let value = serde_json::to_value(value).map_err(PrefsError::Encode)?;
+        self.update(|entries| {
+            if entries.get(key) == Some(&value) { return Ok(false); }
+            entries.insert(key.to_owned(), value);
+            Ok(true)
+        })
     }
-
-    /// Remove one entry (if present) and persist the file.
-    fn remove(&self, key: &str) -> Result<bool> {
-        let mut inner = self.inner.write().unwrap();
-        let mut next = inner.clone();
-        if next.remove(key).is_none() {
-            return Ok(false);
-        }
-        self.save(&next)?;
-        *inner = next;
-        Ok(true)
+    pub fn remove(&self, key: &str) -> Result<bool> {
+        self.update(|entries| Ok(entries.remove(key).is_some()))
     }
-
-    /// Remove every entry and persist the file.
-    fn clear(&self) -> Result<bool> {
-        let mut inner = self.inner.write().unwrap();
-        if inner.is_empty() {
-            return Ok(false);
-        }
-        self.save(&Map::new())?;
-        inner.clear();
-        Ok(true)
+    pub fn clear(&self) -> Result<()> {
+        self.update(|entries| { entries.clear(); Ok(()) })
     }
-
-    /// Every entry sorted by key with its raw JSON value.
-    fn entries(&self) -> Vec<(String, Value)> {
-        let mut entries: Vec<(String, Value)> = self
-            .inner
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+    pub(crate) fn update<T>(&self, update: impl FnOnce(&mut Map<String, Value>) -> Result<T>) -> Result<T> {
+        let mut stored = self.inner.write().unwrap();
+        let mut next = stored.clone();
+        let result = update(&mut next)?;
+        if let Some(key) = next.keys().find(|key| pref_keys::access(key).is_none()) {
+            return Err(PrefsError::UnknownKey(key.clone()));
+        }
+        if next != *stored {
+            self.save(&next)?;
+            *stored = next;
+            drop(stored);
+            self.notify_changed();
+        }
+        Ok(result)
+    }
+    pub fn entries(&self) -> Vec<(String, Value)> {
+        self.inner.read().unwrap().iter().map(|(key, value)| (key.clone(), value.clone())).collect()
+    }
+    pub fn entries_sorted(&self) -> Vec<(String, String)> {
+        let mut entries: Vec<_> = self.entries().into_iter().map(|(key,value)| (key,value.to_string())).collect();
+        entries.sort_by(|a,b| a.0.cmp(&b.0));
         entries
     }
-
-    /// Every entry sorted by key, with values rendered as compact JSON.
-    fn entries_sorted(&self) -> Vec<(String, String)> {
-        self.entries()
-            .into_iter()
-            .map(|(k, v)| (k, v.to_string()))
-            .collect()
-    }
-
     fn save(&self, inner: &Map<String, Value>) -> Result<bool> {
         if self.path.as_os_str().is_empty() {
             return Ok(true);
@@ -428,5 +203,3 @@ impl PrefsStore {
 #[cfg(test)]
 #[path = "../../tests/unit/prefs/mod.rs"]
 mod tests;
-
-pub mod recent;

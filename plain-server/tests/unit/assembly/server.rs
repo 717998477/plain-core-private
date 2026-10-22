@@ -6,8 +6,8 @@ async fn app_and_remote_access_share_listeners_without_background_service() {
     let directory = tempfile::tempdir().unwrap();
     let prefs =
         Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
-    prefs.set_user("service", false).unwrap();
-    prefs.set_user("desktop_access", false).unwrap();
+    prefs.set("background_service_enabled", false).unwrap();
+    prefs.set("desktop_access", false).unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[19; 32]);
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let server = ContentServer::start_http(
@@ -103,7 +103,7 @@ async fn app_and_remote_access_share_listeners_without_background_service() {
             expected
         );
     }
-    prefs.set_user("desktop_access", true).unwrap();
+    prefs.set("desktop_access", true).unwrap();
     assert_eq!(
         client
             .post(format!("http://127.0.0.1:{http}/graphql"))
@@ -127,21 +127,21 @@ async fn configured_public_uses_core_settings_and_keeps_listeners_on_tls_preflig
         .native_graphql()
         .unwrap()
         .execute(async_graphql::Request::new(
-            "mutation{http:setUserPref(key:\"http_port\",value:0) https:setUserPref(key:\"https_port\",value:0)}",
+            "mutation{http:setPref(key:\"http_port\",value:0) https:setPref(key:\"https_port\",value:0)}",
         ))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(
         core.runtime_state()
             .prefs
-            .get_user::<i32>("http_port")
+            .get::<i32>("http_port")
             .unwrap(),
         Some(0)
     );
     assert_eq!(
         core.runtime_state()
             .prefs
-            .get_user::<i32>("https_port")
+            .get::<i32>("https_port")
             .unwrap(),
         Some(0)
     );
@@ -183,7 +183,7 @@ async fn configured_public_uses_core_settings_and_keeps_listeners_on_tls_preflig
 
 #[tokio::test]
 async fn core_startup_persists_complete_identity_and_only_rotates_url_token_on_recreation() {
-    use plain_rs::prefs::system::keys::*;
+    use plain_rs::prefs::pref_keys::*;
     let directory = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();
     let core = ContentServer::open_with_cache(directory.path(), cache.path()).unwrap();
@@ -204,7 +204,7 @@ async fn core_startup_persists_complete_identity_and_only_rotates_url_token_on_r
         );
     }
     assert_eq!(prefs.get::<i32>(PASSWORD_TYPE).unwrap(), Some(2));
-    assert_eq!(prefs.get::<bool>(AUTH_TWO_FACTOR).unwrap(), Some(true));
+    assert_eq!(prefs.get::<bool>(LOGIN_REQUIRE_APPROVAL).unwrap(), Some(true));
     let persisted = plain_rs::prefs::Prefs::load(prefs.path()).unwrap();
     assert_eq!(persisted.entries(), first);
     core.stop_core().await;
@@ -216,7 +216,7 @@ async fn core_startup_persists_complete_identity_and_only_rotates_url_token_on_r
         .set(ROTATE_URL_TOKEN_ON_RESTART, true)
         .unwrap();
     core.state.prefs.set(PASSWORD, "custom-password").unwrap();
-    core.state.prefs.set(AUTH_TWO_FACTOR, false).unwrap();
+    core.state.prefs.set(LOGIN_REQUIRE_APPROVAL, false).unwrap();
     let before: std::collections::BTreeMap<_, _> = core.state.prefs.entries().into_iter().collect();
     core.stop_core().await;
     drop(core);
@@ -268,11 +268,11 @@ async fn shell_preferences_share_the_core_owner() {
     let core = ContentServer::open(directory.path()).unwrap();
     let shell = core.shared_preferences().unwrap();
     assert!(Arc::ptr_eq(&shell, &core.state.prefs));
-    shell.set_user("device_name", "Shared device").unwrap();
+    shell.set("device_name", "Shared device").unwrap();
     assert_eq!(
         core.preferences()
             .unwrap()
-            .get_user::<String>("device_name")
+            .get::<String>("device_name")
             .unwrap(),
         Some("Shared device".into())
     );
@@ -285,7 +285,7 @@ async fn every_transport_build_serves_the_main_guest_and_peer_contracts_without_
     let directory = tempfile::tempdir().unwrap();
     let prefs =
         Arc::new(plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap());
-    prefs.set_user("desktop_access", true).unwrap();
+    prefs.set("desktop_access", true).unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[3; 32]);
     let server = ContentServer::start(directory.path(), &token, prefs).unwrap();
     let client = reqwest::Client::new();
@@ -370,12 +370,12 @@ async fn startup_device_name_initialization_is_shared_and_preserves_user_changes
         let directory = tempfile::tempdir().unwrap();
         let prefs = Arc::new(
             plain_rs::prefs::Prefs::load(
-                &plain_rs::data_paths::DataPaths::new(directory.path()).system_prefs(),
+                &plain_rs::data_paths::DataPaths::new(directory.path()).prefs(),
             )
             .unwrap(),
         );
         if let Some(initial) = initial {
-            prefs.set_user("device_name", initial).unwrap();
+            prefs.set("device_name", initial).unwrap();
         }
         let properties = serde_json::json!({"name":"Startup Name"})
             .as_object()
@@ -390,12 +390,12 @@ async fn startup_device_name_initialization_is_shared_and_preserves_user_changes
         )
         .unwrap();
         assert_eq!(
-            prefs.get_user::<String>("device_name").unwrap().as_deref(),
+            prefs.get::<String>("device_name").unwrap().as_deref(),
             Some(expected)
         );
         let (_generation, mut requests) = state.host.connect();
         for name in [expected, "Updated Name"] {
-            prefs.set_user("device_name", name).unwrap();
+            prefs.set("device_name", name).unwrap();
             let response = crate::graphql::executor::execute_graphql(
                 &state.public,
                 async_graphql::Request::new("{app{deviceName}}"),

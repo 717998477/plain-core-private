@@ -2,7 +2,7 @@ use super::updates;
 use crate::{assembly::server::ServerState, graphql::types::Long};
 use anyhow::{Result, anyhow, ensure};
 use futures_util::StreamExt;
-use plain_rs::{events::WsEvent, prefs::system::UpdateInfo};
+use plain_rs::{events::WsEvent, prefs::security::UpdateInfo};
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -173,7 +173,7 @@ async fn execute_owned(state: ServerState, command: Command) -> Result<AppUpdate
     }
     let _settings = state.update_checks.cache.lock().await;
     ensure!(!runtime.closed.load(Ordering::Acquire), "Rust core stopped");
-    let info = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
+    let info = updates::info(&state)?;
     match command {
         Command::Start => {
             let version = state
@@ -182,7 +182,7 @@ async fn execute_owned(state: ServerState, command: Command) -> Result<AppUpdate
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| anyhow!("Missing startup app version"))?;
             ensure!(
-                plain_rs::updates::available(&info, version),
+                plain_rs::updates::available(&info, version, &state.prefs.get_or("skip_version", String::new())),
                 "No application update available"
             );
             let identity = Identity::from(&info);
@@ -434,14 +434,14 @@ async fn save_stream<B: AsRef<[u8]>>(
         !*cancel.borrow() && !*stop.borrow(),
         "Update download cancelled"
     );
-    let current = plain_rs::prefs::system::snapshot(&state.prefs)?.update_info;
+    let current = updates::info(&state)?;
     let version = state
         .host
         .startup_property("appVersion")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     ensure!(
-        Identity::from(&current) == *identity && plain_rs::updates::available(&current, version),
+        Identity::from(&current) == *identity && plain_rs::updates::available(&current, version, &state.prefs.get_or("skip_version", String::new())),
         "Update source changed during download"
     );
     std::fs::write(
@@ -469,7 +469,7 @@ fn restored(state: &ServerState, info: &UpdateInfo) -> Result<Option<String>> {
         .startup_property("appVersion")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if info.downloaded_apk_path.is_empty() || !plain_rs::updates::available(info, version) {
+    if info.downloaded_apk_path.is_empty() || !plain_rs::updates::available(info, version, &state.prefs.get_or("skip_version", String::new())) {
         return Ok(None);
     }
     let path = Path::new(&info.downloaded_apk_path);

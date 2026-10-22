@@ -580,7 +580,7 @@ async fn channel_action_projection_matches_rust_event_projection_without_host_ca
     schema
         .data::<Arc<Prefs>>()
         .unwrap()
-        .set(plain_rs::prefs::system::keys::CLIENT_ID, actor)
+        .set(plain_rs::prefs::pref_keys::CLIENT_ID, actor)
         .unwrap();
     let channel = plain_rs::chat::channels::state::create(
         database(&schema),

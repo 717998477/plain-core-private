@@ -80,7 +80,7 @@ async fn cross_origin_access_follows_current_shared_preferences_or_debug_configu
     ] {
         core.preferences()
             .unwrap()
-            .set_user("allow_any_host", any_host)
+            .set("allow_any_host", any_host)
             .unwrap();
         core.set_build_debug(debug);
         let response = preflight(&core, "http://localhost:4000", "http").await;

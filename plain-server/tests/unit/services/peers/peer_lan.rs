@@ -8,7 +8,7 @@ fn root(id: &str) -> (tempfile::TempDir, ContentServer, Vec<u8>, String) {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
     prefs.set("client_id", id).unwrap();
-    prefs.set_user("service", true).unwrap();
+    prefs.set("background_service_enabled", true).unwrap();
     let (kp, pk) = plain_rs::crypto::ed25519_generate();
     prefs
         .set(

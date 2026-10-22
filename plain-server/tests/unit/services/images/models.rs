@@ -56,7 +56,7 @@ async fn failed_replacement_preserves_active_package_index_and_search() {
         directory.path().join("cache"),
     ));
     index.use_system_catalog_for_test();
-    let runtime = Runtime::new(directory.path().into(), host, prefs, index, events);
+    let runtime = Runtime::new(directory.path().into(), host, prefs, Arc::new(plain_rs::kv::LazyDb::new(directory.path().join("fjall"))), index, events);
     runtime.import().await.unwrap();
     settled(&runtime).await;
     assert_eq!(
@@ -81,7 +81,7 @@ async fn failed_replacement_preserves_active_package_index_and_search() {
     assert!(runtime.snapshot().status.error_message.contains("checksum"));
     assert_eq!(plain_rs::media::images::embeddings::count(&db).unwrap(), 1);
     let active = plain_inference::models::manifest::Manifest::parse(
-        &std::fs::read(directory.path().join("ai_models/active/manifest.json")).unwrap(),
+        &std::fs::read(directory.path().join("ai_models/imported/manifest.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -134,7 +134,7 @@ async fn catalog_changes_share_one_cancellable_timer_and_do_not_retain_the_runti
         directory.path().join("cache"),
     ));
     index.use_system_catalog_for_test();
-    let runtime = Runtime::new(directory.path().into(), host.clone(), prefs, index, events);
+    let runtime = Runtime::new(directory.path().into(), host.clone(), prefs, Arc::new(plain_rs::kv::LazyDb::new(directory.path().join("fjall"))), index, events);
     runtime.catalog_changed();
     assert!(runtime.catalog_task.lock().unwrap().is_none());
     runtime.observing.store(true, Ordering::Release);
@@ -173,7 +173,7 @@ async fn catalog_changes_share_one_cancellable_timer_and_do_not_retain_the_runti
 #[tokio::test]
 async fn core_start_restores_enabled_local_model_without_a_client_mutation_or_download() {
     let directory = tempfile::tempdir().unwrap();
-    plain_inference::models::test_fixture::fixture(&directory.path().join("ai_models/active"));
+    plain_inference::models::test_fixture::fixture(&directory.path().join("ai_models/imported"));
     let host = Arc::new(Host::default());
     let (generation, mut requests) = host.connect();
     let responder = host.clone();
@@ -196,7 +196,8 @@ async fn core_start_restores_enabled_local_model_without_a_client_mutation_or_do
         }
     });
     let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
-    prefs.set_user("ai_image_search_enabled", true).unwrap();
+    prefs.set("ai_image_search_enabled", true).unwrap();
+    prefs.set("ai_image_search_model", "imported").unwrap();
     let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
     let (events, mut updates) = tokio::sync::broadcast::channel(32);
     let index = Arc::new(ImageIndex::new(
@@ -207,7 +208,7 @@ async fn core_start_restores_enabled_local_model_without_a_client_mutation_or_do
         directory.path().join("cache"),
     ));
     index.use_system_catalog_for_test();
-    let runtime = Runtime::new(directory.path().into(), host, prefs, index, events);
+    let runtime = Runtime::new(directory.path().into(), host, prefs, Arc::new(plain_rs::kv::LazyDb::new(directory.path().join("fjall"))), index, events);
     let (stop, stopped) = tokio::sync::watch::channel(false);
     runtime.follow(stopped);
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -236,11 +237,12 @@ async fn core_start_restores_enabled_local_model_without_a_client_mutation_or_do
 #[tokio::test]
 async fn native_model_restore_and_shutdown_do_not_request_sdk_observers_or_catalogs() {
     let directory = tempfile::tempdir().unwrap();
-    plain_inference::models::test_fixture::fixture(&directory.path().join("ai_models/active"));
+    plain_inference::models::test_fixture::fixture(&directory.path().join("ai_models/imported"));
     let host = Arc::new(Host::default());
     let (_generation, mut requests) = host.connect();
     let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
-    prefs.set_user("ai_image_search_enabled", true).unwrap();
+    prefs.set("ai_image_search_enabled", true).unwrap();
+    prefs.set("ai_image_search_model", "imported").unwrap();
     let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
     let (events, _) = tokio::sync::broadcast::channel(32);
     let index = Arc::new(ImageIndex::new(
@@ -251,7 +253,7 @@ async fn native_model_restore_and_shutdown_do_not_request_sdk_observers_or_catal
         directory.path().join("cache"),
     ));
     index.use_native_catalog_for_test();
-    let runtime = Runtime::new(directory.path().into(), host, prefs, index, events);
+    let runtime = Runtime::new(directory.path().into(), host, prefs, Arc::new(plain_rs::kv::LazyDb::new(directory.path().join("fjall"))), index, events);
     runtime.enable(true).await.unwrap();
     settled(&runtime).await;
     assert_eq!(
@@ -282,7 +284,7 @@ fn projection_runtime() -> (
         directory.path().join("cache"),
     ));
     index.use_native_catalog_for_test();
-    let runtime = Runtime::new(directory.path().into(), host, prefs, index, events);
+    let runtime = Runtime::new(directory.path().into(), host, prefs, Arc::new(plain_rs::kv::LazyDb::new(directory.path().join("fjall"))), index, events);
     (directory, runtime, updates)
 }
 

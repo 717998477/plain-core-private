@@ -5,7 +5,7 @@ pub(crate) mod updates;
 pub(crate) mod update_download;
 
 #[cfg(feature = "core")]
-pub(crate) mod user_preferences;
+pub(crate) mod preferences;
 
 #[cfg(feature = "core")]
-pub(crate) mod system_preferences;
+pub(crate) mod security_preferences;

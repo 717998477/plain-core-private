@@ -106,10 +106,10 @@ async fn receiver_paths_answer_only_while_the_toggle_and_service_are_on() {
     // discoverable or answerable at all.
     assert_eq!(describe().await, 404);
 
-    state.prefs.set_user("service", true).unwrap();
+    state.prefs.set("background_service_enabled", true).unwrap();
     assert_eq!(describe().await, 404, "service alone is not enough");
 
-    state.prefs.set_user("dlna", true).unwrap();
+    state.prefs.set("dlna", true).unwrap();
     let body = client
         .get(format!("{base}/description.xml"))
         .send()
@@ -168,8 +168,8 @@ async fn a_forged_c_ip_header_cannot_impersonate_an_allowed_sender() {
     let client = reqwest::Client::new();
     let base = format!("http://127.0.0.1:{port}");
     let state = server.runtime_state();
-    state.prefs.set_user("service", true).unwrap();
-    state.prefs.set_user("dlna", true).unwrap();
+    state.prefs.set("background_service_enabled", true).unwrap();
+    state.prefs.set("dlna", true).unwrap();
     // 10.0.0.9 is "trusted"; the request below actually arrives from loopback.
     plain_rs::prefs::dlna::add_sender(&state.prefs, "dlna_allowed_senders", "10.0.0.9", "TV");
 
@@ -340,8 +340,8 @@ async fn native_control_uses_shared_http_lifecycle_and_cast_prompt() {
 async fn public_dlna_reads_the_native_players_reported_position() {
     let (_dir, server, port) = public_fixture().await;
     let state = server.runtime_state();
-    state.prefs.set_user("service", true).unwrap();
-    state.prefs.set_user("dlna", true).unwrap();
+    state.prefs.set("background_service_enabled", true).unwrap();
+    state.prefs.set("dlna", true).unwrap();
     state.dlna.state.write().await.media_uri = "http://example.test/owned.mp4".into();
     let controller = MainDlnaClient(server.native_graphql().unwrap(), server.runtime_state());
     controller
@@ -412,8 +412,8 @@ async fn the_two_body_faults_answer_differently() {
 async fn an_oversized_control_request_never_reaches_the_protocol() {
     let (dir, server, port) = public_fixture().await;
     let state = server.runtime_state();
-    state.prefs.set_user("service", true).unwrap();
-    state.prefs.set_user("dlna", true).unwrap();
+    state.prefs.set("background_service_enabled", true).unwrap();
+    state.prefs.set("dlna", true).unwrap();
 
     let soap = format!(
         r#"<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1"><InstanceID>0</InstanceID><CurrentURI>http://example/{}</CurrentURI><CurrentURIMetaData/></u:SetAVTransportURI></s:Body></s:Envelope>"#,
@@ -448,7 +448,7 @@ async fn an_oversized_control_request_never_reaches_the_protocol() {
 async fn receiver_name_uses_the_native_default_and_current_core_setting_without_host_calls() {
     let (_dir, server) = fixture();
     let state = server.runtime_state();
-    state.prefs.set_user("device_name", "").unwrap();
+    state.prefs.set("device_name", "").unwrap();
     let (_generation, mut requests) = state.host.connect();
     assert_eq!(
         device_name(&state).await.unwrap(),
@@ -456,7 +456,7 @@ async fn receiver_name_uses_the_native_default_and_current_core_setting_without_
     );
     state
         .prefs
-        .set_user("device_name", "Shared Renderer")
+        .set("device_name", "Shared Renderer")
         .unwrap();
     assert_eq!(device_name(&state).await.unwrap(), "Shared Renderer");
     assert!(requests.try_recv().is_err());
@@ -477,7 +477,7 @@ impl MainDlnaClient {
                 .0
                 .execute(
                     async_graphql::Request::new(
-                        "mutation($value:JSON!){setUserPref(key:\"dlna\",value:$value)}",
+                        "mutation($value:JSON!){setPref(key:\"dlna\",value:$value)}",
                     )
                     .variables(async_graphql::Variables::from_json(
                         json!({"value":enabled}),

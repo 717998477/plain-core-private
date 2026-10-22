@@ -52,21 +52,19 @@ pub struct Db(
     Arc<Mutex<Connection>>,
     Arc<state::State>,
     #[cfg(feature = "library")] Arc<crate::media::audio::state::Runtime>,
+    #[cfg(feature = "library")] Arc<crate::media::audio::state::Runtime>,
 );
 
 impl Db {
     pub fn open(db_path: &Path) -> rusqlite::Result<Self> {
         #[cfg(feature = "library")]
         {
-            let prefs = if db_path == Path::new(":memory:") {
-                crate::prefs::Prefs::in_memory()
-            } else {
-                crate::prefs::Prefs::load(&crate::prefs::default_path(
-                    db_path.parent().unwrap_or(Path::new(".")),
-                ))
-                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?
+            let store = if db_path == Path::new(":memory:") { None } else {
+                Some(Arc::new(crate::kv::Db::open(&crate::data_paths::DataPaths::new(
+                    db_path.parent().unwrap_or(Path::new("."))).kv())
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?))
             };
-            Self::open_with_prefs(db_path, Arc::new(prefs))
+            Self::open_audio(db_path, store)
         }
         #[cfg(not(feature = "library"))]
         {
@@ -77,20 +75,35 @@ impl Db {
     }
 
     #[cfg(feature = "library")]
-    pub fn open_with_prefs(
-        db_path: &Path,
-        prefs: Arc<crate::prefs::Prefs>,
-    ) -> rusqlite::Result<Self> {
+    pub fn open_with_kv(db_path: &Path, store: Arc<crate::kv::Db>) -> rusqlite::Result<Self> {
+        Self::open_audio(db_path, Some(store))
+    }
+
+    #[cfg(feature = "library")]
+    fn open_audio(db_path: &Path, store: Option<Arc<crate::kv::Db>>) -> rusqlite::Result<Self> {
         let connection = Self::open_connection(db_path)?;
         let state = state::State::new(&connection);
-        Ok(Self(
-            Arc::new(Mutex::new(connection)),
-            Arc::new(state),
-            Arc::new(
-                crate::media::audio::state::Runtime::new(prefs)
-                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
-            ),
-        ))
+        let runtime = |key| crate::media::audio::state::Runtime::new(store.clone(), key)
+            .map(Arc::new).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)));
+        Ok(Self(Arc::new(Mutex::new(connection)), Arc::new(state),
+            runtime("local_audio_current_media_id")?, runtime("remote_audio_current_media_id")?))
+    }
+
+    #[cfg(feature = "library")]
+    // The queue and library stay shared; only playback state changes.
+    pub fn remote_audio(&self) -> Self {
+        Self(self.0.clone(), self.1.clone(), self.3.clone(), self.2.clone())
+    }
+
+    #[cfg(feature = "library")]
+    pub fn audio_selected_ids(&self) -> Vec<String> {
+        [&self.2, &self.3].iter()
+            .filter_map(|runtime| runtime.read(|state| state.current_media_id.clone())).collect()
+    }
+
+    #[cfg(feature = "library")]
+    pub fn key_values(&self) -> Option<Arc<crate::kv::Db>> {
+        self.audio().key_values()
     }
 
     #[cfg(feature = "library")]

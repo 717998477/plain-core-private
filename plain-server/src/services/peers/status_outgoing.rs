@@ -81,7 +81,7 @@ impl Outgoing {
     pub(crate) fn reconcile(self: &Arc<Self>, state: &ServerState, epoch: u64) -> Result<()> {
         let actor = state
             .prefs
-            .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+            .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
             .unwrap_or_default();
         let wanted: HashMap<String, DPeer> = peers::all(&state.db)?
             .into_iter()
@@ -168,7 +168,7 @@ impl Outgoing {
             };
             let Ok(actor) = state
                 .prefs
-                .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)
+                .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)
             else {
                 break;
             };
@@ -194,7 +194,7 @@ impl Outgoing {
         ensure!(self.current(epoch), "Status runtime stopped");
         let actor = state
             .prefs
-            .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+            .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
             .filter(|id| !id.is_empty())
             .ok_or_else(|| anyhow::anyhow!("Missing identity"))?;
         let selected_ip = peer.best_ip();
@@ -222,7 +222,7 @@ impl Outgoing {
         ensure!(
             state
                 .prefs
-                .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+                .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
                 .as_deref()
                 == Some(&actor),
             "Identity changed"
@@ -296,7 +296,7 @@ impl Outgoing {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         loop {
             tokio::select! {
-                _=tick.tick()=>ensure!(state.peer_status.connections.valid(&state.db,&lease) && peer.best_ip()==selected_ip && state.prefs.get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?.as_deref()==Some(&actor),"Peer changed"),
+                _=tick.tick()=>ensure!(state.peer_status.connections.valid(&state.db,&lease) && peer.best_ip()==selected_ip && state.prefs.get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?.as_deref()==Some(&actor),"Peer changed"),
                 frame=socket.next()=>match frame { Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_)))|None|Some(Err(_))=>return Err(anyhow::anyhow!("Status connection closed")),_=>{} }
             }
         }

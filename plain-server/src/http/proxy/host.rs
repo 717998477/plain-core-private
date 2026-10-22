@@ -23,7 +23,7 @@ pub(crate) struct Params {
 }
 
 fn desktop_access_allowed(state: &ServerState) -> bool {
-    state.prefs.get_user_or("desktop_access", true)
+    state.prefs.get_or("desktop_access", true)
 }
 
 /// The decrypted value is handed straight to an outbound client, so accept only
@@ -48,7 +48,7 @@ fn target_url(plaintext: &str) -> anyhow::Result<&str> {
 fn decode_target(state: &ServerState, id: &str) -> anyhow::Result<String> {
     let token = state
         .prefs
-        .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
+        .get::<String>(plain_rs::prefs::pref_keys::URL_TOKEN)
         .unwrap_or_default();
     let key = plain_rs::utils::base64::base64_decode(token.as_deref().unwrap_or_default());
     anyhow::ensure!(key.len() == 32, "url token is not available");

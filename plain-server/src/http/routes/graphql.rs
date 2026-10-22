@@ -46,7 +46,7 @@ async fn run_development(state: &ServerState, body: Bytes) -> Result<Response, S
 /// An unset token never matches, and the comparison is constant time so a
 /// wrong guess cannot learn the real one from response timing.
 pub(crate) fn dev_bearer_matches(state: &ServerState, authorization: &str) -> Result<bool, ()> {
-    let expected = plain_rs::prefs::system::dev_token(&state.prefs).map_err(|_| ())?;
+    let expected = plain_rs::prefs::security::dev_token(&state.prefs).map_err(|_| ())?;
     if expected.is_empty() {
         return Ok(false);
     }
@@ -86,7 +86,7 @@ async fn execute(
     if state.authenticated(headers) {
         return run_local(state, body).await;
     }
-    if !state.prefs.get_user_or("desktop_access", true) {
+    if !state.prefs.get_or("desktop_access", true) {
         return Err(StatusCode::NOT_FOUND);
     }
     // The server development bearer. It stands in for a session so the server
@@ -243,8 +243,8 @@ pub(crate) async fn shutdown(
     if !shutdown_allowed(address) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    match crate::services::settings::user_preferences::UserPreferences::from_server(&state)
-        .patch(plain_rs::prefs::user::UserSettingsPatch {
+    match crate::services::settings::preferences::Preferences::from_server(&state)
+        .patch(plain_rs::prefs::settings::SettingsPatch {
             desktop_access: Some(false),
             ..Default::default()
         })
@@ -272,7 +272,7 @@ pub(crate) async fn init(
     if client_id.is_empty() {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    if !state.prefs.get_user_or("desktop_access", true) {
+    if !state.prefs.get_or("desktop_access", true) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let key = crate::services::sessions::local_key(&state, client_id).or(
@@ -285,7 +285,7 @@ pub(crate) async fn init(
         .is_some_and(|key| plain_rs::crypto::xchacha_decrypt_raw(key, &body).is_some());
     let password_required = state
         .prefs
-        .get_or(plain_rs::prefs::system::keys::PASSWORD_TYPE, 2_i32)
+        .get_or(plain_rs::prefs::pref_keys::PASSWORD_TYPE, 2_i32)
         == 1;
     let pair = match crate::services::peers::peer_wire::signing_keypair(&state.prefs) {
         Ok(pair) => pair,

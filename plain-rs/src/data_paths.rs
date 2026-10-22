@@ -19,11 +19,8 @@ impl DataPaths {
     pub fn database(&self) -> PathBuf {
         self.root.join("plain.db")
     }
-    pub fn system_prefs(&self) -> PathBuf {
-        self.root.join("system_prefs.json")
-    }
-    pub fn user_prefs(&self) -> PathBuf {
-        self.root.join("user_prefs.json")
+    pub fn prefs(&self) -> PathBuf {
+        self.root.join("prefs.json")
     }
     pub fn kv(&self) -> PathBuf {
         self.root.join("fjall")

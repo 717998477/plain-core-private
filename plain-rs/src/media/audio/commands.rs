@@ -118,7 +118,7 @@ pub fn command(
                 return Err(DomainError::Other("invalid playback speed".into()));
             }
             prefs
-                .set_user("audio_playback_speed", speed)
+                .set("audio_playback_speed", speed)
                 .map_err(|e| DomainError::Other(e.to_string()))?;
             audio_playback::invalidate(db)?
         }
@@ -187,7 +187,7 @@ fn dispatch(
     let speed = match speed {
         Some(value) => value,
         None => prefs
-            .get_user::<f32>("audio_playback_speed")
+            .get::<f32>("audio_playback_speed")
             .map_err(|e| DomainError::Other(e.to_string()))?
             .unwrap_or(1.0),
     };

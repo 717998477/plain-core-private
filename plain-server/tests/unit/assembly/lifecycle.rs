@@ -215,7 +215,7 @@ async fn health_and_loopback_shutdown_work_without_a_host() {
     let response = client.get(format!("{base}/shutdown")).send().await.unwrap();
     assert_eq!(response.status(), 410);
     assert!(
-        !plain_rs::prefs::user::snapshot(&server.runtime_state().prefs)
+        !plain_rs::prefs::settings::snapshot(&server.runtime_state().prefs)
             .unwrap()
             .desktop_access
     );

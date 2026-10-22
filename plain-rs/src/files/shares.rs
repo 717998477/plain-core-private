@@ -113,7 +113,7 @@ impl Service {
             .ok_or_else(|| anyhow::anyhow!("share not found"))
     }
     pub fn active(&self, id: &str, guest: bool) -> anyhow::Result<Option<ShareRow>> {
-        if guest && !self.prefs.get_user::<bool>("service")?.unwrap_or(false) {
+        if guest && !self.prefs.get::<bool>("background_service_enabled")?.unwrap_or(false) {
             return Ok(None);
         }
         Ok(self
@@ -130,7 +130,7 @@ impl Service {
         anyhow::ensure!(self.db.share_get(id)?.is_some(), "share not found");
         let secret = self
             .prefs
-            .get::<String>(crate::prefs::system::keys::MASTER_SECRET)?
+            .get::<String>(crate::prefs::pref_keys::MASTER_SECRET)?
             .ok_or_else(|| anyhow::anyhow!("master secret not initialized"))?;
         let key = crate::utils::base64::base64_decode_checked(&secret)?;
         anyhow::ensure!(key.len() == 32, "invalid master secret");

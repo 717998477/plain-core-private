@@ -4,7 +4,7 @@ use crate::{
     platform::network::{self, NetworkType},
 };
 use anyhow::{Result, ensure};
-use plain_rs::{db::notes_feeds::FeedRow, prefs::user::UserSettings};
+use plain_rs::{db::notes_feeds::FeedRow, prefs::settings::Settings};
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -33,7 +33,7 @@ fn next_at(last: Option<&str>, interval: i32, now_ms: i64) -> Result<i64> {
     Ok(last.saturating_add(i64::from(interval) * 1000))
 }
 fn due(
-    settings: &UserSettings,
+    settings: &Settings,
     feeds: Vec<FeedRow>,
     now_ms: i64,
 ) -> Result<(Vec<FeedRow>, Option<i64>)> {
@@ -57,7 +57,7 @@ fn due(
 }
 async fn scheduled_feeds(
     db: Arc<Db>,
-    settings: &UserSettings,
+    settings: &Settings,
     now: i64,
 ) -> Result<(Vec<FeedRow>, Option<i64>)> {
     let settings = settings.clone();
@@ -72,7 +72,7 @@ async fn queue_due(
     lease: &str,
 ) -> Result<Vec<watch::Receiver<FeedSyncState>>> {
     let _policy = state.feeds.policy_gate.lock().await;
-    let settings = plain_rs::prefs::user::snapshot(&state.prefs)?;
+    let settings = plain_rs::prefs::settings::snapshot(&state.prefs)?;
     if !settings.feed_auto_refresh {
         state.feeds.apply_auto_policy(false, false);
     }
@@ -282,7 +282,7 @@ pub(crate) fn start(state: ServerState) {
 }
 async fn tick(state: &ServerState, previous_wake: &mut Option<Option<i64>>) -> Result<Duration> {
     let _policy = state.feeds.policy_gate.lock().await;
-    let settings = plain_rs::prefs::user::snapshot(&state.prefs)?;
+    let settings = plain_rs::prefs::settings::snapshot(&state.prefs)?;
     if !settings.feed_auto_refresh {
         state.feeds.apply_auto_policy(false, false);
     }

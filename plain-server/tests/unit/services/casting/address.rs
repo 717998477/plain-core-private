@@ -18,7 +18,7 @@ async fn configured_device_names_need_no_network_or_host_facts() {
     let state = core.runtime_state();
     state
         .prefs
-        .set_user("device_name", "Configured renderer")
+        .set("device_name", "Configured renderer")
         .unwrap();
     let (_generation, mut requests) = state.host.connect();
     assert_eq!(device_name(&state).await.unwrap(), "Configured renderer");

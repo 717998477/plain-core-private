@@ -11,8 +11,8 @@ fn fixture() -> (
     tokio::sync::broadcast::Receiver<WsEvent>,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let prefs = Arc::new(Prefs::load(&dir.path().join("system_prefs.json")).unwrap());
-    plain_rs::prefs::system::bootstrap(&prefs).unwrap();
+    let prefs = Arc::new(Prefs::load(&dir.path().join("prefs.json")).unwrap());
+    plain_rs::prefs::security::bootstrap(&prefs).unwrap();
     let (events, receiver) = broadcast::channel(32);
     let schema = Schema::build(
         crate::graphql::resolvers::settings::public::PrefsQuery,
@@ -24,33 +24,11 @@ fn fixture() -> (
     )
     .data(prefs)
     .data(events)
+    .data(crate::graphql::executor::RequestOrigin::Local)
     .finish();
     (dir, schema, receiver)
 }
 
-#[tokio::test]
-async fn recent_searches_clear_through_the_boolean_preference_write_with_shared_events() {
-    let (_directory, schema, mut events) = fixture();
-    let prefs = schema.data::<Arc<Prefs>>().unwrap();
-    prefs
-        .set_user("recent_searches", serde_json::json!(["first", "second"]))
-        .unwrap();
-    for changed in [true, false] {
-        let response = schema
-            .execute("mutation{setUserPref(key:\"recent_searches\",value:[])}")
-            .await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
-        assert_eq!(response.data.into_json().unwrap()["setUserPref"], true);
-        assert_eq!(
-            plain_rs::prefs::user::snapshot(prefs)
-                .unwrap()
-                .recent_searches,
-            serde_json::json!([])
-        );
-        assert_eq!(events.try_recv().is_ok(), changed);
-        assert!(events.try_recv().is_err());
-    }
-}
 
 #[tokio::test]
 async fn adb_token_verification_uses_native_management_and_has_no_graphql_oracle() {
@@ -104,16 +82,18 @@ async fn native_user_settings_snapshot_preserves_defaults_and_json_values() {
     )
     .unwrap();
     let state = core.runtime_state();
-    state.prefs.set_user("editor_font_size", 20).unwrap();
+    state.prefs.set("editor_font_size", 20).unwrap();
     state
         .prefs
-        .set_user("feed_auto_refresh_interval", 2345)
+        .set("feed_auto_refresh_interval", 2345)
         .unwrap();
     let expected =
-        serde_json::to_value(plain_rs::prefs::user::snapshot(&state.prefs).unwrap()).unwrap();
+        serde_json::to_value(plain_rs::prefs::settings::snapshot(&state.prefs).unwrap()).unwrap();
     let actual =
-        serde_json::to_value(core.native_management().unwrap().user_settings().unwrap()).unwrap();
-    assert_eq!(actual, expected);
+        serde_json::to_value(core.native_management().unwrap().prefs_snapshot().unwrap()).unwrap();
+    for (key, value) in expected.as_object().unwrap() {
+        assert_eq!(&actual[key], value, "{key}");
+    }
     assert_eq!(actual["feedAutoRefreshIntervalSec"], 2345);
     core.stop_core().await;
 }
@@ -123,34 +103,34 @@ async fn graphql_settings_are_isolated_between_devices() {
     let (_a, first, mut events) = fixture();
     let (_b, second, _) = fixture();
     let response = first
-        .execute("mutation { setUserPref(key:\"editor_font_size\",value:20) }")
+        .execute("mutation { setPref(key:\"editor_font_size\",value:20) }")
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert_eq!(events.recv().await.unwrap().event_type, "PREFS_UPDATED");
-    let first = first.execute("{userPrefs}").await.data.into_json().unwrap();
+    let first = first.execute("{prefs}").await.data.into_json().unwrap();
     let second = second
-        .execute("{userPrefs}")
+        .execute("{prefs}")
         .await
         .data
         .into_json()
         .unwrap();
-    assert_eq!(first["userPrefs"]["editor_font_size"], 20);
-    assert!(second["userPrefs"]["editor_font_size"].is_null());
+    assert_eq!(first["prefs"]["editor_font_size"], 20);
+    assert!(second["prefs"]["editor_font_size"].is_null());
 }
 #[tokio::test]
 async fn system_commands_validate_and_do_not_return_private_keys() {
     let (_dir, schema, _) = fixture();
     let invalid = schema
-        .execute("mutation {setSystemPref(key:\"password_type\",value:4){affectedCount}}")
+        .execute("mutation {setPref(key:\"password_type\",value:4)}")
         .await;
     assert!(!invalid.errors.is_empty());
     let updated = schema
-        .execute("mutation {setSystemPref(key:\"auth_two_factor\",value:false){affectedCount}}")
+        .execute("mutation {setPref(key:\"login_require_approval\",value:false)}")
         .await;
     assert!(updated.errors.is_empty(), "{:?}", updated.errors);
     let prefs = schema.data::<Arc<Prefs>>().unwrap();
-    let snapshot = plain_rs::prefs::system::snapshot(prefs).unwrap();
-    assert!(!snapshot.auth_two_factor);
+    let snapshot = plain_rs::prefs::security::snapshot(prefs).unwrap();
+    assert!(!snapshot.login_require_approval);
     assert!(!snapshot.client_id.is_empty());
     assert!(!snapshot.signature_public_key.is_empty());
     assert!(
@@ -163,11 +143,11 @@ async fn system_commands_validate_and_do_not_return_private_keys() {
 }
 
 #[tokio::test]
-async fn runtime_system_preferences_validate_before_publishing() {
+async fn runtime_security_preferences_validate_before_publishing() {
     let (_dir, schema, mut events) = fixture();
     for (key, value) in [("log_level", "\"debug\""), ("dev_token", "\"development\"")] {
         let document = format!(
-            "mutation {{ setSystemPref(key: \"{key}\", value: {value}) {{ affectedCount }} }}"
+            "mutation {{ setPref(key: \"{key}\", value: {value}) }}"
         );
         let response = schema.execute(document).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
@@ -175,8 +155,8 @@ async fn runtime_system_preferences_validate_before_publishing() {
         assert!(events.try_recv().is_err());
     }
     for document in [
-        "mutation { setSystemPref(key: \"log_level\", value: \"invalid\") { affectedCount } }",
-        "mutation { setSystemPref(key: \"dev_token\", value: 1) { affectedCount } }",
+        "mutation { setPref(key: \"log_level\", value: \"invalid\") }",
+        "mutation { setPref(key: \"dev_token\", value: 1) }",
     ] {
         assert!(!schema.execute(document).await.errors.is_empty());
         assert!(events.try_recv().is_err());
@@ -187,9 +167,6 @@ async fn runtime_system_preferences_validate_before_publishing() {
 async fn app_preference_actions_execute_through_the_main_mutations() {
     let (_directory, schema, mut events) = fixture();
     for selection in [
-        r#"recordRecentSearch(query:"quoted \"term\" αβγ")"#,
-        r#"removeRecentSearch(query:"quoted \"term\" αβγ")"#,
-        r#"recordRecentSaveDirectory(path:"/selected directory")"#,
         r#"setNotificationFilterMode(mode:"allowlist")"#,
         "clearNotificationFilterApps",
     ] {
@@ -223,14 +200,9 @@ async fn app_preference_actions_execute_through_the_main_mutations() {
             "one changed action publishes once; unchanged actions publish nothing"
         );
     }
-    let response = schema.execute("{userPrefs}").await;
+    let response = schema.execute("{prefs}").await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let settings = response.data.into_json().unwrap()["userPrefs"].clone();
-    assert_eq!(settings["recent_searches"], serde_json::json!([]));
-    assert_eq!(
-        settings["recent_save_dirs"],
-        serde_json::json!(["/selected directory"])
-    );
+    let settings = response.data.into_json().unwrap()["prefs"].clone();
     assert_eq!(
         settings["notification_filter"],
         serde_json::json!({"mode":"allowlist","apps":[]})
@@ -240,11 +212,11 @@ async fn app_preference_actions_execute_through_the_main_mutations() {
 #[tokio::test]
 async fn result_only_user_patch_does_not_read_unselected_system_settings() {
     let directory = tempfile::tempdir().unwrap();
-    let prefs = Arc::new(Prefs::load(&directory.path().join("system_prefs.json")).unwrap());
-    plain_rs::prefs::system::bootstrap(&prefs).unwrap();
+    let prefs = Arc::new(Prefs::load(&directory.path().join("prefs.json")).unwrap());
+    plain_rs::prefs::security::bootstrap(&prefs).unwrap();
     prefs
         .set(
-            plain_rs::prefs::system::keys::UPDATE_INFO,
+            "unused_setting",
             serde_json::json!("malformed unrelated system data"),
         )
         .unwrap();
@@ -259,12 +231,12 @@ async fn result_only_user_patch_does_not_read_unselected_system_settings() {
     .data(prefs.clone())
     .finish();
     let response = schema
-        .execute(r#"mutation{setUserPref(key:"editor_font_size",value:21)}"#)
+        .execute(r#"mutation{setPref(key:"editor_font_size",value:21)}"#)
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(response.data.into_json().unwrap()["setUserPref"], true);
+    assert_eq!(response.data.into_json().unwrap()["setPref"], true);
     assert_eq!(
-        plain_rs::prefs::user::snapshot(&prefs)
+        plain_rs::prefs::settings::snapshot(&prefs)
             .unwrap()
             .editor_font_size,
         21
@@ -277,45 +249,30 @@ async fn result_only_user_patch_does_not_read_unselected_system_settings() {
 }
 
 #[tokio::test]
-async fn desktop_namespaced_preferences_use_the_main_settings_mutations() {
-    let (directory, schema, mut events) = fixture();
-    let request = async_graphql::Request::new(
-        "mutation($key:String!,$value:JSON!){setSystemPref(key:$key,value:$value){affectedCount}}",
-    )
-    .variables(async_graphql::Variables::from_json(serde_json::json!({
-        "key":"main_state:peer", "value":{"selected":"files","query":"quoted \"value\""}
-    })));
-    let response = schema.execute(request).await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(events.try_recv().unwrap().event_type, "PREFS_UPDATED");
-    let prefs = Prefs::load(&directory.path().join("system_prefs.json")).unwrap();
-    let value = prefs.get::<Value>("main_state:peer").unwrap().unwrap();
-    assert_eq!(value["selected"], "files");
-    assert_eq!(value["query"], "quoted \"value\"");
-    let response = schema
-        .execute(r#"mutation{removeSystemPref(key:"main_state:peer"){affectedCount}}"#)
-        .await;
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(
-        response.data.into_json().unwrap()["removeSystemPref"]["affectedCount"],
-        1
-    );
-    assert_eq!(events.try_recv().unwrap().event_type, "PREFS_UPDATED");
-    let prefs = Prefs::load(&directory.path().join("system_prefs.json")).unwrap();
-    assert!(prefs.get::<Value>("main_state:peer").unwrap().is_none());
-    for key in [
-        "client_id",
-        "signature_key_pair",
-        "../preferences",
-        "key with spaces",
+async fn generic_writes_and_removals_reject_unknown_and_rust_owned_keys() {
+    let (_directory, schema, mut events) = fixture();
+    for origin in [crate::graphql::executor::RequestOrigin::Local, crate::graphql::executor::RequestOrigin::Remote] {
+        for key in ["main_state:peer", "client_id", "signature_key_pair", "../preferences", "key with spaces"] {
+            for document in [format!(r#"mutation {{ setPref(key:{key:?},value: "changed") }}"#), format!("mutation {{ removePref(key:{key:?}) }}")] {
+                let response = schema.execute(async_graphql::Request::new(document).data(origin)).await;
+                assert!(!response.errors.is_empty(), "{key}");
+                assert!(events.try_recv().is_err());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn remote_cannot_write_remove_or_reset_local_security_settings() {
+    let (_directory, schema, mut events) = fixture();
+    for document in [
+        r#"mutation { setPref(key:"http_port",value:8080) }"#,
+        r#"mutation { removePref(key:"http_port") }"#,
+        "mutation { resetPassword }", "mutation { resetUrlToken }", "mutation { resetAdbToken }",
+        r#"mutation { setNotificationFilterMode(mode:"allowlist") { affectedCount } }"#,
     ] {
-        let request = async_graphql::Request::new(
-            "mutation($key:String!){setSystemPref(key:$key,value:\"changed\"){affectedCount}}",
-        )
-        .variables(async_graphql::Variables::from_json(
-            serde_json::json!({"key":key}),
-        ));
-        assert!(!schema.execute(request).await.errors.is_empty(), "{key}");
+        let response = schema.execute(async_graphql::Request::new(document).data(crate::graphql::executor::RequestOrigin::Remote)).await;
+        assert!(!response.errors.is_empty(), "{document}");
         assert!(events.try_recv().is_err());
     }
 }
@@ -323,8 +280,8 @@ async fn desktop_namespaced_preferences_use_the_main_settings_mutations() {
 #[tokio::test]
 async fn explicit_resets_generate_rust_owned_values_without_returning_secrets() {
     let (directory, schema, mut events) = fixture();
-    let prefs = Prefs::load(&directory.path().join("system_prefs.json")).unwrap();
-    let before = plain_rs::prefs::system::snapshot(&prefs).unwrap();
+    let prefs = Prefs::load(&directory.path().join("prefs.json")).unwrap();
+    let before = plain_rs::prefs::security::snapshot(&prefs).unwrap();
     let response = schema
         .execute("mutation{resetPassword resetUrlToken resetAdbToken}")
         .await;
@@ -333,8 +290,8 @@ async fn explicit_resets_generate_rust_owned_values_without_returning_secrets() 
         response.data.into_json().unwrap(),
         serde_json::json!({"resetPassword":true,"resetUrlToken":true,"resetAdbToken":true})
     );
-    let persisted = Prefs::load(&directory.path().join("system_prefs.json")).unwrap();
-    let after = plain_rs::prefs::system::snapshot(&persisted).unwrap();
+    let persisted = Prefs::load(&directory.path().join("prefs.json")).unwrap();
+    let after = plain_rs::prefs::security::snapshot(&persisted).unwrap();
     assert_ne!(after.password, before.password);
     assert_ne!(after.url_token, before.url_token);
     assert_ne!(after.adb_token, before.adb_token);

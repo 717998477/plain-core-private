@@ -42,8 +42,8 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
     use tokio_tungstenite::tungstenite::Message;
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
-    prefs.set_user("service", true).unwrap();
-    prefs.set_user("device_name", "fixture tablet").unwrap();
+    prefs.set("background_service_enabled", true).unwrap();
+    prefs.set("device_name", "fixture tablet").unwrap();
     prefs.set("client_id", "local").unwrap();
     let (local_keypair, local_public_key) = plain_rs::crypto::ed25519_generate();
     prefs
@@ -294,7 +294,7 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
         .await
         .unwrap()
         .unwrap();
-    prefs.set_user("service", false).unwrap();
+    prefs.set("background_service_enabled", false).unwrap();
     assert_eq!(
         client
             .post(&public_url)

@@ -10,7 +10,7 @@ pub enum Command {
     SetPasswordType {
         value: i32,
     },
-    SetTwoFactor {
+    SetLoginRequireApproval {
         enabled: bool,
     },
     SetRotateUrlToken {
@@ -29,12 +29,8 @@ pub enum Command {
     PatchApiPermissions {
         permissions: std::collections::BTreeMap<String, bool>,
     },
-    CompleteOnboarding,
     SetMdnsHostname {
         hostname: String,
-    },
-    PatchUpdate {
-        patch: UpdatePatch,
     },
 }
 
@@ -67,12 +63,12 @@ impl Command {
             _ => {}
         }
         let mut changed = false;
-        prefs.update_system(|map| {
+        prefs.update(|map| {
             let before = map.clone();
             match self {
                 Self::SetPassword { password } => put(map, PASSWORD, password)?,
                 Self::SetPasswordType { value } => put(map, PASSWORD_TYPE, value)?,
-                Self::SetTwoFactor { enabled } => put(map, AUTH_TWO_FACTOR, enabled)?,
+                Self::SetLoginRequireApproval { enabled } => put(map, LOGIN_REQUIRE_APPROVAL, enabled)?,
                 Self::SetRotateUrlToken { enabled } => {
                     put(map, ROTATE_URL_TOKEN_ON_RESTART, enabled)?
                 }
@@ -108,13 +104,8 @@ impl Command {
                     current.dedup();
                     put(map, API_PERMISSIONS, current)?;
                 }
-                Self::CompleteOnboarding => put(map, ONBOARDING_COMPLETED, true)?,
                 Self::SetMdnsHostname { hostname } => put(map, MDNS_HOSTNAME, hostname)?,
-                Self::PatchUpdate { patch } => {
-                    let mut info: UpdateInfo = read(map, UPDATE_INFO)?;
-                    patch.apply(&mut info);
-                    put(map, UPDATE_INFO, info)?;
-                }
+
             }
             changed = before != *map;
             Ok(())

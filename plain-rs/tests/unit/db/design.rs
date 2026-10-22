@@ -58,21 +58,15 @@ fn installed_schema_matches_generated_definitions() {
 }
 
 #[test]
-fn current_track_reopens_from_preferences_without_playback_progress() {
+fn current_track_reopens_from_kv_without_playback_progress() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db");
     let db = Db::open(&path).unwrap();
     let id = register(&db);
     crate::media::audio::queue::save_audio_current(&db, "/track.mp3").unwrap();
     crate::media::audio::playback::seek(&db, 123).unwrap();
-    let prefs = crate::prefs::Prefs::load(&crate::prefs::default_path(directory.path())).unwrap();
-    let stored = prefs
-        .get::<serde_json::Value>("audio_current_media_id")
-        .unwrap()
-        .unwrap();
-    assert_eq!(stored, id);
-    assert!(stored.get("current_path").is_none());
-    assert!(stored.get("position_ms").is_none());
+    let stored = db.key_values().unwrap().get("local_audio_current_media_id").unwrap().unwrap();
+    assert_eq!(std::str::from_utf8(&stored).unwrap(), id);
     drop(db);
     let reopened = Db::open(&path).unwrap();
     assert_eq!(
@@ -84,37 +78,6 @@ fn current_track_reopens_from_preferences_without_playback_progress() {
     assert_eq!(reopened.audio_current_media_id(), Some(id));
 }
 
-#[test]
-fn preference_write_failure_rolls_back_database_and_runtime() {
-    let directory = tempfile::tempdir().unwrap();
-    let prefs_path = crate::prefs::default_path(directory.path());
-    let prefs = Arc::new(crate::prefs::Prefs::load(&prefs_path).unwrap());
-    let db = Db::open_with_prefs(Path::new(":memory:"), prefs.clone()).unwrap();
-    register(&db);
-    std::fs::create_dir(&prefs_path).unwrap();
-    assert!(
-        db.audio_transaction(|tx, state| {
-            tx.execute("UPDATE media_items SET title='Changed'", [])?;
-            crate::db::audio_queue::io::save_current(tx, "/track.mp3", state)?;
-            state.select("/track.mp3")
-        })
-        .is_err()
-    );
-    assert_eq!(
-        db.media_file_by_path(DataType::Audio, "/track.mp3")
-            .unwrap()
-            .unwrap()
-            .title,
-        "Track"
-    );
-    assert_eq!(db.audio_current_media_id(), None);
-    assert!(
-        prefs
-            .get::<serde_json::Value>("audio_current_media_id")
-            .unwrap()
-            .is_none()
-    );
-}
 
 #[test]
 fn sms_and_mms_with_equal_ids_restore_independently() {

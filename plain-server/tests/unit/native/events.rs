@@ -20,7 +20,7 @@ fn fixture() -> (
     core.runtime_state()
         .prefs
         .set(
-            plain_rs::prefs::system::keys::URL_TOKEN,
+            plain_rs::prefs::pref_keys::URL_TOKEN,
             plain_rs::utils::base64::base64_encode(&KEY),
         )
         .unwrap();
@@ -191,7 +191,7 @@ async fn invalid_stored_event_keys_refuse_subscription() {
     state
         .prefs
         .set(
-            plain_rs::prefs::system::keys::URL_TOKEN,
+            plain_rs::prefs::pref_keys::URL_TOKEN,
             plain_rs::utils::base64::base64_encode(&KEY[..31]),
         )
         .unwrap();
@@ -204,7 +204,7 @@ async fn invalid_stored_event_keys_refuse_subscription() {
     state
         .prefs
         .set(
-            plain_rs::prefs::system::keys::URL_TOKEN,
+            plain_rs::prefs::pref_keys::URL_TOKEN,
             plain_rs::utils::base64::base64_encode(&KEY),
         )
         .unwrap();

@@ -76,7 +76,7 @@ async fn multipart_regular_upload_streams_without_host_preserves_replacements_an
     let prefs = std::sync::Arc::new(
         plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap(),
     );
-    prefs.set_user("desktop_access", true).unwrap();
+    prefs.set("desktop_access", true).unwrap();
     let core = crate::assembly::server::ContentServer::start(
         directory.path(),
         &plain_rs::utils::base64::base64_encode(&[7; 32]),
@@ -168,7 +168,7 @@ async fn native_upload_chunks_use_the_main_identity_key_and_the_owned_chunk_dire
     let prefs = std::sync::Arc::new(
         plain_rs::prefs::Prefs::load(&directory.path().join("prefs.json")).unwrap(),
     );
-    prefs.set_user("desktop_access", true).unwrap();
+    prefs.set("desktop_access", true).unwrap();
     plain_rs::prefs::identity::ensure_url_token(&prefs);
     let core =
         crate::assembly::server::ContentServer::start(directory.path(), &token, prefs).unwrap();

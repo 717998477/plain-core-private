@@ -1,7 +1,6 @@
 use crate::host::bridge::Host;
 use plain_rs::db::Db;
 use plain_rs::events::WsEvent;
-use plain_rs::prefs::Prefs;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -55,7 +54,7 @@ pub(crate) struct Runtime {
     state: Mutex<PendingState>,
     send: tokio::sync::Mutex<()>,
     host: Arc<Host>,
-    prefs: Arc<Prefs>,
+    store: Arc<plain_rs::kv::LazyDb>,
     db: Arc<Db>,
     directory: std::path::PathBuf,
     events: broadcast::Sender<WsEvent>,
@@ -69,9 +68,9 @@ pub(crate) struct Runtime {
 impl Runtime {
     pub fn new(
         host: Arc<Host>,
-        prefs: Arc<Prefs>,
         db: Arc<Db>,
         directory: std::path::PathBuf,
+        store: Arc<plain_rs::kv::LazyDb>,
         events: broadcast::Sender<WsEvent>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -79,7 +78,7 @@ impl Runtime {
             state: Mutex::new(PendingState::default()),
             send: tokio::sync::Mutex::new(()),
             host,
-            prefs,
+            store,
             db,
             directory,
             events,
@@ -185,12 +184,12 @@ impl Runtime {
     pub fn replay(&self) -> anyhow::Result<()> {
         let _guard = self.outbox.lock().unwrap();
         let now = chrono::Utc::now().timestamp_millis();
-        let mut terminal: Vec<Value> = self.prefs.get_or("mms_terminal_results", Vec::new());
+        let mut terminal: Vec<Value> = self.store.get()?.get_json("mms_send_results")?.unwrap_or_default();
         terminal.retain(|value| {
             now.saturating_sub(value["terminalAtMillis"].as_i64().unwrap_or_default()) < 300_000
         });
         terminal.sort_by_key(|value| value["terminalAtMillis"].as_i64().unwrap_or_default());
-        self.prefs.set("mms_terminal_results", &terminal)?;
+        self.store.get()?.set_json("mms_send_results", &terminal)?;
         for value in terminal {
             let _ = self.events.send(WsEvent::broadcast(
                 "MMS_SEND_RESULT",
@@ -343,16 +342,16 @@ impl Runtime {
             json!({"pendingId":pending.id,"success":result_code==0,"resultCode":result_code});
         {
             let _guard = self.outbox.lock().unwrap();
-            let mut terminal: Vec<Value> = self.prefs.get_or("mms_terminal_results", Vec::new());
-            terminal.push(
-                json!({"terminalAtMillis":chrono::Utc::now().timestamp_millis(),"result":result}),
-            );
-            if terminal.len() > 500 {
-                terminal.drain(..terminal.len() - 500);
-            }
-            if let Err(error) = self.prefs.set("mms_terminal_results", &terminal) {
-                log::warn!("MMS result persistence failed: {error}");
-            }
+            let saved = (|| -> anyhow::Result<()> {
+                let store = self.store.get()?;
+                store.update_json("mms_send_results", |terminal: &mut Vec<Value>| {
+                    terminal.push(json!({"terminalAtMillis":chrono::Utc::now().timestamp_millis(),"result":result}));
+                    if terminal.len() > 500 { terminal.drain(..terminal.len() - 500); }
+                    Ok(())
+                })
+            })();
+            if let Err(error) = saved { log::warn!("MMS result persistence failed: {error}"); }
+
         }
         let event = if result_code == 0 {
             WsEvent::broadcast("MMS_SENT", json!(pending.id).to_string())

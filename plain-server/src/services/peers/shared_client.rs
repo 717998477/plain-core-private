@@ -45,11 +45,11 @@ fn candidates(state: &ServerState, card: &Card, discovered: bool) -> Result<Vec<
     let mut seen = HashSet::new();
     if state
         .prefs
-        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+        .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
         .as_deref()
         == Some(&card.peer_info.id)
     {
-        let port = state.prefs.get_user::<u16>("https_port")?.unwrap_or(8443);
+        let port = state.prefs.get::<u16>("https_port")?.unwrap_or(8443);
         add(&mut links, &mut seen, "127.0.0.1", port, card);
         for local in plain_rs::transport::lan::local_interfaces() {
             add(&mut links, &mut seen, &local.ip.to_string(), port, card);
@@ -209,7 +209,7 @@ pub(crate) async fn own_link(state: &ServerState, id: &str, host: Option<String>
         });
         Link::new(
             &host,
-            state.prefs.get_user::<u16>("https_port")?.unwrap_or(8443),
+            state.prefs.get::<u16>("https_port")?.unwrap_or(8443),
             id,
             &token,
         )

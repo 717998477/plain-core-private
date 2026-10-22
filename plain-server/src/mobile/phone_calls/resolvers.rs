@@ -146,7 +146,7 @@ impl CallsQuery {
             } else {
                 plain_rs::chat::messages::content::make_file_id(
                     &path,
-                    &prefs.get_or(plain_rs::prefs::system::keys::URL_TOKEN, String::new()),
+                    &prefs.get_or(plain_rs::prefs::pref_keys::URL_TOKEN, String::new()),
                 )
             };
             calls.push(row);

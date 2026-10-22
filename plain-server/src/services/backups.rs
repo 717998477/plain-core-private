@@ -125,7 +125,6 @@ fn snapshot(
         source_db.clone(),
         source_kv.clone(),
         prefs.path().to_path_buf(),
-        prefs.user_path().to_path_buf(),
         roots.cache.clone(),
     ]);
     for suffix in ["-wal", "-shm", "-journal"] {
@@ -155,7 +154,6 @@ fn snapshot(
     files.extend(kv_files);
     for (index, path, entries) in [
         (0, prefs.path(), prefs.entries()),
-        (1, prefs.user_path(), prefs.user_entries()),
     ] {
         if cancelled() {
             return Err("Backup cancelled".into());

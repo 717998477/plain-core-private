@@ -41,7 +41,7 @@ struct ZipFilesRequest {
 }
 
 fn desktop_access_allowed(state: &ServerState) -> bool {
-    state.prefs.get_user_or("desktop_access", true)
+    state.prefs.get_or("desktop_access", true)
 }
 
 fn plain(status: StatusCode, body: impl Into<String>) -> Response {
@@ -63,7 +63,7 @@ fn url_escape(value: &str) -> String {
 fn decrypt_url_id(state: &ServerState, id: &str) -> Option<String> {
     let token = state
         .prefs
-        .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
+        .get::<String>(plain_rs::prefs::pref_keys::URL_TOKEN)
         .ok()
         .flatten()
         .unwrap_or_default();

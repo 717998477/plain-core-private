@@ -11,7 +11,7 @@ pub(crate) enum Request {
 pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Value> {
     let id = state
         .prefs
-        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+        .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
         .unwrap_or_default();
     if matches!(request, Request::Ble {}) {
         let (supported, running) = aware_flags(state).await?;
@@ -19,7 +19,7 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
             &advertisement::ble(&id, supported, running)?
         )));
     }
-    let settings = plain_rs::prefs::user::snapshot(&state.prefs)?;
+    let settings = plain_rs::prefs::settings::snapshot(&state.prefs)?;
     let name = settings.device_name;
     let port = state.public_ports().await.map(|ports| ports.1).unwrap_or(0);
     let reply = advertisement::reply(&id, &name, port, facts(state).await?)?;

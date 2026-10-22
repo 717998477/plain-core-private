@@ -191,7 +191,7 @@ async fn apply(
                 .map_or(0, |index| (index + 1) % snapshot.items.len());
             Some(snapshot.items[index].clone())
         } else if snapshot.current_audio {
-            let shuffle = state.prefs.get_user_or("audio_play_mode", String::new()) == "SHUFFLE";
+            let shuffle = state.prefs.get_or("audio_play_mode", String::new()) == "SHUFFLE";
             state
                 .audio
                 .run(move |db, lib| plain_rs::media::audio::queue::select_next(db, true, shuffle))

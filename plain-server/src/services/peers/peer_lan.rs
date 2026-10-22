@@ -51,7 +51,7 @@ pub(crate) async fn send(
         .map_err(|e| Failure::Fatal(e.to_string()))?;
     let actor = state
         .prefs
-        .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)
+        .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)
         .map_err(|e| Failure::Fatal(e.to_string()))?
         .filter(|id| !id.is_empty())
         .ok_or_else(|| Failure::Fatal("Missing peer actor".into()))?;

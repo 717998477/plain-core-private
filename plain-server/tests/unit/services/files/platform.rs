@@ -59,9 +59,7 @@ async fn native_recent_files_use_the_owned_preferences_without_media_or_host_dis
     std::fs::write(&first, b"first").unwrap();
     std::fs::write(&last, b"last").unwrap();
     let state = core.runtime_state();
-    state
-        .prefs
-        .set(
+    state.store.get().unwrap().set_json(
             "recent_files",
             vec![
                 first.to_string_lossy().into_owned(),

@@ -13,7 +13,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 async fn public_status_auth_scoped_connections_key_rotation_and_stop_use_rust_without_host() {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
-    prefs.set_user("service", true).unwrap();
+    prefs.set("background_service_enabled", true).unwrap();
     let path = dir.path().join("plain.db");
     let db = Db::open(&path).unwrap();
     let key = [8; 32];
@@ -172,7 +172,7 @@ async fn rust_outgoing_reconnects_same_address_without_native_and_stops_without_
     fn configured(dir: &std::path::Path, id: &str) -> (Arc<plain_rs::prefs::Prefs>, Vec<u8>) {
         let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.join("system.json")).unwrap());
         let (kp, pk) = plain_rs::crypto::ed25519_generate();
-        prefs.set_user("service", true).unwrap();
+        prefs.set("background_service_enabled", true).unwrap();
         prefs.set("client_id", id).unwrap();
         prefs
             .set(

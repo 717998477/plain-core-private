@@ -8,8 +8,8 @@ fn fixture() -> (tempfile::TempDir, ContentServer) {
     let directory = tempfile::tempdir().unwrap();
     let server = ContentServer::open(directory.path()).unwrap();
     let state = server.runtime_state();
-    state.prefs.set_user("service", true).unwrap();
-    state.prefs.set_user("desktop_access", true).unwrap();
+    state.prefs.set("background_service_enabled", true).unwrap();
+    state.prefs.set("desktop_access", true).unwrap();
     for id in ["first", "second"] {
         SessionStore::new(&state.db)
             .upsert(SessionInfo {

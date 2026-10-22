@@ -134,8 +134,7 @@ fn validate(payload: &Path) -> Result<(), String> {
     let paths = plain_rs::data_paths::DataPaths::new(payload);
     for path in [
         paths.database(),
-        paths.system_prefs(),
-        paths.user_prefs(),
+        paths.prefs(),
         paths.kv().join("version"),
     ] {
         if !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()) {
@@ -153,10 +152,10 @@ fn validate(payload: &Path) -> Result<(), String> {
     if check != "ok" {
         return Err(format!("Invalid backup database: {check}"));
     }
-    let prefs = plain_rs::prefs::Prefs::load_pair(&paths.system_prefs(), &paths.user_prefs())
+    let prefs = plain_rs::prefs::Prefs::load(&paths.prefs())
         .map_err(|error| error.to_string())?;
-    plain_rs::prefs::user::snapshot(&prefs).map_err(|error| error.to_string())?;
-    plain_rs::prefs::system::snapshot(&prefs).map_err(|error| error.to_string())?;
+    plain_rs::prefs::settings::snapshot(&prefs).map_err(|error| error.to_string())?;
+    plain_rs::prefs::security::snapshot(&prefs).map_err(|error| error.to_string())?;
     plain_rs::kv::Db::open(&paths.kv())
         .and_then(|database| database.flush())
         .map_err(|error| error.to_string())?;
@@ -292,7 +291,7 @@ pub(crate) fn apply(directory: &Path) -> Result<(), String> {
             return Err("Invalid restore plan".into());
         }
     }
-    if !["plain.db", "system_prefs.json", "user_prefs.json", "fjall"]
+    if !["plain.db", "prefs.json", "fjall"]
         .iter()
         .all(|name| names.contains(*name))
     {

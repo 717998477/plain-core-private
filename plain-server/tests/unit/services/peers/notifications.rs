@@ -406,8 +406,8 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     let remote_state = remote.runtime_state();
     remote_state
         .prefs
-        .set_user(
-            plain_rs::prefs::user::keys::DEVICE_NAME,
+        .set(
+            plain_rs::prefs::pref_keys::DEVICE_NAME,
             "Authenticated peer",
         )
         .unwrap();
@@ -420,8 +420,8 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
         .unwrap()
         .create_session("Fixture notification manager".into())
         .unwrap();
-    remote_state.prefs.set_user("http_port", 0).unwrap();
-    remote_state.prefs.set_user("https_port", 0).unwrap();
+    remote_state.prefs.set("http_port", 0).unwrap();
+    remote_state.prefs.set("https_port", 0).unwrap();
     let (_, port) = remote.start_configured_public().await.unwrap();
     let (generation, mut requests) = remote_state.host.connect();
     let facts = Arc::new(Mutex::new(vec![

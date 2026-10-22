@@ -65,7 +65,6 @@ pub struct Prefetch {
     /// `prefetch = false`).
     processed: AtomicU64,
     db: OnceLock<Arc<crate::storage::kv::Db>>,
-    prefs: OnceLock<Arc<plain_rs::prefs::Prefs>>,
 }
 
 impl Prefetch {
@@ -78,7 +77,6 @@ impl Prefetch {
             round_done: tokio::sync::Notify::new(),
             processed: AtomicU64::new(0),
             db: OnceLock::new(),
-            prefs: OnceLock::new(),
         }
     }
 
@@ -106,10 +104,10 @@ impl Prefetch {
     /// handle (tests driving the queue directly) this is a no-op that
     /// preserves the manually enqueued jobs.
     async fn collect(&self) {
-        let (Some(db), Some(prefs)) = (self.db.get().cloned(), self.prefs.get().cloned()) else {
+        let Some(db) = self.db.get().cloned() else {
             return;
         };
-        let jobs = tokio::task::spawn_blocking(move || collect_jobs(&db, &prefs))
+        let jobs = tokio::task::spawn_blocking(move || collect_jobs(&db))
             .await
             .unwrap_or_default();
         let n = jobs.len();
@@ -169,7 +167,7 @@ impl Prefetch {
 
 /// Build the full prefetch list. Query cost tracks the buckets themselves
 /// (one small index query per directory), capped to [`MAX_JOBS`] entries.
-fn collect_jobs(db: &crate::storage::kv::Db, prefs: &plain_rs::prefs::Prefs) -> Vec<ThumbJob> {
+fn collect_jobs(db: &crate::storage::kv::Db) -> Vec<ThumbJob> {
     let mut jobs: Vec<ThumbJob> = Vec::new();
     let mut seen: std::collections::HashSet<(String, i32, i32)> = std::collections::HashSet::new();
 
@@ -193,7 +191,7 @@ fn collect_jobs(db: &crate::storage::kv::Db, prefs: &plain_rs::prefs::Prefs) -> 
             }
         }
     }
-    match plain_rs::prefs::recent::get_recent_files(prefs, RECENT_LIMIT) {
+    match plain_rs::recent_files::list(db, RECENT_LIMIT) {
         Ok(paths) => {
             for path in paths {
                 push_job(&mut jobs, &mut seen, &path, RECENT_THUMB_W, RECENT_THUMB_H);
@@ -246,11 +244,9 @@ static GLOBAL: std::sync::LazyLock<Arc<Prefetch>> =
 pub fn init_from_config(
     cfg: &crate::config::Config,
     db: Arc<crate::storage::kv::Db>,
-    prefs: Arc<plain_rs::prefs::Prefs>,
 ) {
     let g = &*GLOBAL;
     let _ = g.db.set(db);
-    let _ = g.prefs.set(prefs);
     let raw = cfg.get_int("thumbnails.prefetch_per_sec");
     g.per_sec.store(
         if raw <= 0 { 2 } else { raw.clamp(1, 20) as u32 },

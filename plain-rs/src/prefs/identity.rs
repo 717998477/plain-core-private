@@ -66,17 +66,17 @@ fn ensure_string(prefs: &Prefs, key: &str, make: impl FnOnce() -> String) -> Str
 pub fn ensure_identity(prefs: &Prefs) -> AppIdentity {
     let client_id = ensure_string(
         prefs,
-        crate::prefs::system::keys::CLIENT_ID,
+        crate::prefs::pref_keys::CLIENT_ID,
         short_uuid::short_uuid,
     );
     let device_name = prefs
-        .get_user::<String>(crate::prefs::user::keys::DEVICE_NAME)
+        .get::<String>(crate::prefs::pref_keys::DEVICE_NAME)
         .expect("Device name unavailable")
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| {
             let name = default_device_name();
             prefs
-                .set_user(crate::prefs::user::keys::DEVICE_NAME, &name)
+                .set(crate::prefs::pref_keys::DEVICE_NAME, &name)
                 .expect("Device name persistence failed");
             name
         })
@@ -85,7 +85,7 @@ pub fn ensure_identity(prefs: &Prefs) -> AppIdentity {
         .trim_end_matches(".local")
         .to_string();
     let ed25519_keypair = base64_encode(
-        &crate::prefs::system::ensure_signing_keypair(prefs).expect("Signing identity unavailable"),
+        &crate::prefs::security::ensure_signing_keypair(prefs).expect("Signing identity unavailable"),
     );
     AppIdentity {
         client_id,
@@ -101,13 +101,13 @@ pub fn ensure_identity(prefs: &Prefs) -> AppIdentity {
 pub fn ensure_url_token(prefs: &Prefs) -> String {
     let zero_token = base64_encode(&[0u8; 32]);
     match prefs
-        .get::<String>(crate::prefs::system::keys::URL_TOKEN)
+        .get::<String>(crate::prefs::pref_keys::URL_TOKEN)
         .unwrap_or(None)
     {
         Some(t) if !t.is_empty() && t != zero_token => t,
         _ => {
             let token = gen_token();
-            let _ = prefs.set(crate::prefs::system::keys::URL_TOKEN, &token);
+            let _ = prefs.set(crate::prefs::pref_keys::URL_TOKEN, &token);
             token
         }
     }
@@ -116,8 +116,8 @@ pub fn ensure_url_token(prefs: &Prefs) -> String {
 pub fn ensure_mdns_hostname(prefs: &Prefs) -> String {
     ensure_string(
         prefs,
-        crate::prefs::system::keys::MDNS_HOSTNAME,
-        crate::prefs::system::generate_mdns_hostname,
+        crate::prefs::pref_keys::MDNS_HOSTNAME,
+        crate::prefs::security::generate_mdns_hostname,
     )
 }
 

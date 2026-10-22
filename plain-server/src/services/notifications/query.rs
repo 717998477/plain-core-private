@@ -20,7 +20,7 @@ pub(crate) fn notifications(
         .find(|g| g.name == "text")
         .map(|g| g.value.trim().to_lowercase())
         .unwrap_or_default();
-    let filter = plain_rs::prefs::user::snapshot(prefs)?.notification_filter;
+    let filter = plain_rs::prefs::settings::snapshot(prefs)?.notification_filter;
     facts.retain(|item| {
         let listed = filter["apps"]
             .as_array()

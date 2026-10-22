@@ -42,7 +42,7 @@ pub(super) async fn receive(
     if let Some(item) = items.first() {
         if !state.host.is_current(host_generation)
             || !current_peer(state, peer_id, identity, cancelled).await?
-            || !plain_rs::clipboard::sync::prepare(&state.prefs, peer_id, item)?
+            || !plain_rs::clipboard::sync::prepare(&state.prefs, state.store.get()?.as_ref(), peer_id, item)?
         {
             return Ok(());
         }
@@ -65,7 +65,7 @@ pub(super) async fn receive(
             .await
             .map_err(anyhow::Error::msg)?;
         ensure!(result.as_bool() == Some(true), "Clipboard write failed");
-        plain_rs::clipboard::sync::applied(&state.prefs, peer_id, item)?;
+        plain_rs::clipboard::sync::applied(state.store.get()?.as_ref(), peer_id, item)?;
     }
     Ok(())
 }

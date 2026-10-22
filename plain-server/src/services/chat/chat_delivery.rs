@@ -61,13 +61,13 @@ pub(crate) async fn deliver_observed(
     let result = async {
         let client_id = state
             .prefs
-            .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)?
+            .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
             .filter(|v| !v.is_empty())
             .ok_or_else(|| anyhow::anyhow!("Missing chat identity"))?;
         let key = crate::services::peers::peer_wire::signing_keypair(&state.prefs)?;
         let token = state
             .prefs
-            .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)?
+            .get::<String>(plain_rs::prefs::pref_keys::URL_TOKEN)?
             .unwrap_or_default();
         state
             .delivery

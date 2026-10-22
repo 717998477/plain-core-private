@@ -98,7 +98,7 @@ impl ServerState {
     pub(crate) fn native_url_token(&self) -> Result<String, String> {
         self.native_client_id()?;
         self.prefs
-            .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
+            .get::<String>(plain_rs::prefs::pref_keys::URL_TOKEN)
             .map_err(|error| error.to_string())?
             .filter(|token| !token.is_empty())
             .ok_or_else(|| "native URL token unavailable".into())
@@ -109,7 +109,7 @@ impl ServerState {
             return Err("Rust core stopped".into());
         }
         self.prefs
-            .get::<String>(plain_rs::prefs::system::keys::CLIENT_ID)
+            .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)
             .map_err(|error| error.to_string())?
             .filter(|id| !id.is_empty())
             .ok_or_else(|| "native client identity unavailable".into())
@@ -312,7 +312,7 @@ impl ContentServer {
             crate::assembly::data_directory::DataDirectory::open(directory, &cache_directory)?;
         let paths = plain_rs::data_paths::DataPaths::new(directory);
         let db = Arc::new(
-            Db::open_with_prefs(&paths.database(), prefs.clone()).map_err(|e| e.to_string())?,
+            Db::open_with_kv(&paths.database(), Arc::new(plain_rs::kv::Db::open(&paths.kv()).map_err(|e| e.to_string())?)).map_err(|e| e.to_string())?,
         );
         let (events, _) = broadcast::channel(256);
         Self::build_state_with(
@@ -345,12 +345,12 @@ impl ContentServer {
             directory.clone(),
             data_directory.cache_paths().root().to_owned(),
         );
-        plain_rs::prefs::system::bootstrap(&prefs).map_err(|error| error.to_string())?;
+        plain_rs::prefs::security::bootstrap(&prefs).map_err(|error| error.to_string())?;
         log::set_max_level(
-            plain_rs::prefs::system::log_level(&prefs).map_err(|error| error.to_string())?,
+            plain_rs::prefs::security::log_level(&prefs).map_err(|error| error.to_string())?,
         );
         if prefs
-            .get_user::<String>(plain_rs::prefs::user::keys::DEVICE_NAME)
+            .get::<String>(plain_rs::prefs::pref_keys::DEVICE_NAME)
             .map_err(|error| error.to_string())?
             .is_none_or(|name| name.trim().is_empty())
             && let Some(name) = host
@@ -358,9 +358,9 @@ impl ContentServer {
                 .and_then(serde_json::Value::as_str)
                 .filter(|name| !name.trim().is_empty())
         {
-            plain_rs::prefs::user::patch(
+            plain_rs::prefs::settings::patch(
                 &prefs,
-                plain_rs::prefs::user::UserSettingsPatch {
+                plain_rs::prefs::settings::SettingsPatch {
                     device_name: Some(name.to_owned()),
                     ..Default::default()
                 },
@@ -382,15 +382,16 @@ impl ContentServer {
         services.device.fixed_info()?;
         let mobile = crate::mobile::Runtime::new(
             host.clone(),
-            prefs.clone(),
             db.clone(),
             directory.clone(),
+            services.store.clone(),
             events.clone(),
         );
         let image_models = crate::services::images::models::Runtime::new(
             directory.clone(),
             host.clone(),
             prefs.clone(),
+            services.store.clone(),
             services.index.clone(),
             events.clone(),
         );
@@ -575,7 +576,7 @@ impl ContentServer {
         let url_token = plain_rs::prefs::identity::ensure_url_token(&prefs);
         crate::assembly::core_dependencies::CoreDependencies::validate_token(&url_token)?;
         if prefs
-            .get::<String>(plain_rs::prefs::system::keys::URL_TOKEN)
+            .get::<String>(plain_rs::prefs::pref_keys::URL_TOKEN)
             .map_err(|error| error.to_string())?
             .as_deref()
             != Some(url_token.as_str())

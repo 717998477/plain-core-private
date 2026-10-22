@@ -46,6 +46,7 @@ mod trashed_sms;
 mod media_play_history;
 
 pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS scan_history (id INTEGER PRIMARY KEY, text TEXT NOT NULL)")?;
     #[cfg(feature = "library")]
     audit_event::init(conn)?;
     #[cfg(feature = "library")]

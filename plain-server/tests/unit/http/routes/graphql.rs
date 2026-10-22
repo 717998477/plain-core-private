@@ -133,7 +133,7 @@ async fn the_development_bearer_only_admits_the_exact_configured_token() {
 
     // Unset: no bearer of any kind opens the development path.
     assert!(
-        plain_rs::prefs::system::dev_token(&core.shared_preferences().unwrap())
+        plain_rs::prefs::security::dev_token(&core.shared_preferences().unwrap())
             .unwrap()
             .is_empty()
     );
@@ -141,7 +141,7 @@ async fn the_development_bearer_only_admits_the_exact_configured_token() {
 
     let prefs = core.shared_preferences().unwrap();
     prefs
-        .set(plain_rs::prefs::system::keys::DEV_TOKEN, "plainapp-dev")
+        .set(plain_rs::prefs::pref_keys::DEV_TOKEN, "plainapp-dev")
         .unwrap();
     let state = core.runtime_state();
     assert!(dev_bearer_matches(&state, "Bearer plainapp-dev").unwrap());
@@ -153,7 +153,7 @@ async fn the_development_bearer_only_admits_the_exact_configured_token() {
 
     // Clearing it takes the entry point away again.
     prefs
-        .remove(plain_rs::prefs::system::keys::DEV_TOKEN)
+        .remove(plain_rs::prefs::pref_keys::DEV_TOKEN)
         .unwrap();
     assert!(!dev_bearer_matches(&state, "Bearer plainapp-dev").unwrap());
     core.stop_core().await;
@@ -208,7 +208,7 @@ async fn init_requires_a_client_id_and_returns_forbidden_when_access_is_disabled
             .status(),
         StatusCode::BAD_REQUEST
     );
-    state.prefs.set_user("desktop_access", false).unwrap();
+    state.prefs.set("desktop_access", false).unwrap();
     let mut headers = HeaderMap::new();
     headers.insert("c-id", "web-client".parse().unwrap());
     assert_eq!(
@@ -268,7 +268,7 @@ async fn unauthenticated_init_never_returns_or_rotates_passwords_and_reports_exp
     crate::services::peers::peer_wire::signing_keypair(&state.prefs).unwrap();
     for mode in [1_i32, 2_i32] {
         state.prefs.set("password_type", mode).unwrap();
-        let before = std::fs::read(directory.path().join("system_prefs.json")).unwrap();
+        let before = std::fs::read(directory.path().join("prefs.json")).unwrap();
         let mut events = state.events.subscribe();
         for body in [
             vec![],
@@ -301,7 +301,7 @@ async fn unauthenticated_init_never_returns_or_rotates_passwords_and_reports_exp
             );
         }
         assert_eq!(
-            std::fs::read(directory.path().join("system_prefs.json")).unwrap(),
+            std::fs::read(directory.path().join("prefs.json")).unwrap(),
             before
         );
         assert!(events.try_recv().is_err());

@@ -10,9 +10,9 @@ fn explicit_modes_are_persisted_and_used_by_the_shared_queue() {
         MediaPlayMode::Shuffle,
         MediaPlayMode::Repeat,
     ] {
-        crate::prefs::user::set_entry(
+        crate::prefs::settings::set_entry(
             &prefs,
-            crate::prefs::user::keys::AUDIO_PLAY_MODE,
+            crate::prefs::pref_keys::AUDIO_PLAY_MODE,
             serde_json::json!(mode.ordinal()),
         )
         .unwrap();
@@ -30,12 +30,12 @@ fn malformed_stored_modes_are_rejected_without_overwriting_them() {
     let dir = tempfile::tempdir().unwrap();
     let prefs = crate::prefs::Prefs::load(&dir.path().join("prefs")).unwrap();
     prefs
-        .set_user(crate::prefs::user::keys::AUDIO_PLAY_MODE, 99)
+        .set(crate::prefs::pref_keys::AUDIO_PLAY_MODE, 99)
         .unwrap();
     assert!(crate::media::audio::queue::play_mode(&prefs).is_err());
     assert_eq!(
         prefs
-            .get_user::<i32>(crate::prefs::user::keys::AUDIO_PLAY_MODE)
+            .get::<i32>(crate::prefs::pref_keys::AUDIO_PLAY_MODE)
             .unwrap(),
         Some(99)
     );

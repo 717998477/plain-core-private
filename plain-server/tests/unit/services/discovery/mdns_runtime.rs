@@ -88,7 +88,7 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
     prefs
         .set("mdns_hostname", "fixture-mdns-root.local")
         .unwrap();
-    prefs.set_user("https_port", 2443).unwrap();
+    prefs.set("https_port", 2443).unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[5; 32]);
     let server =
         crate::assembly::server::ContentServer::start(dir.path(), &token, prefs.clone()).unwrap();

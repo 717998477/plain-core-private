@@ -1,6 +1,6 @@
 use crate::platform::linux::disks::blockdev::flatten_devices;
 use crate::platform::linux::disks::blockdev::run_lsblk;
-use crate::prefs::Prefs;
+use crate::kv::Db;
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -14,7 +14,7 @@ const MOUNT_ROOT: &str = "/mnt";
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const USB_PREFIX: &str = "usb";
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-const KEY_SLOT_MAP: &str = "fsuuid_slot_map";
+const KEY_SLOT_MAP: &str = "disk_mount_slots";
 
 static AUTO_MOUNT_INHIBIT_COUNT: AtomicI32 = AtomicI32::new(0);
 
@@ -155,18 +155,18 @@ fn unmount_all_at(path: &str) -> Result<()> {
 pub struct SlotMap(BTreeMap<String, i64>);
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub fn get_slot_map(prefs: &Prefs) -> SlotMap {
-    prefs
-        .get::<SlotMap>(KEY_SLOT_MAP)
+pub fn get_slot_map(store: &Db) -> SlotMap {
+    store
+        .get_json::<SlotMap>(KEY_SLOT_MAP)
         .ok()
         .flatten()
         .unwrap_or_default()
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn store_slot_map(prefs: &Prefs, m: &SlotMap) -> Result<()> {
-    prefs
-        .set(KEY_SLOT_MAP, m.clone())
+fn store_slot_map(store: &Db, m: &SlotMap) -> Result<()> {
+    store
+        .set_json(KEY_SLOT_MAP, m.clone())
         .map_err(|e| anyhow!("{e}"))?;
     Ok(())
 }
@@ -238,13 +238,13 @@ pub fn plan_mounts(filesystems: &[BlockFs], persisted: &SlotMap) -> (Vec<Planned
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub type EventSink = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
-pub fn ensure_mounted_usb_volumes(prefs: &Prefs, emit_event: &EventSink) -> Result<()> {
+pub fn ensure_mounted_usb_volumes(store: &Db, emit_event: &EventSink) -> Result<()> {
     if auto_mount_inhibited() {
         return Ok(());
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (prefs, emit_event);
+        let _ = (store, emit_event);
         return Ok(());
     }
     #[cfg(target_os = "linux")]
@@ -252,7 +252,7 @@ pub fn ensure_mounted_usb_volumes(prefs: &Prefs, emit_event: &EventSink) -> Resu
         std::fs::create_dir_all(MOUNT_ROOT)?;
 
         let filesystems = scan_filesystems()?;
-        let persisted = get_slot_map(prefs);
+        let persisted = get_slot_map(store);
         let (planned, merged) = plan_mounts(&filesystems, &persisted);
 
         let by_uuid: HashMap<&str, &BlockFs> = filesystems
@@ -286,7 +286,7 @@ pub fn ensure_mounted_usb_volumes(prefs: &Prefs, emit_event: &EventSink) -> Resu
             emit_event("mount", &format!("mounted UUID {} at {target}", fs.fsuuid));
         }
 
-        store_slot_map(prefs, &merged)?;
+        store_slot_map(store, &merged)?;
         emit_event("mounts_changed", "");
         Ok(())
     }
@@ -319,9 +319,9 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    pub fn start(prefs: Arc<Prefs>, events: EventSink) -> Self {
+    pub fn start(store: Arc<Db>, events: EventSink) -> Self {
         let (stop, receiver) = tokio::sync::watch::channel(false);
-        let task = tokio::spawn(watch(prefs, events, receiver));
+        let task = tokio::spawn(watch(store, events, receiver));
         Self {
             stop,
             task: Some(task),
@@ -353,7 +353,7 @@ impl Drop for Watcher {
 }
 
 async fn watch(
-    prefs: Arc<Prefs>,
+    store: Arc<Db>,
     events: EventSink,
     stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
@@ -370,12 +370,12 @@ async fn watch(
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()?;
-    watch_child(child, prefs, events, stop).await
+    watch_child(child, store, events, stop).await
 }
 
 async fn watch_child(
     mut child: tokio::process::Child,
-    prefs: Arc<Prefs>,
+    store: Arc<Db>,
     events: EventSink,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
@@ -418,9 +418,9 @@ async fn watch_child(
                 }
             } => {
                 deadline = None;
-                let prefs = prefs.clone();
+                let store = store.clone();
                 let events = events.clone();
-                match tokio::task::spawn_blocking(move || ensure_mounted_usb_volumes(&prefs, &events)).await {
+                match tokio::task::spawn_blocking(move || ensure_mounted_usb_volumes(&store, &events)).await {
                     Ok(Ok(())) => {},
                     Ok(Err(error)) => log::error!("storage mount ensure failed: {error}"),
                     Err(error) => break Err(error.into()),

@@ -211,7 +211,7 @@ async fn cancel_releases_route_and_malformed_raw_ble_response_is_terminal() {
 #[tokio::test]
 async fn aware_config_uses_current_pairing_identity_and_rejects_corrupt_keys() {
     let (_dir, server, state) = state();
-    state.prefs.set_user("https_port", 2443).unwrap();
+    state.prefs.set("https_port", 2443).unwrap();
     let config =
         aware_config_for_peer(&state, &peers::get(&state.db, "fixture").unwrap().unwrap()).unwrap();
     assert!(config.is_client);

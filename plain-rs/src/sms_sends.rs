@@ -1,4 +1,4 @@
-use super::{Prefs, PrefsError};
+use crate::kv::Db;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -43,32 +43,27 @@ impl Pending {
 fn key(id: &str) -> String {
     format!("{PREFIX}{id}")
 }
-fn decode(value: Value) -> super::Result<Pending> {
-    let value: String = serde_json::from_value(value).map_err(PrefsError::Decode)?;
-    serde_json::from_str(&value).map_err(PrefsError::Decode)
+fn decode(value: Value) -> anyhow::Result<Pending> {
+    Ok(serde_json::from_value(value)?)
 }
-fn encode(value: &Pending) -> super::Result<Value> {
-    serde_json::to_string(value)
-        .map(Value::String)
-        .map_err(PrefsError::Encode)
+fn encode(value: &Pending) -> anyhow::Result<Value> {
+    Ok(serde_json::to_value(value)?)
 }
 
-pub fn pending(prefs: &Prefs) -> super::Result<Vec<Pending>> {
-    prefs
-        .entries()
-        .into_iter()
-        .filter(|(name, _)| name.starts_with(PREFIX))
-        .map(|(_, value)| decode(value))
-        .collect()
+pub fn pending(store: &Db) -> anyhow::Result<Vec<Pending>> {
+    store.scan_prefix(PREFIX).map(|entry| {
+        let (_, value) = entry?;
+        decode(serde_json::from_slice(&value)?)
+    }).collect()
 }
 
 pub fn register(
-    prefs: &Prefs,
+    store: &Db,
     request_id: String,
     client_request_id: Option<String>,
     part_count: usize,
     now: u64,
-) -> super::Result<()> {
+) -> anyhow::Result<()> {
     let value = Pending {
         request_id,
         client_request_id,
@@ -79,14 +74,15 @@ pub fn register(
         terminal_result_code: None,
         terminal_at_millis: None,
     };
-    prefs.set(
+    store.set_json(
         &key(&value.request_id),
-        serde_json::to_string(&value).map_err(PrefsError::Encode)?,
+        &value,
     )?;
     Ok(())
 }
-pub fn cancel(prefs: &Prefs, id: &str) -> super::Result<()> {
-    prefs.remove(&key(id))?;
+pub fn cancel(store: &Db, id: &str) -> anyhow::Result<()> {
+    store.remove(&key(id))?;
+    store.flush()?;
     Ok(())
 }
 
@@ -102,15 +98,15 @@ fn finish(value: &mut Pending, success: bool, result_code: i32, now: u64) -> Out
     result
 }
 pub fn record(
-    prefs: &Prefs,
+    store: &Db,
     id: &str,
     index: usize,
     count: usize,
     success: bool,
     code: i32,
     now: u64,
-) -> super::Result<Option<Outcome>> {
-    prefs.update_system(|map| {
+) -> anyhow::Result<Option<Outcome>> {
+    store.update_json_prefix(PREFIX, |map| {
         let name = key(id);
         let Some(raw) = map.get(&name).cloned() else {
             return Ok(None);
@@ -134,7 +130,7 @@ pub fn record(
         Ok(outcome)
     })
 }
-fn tick_map(map: &mut Map<String, Value>, now: u64) -> super::Result<Vec<Outcome>> {
+fn tick_map(map: &mut Map<String, Value>, now: u64) -> anyhow::Result<Vec<Outcome>> {
     let names = map
         .keys()
         .filter(|name| name.starts_with(PREFIX))
@@ -155,10 +151,10 @@ fn tick_map(map: &mut Map<String, Value>, now: u64) -> super::Result<Vec<Outcome
     }
     Ok(outcomes)
 }
-pub fn tick(prefs: &Prefs, now: u64) -> super::Result<Vec<Outcome>> {
-    prefs.update_system(|map| tick_map(map, now))
+pub fn tick(store: &Db, now: u64) -> anyhow::Result<Vec<Outcome>> {
+    store.update_json_prefix(PREFIX, |map| tick_map(map, now))
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/prefs/sms_sends.rs"]
+#[path = "../tests/unit/prefs/sms_sends.rs"]
 mod tests;

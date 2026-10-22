@@ -15,7 +15,7 @@ impl<'a> SignatureKey<'a> {
         ))
     }
     pub fn ensure_keypair(&self) -> Result<[u8; 64]> {
-        plain_rs::prefs::system::ensure_signing_keypair(self.prefs)?
+        plain_rs::prefs::security::ensure_signing_keypair(self.prefs)?
             .try_into()
             .map_err(|_| anyhow::anyhow!("Invalid signing identity"))
     }

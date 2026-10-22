@@ -22,7 +22,7 @@ impl Node {
         let data = directory.path().join("data");
         std::fs::create_dir(&data).unwrap();
         std::fs::write(
-            data.join("user_prefs.json"),
+            data.join("prefs.json"),
             json!({
                 "device_name":"Acceptance fixture", "desktop_access":true,
             })
@@ -132,9 +132,9 @@ async fn native_password_and_approval_pairing_enables_actual_chat_and_preserves_
     query(
         &second.native,
         r#"mutation{
-        passwordType:setSystemPref(key:"password_type",value:1){affectedCount}
-        password:setSystemPref(key:"password",value:"fixture-password"){affectedCount}
-        twoFactor:setSystemPref(key:"auth_two_factor",value:true){affectedCount}
+        passwordType:setPref(key:"password_type",value:1)
+        password:setPref(key:"password",value:"fixture-password")
+        twoFactor:setPref(key:"login_require_approval",value:true)
     }"#,
         json!({}),
     )

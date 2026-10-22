@@ -36,9 +36,7 @@ async fn native_update_check_uses_capabilities_and_skips_network_when_automatic_
         }
         assert!(worker.await.unwrap().try_recv().is_err());
         assert_eq!(
-            plain_rs::prefs::system::snapshot(&state.prefs)
-                .unwrap()
-                .update_info
+            crate::services::settings::updates::info(&state).unwrap()
                 .check_update_time,
             0
         );
@@ -55,7 +53,7 @@ async fn main_settings_derive_update_availability_from_current_version_and_skip(
     for (skip, available) in [("", true), ("999.0.0", false)] {
         update(&state, json!({"newVersion":"999.0.0","skipVersion":skip})).unwrap();
         let value =
-            serde_json::to_value(core.native_management().unwrap().system_settings().unwrap())
+            serde_json::to_value(core.native_management().unwrap().prefs_snapshot().unwrap())
                 .unwrap();
         assert_eq!(value["appUpdateAvailable"], available);
     }

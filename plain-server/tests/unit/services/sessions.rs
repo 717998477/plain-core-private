@@ -12,9 +12,9 @@ use std::sync::Arc;
 fn fixture() -> (tempfile::TempDir, ContentServer) {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
-    prefs.set_user("service", true).unwrap();
-    prefs.set_user("desktop_access", true).unwrap();
-    prefs.set("auth_two_factor", false).unwrap();
+    prefs.set("background_service_enabled", true).unwrap();
+    prefs.set("desktop_access", true).unwrap();
+    prefs.set("login_require_approval", false).unwrap();
     prefs.set("password", "secret").unwrap();
     prefs.set("password_type", 1_i32).unwrap();
     prefs.set("client_id", "phone").unwrap();
@@ -154,7 +154,7 @@ async fn web_login_ecdh_encrypted_response_signature_and_token_auth_survive_rest
         response["ecdhPublicKey"].as_str().unwrap(),
         response["timestamp"].as_u64().unwrap()
     );
-    let pair = plain_rs::prefs::system::signing_keypair(&state.prefs).unwrap();
+    let pair = plain_rs::prefs::security::signing_keypair(&state.prefs).unwrap();
     assert!(plain_rs::crypto::ed25519_verify(
         &plain_rs::base64_encode(&pair[32..]),
         material.as_bytes(),
@@ -197,7 +197,7 @@ async fn web_login_ecdh_encrypted_response_signature_and_token_auth_survive_rest
 async fn confirmation_is_once_only_and_cancel_or_revoke_prevents_issuance() {
     let (_dir, server) = fixture();
     let state = server.runtime_state();
-    state.prefs.set("auth_two_factor", true).unwrap();
+    state.prefs.set("login_require_approval", true).unwrap();
     let client = plain_rs::crypto::EcdhSession::generate();
     let pending = ws_login::execute(&state, offer(&state, &client, Value::Null))
         .await
@@ -375,13 +375,9 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
     let local = native.execute(query.into()).await;
     assert!(local.errors.is_empty(), "{:?}", local.errors);
     let local = local.data.into_json().unwrap();
-    let settings = server
-        .native_management()
-        .unwrap()
-        .system_preferences()
-        .unwrap();
+    let settings = serde_json::to_value(server.native_management().unwrap().prefs_snapshot().unwrap()).unwrap();
     assert_eq!(settings["password"], "secret");
-    assert_eq!(settings["url_token"], "resource-token");
+    assert_eq!(settings["urlToken"], "resource-token");
     assert_eq!(local["peers"][0]["key"], "peer-secret");
     assert_eq!(local["chatChannels"][0]["key"], "channel-secret");
     assert_eq!(local["sessions"][0]["token"], session.token);

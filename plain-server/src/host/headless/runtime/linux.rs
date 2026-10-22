@@ -43,11 +43,11 @@ pub(super) async fn dispatch(
                 serde_json::from_value(params).map_err(|error| error.to_string())?;
             let core = core.clone();
             tokio::task::spawn_blocking(move || {
-                    let prefs = core.shared_preferences()?;
+                    let store = core.headless_state().store.get().map_err(|e| e.to_string())?;
                     let events = crate::assembly::headless::storage::event_sink(&core, false)?;
                     let db = core.headless_state().db.clone();
                     let client_id = (!request.client_id.is_empty()).then_some(request.client_id.as_str());
-                    let result = plain_rs::platform::linux::disks::format::format_disk_single_partition(&prefs, &request.path, |mount| {
+                    let result = plain_rs::platform::linux::disks::format::format_disk_single_partition(&store, &request.path, |mount| {
                         let _ = db.audit_event_add("unmount", mount, client_id);
                     }, &events);
                     let _ = db.audit_event_add(if result.is_ok() { "format_disk" } else { "format_disk_failed" }, &request.path, client_id);
@@ -86,7 +86,7 @@ pub(super) async fn dispatch(
             let core = core.clone();
             tokio::task::spawn_blocking(move || {
                 core.preferences()?;
-                plain_rs::platform::linux::samba::set_user_password(&request.password)
+                plain_rs::platform::linux::samba::set_password(&request.password)
                     .map(|_| Value::Bool(true))
                     .map_err(|error| error.to_string())
             })

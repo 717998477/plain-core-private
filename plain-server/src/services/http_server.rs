@@ -143,8 +143,8 @@ pub(crate) fn restart(
             let _shutdown = state.shutdown.lock().await;
             let result = async {
                 state.native_client_id()?;
-                let preferences = crate::services::settings::user_preferences::UserPreferences::from_server(&state);
-                preferences.patch(plain_rs::prefs::user::UserSettingsPatch {
+                let preferences = crate::services::settings::preferences::Preferences::from_server(&state);
+                preferences.patch(plain_rs::prefs::settings::SettingsPatch {
                         http_port: http.map(i32::from),
                         https_port: https.map(i32::from),
                         ..Default::default()
@@ -152,7 +152,7 @@ pub(crate) fn restart(
                     .await
                     .map_err(|error| error.to_string())?;
                 let ports = state.restart_public_locked().await?;
-                preferences.patch(plain_rs::prefs::user::UserSettingsPatch {
+                preferences.patch(plain_rs::prefs::settings::SettingsPatch {
                     http_port: Some(i32::from(ports.0)),
                     https_port: Some(i32::from(ports.1)),
                     ..Default::default()

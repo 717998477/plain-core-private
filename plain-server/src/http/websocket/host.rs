@@ -114,7 +114,7 @@ fn close(code: u16, reason: &'static str) -> Message {
     }))
 }
 fn enabled(state: &ServerState) -> bool {
-    state.prefs.get_user_or("desktop_access", true)
+    state.prefs.get_or("desktop_access", true)
 }
 #[derive(Deserialize)]
 pub(crate) struct Params {
@@ -185,7 +185,7 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                     Some(Ok(Message::Binary(frame))) => frame,
                     Some(Ok(Message::Ping(bytes))) => { if socket.send(Message::Pong(bytes)).await.is_err() { break; } continue; },
                     Some(Ok(Message::Text(text))) if params.auth.as_deref() == Some("2") => {
-                        if temporary_started || text.len() > 4096 || state.prefs.get_or(plain_rs::prefs::system::keys::PASSWORD_TYPE, 2_i32) != 2 {
+                        if temporary_started || text.len() > 4096 || state.prefs.get_or(plain_rs::prefs::pref_keys::PASSWORD_TYPE, 2_i32) != 2 {
                             let _ = socket.send(close(1008, "invalid_login_request")).await;
                             break;
                         }
@@ -194,7 +194,7 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                             anyhow::ensure!(enabled(&state), "desktop_access_disabled");
                             crate::http::auth::ws_login::admit_attempt(&state, &params.cid, &ip)?;
                             let request = serde_json::from_str::<crate::http::auth::login_channel::ClientHello>(&text)?;
-                            let device_id = state.prefs.get_or(plain_rs::prefs::system::keys::CLIENT_ID, String::new());
+                            let device_id = state.prefs.get_or(plain_rs::prefs::pref_keys::CLIENT_ID, String::new());
                             let signing = crate::services::peers::peer_wire::signing_keypair(&state.prefs)?;
                             crate::http::auth::login_channel::Channel::accept(&params.cid, &device_id, &request, &signing, chrono::Utc::now().timestamp_millis() as u64)
                         })();

@@ -25,7 +25,7 @@ pub fn set_password(directory: &Path, cache: &Path, password: &str) -> Result<()
     let _data_directory = crate::assembly::data_directory::DataDirectory::open(directory, cache)
         .map_err(anyhow::Error::msg)?;
     let prefs = plain_rs::prefs::Prefs::load(&plain_rs::prefs::default_path(directory))?;
-    plain_rs::prefs::system::Command::SetPassword {
+    plain_rs::prefs::security::Command::SetPassword {
         password: password.to_owned(),
     }
     .apply(&prefs)?;
@@ -76,20 +76,20 @@ impl HeadlessService {
         }
         #[cfg(target_os = "linux")]
         if options.automount {
-            let prefs = self.core.shared_preferences().map_err(anyhow::Error::msg)?;
+            let store = self.core.headless_state().store.get()?;
             let events = storage::event_sink(&self.core, options.media_directories.is_empty())
                 .map_err(anyhow::Error::msg)?;
-            let mount_prefs = prefs.clone();
+            let mount_store = store.clone();
             let mount_events = events.clone();
             tokio::task::spawn_blocking(move || {
                 plain_rs::platform::linux::mounts::automount::ensure_mounted_usb_volumes(
-                    &mount_prefs,
+                    &mount_store,
                     &mount_events,
                 )
             })
             .await??;
             self.watcher =
-                Some(plain_rs::platform::linux::mounts::automount::Watcher::start(prefs, events));
+                Some(plain_rs::platform::linux::mounts::automount::Watcher::start(store, events));
         }
         let prefs = self.core.shared_preferences().map_err(anyhow::Error::msg)?;
         let roots = storage::source_directories(&prefs, &options.media_directories)?;

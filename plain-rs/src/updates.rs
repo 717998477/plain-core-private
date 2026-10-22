@@ -1,4 +1,4 @@
-use crate::prefs::system::UpdateInfo;
+use crate::prefs::security::UpdateInfo;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -86,12 +86,12 @@ pub fn normalized_version(text: &str) -> String {
 pub fn release_info(
     release: &Release,
     source: &Source,
-) -> anyhow::Result<crate::prefs::system::ReleaseInfo> {
+) -> anyhow::Result<crate::prefs::security::ReleaseInfo> {
     anyhow::ensure!(
         numeric_version(&release.tag_name).is_some(),
         "Invalid release version"
     );
-    Ok(crate::prefs::system::ReleaseInfo {
+    Ok(crate::prefs::security::ReleaseInfo {
         version: Version::parse(&release.tag_name).text(),
         name: release.name.clone(),
         url: if release.html_url.trim().is_empty() {
@@ -110,17 +110,18 @@ pub fn available_version(latest: &str, current: &str, skip: &str) -> bool {
     let latest = Version::parse(latest);
     latest > Version::parse(current) && latest > Version::parse(skip)
 }
-pub fn available(info: &UpdateInfo, current: &str) -> bool {
-    available_version(&info.new_version, current, &info.skip_version)
+pub fn available(info: &UpdateInfo, current: &str, skip: &str) -> bool {
+    available_version(&info.new_version, current, skip)
 }
 
-pub fn due(info: &UpdateInfo, now_ms: u64) -> bool {
-    info.auto_check_update && now_ms.saturating_sub(info.check_update_time) > 86_400_000
+pub fn due(info: &UpdateInfo, auto_check: bool, now_ms: u64) -> bool {
+    auto_check && now_ms.saturating_sub(info.check_update_time) > 86_400_000
 }
 
 pub fn apply_release(
     info: &mut UpdateInfo,
     current: &str,
+    skip: &str,
     abis: &[String],
     source: &Source,
     release: &Release,
@@ -131,7 +132,7 @@ pub fn apply_release(
             .strip_prefix('v')
             .unwrap_or(&release.tag_name),
     );
-    if latest <= Version::parse(current) || latest <= Version::parse(&info.skip_version) {
+    if latest <= Version::parse(current) || latest <= Version::parse(skip) {
         return false;
     }
     let rule = source.assets.iter().find(|rule| {

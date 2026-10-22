@@ -39,6 +39,7 @@ struct ModelState {
 #[derive(Clone, Copy)]
 enum Selection {
     Default,
+    Imported,
     Active,
     Incoming,
 }
@@ -47,6 +48,7 @@ pub(crate) struct Runtime {
     directory: PathBuf,
     host: Arc<Host>,
     prefs: Arc<Prefs>,
+    store: Arc<plain_rs::kv::LazyDb>,
     index: Arc<ImageIndex>,
     state: Mutex<ModelState>,
     #[cfg(test)]
@@ -64,6 +66,7 @@ impl Runtime {
         directory: PathBuf,
         host: Arc<Host>,
         prefs: Arc<Prefs>,
+        store: Arc<plain_rs::kv::LazyDb>,
         index: Arc<ImageIndex>,
         events: tokio::sync::broadcast::Sender<WsEvent>,
     ) -> Arc<Self> {
@@ -71,6 +74,7 @@ impl Runtime {
             directory: directory.join("ai_models"),
             host,
             prefs,
+            store,
             index,
             events,
             state: Mutex::new(ModelState {
@@ -185,16 +189,22 @@ impl Runtime {
         }
         self.publish();
     }
-    fn available(&self) -> bool {
-        self.directory.join("active/manifest.json").is_file()
+    fn selected_model(&self) -> Result<&'static str, String> {
+        match self.prefs.get_or("ai_image_search_model", String::from("default")).as_str() {
+            "default" => Ok("default"),
+            "imported" => Ok("imported"),
+            _ => Err("Image search model must be default or imported".into()),
+        }
     }
     pub async fn enable(self: &Arc<Self>, restore: bool) -> Result<(), String> {
-        self.activate(if restore {
-            Selection::Active
-        } else {
-            Selection::Default
-        })
-        .await
+        let model = self.selected_model()?;
+        if restore && (!self.prefs.get_or("ai_image_search_enabled", false)
+            || !self.directory.join(model).join("manifest.json").is_file()) {
+            return Ok(());
+        }
+        self.activate(if restore { Selection::Active }
+            else if model == "imported" { Selection::Imported }
+            else { Selection::Default }).await
     }
     pub async fn import(self: &Arc<Self>) -> Result<(), String> {
         if !self.directory.join("incoming/manifest.json").is_file() {
@@ -213,11 +223,6 @@ impl Runtime {
         {
             return Ok(());
         }
-        if matches!(selection, Selection::Active)
-            && (!self.prefs.get_user_or("ai_image_search_enabled", false) || !self.available())
-        {
-            return Ok(());
-        }
         self.cancelled.store(false, Ordering::Release);
         let runtime = self.clone();
         *self.task.lock().unwrap() = Some(tokio::spawn(async move {
@@ -233,22 +238,25 @@ impl Runtime {
         Ok(())
     }
     async fn load(&self, selection: Selection) -> Result<(), String> {
-        let active = self.directory.join("active");
-        let default = plain_inference::models::default_model::manifest();
-        let active_is_default =
-            plain_inference::models::manifest::Manifest::read(&active.join("manifest.json"))
-                .ok()
-                .is_some_and(|manifest| manifest.fingerprint().ok() == default.fingerprint().ok());
+        let model = match selection {
+            Selection::Default => "default",
+            Selection::Incoming | Selection::Imported => "imported",
+            Selection::Active => self.selected_model()?,
+        };
+        let active = self.directory.join(model);
+        let default_is_current = plain_inference::models::manifest::Manifest::read(
+            &active.join("manifest.json")).ok().is_some_and(|manifest| {
+                manifest.fingerprint().ok() == plain_inference::models::default_model::manifest().fingerprint().ok()
+            });
         let source = match selection {
             Selection::Incoming => self.directory.join("incoming"),
-            Selection::Active => active.clone(),
-            Selection::Default if active_is_default => active.clone(),
-            Selection::Default => {
+            Selection::Default if !default_is_current => {
                 self.state.lock().unwrap().progress = 0;
                 self.set_status(ImageSearchStatusType::Downloading, String::new());
                 self.download().await?;
                 self.directory.join("download")
             }
+            _ => active.clone(),
         };
         self.set_status(ImageSearchStatusType::Loading, String::new());
         let manifest =
@@ -283,20 +291,17 @@ impl Runtime {
             }
         }
         let engine = Arc::new(engine.relocate(active));
-        if self
-            .prefs
-            .get_user_or("ai_image_search_model", String::new())
-            != fingerprint
-        {
+        let store = self.store.get().map_err(|e| e.to_string())?;
+        if store.get_json::<String>("image_index_model").map_err(|e| e.to_string())?.as_deref()
+            != Some(fingerprint.as_str()) {
             self.index.clear().map_err(|e| e.to_string())?;
-            self.prefs
-                .set_user("ai_image_search_model", fingerprint)
-                .map_err(|e| e.to_string())?;
+            store.set_json("image_index_model", &fingerprint).map_err(|e| e.to_string())?;
         }
+        self.prefs.set("ai_image_search_model", model).map_err(|e| e.to_string())?;
         self.index.set_encoder(Some(engine.clone()));
         *self.engine.lock().unwrap() = Some(engine);
         self.prefs
-            .set_user("ai_image_search_enabled", true)
+            .set("ai_image_search_enabled", true)
             .map_err(|e| e.to_string())?;
         if !self.observing.load(Ordering::Acquire) {
             if self.index.uses_system_catalog() {
@@ -486,7 +491,7 @@ impl Runtime {
             self.index.clear().map_err(|e| e.to_string())?;
         }
         self.prefs
-            .set_user("ai_image_search_enabled", false)
+            .set("ai_image_search_enabled", false)
             .map_err(|e| e.to_string())?;
         if disable && self.directory.exists() {
             tokio::fs::remove_dir_all(&self.directory)
