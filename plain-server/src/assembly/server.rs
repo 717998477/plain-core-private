@@ -340,7 +340,6 @@ impl ContentServer {
             events,
             host,
         } = dependencies;
-        crate::assembly::core_dependencies::CoreDependencies::validate_token(&token)?;
         #[cfg(feature = "media")]
         plain_media::storage::paths::set(
             directory.clone(),
@@ -729,15 +728,6 @@ impl ContentServer {
     pub async fn http_ports(&self) -> Option<(u16, u16)> {
         self.state.public_ports().await
     }
-    #[cfg(feature = "http_transport")]
-    pub async fn public_generation(&self) -> Option<u64> {
-        self.state
-            .public_server
-            .lock()
-            .await
-            .as_ref()
-            .map(|server| server.generation)
-    }
     pub fn set_build_debug(&self, debug: bool) {
         self.state
             .build_debug
@@ -839,7 +829,6 @@ pub(crate) struct PublicServer {
     pub(crate) discovery: crate::assembly::lifecycle::PublicDiscovery,
     pub(crate) listeners: crate::http::listeners::HttpListeners,
     pub(crate) stop: watch::Sender<bool>,
-    pub(crate) generation: u64,
 }
 pub(crate) fn adapter_router(state: ServerState) -> Router {
     let router = Router::new().route(

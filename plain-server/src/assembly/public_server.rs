@@ -33,7 +33,6 @@ impl ServerState {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             self.peer_status.outgoing.start(self.clone());
         }
-        let generation = crate::assembly::lifecycle::next_generation();
         let failure = listeners.failures();
         let discovery =
             crate::assembly::lifecycle::PublicDiscovery::start(self.clone(), receiver.clone());
@@ -41,16 +40,15 @@ impl ServerState {
             discovery,
             listeners,
             stop,
-            generation,
         });
-        crate::assembly::lifecycle::monitor(self.clone(), failure, receiver, generation);
+        crate::assembly::lifecycle::monitor(self.clone(), failure, receiver);
         drop(guard);
         if let Err(error) = crate::services::casting::receiver::lifecycle::reconcile(self).await {
             log::warn!("DLNA receiver startup: {error}");
         }
         let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
             plain_rs::events::HTTP_SERVER_STARTED,
-            serde_json::json!({"generation":generation,"httpPort":ports.0,"httpsPort":ports.1})
+            serde_json::json!({"httpPort":ports.0,"httpsPort":ports.1})
                 .to_string(),
         ));
         Ok(ports)

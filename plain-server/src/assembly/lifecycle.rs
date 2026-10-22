@@ -1,24 +1,11 @@
 use crate::assembly::server::PublicServer;
 use crate::assembly::server::ServerState;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::watch;
-
-#[derive(serde::Serialize)]
-pub(crate) struct HttpServerFailure {
-    pub generation: u64,
-    pub message: String,
-}
-
-pub(crate) fn next_generation() -> u64 {
-    static GENERATION: AtomicU64 = AtomicU64::new(1);
-    GENERATION.fetch_add(1, Ordering::Relaxed)
-}
 
 pub(crate) fn monitor(
     state: ServerState,
     mut failure: watch::Receiver<Option<String>>,
     mut stop: watch::Receiver<bool>,
-    generation: u64,
 ) {
     let mut core_stop = state.stop.clone();
     tokio::spawn(async move {
@@ -30,7 +17,7 @@ pub(crate) fn monitor(
                 biased;
                 _ = core_stop.changed() => {
                     let mut guard = state.public_server.lock().await;
-                    if guard.as_ref().map(|server| server.generation) == Some(generation) {
+                    if guard.as_ref().is_some_and(|server| server.stop.subscribe().same_channel(&stop)) {
                         guard.take();
                     }
                     return;
@@ -44,20 +31,16 @@ pub(crate) fn monitor(
         let _shutdown = state.shutdown.lock().await;
         let mut server = {
             let mut guard = state.public_server.lock().await;
-            if guard.as_ref().map(|server| server.generation) != Some(generation) {
+            if !guard.as_ref().is_some_and(|server| server.stop.subscribe().same_channel(&stop)) {
                 return;
             }
             guard.take()
         };
         stop_locked(&state, &mut server).await;
         state.http_server.failed(error.clone());
-        let failure = HttpServerFailure {
-            generation,
-            message: error,
-        };
         let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
             plain_rs::events::HTTP_SERVER_FAILED,
-            serde_json::to_string(&failure).unwrap(),
+            serde_json::json!({"message": error}).to_string(),
         ));
     });
 }

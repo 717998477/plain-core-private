@@ -58,7 +58,7 @@ async fn loopback_and_public_listeners_serve_the_same_health_endpoint() {
             .status(),
         200
     );
-    assert!(server.public_generation().await.is_none());
+    assert!(server.http_ports().await.is_none());
     start(&server).await;
     let state = server.runtime_state();
     assert!(
@@ -74,18 +74,17 @@ async fn loopback_and_public_listeners_serve_the_same_health_endpoint() {
             .is_ok()
     );
     server.stop_public().await;
-    assert!(server.public_generation().await.is_none());
+    assert!(server.http_ports().await.is_none());
     server.shutdown().await;
 }
 
 #[tokio::test]
-async fn listener_failure_cleans_up_and_notifies_host_with_generation() {
+async fn listener_failure_cleans_up_and_notifies_host() {
     let directory = tempfile::tempdir().unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[10; 32]);
     let server = server(directory.path(), &token);
     let ports = start(&server).await;
     let state = server.runtime_state();
-    let generation = server.public_generation().await.unwrap();
     let (host_generation, mut calls) = state.host.connect();
     let host = state.host.clone();
     let responder = tokio::spawn(async move {
@@ -107,7 +106,7 @@ async fn listener_failure_cleans_up_and_notifies_host_with_generation() {
         .unwrap()
         .stop
         .subscribe();
-    monitor(state.clone(), receiver, stop, generation);
+    monitor(state.clone(), receiver, stop);
     failure
         .send(Some("injected listener failure".into()))
         .unwrap();
@@ -124,9 +123,9 @@ async fn listener_failure_cleans_up_and_notifies_host_with_generation() {
     assert_eq!(event.event_type, "HTTP_SERVER_FAILED");
     assert!(event.is_internal());
     let failure: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
-    assert_eq!(failure["generation"], generation);
+    assert!(failure.get("generation").is_none());
     assert_eq!(failure["message"], "injected listener failure");
-    assert!(server.public_generation().await.is_none());
+    assert!(server.http_ports().await.is_none());
     for port in [ports.0, ports.1] {
         assert_port_released(port);
     }
@@ -139,18 +138,12 @@ async fn listener_failure_cleans_up_and_notifies_host_with_generation() {
 }
 
 #[tokio::test]
-async fn stale_failure_cannot_stop_a_new_generation() {
+async fn stale_failure_cannot_stop_a_new_listener() {
     let directory = tempfile::tempdir().unwrap();
     let token = plain_rs::utils::base64::base64_encode(&[11; 32]);
     let server = server(directory.path(), &token);
     start(&server).await;
-    let old_generation = server.public_generation().await.unwrap();
-    server.stop_public().await;
-    let ports = start(&server).await;
-    let generation = server.public_generation().await.unwrap();
-    assert_ne!(old_generation, generation);
     let state = server.runtime_state();
-    let (failure, receiver) = watch::channel(Some("late failure".into()));
     let stop = state
         .public_server
         .lock()
@@ -159,9 +152,12 @@ async fn stale_failure_cannot_stop_a_new_generation() {
         .unwrap()
         .stop
         .subscribe();
-    monitor(state.clone(), receiver, stop, old_generation);
+    server.stop_public().await;
+    let ports = start(&server).await;
+    let (failure, receiver) = watch::channel(Some("late failure".into()));
+    monitor(state.clone(), receiver, stop);
     tokio::task::yield_now().await;
-    assert_eq!(server.public_generation().await, Some(generation));
+    assert_eq!(server.http_ports().await, Some(ports));
     assert!(
         state
             .public_server
@@ -223,7 +219,7 @@ async fn health_and_loopback_shutdown_work_without_a_host() {
             .unwrap()
             .desktop_access
     );
-    assert!(server.public_generation().await.is_some());
+    assert!(server.http_ports().await.is_some());
     assert_eq!(
         client
             .get(format!("{base}/health"))
