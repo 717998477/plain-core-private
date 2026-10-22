@@ -146,12 +146,7 @@ impl ScreenMirrorMutation {
         crate::graphql::resolvers::settings::state::user_preferences(ctx)?
             .set(plain_rs::prefs::user::keys::SCREEN_MIRROR_QUALITY, quality)
             .await?;
-        dispatch(
-            ctx,
-            "systemUpdateScreenMirrorQuality",
-            serde_json::json!({ "mode": mode.name() }),
-        )
-        .await
+        Ok(true)
     }
 }
 

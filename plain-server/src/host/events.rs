@@ -45,6 +45,30 @@ impl HostEvents {
             events: Mutex::new(events),
         }
     }
+    pub async fn prefs_changed(&self, prefs_type: plain_rs::prefs::PrefsType) {
+        let store = match prefs_type {
+            plain_rs::prefs::PrefsType::User => "user",
+            plain_rs::prefs::PrefsType::System => "system",
+        };
+        loop {
+            let result = tokio::select! {
+                biased;
+                _ = self.wait_disconnected() => return,
+                result = self.state.host.call_current(
+                    self.generation, "prefsChanged", json!({"store": store}),
+                ) => result,
+            };
+            match result {
+                Ok(_) => return,
+                Err(error) => log::warn!("Host {store} preferences refresh failed; retrying: {error}"),
+            }
+            tokio::select! {
+                _ = self.wait_disconnected() => return,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+            }
+        }
+    }
+
     pub fn capabilities(&self) -> Value {
         json!({"textTypes":HOST_TEXT_TYPES,"binaryTypes":HOST_BINARY_TYPES})
     }

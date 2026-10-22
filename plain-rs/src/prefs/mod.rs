@@ -107,7 +107,14 @@ impl std::error::Error for PrefsError {
 
 pub type Result<T> = std::result::Result<T, PrefsError>;
 
+#[derive(Clone, Copy, Debug)]
+pub enum PrefsType {
+    User,
+    System,
+}
+
 pub struct Prefs {
+    change_hook: RwLock<Option<Arc<dyn Fn(PrefsType) + Send + Sync>>>,
     system: PrefsStore,
     user: PrefsStore,
 }
@@ -127,8 +134,20 @@ pub fn default_path(data_dir: &Path) -> PathBuf {
 }
 
 impl Prefs {
+    pub fn set_change_hook(&self, hook: Option<Arc<dyn Fn(PrefsType) + Send + Sync>>) {
+        *self.change_hook.write().unwrap() = hook;
+    }
+
+    fn changed(&self, prefs_type: PrefsType) {
+        let hook = self.change_hook.read().unwrap().clone();
+        if let Some(hook) = hook {
+            hook(prefs_type);
+        }
+    }
+
     pub fn in_memory() -> Self {
         Self {
+            change_hook: RwLock::new(None),
             system: PrefsStore::in_memory(),
             user: PrefsStore::in_memory(),
         }
@@ -145,6 +164,7 @@ impl Prefs {
     /// Load the system and user preference files independently.
     pub fn load_pair(system_path: &Path, user_path: &Path) -> Result<Self> {
         Ok(Self {
+            change_hook: RwLock::new(None),
             system: PrefsStore::load(system_path)?,
             user: PrefsStore::load(user_path)?,
         })
@@ -169,11 +189,19 @@ impl Prefs {
     }
 
     pub fn set<T: Serialize>(&self, key: &str, value: T) -> Result<bool> {
-        self.system.set(key, value)
+        let changed = self.system.set(key, value)?;
+        if changed {
+            self.changed(PrefsType::System);
+        }
+        Ok(changed)
     }
 
     pub fn remove(&self, key: &str) -> Result<bool> {
-        self.system.remove(key)
+        let changed = self.system.remove(key)?;
+        if changed {
+            self.changed(PrefsType::System);
+        }
+        Ok(changed)
     }
 
     pub(crate) fn update_system<T>(
@@ -186,6 +214,8 @@ impl Prefs {
         if next != *stored {
             self.system.save(&next)?;
             *stored = next;
+            drop(stored);
+            self.changed(PrefsType::System);
         }
         Ok(result)
     }
@@ -200,12 +230,17 @@ impl Prefs {
         if next != *stored {
             self.user.save(&next)?;
             *stored = next;
+            drop(stored);
+            self.changed(PrefsType::User);
         }
         Ok(result)
     }
 
     pub fn clear(&self) -> Result<()> {
-        self.system.clear()
+        if self.system.clear()? {
+            self.changed(PrefsType::System);
+        }
+        Ok(())
     }
 
     pub fn entries(&self) -> Vec<(String, Value)> {
@@ -225,15 +260,26 @@ impl Prefs {
     }
 
     pub fn set_user<T: Serialize>(&self, key: &str, value: T) -> Result<bool> {
-        self.user.set(key, value)
+        let changed = self.user.set(key, value)?;
+        if changed {
+            self.changed(PrefsType::User);
+        }
+        Ok(changed)
     }
 
     pub fn remove_user(&self, key: &str) -> Result<bool> {
-        self.user.remove(key)
+        let changed = self.user.remove(key)?;
+        if changed {
+            self.changed(PrefsType::User);
+        }
+        Ok(changed)
     }
 
     pub fn clear_user(&self) -> Result<()> {
-        self.user.clear().map(|_| ())
+        if self.user.clear()? {
+            self.changed(PrefsType::User);
+        }
+        Ok(())
     }
 
     pub fn user_entries(&self) -> Vec<(String, Value)> {
@@ -321,11 +367,14 @@ impl PrefsStore {
     }
 
     /// Remove every entry and persist the file.
-    fn clear(&self) -> Result<()> {
+    fn clear(&self) -> Result<bool> {
         let mut inner = self.inner.write().unwrap();
+        if inner.is_empty() {
+            return Ok(false);
+        }
         self.save(&Map::new())?;
         inner.clear();
-        Ok(())
+        Ok(true)
     }
 
     /// Every entry sorted by key with its raw JSON value.
