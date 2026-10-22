@@ -31,9 +31,6 @@ pub(crate) struct ServerState {
     pub(crate) store: Arc<plain_rs::kv::LazyDb>,
     #[cfg(feature = "http_transport")]
     pub(crate) public_server: Arc<tokio::sync::Mutex<Option<PublicServer>>>,
-    #[cfg(feature = "http_transport")]
-    pub(crate) http_failure:
-        Arc<std::sync::Mutex<Option<crate::assembly::lifecycle::HttpServerFailure>>>,
     pub(crate) http_server: Arc<crate::services::http_server::Runtime>,
     pub(crate) build_debug: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) web_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
@@ -454,8 +451,6 @@ impl ContentServer {
             media_watch: std::sync::Arc::new(std::sync::Mutex::new(None)),
             #[cfg(feature = "http_transport")]
             public_server: Arc::new(tokio::sync::Mutex::new(None)),
-            #[cfg(feature = "http_transport")]
-            http_failure: Arc::new(std::sync::Mutex::new(None)),
             public,
             lan,
             thumbnails: Arc::new(crate::services::images::thumbnails::Thumbnails::default()),
@@ -701,7 +696,16 @@ impl ContentServer {
     pub async fn start_configured_public(&self) -> Result<(u16, u16), String> {
         let _core = self.state.shutdown.lock().await;
         self.state.native_client_id()?;
-        let (http, https, cert, key) = self.state.configured_public_identity().await?;
+        let (http, https, cert, key) = match self.state.configured_public_identity().await {
+            Ok(identity) => identity,
+            Err(error) => {
+                if self.state.public_server.lock().await.is_none() {
+                    self.state.http_server.failed(error.clone());
+                    let _ = self.state.events.send(self.state.http_server.status().event());
+                }
+                return Err(error);
+            }
+        };
         self.state.start_public_locked(http, https, cert, key).await
     }
 
@@ -716,6 +720,10 @@ impl ContentServer {
         let mut server = self.state.public_server.lock().await.take();
         crate::assembly::lifecycle::stop_locked(&self.state, &mut server).await;
         self.state.http_server.stopped();
+        let _ = self.state.events.send(self.state.http_server.status().event());
+    }
+    pub fn http_status(&self) -> crate::services::http_server::HttpStatus {
+        self.state.http_server.status()
     }
     #[cfg(feature = "http_transport")]
     pub async fn http_ports(&self) -> Option<(u16, u16)> {

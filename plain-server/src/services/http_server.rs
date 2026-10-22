@@ -11,6 +11,21 @@ pub struct HttpServerState {
     pub error: String,
 }
 
+#[derive(Clone, serde::Serialize)]
+pub struct HttpStatus {
+    pub state: &'static str,
+    pub message: String,
+}
+
+impl HttpStatus {
+    pub(crate) fn event(self) -> plain_rs::events::WsEvent {
+        plain_rs::events::WsEvent::broadcast(
+            plain_rs::events::HTTP_SERVER_STATE_CHANGED,
+            serde_json::to_string(&self).unwrap(),
+        )
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Runtime {
     state: Mutex<HttpServerState>,
@@ -38,6 +53,26 @@ impl Runtime {
         self.state.lock().unwrap().clone()
     }
 
+    pub(crate) fn status(&self) -> HttpStatus {
+        let state = self.state.lock().unwrap();
+        if state.http_port != 0 {
+            HttpStatus {
+                state: "started",
+                message: String::new(),
+            }
+        } else if !state.error.is_empty() {
+            HttpStatus {
+                state: "error",
+                message: state.error.clone(),
+            }
+        } else {
+            HttpStatus {
+                state: "stopped",
+                message: String::new(),
+            }
+        }
+    }
+
     fn begin(&self) -> Result<HttpServerState, String> {
         let mut state = self.state.lock().unwrap();
         if state.restarting {
@@ -57,12 +92,21 @@ impl Runtime {
         let mut state = self.state.lock().unwrap();
         state.http_port = i32::from(ports.0);
         state.https_port = i32::from(ports.1);
+        state.error.clear();
     }
 
     pub(crate) fn stopped(&self) {
         let mut state = self.state.lock().unwrap();
         state.http_port = 0;
         state.https_port = 0;
+        state.error.clear();
+    }
+
+    pub(crate) fn failed(&self, error: String) {
+        let mut state = self.state.lock().unwrap();
+        state.http_port = 0;
+        state.https_port = 0;
+        state.error = error;
     }
 
     fn finish(&self, revision: Long, result: Result<(u16, u16), String>) {
@@ -96,6 +140,7 @@ pub(crate) fn restart(
         let revision = receipt.revision;
         let state = state.clone();
         tokio::spawn(async move {
+            let _shutdown = state.shutdown.lock().await;
             let result = async {
                 state.native_client_id()?;
                 crate::services::settings::user_preferences::UserPreferences::from_server(&state)
@@ -106,10 +151,11 @@ pub(crate) fn restart(
                     })
                     .await
                     .map_err(|error| error.to_string())?;
-                state.restart_public().await
+                state.restart_public_locked().await
             }
             .await;
             state.http_server.finish(revision, result);
+            let _ = state.events.send(state.http_server.status().event());
         });
         Ok(receipt)
     }

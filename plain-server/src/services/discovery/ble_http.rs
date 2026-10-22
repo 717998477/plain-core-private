@@ -81,11 +81,10 @@ pub(crate) async fn incoming(
             let Message::Text(text) = first else { anyhow::bail!("Missing BLE connection facts"); };
             ensure!(text.len() <= 4096, "BLE facts exceed limit");
             let facts: Incoming = serde_json::from_str(&text)?;
-            ensure!(!facts.remote_host.is_empty() && matches_characteristic(&facts.characteristic_uuid), "Invalid BLE connection facts");
             let bytes = receive(&mut socket, Duration::from_secs(15)).await?;
             let mut stop = state.stop.clone();
             let response = tokio::select! {
-                result = dispatch_incoming(state, facts, &bytes) => result?,
+                result = dispatch_incoming(state, facts.remote_host, facts.characteristic_uuid, &bytes) => result?,
                 _ = socket.recv() => anyhow::bail!("BLE channel closed or received an unexpected frame"),
                 _ = stop.changed() => anyhow::bail!("BLE core stopped"),
             };
@@ -99,20 +98,25 @@ fn matches_characteristic(value: &str) -> bool {
         || value.eq_ignore_ascii_case(ble::NEARBY_CHAR_UUID)
 }
 
-async fn dispatch_incoming(state: ServerState, facts: Incoming, bytes: &[u8]) -> Result<Vec<u8>> {
-    if facts
-        .characteristic_uuid
-        .eq_ignore_ascii_case(ble::NEARBY_CHAR_UUID)
-    {
-        nearby::dispatch(&state, facts.remote_host, bytes).await
+pub(crate) async fn dispatch_incoming(
+    state: ServerState,
+    remote_host: String,
+    characteristic_uuid: String,
+    bytes: &[u8],
+) -> Result<Vec<u8>> {
+    ensure!(
+        !remote_host.is_empty() && matches_characteristic(&characteristic_uuid),
+        "Invalid BLE connection facts"
+    );
+    ensure!(
+        remote_host.len() + characteristic_uuid.len() <= 4096,
+        "BLE facts exceed limit"
+    );
+    ble::parts(bytes)?;
+    if characteristic_uuid.eq_ignore_ascii_case(ble::NEARBY_CHAR_UUID) {
+        nearby::dispatch(&state, remote_host, bytes).await
     } else {
-        ensure!(
-            facts
-                .characteristic_uuid
-                .eq_ignore_ascii_case(ble::HTTP_CHAR_UUID),
-            "Invalid BLE characteristic"
-        );
-        dispatch(state, facts.remote_host, bytes).await
+        dispatch(state, remote_host, bytes).await
     }
 }
 
@@ -123,7 +127,6 @@ async fn receive(socket: &mut WebSocket, timeout: Duration) -> Result<Vec<u8>> {
     let Message::Binary(bytes) = frame else {
         anyhow::bail!("Expected BLE bytes");
     };
-    ble::parts(&bytes)?;
     Ok(bytes.to_vec())
 }
 pub(crate) async fn dispatch(

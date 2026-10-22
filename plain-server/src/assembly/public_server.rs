@@ -16,8 +16,14 @@ impl ServerState {
         }
         let (stop, receiver) = watch::channel(false);
         let router = crate::http::routes::public::build_router(self.clone(), receiver.clone());
-        let listeners =
-            crate::http::listeners::HttpListeners::start(router, http, https, cert, key).await?;
+        let listeners = match crate::http::listeners::HttpListeners::start(router, http, https, cert, key).await {
+            Ok(listeners) => listeners,
+            Err(error) => {
+                self.http_server.failed(error.clone());
+                let _ = self.events.send(self.http_server.status().event());
+                return Err(error);
+            }
+        };
         let ports = (listeners.http_port, listeners.https_port);
         self.http_server.started(ports);
         {
@@ -27,7 +33,6 @@ impl ServerState {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             self.peer_status.outgoing.start(self.clone());
         }
-        *self.http_failure.lock().unwrap() = None;
         let generation = crate::assembly::lifecycle::next_generation();
         let failure = listeners.failures();
         let discovery =
@@ -68,8 +73,7 @@ impl ServerState {
         Ok((http, https, cert, key))
     }
 
-    pub(crate) async fn restart_public(&self) -> Result<(u16, u16), String> {
-        let _core = self.shutdown.lock().await;
+    pub(crate) async fn restart_public_locked(&self) -> Result<(u16, u16), String> {
         self.native_client_id()?;
         let (http, https, cert, key) = self.configured_public_identity().await?;
         {

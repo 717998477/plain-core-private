@@ -6,6 +6,7 @@ pub const PEER_MANAGEMENT_EVENT: &str = "PEER_MANAGEMENT_EVENT";
 pub const NETWORK_CHANGED: &str = "NETWORK_CHANGED";
 pub const HTTP_SERVER_STARTED: &str = "HTTP_SERVER_STARTED";
 pub const HTTP_SERVER_FAILED: &str = "HTTP_SERVER_FAILED";
+pub const HTTP_SERVER_STATE_CHANGED: &str = "HTTP_SERVER_STATE_CHANGED";
 pub const MEDIA_SCAN_PROGRESS: &str = "MEDIA_SCAN_PROGRESS";
 pub const MEDIA_ACTION_FINISHED: &str = "MEDIA_ACTION_FINISHED";
 pub const WS_PAIRING_SUCCESS: &str = "PAIRING_SUCCESS";
@@ -94,6 +95,7 @@ impl WsEvent {
                 | "EXECUTION_STATE_CHANGED"
                 | HTTP_SERVER_FAILED
                 | HTTP_SERVER_STARTED
+                | HTTP_SERVER_STATE_CHANGED
                 | MEDIA_ACTION_FINISHED
                 | "MDNS_UPDATED"
                 | "PEER_CONNECTIONS_UPDATED"

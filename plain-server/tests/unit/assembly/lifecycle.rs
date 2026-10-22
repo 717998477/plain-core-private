@@ -131,7 +131,8 @@ async fn listener_failure_cleans_up_and_notifies_host_with_generation() {
         assert_port_released(port);
     }
     start(&server).await;
-    assert!(state.http_failure.lock().unwrap().is_none());
+    assert_eq!(server.http_status().state, "started");
+    assert!(server.http_status().message.is_empty());
     state.host.disconnect(host_generation);
     server.shutdown().await;
     responder.await.unwrap();

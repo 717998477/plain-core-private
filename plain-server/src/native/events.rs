@@ -20,6 +20,7 @@ pub(crate) struct Delivery {
 
 #[derive(Clone, Copy)]
 enum Snapshot {
+    HttpServer,
     Images,
     OnlineClients,
     PeerTransport,
@@ -30,6 +31,7 @@ enum Snapshot {
 }
 
 const SNAPSHOTS: &[Snapshot] = &[
+    Snapshot::HttpServer,
     Snapshot::Images,
     Snapshot::OnlineClients,
     Snapshot::PeerTransport,
@@ -120,8 +122,13 @@ impl NativeEventStream {
                 return None;
             }
             if let Some(snapshot) = SNAPSHOTS.get(self.next_snapshot).copied() {
+                if matches!(snapshot, Snapshot::HttpServer) && self.client_id.is_some() {
+                    self.next_snapshot += 1;
+                    continue;
+                }
                 let pending_snapshot = async {
                     match snapshot {
+                        Snapshot::HttpServer => self.state.http_server.status().event(),
                         Snapshot::Images => self.state.image_models.snapshot().event(),
                         Snapshot::OnlineClients => self.state.main_ws.snapshot_event(),
                         Snapshot::PeerTransport => {
@@ -175,7 +182,19 @@ impl NativeEventStream {
                     continue;
                 }
                 Ok(event) => {
+                    if event.event_type == plain_rs::events::HTTP_SERVER_STATE_CHANGED
+                        && self.client_id.is_some()
+                    {
+                        continue;
+                    }
                     let event = match event.event_type {
+                        plain_rs::events::HTTP_SERVER_STARTED
+                        | plain_rs::events::HTTP_SERVER_FAILED
+                        | plain_rs::events::HTTP_SERVER_STATE_CHANGED
+                            if self.client_id.is_none() =>
+                        {
+                            self.state.http_server.status().event()
+                        }
                         "ONLINE_CLIENTS_UPDATED" => self.state.main_ws.snapshot_event(),
                         "PEER_TRANSPORT_UPDATED" => {
                             crate::services::peers::peer_transport::snapshot_event(&self.state)
@@ -191,16 +210,12 @@ impl NativeEventStream {
                     });
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    self.next_snapshot = 0;
+                    self.next_snapshot = usize::from(self.client_id.is_none());
                     self.notification_snapshot =
                         Some(self.state.management.notifications.snapshot_event());
-                    #[cfg(feature = "http_transport")]
-                    if let Some(failure) = self.state.http_failure.lock().unwrap().as_ref() {
+                    if self.client_id.is_none() {
                         return Some(Delivery {
-                            event: WsEvent::broadcast(
-                                plain_rs::events::HTTP_SERVER_FAILED,
-                                serde_json::to_string(failure).unwrap(),
-                            ),
+                            event: self.state.http_server.status().event(),
                             reconcile: true,
                         });
                     }

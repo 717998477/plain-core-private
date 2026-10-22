@@ -70,8 +70,15 @@ impl Runtime {
                         .get("payload")
                         .and_then(Value::as_str)
                         .ok_or("missing host event payload")?;
-                    if kind == plain_rs::events::HTTP_SERVER_FAILED {
-                        return Err(format!("HTTP server failed: {payload}"));
+                    if kind == plain_rs::events::HTTP_SERVER_STATE_CHANGED {
+                        let status: Value = serde_json::from_str(payload)
+                            .map_err(|error| error.to_string())?;
+                        if status["state"] == "error" {
+                            return Err(format!(
+                                "HTTP server failed: {}",
+                                status["message"].as_str().unwrap_or_default()
+                            ));
+                        }
                     }
                     log::info!("[shell] {kind}: {payload}");
                     Ok(())

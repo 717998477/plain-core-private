@@ -155,18 +155,30 @@ async fn configured_public_uses_core_settings_and_keeps_listeners_on_tls_preflig
         .set("rotate_url_token_on_restart", true)
         .unwrap();
     let preferences = core.state.prefs.entries();
-    core.runtime_state().restart_public().await.unwrap();
+    {
+        let state = core.runtime_state();
+        let _shutdown = state.shutdown.lock().await;
+        state.restart_public_locked().await.unwrap();
+    }
     assert_eq!(core.state.prefs.entries(), preferences);
     let ports = core.http_ports().await.unwrap();
     std::fs::write(directory.path().join("tls-identity.json"), "{}").unwrap();
-    assert!(core.runtime_state().restart_public().await.is_err());
+    {
+        let state = core.runtime_state();
+        let _shutdown = state.shutdown.lock().await;
+        assert!(state.restart_public_locked().await.is_err());
+    }
     assert_eq!(core.http_ports().await, Some(ports));
     core.stop_core().await;
     assert_eq!(core.http_ports().await, None);
     assert!(core.native_url_token().is_err());
     assert!(core.native_graphql().is_err());
     assert!(core.start_configured_public().await.is_err());
-    assert!(core.runtime_state().restart_public().await.is_err());
+    {
+        let state = core.runtime_state();
+        let _shutdown = state.shutdown.lock().await;
+        assert!(state.restart_public_locked().await.is_err());
+    }
 }
 
 #[tokio::test]

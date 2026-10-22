@@ -110,6 +110,49 @@ impl NativeManagement {
         }
     }
 
+    pub async fn ble_incoming(
+        &self,
+        remote_host: String,
+        characteristic_uuid: String,
+        bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        self.state.native_client_id()?;
+        let mut stop = self.state.stop.clone();
+        tokio::select! {
+            biased;
+            _ = stop.wait_for(|stopped| *stopped) => Err("BLE core stopped".into()),
+            result = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                crate::services::discovery::ble_http::dispatch_incoming(
+                    self.state.clone(),
+                    remote_host,
+                    characteristic_uuid,
+                    &bytes,
+                ),
+            ) => result
+                .map_err(|_| "BLE exchange timed out".to_owned())?
+                .map_err(|error| error.to_string()),
+        }
+    }
+
+    #[cfg(feature = "http_transport")]
+    pub async fn check_http(&self) -> Result<bool, String> {
+        self.state.native_client_id()?;
+        let Some((port, _)) = self.state.public_ports().await else {
+            return Ok(false);
+        };
+        reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .map_err(|error| error.to_string())?
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+            .map(|response| response.status() == reqwest::StatusCode::OK)
+            .map_err(|error| error.to_string())
+    }
+
     pub async fn regenerate_tls_certificate(&self) -> Result<Vec<u8>, String> {
         self.certificate(json!({"action":"generate"})).await
     }

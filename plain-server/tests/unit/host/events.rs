@@ -18,6 +18,7 @@ async fn cancelled_audio_snapshot_read_is_retried_before_consuming_queued_events
     let state = core.runtime_state();
     let bridge = core.host_events();
     for kind in [
+        "HTTP_SERVER_STATE_CHANGED",
         "IMAGE_MODELS_UPDATED",
         "ONLINE_CLIENTS_UPDATED",
         "PEER_TRANSPORT_UPDATED",
@@ -79,6 +80,10 @@ async fn model_snapshots_recover_current_versions_on_attach_overflow_and_replace
     let server = server(&directory);
     let state = server.runtime_state();
     let bridge = server.host_events();
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
     let initial = bridge.next_event().await.unwrap();
     assert_eq!(initial["type"], "IMAGE_MODELS_UPDATED");
     assert_eq!(
@@ -127,6 +132,7 @@ async fn model_snapshots_recover_current_versions_on_attach_overflow_and_replace
     }
     let recovery = bridge.next_event().await.unwrap();
     assert_eq!(recovery["reconcile"], true);
+    assert_eq!(recovery["type"], "HTTP_SERVER_STATE_CHANGED");
     let snapshot = bridge.next_event().await.unwrap();
     assert_eq!(snapshot["type"], "IMAGE_MODELS_UPDATED");
     assert_eq!(
@@ -135,6 +141,10 @@ async fn model_snapshots_recover_current_versions_on_attach_overflow_and_replace
     );
     let replacement = server.host_events();
     assert!(bridge.next_event().await.is_none());
+    assert_eq!(
+        replacement.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
     let snapshot = replacement.next_event().await.unwrap();
     assert_eq!(snapshot["type"], "IMAGE_MODELS_UPDATED");
     assert_eq!(
@@ -151,6 +161,10 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
     let server = server(&dir);
     let bridge = server.host_events();
     let mut public = server.runtime_state().events.subscribe();
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
@@ -323,6 +337,10 @@ async fn listener_failure_survives_event_queue_overflow() {
     let bridge = server.host_events();
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
     );
     assert_eq!(
@@ -350,20 +368,19 @@ async fn listener_failure_survives_event_queue_overflow() {
         "PEER_NOTIFICATIONS_UPDATED"
     );
     let state = server.runtime_state();
-    *state.http_failure.lock().unwrap() = Some(crate::assembly::lifecycle::HttpServerFailure {
-        generation: 7,
-        message: "failed".into(),
-    });
+    state.http_server.failed("failed".into());
     for _ in 0..300 {
         let _ = state
             .events
             .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()));
     }
     let event = bridge.next_event().await.unwrap();
-    assert_eq!(event["type"], "HTTP_SERVER_FAILED");
+    assert_eq!(event["type"], "HTTP_SERVER_STATE_CHANGED");
     assert_eq!(event["reconcile"], true);
     let payload: Value = serde_json::from_str(event["payload"].as_str().unwrap()).unwrap();
-    assert_eq!(payload["generation"], 7);
+    assert_eq!(payload["state"], "error");
+    assert_eq!(payload["message"], "failed");
+    assert!(payload.get("generation").is_none());
     server.shutdown().await;
 }
 
@@ -372,6 +389,10 @@ async fn replacing_a_host_wakes_a_waiting_event_receiver() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(&dir);
     let original = server.host_events();
+    assert_eq!(
+        original.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
     assert_eq!(
         original.next_event().await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
@@ -548,6 +569,7 @@ async fn casting_snapshots_recover_the_current_version_without_a_query() {
     );
     let bridge = server.host_events();
     for kind in [
+        "HTTP_SERVER_STATE_CHANGED",
         "IMAGE_MODELS_UPDATED",
         "ONLINE_CLIENTS_UPDATED",
         "PEER_TRANSPORT_UPDATED",
@@ -609,6 +631,7 @@ async fn casting_snapshots_recover_the_current_version_without_a_query() {
     let replacement = server.host_events();
     assert!(bridge.next_event().await.is_none());
     for kind in [
+        "HTTP_SERVER_STATE_CHANGED",
         "IMAGE_MODELS_UPDATED",
         "ONLINE_CLIENTS_UPDATED",
         "PEER_TRANSPORT_UPDATED",
@@ -686,6 +709,7 @@ async fn update_download_snapshots_recover_without_querying_or_replaying_stale_h
     let state = core.runtime_state();
     let bridge = core.host_events();
     for kind in [
+        "HTTP_SERVER_STATE_CHANGED",
         "IMAGE_MODELS_UPDATED",
         "ONLINE_CLIENTS_UPDATED",
         "PEER_TRANSPORT_UPDATED",
@@ -725,5 +749,57 @@ async fn update_download_snapshots_recover_without_querying_or_replaying_stale_h
     let restored = bridge.next_event().await.unwrap();
     assert_eq!(restored["type"], "APP_UPDATE_DOWNLOAD_UPDATED");
     assert_eq!(restored["payload"], expected);
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn http_status_snapshots_replace_stale_listener_events_without_exposing_generations() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    state.http_server.started((8080, 8443));
+    let bridge = core.host_events();
+    let initial = bridge.next_event().await.unwrap();
+    assert_eq!(initial["type"], "HTTP_SERVER_STATE_CHANGED");
+    assert_eq!(
+        serde_json::from_str::<Value>(initial["payload"].as_str().unwrap()).unwrap(),
+        json!({"state":"started","message":""})
+    );
+    for kind in [
+        "IMAGE_MODELS_UPDATED",
+        "ONLINE_CLIENTS_UPDATED",
+        "PEER_TRANSPORT_UPDATED",
+        "DLNA_SENDER_UPDATED",
+        "APP_UPDATE_DOWNLOAD_UPDATED",
+        "AUDIO_PLAYBACK_UPDATED",
+        "PEER_NOTIFICATIONS_UPDATED",
+    ] {
+        assert_eq!(bridge.next_event().await.unwrap()["type"], kind);
+    }
+    state
+        .events
+        .send(WsEvent::broadcast(
+            plain_rs::events::HTTP_SERVER_FAILED,
+            json!({"generation":1,"message":"old failure"}).to_string(),
+        ))
+        .unwrap();
+    state.http_server.started((8180, 8543));
+    let current = bridge.next_event().await.unwrap();
+    assert_eq!(current["type"], "HTTP_SERVER_STATE_CHANGED");
+    assert_eq!(
+        serde_json::from_str::<Value>(current["payload"].as_str().unwrap()).unwrap(),
+        json!({"state":"started","message":""})
+    );
+    state.http_server.failed("current failure".into());
+    state.http_server.stopped();
+    state
+        .events
+        .send(state.http_server.status().event())
+        .unwrap();
+    let stopped = bridge.next_event().await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(stopped["payload"].as_str().unwrap()).unwrap(),
+        json!({"state":"stopped","message":""})
+    );
     core.stop_core().await;
 }

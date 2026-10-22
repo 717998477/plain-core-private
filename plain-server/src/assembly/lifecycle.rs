@@ -3,7 +3,7 @@ use crate::assembly::server::ServerState;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::watch;
 
-#[derive(Clone, serde::Serialize)]
+#[derive(serde::Serialize)]
 pub(crate) struct HttpServerFailure {
     pub generation: u64,
     pub message: String,
@@ -50,12 +50,11 @@ pub(crate) fn monitor(
             guard.take()
         };
         stop_locked(&state, &mut server).await;
-        state.http_server.stopped();
+        state.http_server.failed(error.clone());
         let failure = HttpServerFailure {
             generation,
             message: error,
         };
-        *state.http_failure.lock().unwrap() = Some(failure.clone());
         let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
             plain_rs::events::HTTP_SERVER_FAILED,
             serde_json::to_string(&failure).unwrap(),
