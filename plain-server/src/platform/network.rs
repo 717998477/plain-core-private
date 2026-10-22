@@ -19,7 +19,6 @@ struct Interface {
     up: bool,
     loopback: bool,
     tunnel: bool,
-    default: bool,
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -43,7 +42,6 @@ fn interfaces() -> Vec<Interface> {
             up: row.is_up(),
             loopback: row.is_loopback(),
             tunnel: row.is_tun(),
-            default: row.default,
         })
         .collect()
 }
@@ -64,7 +62,6 @@ pub(crate) async fn ipv4() -> Result<String, String> {
 pub(crate) struct NetworkStatus {
     pub ipv4_addresses: Vec<String>,
     pub primary_ipv4: String,
-    pub vpn_active: bool,
 }
 
 pub(crate) async fn snapshot() -> Result<NetworkStatus, String> {
@@ -79,32 +76,11 @@ pub(crate) async fn snapshot() -> Result<NetworkStatus, String> {
     .map_err(|error| error.to_string())?
 }
 
-pub(crate) async fn device_snapshot(host: &Host) -> Result<NetworkStatus, String> {
-    #[allow(unused_mut)]
-    let mut status = snapshot().await?;
-    #[cfg(target_os = "android")]
-    {
-        status.vpn_active =
-            serde_json::from_value(host.call("systemVpnActive", serde_json::json!({})).await?)
-                .map_err(|error| error.to_string())?;
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = host;
-    }
-    Ok(status)
-}
-
 fn sample(interfaces: &[Interface]) -> NetworkStatus {
     let addresses = lan_ipv4_addresses(interfaces);
     NetworkStatus {
         primary_ipv4: addresses.first().cloned().unwrap_or_default(),
         ipv4_addresses: addresses,
-        vpn_active: interfaces.iter().any(|interface| {
-            interface.default
-                && interface.up
-                && (interface.tunnel || interface.if_type == InterfaceType::Tunnel)
-        }),
     }
 }
 

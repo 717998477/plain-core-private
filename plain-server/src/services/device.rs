@@ -32,7 +32,7 @@ impl Selection {
         self.uptime
             || (self.battery && !cfg!(any(target_os = "ios", target_os = "android")))
             || self.storage
-            || (self.memory && !cfg!(any(target_os = "ios", target_os = "android")))
+            || (self.memory && !cfg!(target_os = "ios"))
             || (self.temperatures && cfg!(target_os = "linux"))
     }
 }
@@ -132,24 +132,9 @@ impl Status {
             let _ = host;
             Ok::<Option<BatterySample>, String>(None)
         };
-        let memory = async {
-            #[cfg(target_os = "android")]
-            if selection.memory {
-                return host
-                    .call("systemMemoryAvailable", serde_json::json!({}))
-                    .await?
-                    .as_i64()
-                    .map(|value| Some(Long(value)))
-                    .ok_or_else(|| "invalid available memory reading".to_owned());
-            }
-            Ok::<Option<Long>, String>(None)
-        };
-        let (cpu, readings, battery, memory) = tokio::join!(cpu, readings, battery, memory);
+        let (cpu, readings, battery) = tokio::join!(cpu, readings, battery);
         let mut status = readings?;
         status.cpu_usage = cpu?;
-        if let Some(memory) = memory? {
-            status.memory_available = Some(memory);
-        }
         if let Some(sample) = battery? {
             status.battery_level = sample.percent();
             status.charging = sample.charging;
@@ -196,7 +181,7 @@ fn direct(selection: Selection, directory: &std::path::Path) -> Result<DeviceSta
     if selection.battery {
         (status.battery_level, status.charging) = native_battery::read();
     }
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(target_os = "ios"))]
     if selection.memory {
         let mut system = sysinfo::System::new();
         system.refresh_memory();

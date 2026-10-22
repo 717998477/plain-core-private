@@ -183,11 +183,8 @@ impl App {
 
 #[ComplexObject]
 impl App {
-    async fn network(
-        &self,
-        ctx: &Context<'_>,
-    ) -> async_graphql::Result<crate::platform::network::NetworkStatus> {
-        crate::platform::network::device_snapshot(ctx.data::<Arc<Host>>()?)
+    async fn network(&self) -> async_graphql::Result<crate::platform::network::NetworkStatus> {
+        crate::platform::network::snapshot()
             .await
             .map_err(async_graphql::Error::new)
     }

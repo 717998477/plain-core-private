@@ -1,7 +1,7 @@
 use super::{Interface, InterfaceType};
 use std::{
     ffi::CStr,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
 struct Addresses(*mut libc::ifaddrs);
@@ -27,33 +27,12 @@ fn kind(name: &str) -> InterfaceType {
     }
 }
 
-fn selected_address() -> Option<IpAddr> {
-    let routes = [
-        (
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
-        ),
-        (
-            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-            IpAddr::V6(Ipv6Addr::new(
-                0xfdff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
-            )),
-        ),
-    ];
-    routes.into_iter().find_map(|(bind, remote)| {
-        let socket = UdpSocket::bind(SocketAddr::new(bind, 0)).ok()?;
-        socket.connect(SocketAddr::new(remote, 1)).ok()?;
-        Some(socket.local_addr().ok()?.ip())
-    })
-}
-
 pub(super) fn interfaces() -> Result<Vec<Interface>, String> {
     let mut head = std::ptr::null_mut();
     if unsafe { libc::getifaddrs(&mut head) } != 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
     let _addresses = Addresses(head);
-    let selected = selected_address();
     let mut result = Vec::new();
     let mut current = head;
     while !current.is_null() {
@@ -91,7 +70,6 @@ pub(super) fn interfaces() -> Result<Vec<Interface>, String> {
             up: row.ifa_flags & libc::IFF_UP as u32 != 0,
             loopback: row.ifa_flags & libc::IFF_LOOPBACK as u32 != 0,
             tunnel: row.ifa_flags & libc::IFF_POINTOPOINT as u32 != 0,
-            default: Some(address) == selected,
         });
     }
     Ok(result)

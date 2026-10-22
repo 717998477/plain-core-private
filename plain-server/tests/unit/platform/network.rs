@@ -14,7 +14,6 @@ fn interface(kind: InterfaceType, addresses: &[&str]) -> Interface {
         up: true,
         loopback: false,
         tunnel: false,
-        default: false,
     }
 }
 
@@ -74,17 +73,11 @@ fn lan_selection_retains_sample_order_between_equal_priority_interfaces() {
 }
 
 #[test]
-fn network_sample_deduplicates_addresses_and_requires_an_active_default_tunnel() {
+fn network_sample_deduplicates_addresses_without_including_tunnels() {
     let wireless = interface(
         InterfaceType::Wireless80211,
         &["203.0.113.1/24", "203.0.113.1/24"],
     );
-    let mut tunnel = interface(InterfaceType::Tunnel, &["198.51.100.1/24"]);
-    assert!(!sample(&[wireless.clone(), tunnel.clone()]).vpn_active);
-    tunnel.default = true;
-    let status = sample(&[wireless, tunnel.clone()]);
-    assert!(status.vpn_active);
-    assert_eq!(status.ipv4_addresses, ["203.0.113.1"]);
-    tunnel.up = false;
-    assert!(!sample(&[tunnel]).vpn_active);
+    let tunnel = interface(InterfaceType::Tunnel, &["198.51.100.1/24"]);
+    assert_eq!(sample(&[wireless, tunnel]).ipv4_addresses, ["203.0.113.1"]);
 }

@@ -144,7 +144,6 @@ type KeyValuePair {
 type NetworkStatus {
 	ipv4Addresses: [String!]!
 	primaryIpv4: String!
-	vpnActive: Boolean!
 }
 
 enum Permission {

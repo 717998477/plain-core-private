@@ -197,3 +197,17 @@ fn data_volume_selection_uses_the_longest_component_prefix_and_never_an_unrelate
         None
     );
 }
+
+#[cfg(not(target_os = "ios"))]
+#[tokio::test]
+async fn available_memory_is_read_without_a_connected_host() {
+    let selection = Selection {
+        memory: true,
+        ..Selection::default()
+    };
+    assert!(selection.direct_fields());
+    let status = Status::default();
+    let sample = status.collect(&Host::default(), selection).await.unwrap();
+    assert!(sample.memory_available.is_some());
+    assert!(status.cpu.lock().await.is_none());
+}
