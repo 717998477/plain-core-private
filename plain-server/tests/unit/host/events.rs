@@ -132,7 +132,11 @@ async fn model_snapshots_recover_current_versions_on_attach_overflow_and_replace
     }
     let recovery = bridge.next_event().await.unwrap();
     assert_eq!(recovery["reconcile"], true);
-    assert_eq!(recovery["type"], "HTTP_SERVER_STATE_CHANGED");
+    assert_eq!(recovery["type"], "CONTENT_CHANGED");
+    assert_eq!(
+        bridge.next_event().await.unwrap()["type"],
+        "HTTP_SERVER_STATE_CHANGED"
+    );
     let snapshot = bridge.next_event().await.unwrap();
     assert_eq!(snapshot["type"], "IMAGE_MODELS_UPDATED");
     assert_eq!(
@@ -374,9 +378,11 @@ async fn listener_failure_survives_event_queue_overflow() {
             .events
             .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()));
     }
+    let recovery = bridge.next_event().await.unwrap();
+    assert_eq!(recovery["type"], "CONTENT_CHANGED");
+    assert_eq!(recovery["reconcile"], true);
     let event = bridge.next_event().await.unwrap();
     assert_eq!(event["type"], "HTTP_SERVER_STATE_CHANGED");
-    assert_eq!(event["reconcile"], true);
     let payload: Value = serde_json::from_str(event["payload"].as_str().unwrap()).unwrap();
     assert_eq!(payload["state"], "error");
     assert_eq!(payload["message"], "failed");
@@ -604,6 +610,7 @@ async fn casting_snapshots_recover_the_current_version_without_a_query() {
     }
     assert_eq!(bridge.next_event().await.unwrap()["reconcile"], true);
     for kind in [
+        "HTTP_SERVER_STATE_CHANGED",
         "IMAGE_MODELS_UPDATED",
         "ONLINE_CLIENTS_UPDATED",
         "PEER_TRANSPORT_UPDATED",
@@ -739,6 +746,7 @@ async fn update_download_snapshots_recover_without_querying_or_replaying_stale_h
     }
     assert_eq!(bridge.next_event().await.unwrap()["reconcile"], true);
     for kind in [
+        "HTTP_SERVER_STATE_CHANGED",
         "IMAGE_MODELS_UPDATED",
         "ONLINE_CLIENTS_UPDATED",
         "PEER_TRANSPORT_UPDATED",

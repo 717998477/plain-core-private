@@ -210,15 +210,9 @@ impl NativeEventStream {
                     });
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    self.next_snapshot = usize::from(self.client_id.is_none());
+                    self.next_snapshot = 0;
                     self.notification_snapshot =
                         Some(self.state.management.notifications.snapshot_event());
-                    if self.client_id.is_none() {
-                        return Some(Delivery {
-                            event: self.state.http_server.status().event(),
-                            reconcile: true,
-                        });
-                    }
                     return Some(Delivery {
                         event: WsEvent::broadcast("CONTENT_CHANGED", "{}".into()),
                         reconcile: true,
