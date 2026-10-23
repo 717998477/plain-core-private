@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::{AUTO_CHECK_UPDATE, SKIP_VERSION};
 use plain_rs::{
     events::WsEvent,
     prefs::Prefs,
@@ -14,7 +15,7 @@ pub(crate) struct SecurityPreferences<'a> {
 
 impl SecurityPreferences<'_> {
     pub(crate) async fn set(&self, key: &str, value: Value) -> anyhow::Result<bool> {
-        let changed = if matches!(key, "auto_check_update" | "skip_version") {
+        let changed = if matches!(key, AUTO_CHECK_UPDATE | SKIP_VERSION) {
             if let Some(state) = self.server {
                 crate::services::settings::updates::set_setting(state, key, value).await?
             } else {

@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::{AUTO_CHECK_UPDATE, SKIP_VERSION};
 use crate::assembly::server::ServerState;
 use anyhow::{Result, anyhow, ensure};
 use plain_rs::{
@@ -63,7 +64,7 @@ pub(crate) async fn check(state: &ServerState, automatic: bool) -> Result<AppUpd
     let mut cache = state.update_checks.cache.lock().await;
     let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis())?;
     let info = info(state)?;
-    if automatic && !plain_rs::updates::due(&info, state.prefs.get_or("auto_check_update", true), now_ms) {
+    if automatic && !plain_rs::updates::due(&info, state.prefs.get_or(AUTO_CHECK_UPDATE, true), now_ms) {
         return Ok(AppUpdateStatus::NotDue);
     }
     attempt(state, &mut cache).await
@@ -109,7 +110,7 @@ fn project(
             current_version: plain_rs::updates::normalized_version(version),
             latest_version: latest.map(|release| release.version.clone()),
             has_update: latest.is_some_and(|release| {
-                plain_rs::updates::available_version(&release.version, version, &state.prefs.get_or("skip_version", String::new()))
+                plain_rs::updates::available_version(&release.version, version, &state.prefs.get_or(SKIP_VERSION, String::new()))
             }),
             url: latest
                 .map(|release| release.url.clone())
@@ -191,7 +192,7 @@ async fn fetch(state: &ServerState) -> Result<AppUpdateStatus> {
     let release: Release = serde_json::from_slice(&bytes)?;
     let latest = plain_rs::updates::release_info(&release, &source)?;
     let mut info: UpdateInfo = info(state)?;
-    let available = plain_rs::updates::apply_release(&mut info, version, &state.prefs.get_or("skip_version", String::new()), &abis, &source, &release);
+    let available = plain_rs::updates::apply_release(&mut info, version, &state.prefs.get_or(SKIP_VERSION, String::new()), &abis, &source, &release);
     let mut patch = serde_json::json!({"latestRelease":latest});
     if available {
         patch.as_object_mut().unwrap().extend(serde_json::json!({"newVersion":info.new_version,"log":info.log,"publishDate":info.publish_date,"size":info.size,"downloadUrl":info.download_url}).as_object().unwrap().clone());
@@ -220,7 +221,7 @@ pub(crate) async fn set_setting(
 ) -> Result<bool> {
     let _cache = state.update_checks.cache.lock().await;
     let changed = plain_rs::prefs::security::set_entry(&state.prefs, key, value)?;
-    if changed && key == "skip_version" {
+    if changed && key == SKIP_VERSION {
         state.update_checks.download.invalidate();
         update(state, serde_json::json!({"downloadedApkPath":""}))?;
         super::update_download::Runtime::schedule_reconcile(state);

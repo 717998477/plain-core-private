@@ -1,9 +1,9 @@
+use crate::prefs::pref_keys::CLIPBOARD_DIRECTIONS;
 use crate::prefs::Prefs;
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-const DIRECTIONS: &str = "clipboard_directions";
 const APPLIED: &str = "clipboard_last_item";
 
 #[derive(Deserialize)]
@@ -29,7 +29,7 @@ pub fn sends(prefs: &Prefs, peer_id: &str) -> Result<bool> {
 
 fn direction(prefs: &Prefs, peer_id: &str) -> Result<String> {
     let directions = prefs
-        .get::<serde_json::Map<String, Value>>(DIRECTIONS)?
+        .get::<serde_json::Map<String, Value>>(CLIPBOARD_DIRECTIONS)?
         .unwrap_or_default();
     match directions.get(peer_id) {
         None => Ok("pull".into()),

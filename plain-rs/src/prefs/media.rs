@@ -1,13 +1,12 @@
+use crate::prefs::pref_keys::MEDIA_SOURCE_DIRS;
 use super::{Prefs, Result};
 
-const SOURCE_DIRECTORIES: &str = "media_source_dirs";
-
 pub fn source_directories(prefs: &Prefs) -> Result<Vec<String>> {
-    Ok(prefs.get(SOURCE_DIRECTORIES)?.unwrap_or_default())
+    Ok(prefs.get(MEDIA_SOURCE_DIRS)?.unwrap_or_default())
 }
 
 pub fn set_source_directories(prefs: &Prefs, directories: &[String]) -> Result<()> {
-    prefs.set(SOURCE_DIRECTORIES, directories)?;
+    prefs.set(MEDIA_SOURCE_DIRS, directories)?;
     Ok(())
 }
 

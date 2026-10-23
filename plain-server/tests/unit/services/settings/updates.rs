@@ -10,7 +10,7 @@ async fn native_update_check_uses_capabilities_and_skips_network_when_automatic_
         let dir = tempfile::tempdir().unwrap();
         let core = ContentServer::open(dir.path()).unwrap();
         let state = core.runtime_state();
-        update(&state, json!({"autoCheckUpdate":false})).unwrap();
+        state.prefs.set(AUTO_CHECK_UPDATE, false).unwrap();
         let (generation, mut requests) = state.host.connect();
         let host = state.host.clone();
         let worker = tokio::spawn(async move {
@@ -51,7 +51,8 @@ async fn main_settings_derive_update_availability_from_current_version_and_skip(
     let state = core.runtime_state();
     let (_generation, mut requests) = state.host.connect();
     for (skip, available) in [("", true), ("999.0.0", false)] {
-        update(&state, json!({"newVersion":"999.0.0","skipVersion":skip})).unwrap();
+        update(&state, json!({"newVersion":"999.0.0"})).unwrap();
+        state.prefs.set(SKIP_VERSION, skip).unwrap();
         let value =
             serde_json::to_value(core.native_management().unwrap().prefs_snapshot().unwrap())
                 .unwrap();
@@ -88,7 +89,7 @@ async fn main_update_snapshot_reuses_cached_result_and_projects_release_without_
         requests
     });
     for (skip, expected) in [("", true), ("999.0.0", false)] {
-        update(&state, json!({"skipVersion":skip})).unwrap();
+        state.prefs.set(SKIP_VERSION, skip).unwrap();
         let response = core
             .native_graphql()
             .unwrap()

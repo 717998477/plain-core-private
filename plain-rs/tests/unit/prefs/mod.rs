@@ -32,9 +32,9 @@ fn missing_file_starts_empty_and_creates_on_first_set() {
 fn roundtrip_string_and_json_shapes() {
     let (_dir, prefs) = tmp_prefs("roundtrip");
     prefs.set("url_token", "abc123").unwrap();
-    prefs.set("recent_files", vec!["/a", "/b"]).unwrap();
+    prefs.set("media_source_dirs", vec!["/a", "/b"]).unwrap();
     prefs
-        .set("samba", serde_json::json!({"enabled": true}))
+        .set("samba_settings", serde_json::json!({"enabled": true}))
         .unwrap();
 
     assert_eq!(
@@ -42,11 +42,11 @@ fn roundtrip_string_and_json_shapes() {
         Some("abc123")
     );
     assert_eq!(
-        prefs.get::<Vec<String>>("recent_files").unwrap(),
+        prefs.get::<Vec<String>>("media_source_dirs").unwrap(),
         Some(vec!["/a".into(), "/b".into()])
     );
     assert_eq!(
-        prefs.get::<serde_json::Value>("samba").unwrap(),
+        prefs.get::<serde_json::Value>("samba_settings").unwrap(),
         Some(serde_json::json!({"enabled": true}))
     );
 }
@@ -56,44 +56,44 @@ fn roundtrip_string_and_json_shapes() {
 fn user_store_has_matching_default_and_clear_operations() {
     let (dir, prefs) = tmp_prefs("user-ops");
     assert_eq!(prefs.get_or("missing", 42), 42);
-    prefs.set("system", true).unwrap();
-    prefs.set("user", "value").unwrap();
+    prefs.set("developer_mode", true).unwrap();
+    prefs.set("locale", "value").unwrap();
     prefs.clear().unwrap();
     assert!(prefs.entries().is_empty());
-    assert!(prefs.get_or("system", false));
+    assert!(!prefs.get_or("developer_mode", false));
     let reloaded = Prefs::load(&default_path(&dir)).unwrap();
     assert!(reloaded.entries().is_empty());
-    assert!(reloaded.get_or("system", false));
+    assert!(!reloaded.get_or("developer_mode", false));
 }
 
 #[test]
 fn set_same_value_skips_disk_write() {
     let (dir, prefs) = tmp_prefs("noop");
-    assert!(prefs.set("k", 1u32).unwrap());
+    assert!(prefs.set("volume_alias", 1u32).unwrap());
     let file = dir.join("prefs.json");
     let first = std::fs::read(&file).unwrap();
     // Same value again: no rewrite reported.
-    assert!(!prefs.set("k", 1u32).unwrap());
+    assert!(!prefs.set("volume_alias", 1u32).unwrap());
     assert_eq!(std::fs::read(&file).unwrap(), first);
     // Different value: rewritten.
-    assert!(prefs.set("k", 2u32).unwrap());
+    assert!(prefs.set("volume_alias", 2u32).unwrap());
     assert_ne!(std::fs::read(&file).unwrap(), first);
 }
 
 #[test]
 fn remove_persists_and_reports_presence() {
     let (_dir, prefs) = tmp_prefs("remove");
-    prefs.set("k", "v").unwrap();
-    assert!(prefs.remove("k").unwrap());
-    assert!(!prefs.remove("k").unwrap(), "second remove: absent");
-    assert_eq!(prefs.get::<String>("k").unwrap(), None);
+    prefs.set("volume_alias", "v").unwrap();
+    assert!(prefs.remove("volume_alias").unwrap());
+    assert!(!prefs.remove("volume_alias").unwrap(), "second remove: absent");
+    assert_eq!(prefs.get::<String>("volume_alias").unwrap(), None);
 }
 
 #[test]
 fn clear_empties_and_persists() {
     let (dir, prefs) = tmp_prefs("clear");
-    prefs.set("a", 1u32).unwrap();
-    prefs.set("b", "x").unwrap();
+    prefs.set("audio_sort_by", 1u32).unwrap();
+    prefs.set("locale", "x").unwrap();
     prefs.clear().unwrap();
     assert_eq!(prefs.entries(), vec![]);
     let reloaded = Prefs::load(&dir.join("prefs.json")).unwrap();
@@ -107,21 +107,21 @@ fn get_or_returns_stored_or_default() {
     assert_eq!(prefs.get_or("http_port", 8080u64), 9000);
     assert_eq!(prefs.get_or("https_port", 8443u64), 8443);
     // Type mismatch falls back to the default instead of erroring out.
-    prefs.set("flag", "not-a-bool").unwrap();
-    assert!(!prefs.get_or("flag", false));
+    prefs.set("developer_mode", "not-a-bool").unwrap();
+    assert!(!prefs.get_or("developer_mode", false));
 }
 
 #[test]
 fn entries_sorted_with_json_rendered_values() {
     let (_dir, prefs) = tmp_prefs("entries");
-    prefs.set("z_key", "v").unwrap();
-    prefs.set("a_key", vec![1u32, 2]).unwrap();
+    prefs.set("video_sort_by", "v").unwrap();
+    prefs.set("audio_sort_by", vec![1u32, 2]).unwrap();
 
     let entries = prefs.entries_sorted();
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].0, "a_key");
+    assert_eq!(entries[0].0, "audio_sort_by");
     assert_eq!(entries[0].1, "[1,2]");
-    assert_eq!(entries[1].0, "z_key");
+    assert_eq!(entries[1].0, "video_sort_by");
     // Strings render as JSON (quoted) — plain-desktop parity.
     assert_eq!(entries[1].1, "\"v\"");
 
@@ -134,7 +134,7 @@ fn entries_sorted_with_json_rendered_values() {
 fn reload_sees_previous_writes_and_pretty_prints() {
     let (dir, prefs) = tmp_prefs("reload");
     prefs.set("device_name", "box").unwrap();
-    prefs.set("nested", serde_json::json!({"a": 1})).unwrap();
+    prefs.set("samba_settings", serde_json::json!({"a": 1})).unwrap();
     drop(prefs);
 
     // File is pretty-printed (hand-editable, like plain-desktop's).
@@ -147,7 +147,7 @@ fn reload_sees_previous_writes_and_pretty_prints() {
         Some("box")
     );
     assert_eq!(
-        reloaded.get::<serde_json::Value>("nested").unwrap(),
+        reloaded.get::<serde_json::Value>("samba_settings").unwrap(),
         Some(serde_json::json!({"a": 1}))
     );
 }

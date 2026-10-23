@@ -27,7 +27,7 @@ fn settings_are_shared_and_decode_errors_are_not_defaults() {
     assert_eq!(get_samba_settings(&prefs).unwrap(), configured);
     assert!(configure(&prefs, true, vec![]).is_err());
     assert_eq!(get_samba_settings(&prefs).unwrap(), configured);
-    prefs.set(KEY_SAMBA_SETTINGS, "invalid settings").unwrap();
+    prefs.set(SAMBA_SETTINGS, "invalid settings").unwrap();
     assert!(get_samba_settings(&prefs).is_err());
 }
 

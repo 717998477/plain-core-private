@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::SKIP_VERSION;
 use super::updates;
 use crate::{assembly::server::ServerState, graphql::types::Long};
 use anyhow::{Result, anyhow, ensure};
@@ -182,7 +183,7 @@ async fn execute_owned(state: ServerState, command: Command) -> Result<AppUpdate
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| anyhow!("Missing startup app version"))?;
             ensure!(
-                plain_rs::updates::available(&info, version, &state.prefs.get_or("skip_version", String::new())),
+                plain_rs::updates::available(&info, version, &state.prefs.get_or(SKIP_VERSION, String::new())),
                 "No application update available"
             );
             let identity = Identity::from(&info);
@@ -441,7 +442,7 @@ async fn save_stream<B: AsRef<[u8]>>(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     ensure!(
-        Identity::from(&current) == *identity && plain_rs::updates::available(&current, version, &state.prefs.get_or("skip_version", String::new())),
+        Identity::from(&current) == *identity && plain_rs::updates::available(&current, version, &state.prefs.get_or(SKIP_VERSION, String::new())),
         "Update source changed during download"
     );
     std::fs::write(
@@ -469,7 +470,7 @@ fn restored(state: &ServerState, info: &UpdateInfo) -> Result<Option<String>> {
         .startup_property("appVersion")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if info.downloaded_apk_path.is_empty() || !plain_rs::updates::available(info, version, &state.prefs.get_or("skip_version", String::new())) {
+    if info.downloaded_apk_path.is_empty() || !plain_rs::updates::available(info, version, &state.prefs.get_or(SKIP_VERSION, String::new())) {
         return Ok(None);
     }
     let path = Path::new(&info.downloaded_apk_path);

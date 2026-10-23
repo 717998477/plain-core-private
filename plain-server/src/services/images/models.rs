@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::AI_IMAGE_SEARCH_MODEL;
 use crate::graphql::resolvers::images::public_index::ImageSearchStatus;
 use crate::graphql::resolvers::images::public_index::ImageSearchStatusType;
 use crate::host::bridge::Host;
@@ -190,7 +191,7 @@ impl Runtime {
         self.publish();
     }
     fn selected_model(&self) -> Result<&'static str, String> {
-        match self.prefs.get_or("ai_image_search_model", String::from("default")).as_str() {
+        match self.prefs.get_or(AI_IMAGE_SEARCH_MODEL, String::from("default")).as_str() {
             "default" => Ok("default"),
             "imported" => Ok("imported"),
             _ => Err("Image search model must be default or imported".into()),
@@ -297,7 +298,7 @@ impl Runtime {
             self.index.clear().map_err(|e| e.to_string())?;
             store.set_json("image_index_model", &fingerprint).map_err(|e| e.to_string())?;
         }
-        self.prefs.set("ai_image_search_model", model).map_err(|e| e.to_string())?;
+        self.prefs.set(AI_IMAGE_SEARCH_MODEL, model).map_err(|e| e.to_string())?;
         self.index.set_encoder(Some(engine.clone()));
         *self.engine.lock().unwrap() = Some(engine);
         self.prefs

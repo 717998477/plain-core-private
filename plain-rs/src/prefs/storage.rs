@@ -1,19 +1,18 @@
+use crate::prefs::pref_keys::VOLUME_ALIAS;
 use super::Prefs;
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-const KEY: &str = "volume_alias";
-
 pub fn get_map(prefs: &Prefs) -> Map<String, Value> {
     prefs
-        .get::<Map<String, Value>>(KEY)
+        .get::<Map<String, Value>>(VOLUME_ALIAS)
         .ok()
         .flatten()
         .unwrap_or_default()
 }
 
 pub fn set_map(prefs: &Prefs, m: &Map<String, Value>) -> Result<()> {
-    prefs.set(KEY, m)?;
+    prefs.set(VOLUME_ALIAS, m)?;
     Ok(())
 }
 

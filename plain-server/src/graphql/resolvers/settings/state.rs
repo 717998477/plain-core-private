@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::{AI_IMAGE_SEARCH_MODEL, AUTO_CHECK_UPDATE, SKIP_VERSION};
 use crate::services::settings::security_preferences::SecurityPreferences;
 use crate::services::settings::preferences::Preferences;
 use async_graphql::{Context, Result};
@@ -57,7 +58,7 @@ fn security_preferences<'a>(ctx: &'a Context<'_>) -> Result<SecurityPreferences<
 
 pub(crate) async fn set_pref(ctx: &Context<'_>, key: &str, value: Value) -> Result<bool> {
     super::public::authorize(ctx, key)?;
-    if key == "ai_image_search_model" && !matches!(value.as_str(), Some("default" | "imported")) {
+    if key == AI_IMAGE_SEARCH_MODEL && !matches!(value.as_str(), Some("default" | "imported")) {
         return Err(async_graphql::Error::new("Unknown image search model"));
     }
     if security_key(key) {
@@ -68,7 +69,7 @@ pub(crate) async fn set_pref(ctx: &Context<'_>, key: &str, value: Value) -> Resu
 }
 
 fn security_key(key: &str) -> bool {
-    matches!(key, "password" | "password_type" | "login_require_approval" | "rotate_url_token_on_restart" | "api_permissions" | "mdns_hostname" | "dev_token" | "log_level" | "auto_check_update" | "skip_version")
+    matches!(key, "password" | "password_type" | "login_require_approval" | "rotate_url_token_on_restart" | "api_permissions" | "mdns_hostname" | "dev_token" | "log_level" | AUTO_CHECK_UPDATE | SKIP_VERSION)
 }
 pub(crate) async fn remove_pref(ctx: &Context<'_>, key: &str) -> Result<bool> {
     if security_key(key) {

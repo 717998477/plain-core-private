@@ -35,7 +35,7 @@ fn directions_and_sensitive_items_do_not_advance_the_applied_marker() {
         ("pull", true),
         ("both", true),
     ] {
-        prefs.set(DIRECTIONS, json!({"peer":direction})).unwrap();
+        prefs.set(CLIPBOARD_DIRECTIONS, json!({"peer":direction})).unwrap();
         assert_eq!(super::receives(&prefs, "peer").unwrap(), receives);
         assert_eq!(prepare(&prefs, "peer", &item("next")).unwrap(), receives);
     }
@@ -49,7 +49,7 @@ fn directions_and_sensitive_items_do_not_advance_the_applied_marker() {
         json!({"peer":"baseline"})
     );
     for direction in [json!("invalid"), json!(1), Value::Null] {
-        prefs.set(DIRECTIONS, json!({"peer":direction})).unwrap();
+        prefs.set(CLIPBOARD_DIRECTIONS, json!({"peer":direction})).unwrap();
         assert!(super::receives(&prefs, "peer").is_err());
     }
 }
@@ -98,13 +98,13 @@ fn sending_is_explicit_and_does_not_inherit_the_default_receive_direction() {
         ("push", true, false),
         ("both", true, true),
     ] {
-        prefs.set(DIRECTIONS, json!({"peer":direction})).unwrap();
+        prefs.set(CLIPBOARD_DIRECTIONS, json!({"peer":direction})).unwrap();
         assert_eq!(sends(&prefs, "peer").unwrap(), send);
         assert_eq!(receives(&prefs, "peer").unwrap(), receive);
         assert!(!sends(&prefs, "another").unwrap());
     }
     for value in [json!("invalid"), json!(1), Value::Null] {
-        prefs.set(DIRECTIONS, json!({"peer":value})).unwrap();
+        prefs.set(CLIPBOARD_DIRECTIONS, json!({"peer":value})).unwrap();
         assert!(sends(&prefs, "peer").is_err());
         assert!(receives(&prefs, "peer").is_err());
     }

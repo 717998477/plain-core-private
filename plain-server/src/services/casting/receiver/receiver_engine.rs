@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::{DLNA_ALLOWED_SENDERS, DLNA_DENIED_SENDERS};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -202,10 +203,10 @@ impl DlnaEngine {
         drop(s);
         self.dispatch_accept(&pending, play_queued).await;
         if remember && !pending.sender_ip.is_empty() {
-            plain_rs::prefs::dlna::remove_sender(prefs, "dlna_denied_senders", &pending.sender_ip);
+            plain_rs::prefs::dlna::remove_sender(prefs, DLNA_DENIED_SENDERS, &pending.sender_ip);
             plain_rs::prefs::dlna::add_sender(
                 prefs,
-                "dlna_allowed_senders",
+                DLNA_ALLOWED_SENDERS,
                 &pending.sender_ip,
                 &pending.sender_name,
             );
@@ -226,10 +227,10 @@ impl DlnaEngine {
         s.pending_play_queued = false;
         drop(s);
         if remember && !pending.sender_ip.is_empty() {
-            plain_rs::prefs::dlna::remove_sender(prefs, "dlna_allowed_senders", &pending.sender_ip);
+            plain_rs::prefs::dlna::remove_sender(prefs, DLNA_ALLOWED_SENDERS, &pending.sender_ip);
             plain_rs::prefs::dlna::add_sender(
                 prefs,
-                "dlna_denied_senders",
+                DLNA_DENIED_SENDERS,
                 &pending.sender_ip,
                 &pending.sender_name,
             );

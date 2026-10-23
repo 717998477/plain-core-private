@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::{DLNA_ALLOWED_SENDERS, DLNA_DENIED_SENDERS};
 use crate::assembly::server::ServerState;
 use crate::services::casting::receiver::control::emit;
 #[cfg(test)]
@@ -99,8 +100,8 @@ pub(crate) async fn receiver(
     let body = String::from_utf8_lossy(&bytes).to_string();
     let headers = headers_to_map(&parts.headers);
 
-    let allowed = plain_rs::prefs::dlna::senders(&state.prefs, "dlna_allowed_senders");
-    let denied = plain_rs::prefs::dlna::senders(&state.prefs, "dlna_denied_senders");
+    let allowed = plain_rs::prefs::dlna::senders(&state.prefs, DLNA_ALLOWED_SENDERS);
+    let denied = plain_rs::prefs::dlna::senders(&state.prefs, DLNA_DENIED_SENDERS);
     // The allow/deny rules and the "remember this sender" prefs both key on
     // the peer address, so it comes from the socket — a control point that
     // forged `c-ip` would otherwise be able to impersonate a trusted sender.

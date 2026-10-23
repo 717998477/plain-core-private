@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::AI_IMAGE_SEARCH_MODEL;
 use plain_rs::{events::WsEvent, prefs::Prefs};
 use serde_json::Value;
 use tokio::sync::broadcast;
@@ -51,7 +52,7 @@ impl<'a> Preferences<'a> {
         write: impl FnOnce(&Prefs) -> anyhow::Result<bool>,
     ) -> anyhow::Result<bool> {
         let before = plain_rs::prefs::settings::snapshot(self.prefs)?;
-        let before_model = self.prefs.get_or("ai_image_search_model", String::from("default"));
+        let before_model = self.prefs.get_or(AI_IMAGE_SEARCH_MODEL, String::from("default"));
         let changed = write(self.prefs)?;
         let after = plain_rs::prefs::settings::snapshot(self.prefs)?;
         if changed {
@@ -60,7 +61,7 @@ impl<'a> Preferences<'a> {
             }
         }
         if let Some(state) = self.server {
-            if after.ai_image_search_enabled && before_model != self.prefs.get_or("ai_image_search_model", String::from("default")) {
+            if after.ai_image_search_enabled && before_model != self.prefs.get_or(AI_IMAGE_SEARCH_MODEL, String::from("default")) {
                 state.image_models.shutdown().await;
                 state.image_models.enable(false).await.map_err(anyhow::Error::msg)?;
             }

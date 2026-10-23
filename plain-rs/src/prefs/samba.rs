@@ -1,9 +1,8 @@
+use crate::prefs::pref_keys::SAMBA_SETTINGS;
 use super::{Prefs, PrefsError};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_USERNAME: &str = "plainapp";
-
-const KEY_SAMBA_SETTINGS: &str = "samba_settings";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SambaShareAuth {
@@ -53,12 +52,12 @@ impl Default for SambaSettings {
 
 pub fn get_samba_settings(prefs: &Prefs) -> Result<SambaSettings, PrefsError> {
     Ok(prefs
-        .get::<SambaSettings>(KEY_SAMBA_SETTINGS)?
+        .get::<SambaSettings>(SAMBA_SETTINGS)?
         .unwrap_or_default())
 }
 
 pub fn set_samba_settings(prefs: &Prefs, settings: &SambaSettings) -> Result<(), PrefsError> {
-    prefs.set(KEY_SAMBA_SETTINGS, settings)?;
+    prefs.set(SAMBA_SETTINGS, settings)?;
     Ok(())
 }
 

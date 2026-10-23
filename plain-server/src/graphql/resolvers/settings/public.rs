@@ -1,5 +1,6 @@
 //! Public preference roots share the local Rust store and notify UI projections.
 
+use plain_rs::prefs::pref_keys::{AUTO_CHECK_UPDATE, SKIP_VERSION};
 use async_graphql::{Context, Json, Object};
 use plain_rs::prefs::Prefs;
 use serde_json::Value;
@@ -54,8 +55,8 @@ impl PrefsMutation {
         key: String,
     ) -> async_graphql::Result<bool> {
         authorize(ctx, &key)?;
-        if matches!(key.as_str(), "skip_version" | "auto_check_update") {
-            let default = if key == "skip_version" { Value::String(String::new()) } else { Value::Bool(true) };
+        if matches!(key.as_str(), SKIP_VERSION | AUTO_CHECK_UPDATE) {
+            let default = if key == SKIP_VERSION { Value::String(String::new()) } else { Value::Bool(true) };
             super::state::set_pref(ctx, &key, default).await?;
         } else {
             super::state::remove_pref(ctx, &key).await?;

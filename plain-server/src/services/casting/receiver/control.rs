@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::{DLNA_ALLOWED_SENDERS, DLNA_DENIED_SENDERS};
 use super::renderer_state::DlnaRendererState;
 use crate::assembly::server::ServerState;
 use serde::Deserialize;
@@ -55,9 +56,9 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
             plain_rs::prefs::dlna::remove_sender(
                 &state.prefs,
                 if allowed {
-                    "dlna_allowed_senders"
+                    DLNA_ALLOWED_SENDERS
                 } else {
-                    "dlna_denied_senders"
+                    DLNA_DENIED_SENDERS
                 },
                 &ip,
             );
@@ -120,5 +121,5 @@ fn rules(state: &ServerState) -> Value {
             })
             .collect::<Vec<_>>()
     };
-    json!({"allowed":entries("dlna_allowed_senders"),"denied":entries("dlna_denied_senders")})
+    json!({"allowed":entries(DLNA_ALLOWED_SENDERS),"denied":entries(DLNA_DENIED_SENDERS)})
 }

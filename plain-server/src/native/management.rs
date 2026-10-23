@@ -1,3 +1,4 @@
+use plain_rs::prefs::pref_keys::{AUTO_CHECK_UPDATE, SKIP_VERSION};
 use crate::assembly::server::ServerState;
 use plain_rs::events::WsEvent;
 use serde::{Deserialize, Serialize};
@@ -69,14 +70,14 @@ impl NativeManagement {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         let update_info = crate::services::settings::updates::info(&self.state).map_err(|e| e.to_string())?;
-        let skip_version = self.state.prefs.get_or("skip_version", String::new());
+        let skip_version = self.state.prefs.get_or(SKIP_VERSION, String::new());
         let app_update_available = plain_rs::updates::available(&update_info, version, &skip_version);
         Ok(NativePrefs {
             state,
             app_update_available,
             update_info,
             skip_version,
-            auto_check_update: self.state.prefs.get_or("auto_check_update", true),
+            auto_check_update: self.state.prefs.get_or(AUTO_CHECK_UPDATE, true),
             onboarding_completed: self.state.store.get().map_err(|e| e.to_string())?
                 .get_json("onboarding_completed").map_err(|e| e.to_string())?.unwrap_or(false),
             settings: plain_rs::prefs::settings::snapshot(&self.state.prefs).map_err(|e| e.to_string())?,
