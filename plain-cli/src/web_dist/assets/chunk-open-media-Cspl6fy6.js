@@ -1,1 +1,0 @@
-import"./chunk-VCheckbox-Dv9MdDkx.js";import{t as e}from"./chunk-temp-Gb9q4dk_.js";function t(t){let n=e();function r(e,r,i=!1){let a=r??t?.value;a&&a[e]&&(n.lightbox={sources:a,index:e,visible:!0,readOnly:i})}return{open:r}}export{t};

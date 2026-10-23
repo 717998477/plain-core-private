@@ -1,0 +1,1 @@
+import{t as e}from"./chunk-eventbus-Ca-q0d_H.js";var t=t=>{e.emit(`tap_phone`,t)};export{t};

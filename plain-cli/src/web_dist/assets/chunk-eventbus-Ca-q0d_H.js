@@ -1,0 +1,1 @@
+function e(){let e=new Map;function t(t,n){let r=e.get(t);r?r.add(n):e.set(t,new Set([n]))}function n(t,n){n?e.get(t)?.delete(n):e.delete(t)}function r(t,n){e.get(t)?.forEach(e=>e(n))}return{on:t,off:n,emit:r}}var t=e();export{t};
