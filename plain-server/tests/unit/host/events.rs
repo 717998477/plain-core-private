@@ -811,3 +811,39 @@ async fn http_status_snapshots_replace_stale_listener_events_without_exposing_ge
     );
     core.stop_core().await;
 }
+
+#[tokio::test]
+async fn preference_updates_send_only_changed_values_and_skip_unchanged_snapshots() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let bridge = Arc::new(core.host_events());
+    state.prefs.set("http_port", 8181).unwrap();
+    bridge.prefs_changed().await;
+    assert_eq!(bridge.prefs_snapshot().await.unwrap()["httpPort"], 8181);
+    state.prefs.set("http_port", 8080).unwrap();
+    let sender = bridge.clone();
+    let update = tokio::spawn(async move { sender.prefs_changed().await });
+    loop {
+        let request = bridge.next_request().await.unwrap();
+        let is_preferences = request["method"] == "prefsChanged";
+        if is_preferences {
+            assert_eq!(request["params"], json!({"values":{"httpPort":8080}}));
+        }
+        bridge
+            .reply(json!({"id":request["id"],"result":null}))
+            .unwrap();
+        if is_preferences {
+            break;
+        }
+    }
+    update.await.unwrap();
+    let mut unchanged = Box::pin(bridge.prefs_changed());
+    std::future::poll_fn(|context| {
+        assert!(std::future::Future::poll(unchanged.as_mut(), context).is_ready());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(unchanged);
+    core.stop_core().await;
+}

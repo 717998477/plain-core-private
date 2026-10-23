@@ -59,6 +59,14 @@ impl NativeManagement {
         Self { state }
     }
 
+    pub async fn set_pref(&self, key: &str, value: serde_json::Value) -> Result<bool, String> {
+        self.state.native_client_id()?;
+        crate::services::settings::preferences::Preferences::from_server(&self.state)
+            .set(key, value)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     pub fn prefs_snapshot(&self) -> Result<NativePrefs, String> {
         self.state.native_client_id()?;
         let state = plain_rs::prefs::security::snapshot(&self.state.prefs)

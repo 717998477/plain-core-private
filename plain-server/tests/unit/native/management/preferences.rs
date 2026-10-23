@@ -97,3 +97,59 @@ fn preference_updates(events: &mut tokio::sync::broadcast::Receiver<plain_rs::ev
         .filter(|event| event.event_type == "PREFS_UPDATED")
         .count()
 }
+
+#[tokio::test]
+async fn native_preference_writes_share_validation_and_commit_notifications() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let management = core.native_management().unwrap();
+    let mut events = state.events.subscribe();
+    assert!(
+        management
+            .set_pref("http_port", serde_json::json!(8181))
+            .await
+            .unwrap()
+    );
+    assert_eq!(preference_updates(&mut events), 1);
+    assert_eq!(
+        serde_json::to_value(management.prefs_snapshot().unwrap()).unwrap()["httpPort"],
+        8181
+    );
+    assert!(
+        !management
+            .set_pref("http_port", serde_json::json!(8181))
+            .await
+            .unwrap()
+    );
+    assert_eq!(preference_updates(&mut events), 0);
+    let before = state.prefs.entries_sorted();
+    for (key, value) in [
+        ("http_port", serde_json::json!(70000)),
+        ("url_token", serde_json::json!("invalid")),
+        ("unknown_pref", serde_json::json!(true)),
+        ("ai_image_search_model", serde_json::json!("unknown")),
+    ] {
+        assert!(management.set_pref(key, value).await.is_err());
+    }
+    assert_eq!(state.prefs.entries_sorted(), before);
+    assert_eq!(preference_updates(&mut events), 0);
+    assert!(
+        management
+            .set_pref("login_require_approval", serde_json::json!(false))
+            .await
+            .unwrap()
+    );
+    assert_eq!(preference_updates(&mut events), 1);
+    assert_eq!(
+        serde_json::to_value(management.prefs_snapshot().unwrap()).unwrap()["loginRequireApproval"],
+        false
+    );
+    core.stop_core().await;
+    assert!(
+        management
+            .set_pref("http_port", serde_json::json!(8282))
+            .await
+            .is_err()
+    );
+}

@@ -68,3 +68,19 @@ impl SecurityPreferences<'_> {
         }
     }
 }
+
+pub(crate) fn security_key(key: &str) -> bool {
+    matches!(
+        key,
+        "password"
+            | "password_type"
+            | "login_require_approval"
+            | "rotate_url_token_on_restart"
+            | "api_permissions"
+            | "mdns_hostname"
+            | "dev_token"
+            | "log_level"
+            | AUTO_CHECK_UPDATE
+            | SKIP_VERSION
+    )
+}

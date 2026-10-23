@@ -44,7 +44,6 @@ impl PrefsMutation {
         key: String,
         value: Json<Value>,
     ) -> async_graphql::Result<bool> {
-        validate_value(&value.0)?;
         super::state::set_pref(ctx, &key, value.0).await?;
         Ok(true)
     }

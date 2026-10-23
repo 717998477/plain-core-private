@@ -27,6 +27,26 @@ impl<'a> Preferences<'a> {
     }
 
     pub(crate) async fn set(&self, key: &str, value: Value) -> anyhow::Result<bool> {
+        anyhow::ensure!(
+            plain_rs::prefs::pref_keys::accessible(key, true),
+            "Preference is not accessible"
+        );
+        anyhow::ensure!(value.to_string().len() <= 65536, "invalid_pref_value");
+        if key == AI_IMAGE_SEARCH_MODEL {
+            anyhow::ensure!(
+                matches!(value.as_str(), Some("default" | "imported")),
+                "Unknown image search model"
+            );
+        }
+        if super::security_preferences::security_key(key) {
+            return super::security_preferences::SecurityPreferences {
+                prefs: self.prefs,
+                events: self.events,
+                server: self.server,
+            }
+            .set(key, value)
+            .await;
+        }
         self.update(move |prefs| {
             match plain_rs::prefs::settings::set_entry(prefs, key, value.clone())? {
                 Some(changed) => Ok(changed),
@@ -52,7 +72,9 @@ impl<'a> Preferences<'a> {
         write: impl FnOnce(&Prefs) -> anyhow::Result<bool>,
     ) -> anyhow::Result<bool> {
         let before = plain_rs::prefs::settings::snapshot(self.prefs)?;
-        let before_model = self.prefs.get_or(AI_IMAGE_SEARCH_MODEL, String::from("default"));
+        let before_model = self
+            .prefs
+            .get_or(AI_IMAGE_SEARCH_MODEL, String::from("default"));
         let changed = write(self.prefs)?;
         let after = plain_rs::prefs::settings::snapshot(self.prefs)?;
         if changed {
@@ -61,9 +83,18 @@ impl<'a> Preferences<'a> {
             }
         }
         if let Some(state) = self.server {
-            if after.ai_image_search_enabled && before_model != self.prefs.get_or(AI_IMAGE_SEARCH_MODEL, String::from("default")) {
+            if after.ai_image_search_enabled
+                && before_model
+                    != self
+                        .prefs
+                        .get_or(AI_IMAGE_SEARCH_MODEL, String::from("default"))
+            {
                 state.image_models.shutdown().await;
-                state.image_models.enable(false).await.map_err(anyhow::Error::msg)?;
+                state
+                    .image_models
+                    .enable(false)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
             }
             if before.desktop_access && !after.desktop_access {
                 state.main_ws.close_client(state, None);

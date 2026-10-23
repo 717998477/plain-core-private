@@ -6,6 +6,7 @@ use tokio::sync::{Mutex, mpsc};
 pub struct HostEvents {
     state: ServerState,
     generation: u64,
+    preferences: Mutex<Option<Value>>,
     requests: Mutex<mpsc::Receiver<Value>>,
     events: Mutex<crate::native::events::NativeEventStream>,
 }
@@ -39,24 +40,61 @@ impl HostEvents {
             );
         });
         Self {
+            preferences: Mutex::new(None),
             state,
             generation,
             requests: Mutex::new(requests),
             events: Mutex::new(events),
         }
     }
+    pub async fn prefs_snapshot(&self) -> Result<Value, String> {
+        let mut previous = self.preferences.lock().await;
+        let current = crate::native::management::NativeManagement::new(self.state.clone())
+            .prefs_snapshot()
+            .and_then(|snapshot| serde_json::to_value(snapshot).map_err(|e| e.to_string()))?;
+        *previous = Some(current.clone());
+        Ok(current)
+    }
+
     pub async fn prefs_changed(&self) {
+        let mut previous = self.preferences.lock().await;
+        let Some(baseline) = previous.as_ref() else {
+            return;
+        };
+        let current = match crate::native::management::NativeManagement::new(self.state.clone())
+            .prefs_snapshot()
+            .and_then(|snapshot| serde_json::to_value(snapshot).map_err(|e| e.to_string()))
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                log::error!("Host preferences snapshot failed: {error}");
+                return;
+            }
+        };
+        let changes: serde_json::Map<_, _> = current
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(key, value)| baseline.get(*key) != Some(*value))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        if changes.is_empty() {
+            return;
+        }
         loop {
             let result = tokio::select! {
                 biased;
                 _ = self.wait_disconnected() => return,
                 result = self.state.host.call_current(
-                    self.generation, "prefsChanged", json!({}),
+                    self.generation, "prefsChanged", json!({"values": changes}),
                 ) => result,
             };
             match result {
-                Ok(_) => return,
-                Err(error) => log::warn!("Host preferences refresh failed; retrying: {error}"),
+                Ok(_) => {
+                    *previous = Some(current);
+                    return;
+                }
+                Err(error) => log::warn!("Host preferences update failed; retrying: {error}"),
             }
             tokio::select! {
                 _ = self.wait_disconnected() => return,
