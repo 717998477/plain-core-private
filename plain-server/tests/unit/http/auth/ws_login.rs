@@ -163,12 +163,15 @@ fn signature_data_matches_the_client_verification_format() {
 #[test]
 fn login_attempts_are_rate_limited_per_key() {
     let mut attempts = LoginAttempts::default();
-    for _ in 0..LOGIN_ATTEMPT_LIMIT {
-        assert!(attempts.acquire("10.0.0.1"));
+    for index in 0..LOGIN_ATTEMPT_LIMIT {
+        assert!(attempts.acquire("fixture-a", &index.to_string()));
     }
-    assert!(!attempts.acquire("10.0.0.1"), "the window must lock out");
     assert!(
-        attempts.acquire("10.0.0.2"),
+        !attempts.acquire("fixture-a", "blocked"),
+        "the window must lock out"
+    );
+    assert!(
+        attempts.acquire("fixture-b", "unrelated"),
         "another address is unaffected"
     );
 }
@@ -233,7 +236,7 @@ async fn passwordless_server() -> (
     let server = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = server.runtime_state();
     state.prefs.set("password_type", 2_i32).unwrap();
-    state.prefs.set("login_require_approval", false).unwrap();
+    state.prefs.set("login_require_approval", true).unwrap();
     state.prefs.set("password", "unexposed-password").unwrap();
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let (port, _) = server
@@ -302,11 +305,18 @@ async fn passwordless_browser(
         .await
         .unwrap();
     let Message::Binary(pending) = login_frame(&mut socket).await else {
-        panic!("encrypted pending required")
+        panic!("encrypted login response required")
     };
     let pending: Value =
         serde_json::from_slice(&channel.decrypt_response(&pending, now_ms()).unwrap()).unwrap();
-    assert_eq!(pending["status"], "PENDING");
+    assert_eq!(
+        pending["status"],
+        if state.prefs.get_or("login_require_approval", true) {
+            "PENDING"
+        } else {
+            "COMPLETED"
+        }
+    );
     (socket, channel, session, encrypted)
 }
 
@@ -383,7 +393,8 @@ async fn passwordless_hello_consumes_the_same_ip_limiter_before_key_exchange() {
 
 #[cfg(feature = "http_transport")]
 #[tokio::test]
-async fn real_passwordless_browser_always_requires_approval_and_only_approval_issues_the_session() {
+async fn passwordless_browser_requires_approval_when_enabled_and_only_approval_issues_the_session()
+{
     use tokio_tungstenite::tungstenite::Message;
     let (_directory, server, port) = passwordless_server().await;
     let state = server.runtime_state();
@@ -509,4 +520,40 @@ async fn disconnect_expiry_mode_changes_and_repeated_requests_cannot_create_a_pa
         closed_event(&mut events, id).await;
         server.shutdown().await;
     }
+}
+
+#[cfg(feature = "http_transport")]
+#[tokio::test]
+async fn successful_passwordless_logins_skip_disabled_approval_and_do_not_exhaust_attempts() {
+    let (_directory, server, port) = passwordless_server().await;
+    let state = server.runtime_state();
+    state.prefs.set("login_require_approval", false).unwrap();
+    admit_attempt(&state, "failed-client", "127.0.0.1", "failed-attempt").unwrap();
+    for index in 0..LOGIN_ATTEMPT_LIMIT + 2 {
+        let client_id = format!("successful-browser-{index}");
+        let (mut socket, _, _, _) = passwordless_browser(&state, port, &client_id).await;
+        assert!(state.db.session_get(&client_id).unwrap().is_some());
+        assert!(state.login_attempts.lock().unwrap().pending.is_empty());
+        let attempts = state.login_attempts.lock().unwrap();
+        let remaining = attempts.entries.get("127.0.0.1").unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].0, "failed-attempt");
+        drop(attempts);
+        socket.close(None).await.unwrap();
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn completing_an_attempt_preserves_other_attempts_from_the_same_address() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = server.runtime_state();
+    admit_attempt(&state, "client", "fixture", "failure").unwrap();
+    admit_attempt(&state, "client", "fixture", "success").unwrap();
+    finish_attempt(&state, "success");
+    let attempts = state.login_attempts.lock().unwrap();
+    let remaining = attempts.entries.get("fixture").unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].0, "failure");
 }

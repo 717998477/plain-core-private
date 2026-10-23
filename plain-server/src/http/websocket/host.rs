@@ -74,13 +74,14 @@ impl Runtime {
             .connections
             .lock()
             .unwrap()
-            .values_mut()
-            .find(|c| c.pending.as_deref() == Some(request_id))
-            .map(|c| {
+            .iter_mut()
+            .find(|(_, c)| c.pending.as_deref() == Some(request_id))
+            .map(|(id, c)| {
                 c.pending = None;
-                c.outgoing.clone()
+                (id.clone(), c.outgoing.clone())
             });
-        if let Some(outgoing) = outgoing {
+        if let Some((id, outgoing)) = outgoing {
+            crate::http::auth::ws_login::finish_attempt(state, &id);
             tokio::time::timeout(
                 Duration::from_secs(2),
                 outgoing.send(Message::Binary(plain_rs::utils::base64::base64_decode(
@@ -192,7 +193,7 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                         temporary_started = true;
                         let hello = (|| -> anyhow::Result<_> {
                             anyhow::ensure!(enabled(&state), "desktop_access_disabled");
-                            crate::http::auth::ws_login::admit_attempt(&state, &params.cid, &ip)?;
+                            crate::http::auth::ws_login::admit_attempt(&state, &params.cid, &ip, &id)?;
                             let request = serde_json::from_str::<crate::http::auth::login_channel::ClientHello>(&text)?;
                             let device_id = state.prefs.get_or(plain_rs::prefs::pref_keys::CLIENT_ID, String::new());
                             let signing = crate::services::peers::peer_wire::signing_keypair(&state.prefs)?;
@@ -224,10 +225,16 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                         temporary_submitted = true;
                         crate::http::auth::ws_login::Request::IssueTemporary { client_id: params.cid.clone(), client_ip: ip.clone(), frame: plain_rs::utils::base64::base64_encode(&frame), channel }
                     } else {
+                        if let Err(error) = crate::http::auth::ws_login::admit_attempt(&state, &params.cid, &ip, &id) {
+                            let reason = if error.to_string() == "too_many_login_attempts" { "too_many_login_attempts" } else { "invalid_login_request" };
+                            let _ = socket.send(close(1013, reason)).await;
+                            break;
+                        }
                         crate::http::auth::ws_login::Request::Issue { client_id: params.cid.clone(), client_ip: ip.clone(), frame: plain_rs::utils::base64::base64_encode(&frame) }
                     };
                     match crate::http::auth::ws_login::execute(&state, request).await {
                         Ok(result) => {
+                            if result["status"] == "COMPLETED" { crate::http::auth::ws_login::finish_attempt(&state, &id); }
                             if socket.send(Message::Binary(plain_rs::utils::base64::base64_decode(result["frame"].as_str().unwrap_or_default()))).await.is_err() { break; }
                             if result["status"] == "PENDING" {
                                 let request_id = result["requestId"].as_str().unwrap().to_owned();

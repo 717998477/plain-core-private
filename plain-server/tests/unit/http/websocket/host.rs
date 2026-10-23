@@ -173,6 +173,22 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
                 plain_rs::crypto::xchacha_decrypt_raw(&digest.as_bytes()[..32], &frame).unwrap();
             let result: Value = serde_json::from_slice(&decrypted).unwrap();
             assert_eq!(result["status"], "COMPLETED");
+            let state = server.runtime_state();
+            for index in 0..3 {
+                crate::http::auth::ws_login::admit_attempt(
+                    &state,
+                    cid,
+                    "127.0.0.1",
+                    &format!("remaining-{index}"),
+                )
+                .unwrap();
+            }
+            crate::http::auth::ws_login::admit_attempt(&state, cid, "127.0.0.1", "last-slot")
+                .unwrap();
+            assert!(
+                crate::http::auth::ws_login::admit_attempt(&state, cid, "127.0.0.1", "blocked")
+                    .is_err()
+            );
             assert!(
                 server
                     .runtime_state()

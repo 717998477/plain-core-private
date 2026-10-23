@@ -27,17 +27,21 @@ pub(crate) fn admit_attempt(
     state: &ServerState,
     client_id: &str,
     client_ip: &str,
+    attempt_id: &str,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(!client_id.is_empty(), "Client id is required");
     let allowed = state
         .login_attempts
         .lock()
         .map_err(|_| anyhow::anyhow!("Login state unavailable"))?
-        .acquire(&if client_ip.is_empty() {
-            format!("cid:{client_id}")
-        } else {
-            client_ip.into()
-        });
+        .acquire(
+            &if client_ip.is_empty() {
+                format!("cid:{client_id}")
+            } else {
+                client_ip.into()
+            },
+            attempt_id,
+        );
     anyhow::ensure!(allowed, "too_many_login_attempts");
     Ok(())
 }
@@ -51,27 +55,39 @@ fn now_ms() -> u64 {
 
 #[derive(Default)]
 pub(crate) struct LoginAttempts {
-    entries: HashMap<String, Vec<Instant>>,
+    entries: HashMap<String, Vec<(String, Instant)>>,
     pending: HashMap<String, Pending>,
 }
 
 impl LoginAttempts {
-    fn acquire(&mut self, key: &str) -> bool {
+    fn acquire(&mut self, key: &str, attempt_id: &str) -> bool {
         let now = Instant::now();
         if self.entries.len() > MAX_TRACKED_CLIENTS {
             self.entries.retain(|_, attempts| {
-                attempts.retain(|at| now.duration_since(*at) < LOGIN_ATTEMPT_WINDOW);
+                attempts.retain(|(_, at)| now.duration_since(*at) < LOGIN_ATTEMPT_WINDOW);
                 !attempts.is_empty()
             });
         }
         let attempts = self.entries.entry(key.to_owned()).or_default();
-        attempts.retain(|at| now.duration_since(*at) < LOGIN_ATTEMPT_WINDOW);
+        attempts.retain(|(_, at)| now.duration_since(*at) < LOGIN_ATTEMPT_WINDOW);
         if attempts.len() >= LOGIN_ATTEMPT_LIMIT {
             return false;
         }
-        attempts.push(now);
+        attempts.push((attempt_id.to_owned(), now));
         true
     }
+}
+
+pub(crate) fn finish_attempt(state: &ServerState, attempt_id: &str) {
+    state
+        .login_attempts
+        .lock()
+        .unwrap()
+        .entries
+        .retain(|_, attempts| {
+            attempts.retain(|(id, _)| id != attempt_id);
+            !attempts.is_empty()
+        });
 }
 
 struct Pending {
@@ -481,9 +497,6 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                 } => (client_id, client_ip, frame, Protection::Temporary(channel)),
                 _ => unreachable!(),
             };
-            if matches!(&protection, Protection::Password(_)) {
-                admit_attempt(state, &client_id, &client_ip)?;
-            }
             let frame = plain_rs::utils::base64::base64_decode(&frame);
             let bytes = match &protection {
                 Protection::Password(digest) => {
@@ -526,8 +539,7 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                 protection,
             };
             let id = uuid::Uuid::new_v4().to_string();
-            if matches!(pending.protection, Protection::Temporary(_))
-                || peer_chat_paired(&pending.request)
+            if peer_chat_paired(&pending.request)
                 || state
                     .prefs
                     .get_or(plain_rs::prefs::pref_keys::LOGIN_REQUIRE_APPROVAL, true)
