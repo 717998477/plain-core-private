@@ -291,6 +291,11 @@ CREATE TABLE IF NOT EXISTS pomodoro_items (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS scan_history (
+    id INTEGER PRIMARY KEY,
+    text TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     client_id TEXT NOT NULL PRIMARY KEY CHECK(length(client_id)>0),
     name TEXT NOT NULL DEFAULT '',

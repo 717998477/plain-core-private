@@ -10,6 +10,10 @@ pub struct Db(Arc<Inner>);
 struct Inner {
     database: fjall::Database,
     json_lock: Mutex<()>,
+    #[cfg(test)]
+    write_failure: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    write_attempts: std::sync::atomic::AtomicUsize,
     keyspace: fjall::Keyspace,
 }
 
@@ -31,7 +35,15 @@ impl Db {
         let keyspace = database
             .keyspace(KEYSPACE, fjall::KeyspaceCreateOptions::default)
             .context("open fjall keyspace")?;
-        let inner = Arc::new(Inner { database, keyspace, json_lock: Mutex::new(()) });
+        let inner = Arc::new(Inner {
+            database,
+            keyspace,
+            json_lock: Mutex::new(()),
+            #[cfg(test)]
+            write_failure: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            write_attempts: std::sync::atomic::AtomicUsize::new(0),
+        });
         opened.insert(path, Arc::downgrade(&inner));
         Ok(Self(inner))
     }
@@ -41,6 +53,8 @@ impl Db {
     }
 
     pub fn insert<K: AsRef<[u8]>, V: AsRef<[u8]>>(&self, key: K, value: V) -> Result<()> {
+        #[cfg(test)]
+        self.check_write_for_test()?;
         self.0
             .keyspace
             .insert(key.as_ref(), value.as_ref())
@@ -49,6 +63,8 @@ impl Db {
     }
 
     pub fn remove<K: AsRef<[u8]>>(&self, key: K) -> Result<()> {
+        #[cfg(test)]
+        self.check_write_for_test()?;
         self.0
             .keyspace
             .remove(key.as_ref())
@@ -148,10 +164,29 @@ impl Db {
         result
     }
     pub fn flush(&self) -> Result<()> {
+        #[cfg(test)]
+        self.check_write_for_test()?;
         self.0
             .database
             .persist(fjall::PersistMode::SyncData)
             .context("fjall persist")?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_write_failure_for_test(&self, failure: bool) {
+        self.0.write_failure.store(failure, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn write_attempts_for_test(&self) -> usize {
+        self.0.write_attempts.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn check_write_for_test(&self) -> Result<()> {
+        self.0.write_attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        anyhow::ensure!(!self.0.write_failure.load(std::sync::atomic::Ordering::Relaxed), "injected KV write failure");
         Ok(())
     }
     pub fn batch(&self) -> Batch {
@@ -164,6 +199,8 @@ impl Db {
         }
     }
     pub fn apply_batch(&self, batch: Batch) -> Result<()> {
+        #[cfg(test)]
+        self.check_write_for_test()?;
         batch.commit().context("fjall batch commit")?;
         Ok(())
     }

@@ -148,3 +148,27 @@ fn backup_cancellation_after_a_batch_removes_partial_store_and_preserves_source(
     drop(db);
     std::fs::remove_dir_all(source).unwrap();
 }
+#[test]
+fn injected_write_failure_is_local_to_one_store_and_preserves_existing_bytes() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = Db::open(&directory.path().join("first")).unwrap();
+    let second = Db::open(&directory.path().join("second")).unwrap();
+    first.insert("selected", b"before").unwrap();
+    first.insert("neighbor", b"retained").unwrap();
+    first.flush().unwrap();
+    first.set_write_failure_for_test(true);
+    assert!(first.insert("selected", b"after").is_err());
+    assert!(first.remove("neighbor").is_err());
+    assert!(first.flush().is_err());
+    let mut batch = first.batch();
+    batch.insert("selected", b"after");
+    assert!(first.apply_batch(batch).is_err());
+    assert_eq!(first.get("selected").unwrap().unwrap().as_ref(), b"before");
+    assert_eq!(first.get("neighbor").unwrap().unwrap().as_ref(), b"retained");
+    second.insert("independent", b"written").unwrap();
+    second.flush().unwrap();
+    first.set_write_failure_for_test(false);
+    first.insert("selected", b"after").unwrap();
+    first.flush().unwrap();
+    assert_eq!(first.get("selected").unwrap().unwrap().as_ref(), b"after");
+}

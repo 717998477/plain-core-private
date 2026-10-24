@@ -178,3 +178,45 @@ fn removal_and_path_invalidation_prevent_inflight_probes_from_resurrecting_entri
     );
     assert_eq!(cache.all().unwrap()[0].duration_ms, 7000);
 }
+
+#[test]
+fn unrelated_removals_cancel_pending_probes_without_committing_or_flushing() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(LazyDb::new(crate::kv::default_db_path(directory.path())));
+    let cache = DurationCache::with_store(store.clone());
+    cache
+        .save(value("audio", "kept", "/kept/song", 5000))
+        .unwrap();
+    let db = store.get().unwrap();
+    let before = db.get(key("audio", "kept").unwrap()).unwrap().unwrap();
+    let revision = cache.revision();
+    let writes = db.write_attempts_for_test();
+    db.set_write_failure_for_test(true);
+
+    assert_eq!(cache.remove("audio", &["missing".into()]).unwrap(), 0);
+    cache
+        .invalidate_paths(&["/unrelated".into()], &["/other".into()])
+        .unwrap();
+    assert_eq!(cache.revision(), revision + 2);
+    assert!(
+        !cache
+            .save_at_revision(value("audio", "stale", "/unrelated", 6000), revision)
+            .unwrap()
+    );
+    assert_eq!(db.write_attempts_for_test(), writes);
+    assert_eq!(
+        db.get(key("audio", "kept").unwrap()).unwrap().unwrap(),
+        before
+    );
+    assert!(cache.invalidate_paths(&[], &["/kept".into()]).is_err());
+    assert_eq!(db.write_attempts_for_test(), writes + 1);
+    assert_eq!(
+        db.get(key("audio", "kept").unwrap()).unwrap().unwrap(),
+        before
+    );
+
+    db.set_write_failure_for_test(false);
+    cache.invalidate_paths(&[], &["/kept".into()]).unwrap();
+    assert_eq!(db.write_attempts_for_test(), writes + 3);
+    assert!(cache.all().unwrap().is_empty());
+}

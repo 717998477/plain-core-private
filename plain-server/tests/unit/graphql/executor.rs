@@ -4,6 +4,33 @@ use serde_json::json;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn quoted_enum_literals_are_rejected_before_local_or_remote_mutations_execute() {
+    let dir = tempfile::tempdir().unwrap();
+    let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());
+    prefs.set("auto_check_update", true).unwrap();
+    let token = plain_rs::utils::base64::base64_encode(&[8; 32]);
+    let server = ContentServer::start(dir.path(), &token, prefs.clone()).unwrap();
+    let state = server.runtime_state();
+    let query = r#"mutation { setPref(key: "auto_check_update", value: false) updateScreenMirrorQuality(mode: "HD") }"#;
+    for local in [true, false] {
+        let response = if local {
+            server.graphql_executor().execute(Request::new(query)).await
+        } else {
+            execute_graphql(
+                &state.public,
+                Request::new(query),
+                RequestContext::remote(Some(state.clone())),
+            )
+            .await
+        };
+        assert!(!response.errors.is_empty(), "{response:?}");
+        assert_eq!(response.data, async_graphql::Value::Null);
+        assert_eq!(prefs.get::<bool>("auto_check_update").unwrap(), Some(true));
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn local_and_remote_execute_the_same_envelope_and_preserve_errors() {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("prefs.json")).unwrap());

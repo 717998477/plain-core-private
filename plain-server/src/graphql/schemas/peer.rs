@@ -125,6 +125,7 @@ impl Mutation {
 pub(crate) type PeerSchema = Schema<Query, Mutation, EmptySubscription>;
 pub(crate) fn schema() -> PeerSchema {
     Schema::build(Query, Mutation, EmptySubscription)
+        .extension(crate::graphql::enum_literals::EnumLiteralValidation)
         .register_output_type::<crate::graphql::types::Long>()
         .register_output_type::<plain_rs::chat::enums::PeerStatus>()
         .limit_depth(16)

@@ -241,6 +241,81 @@ fn public_fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServe
     (directory, core)
 }
 
+#[cfg(feature = "http_transport")]
+#[tokio::test]
+async fn malformed_login_frames_exhaust_the_ip_limit_before_decryption_despite_rotating_clients() {
+    use futures_util::SinkExt;
+    use sha2::Digest;
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+    let (_directory, core) = public_fixture();
+    let state = core.runtime_state();
+    state.prefs.set("password", "secret").unwrap();
+    state.prefs.set("password_type", 1_i32).unwrap();
+    state.prefs.set("login_require_approval", false).unwrap();
+    let digest = plain_rs::utils::hex::bytes_to_hex(&sha2::Sha512::digest(b"secret"));
+    let client = plain_rs::crypto::EcdhSession::generate();
+    let request = json!({"password":digest,"browserName":"Test","browserVersion":"1","osName":"Fixture","osVersion":"1","isMobile":false,"ecdhPublicKey":plain_rs::utils::base64::base64_encode(&client.public_key_bytes),"peer":null});
+    let valid_frame = plain_rs::crypto::xchacha_encrypt_raw(
+        &digest.as_bytes()[..32],
+        &serde_json::to_vec(&request).unwrap(),
+    )
+    .unwrap();
+
+    for attempt in 0..7 {
+        let cid = format!("login-limit-{attempt}");
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!(
+            "ws://127.0.0.1:{}/?cid={cid}&auth=1",
+            core.port
+        ))
+        .await
+        .unwrap();
+        socket
+            .send(ClientMessage::Binary(
+                if attempt == 0 || attempt == 6 {
+                    valid_frame.clone()
+                } else {
+                    b"invalid".to_vec()
+                }
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(3), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if attempt == 0 {
+            let ClientMessage::Binary(frame) = response else {
+                panic!("expected completed login");
+            };
+            let decrypted =
+                plain_rs::crypto::xchacha_decrypt_raw(&digest.as_bytes()[..32], &frame).unwrap();
+            let result: Value = serde_json::from_slice(&decrypted).unwrap();
+            assert_eq!(result["status"], "COMPLETED");
+            assert!(state.db.session_get(&cid).unwrap().is_some());
+        } else {
+            let ClientMessage::Close(Some(frame)) = response else {
+                panic!("expected rejected login");
+            };
+            assert_eq!(u16::from(frame.code), 1013);
+            assert_eq!(
+                frame.reason,
+                if attempt == 6 {
+                    "too_many_login_attempts"
+                } else {
+                    "invalid_password"
+                }
+            );
+            assert!(state.db.session_get(&cid).unwrap().is_none());
+        }
+        socket.close(None).await.ok();
+        assert_eq!(state.db.session_list().unwrap().len(), 1);
+    }
+    core.shutdown().await;
+}
+
 #[tokio::test]
 async fn root_serves_the_spa_and_old_ws_path_never_upgrades() {
     let (_directory, core) = public_fixture();

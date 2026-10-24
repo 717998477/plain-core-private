@@ -114,7 +114,15 @@ fn database(schema: &PublicSchema) -> &Arc<Db> {
 }
 
 async fn query(schema: &PublicSchema, document: &str) -> Value {
-    serde_json::to_value(schema.execute(document).await).unwrap()
+    let request = async_graphql::Request::new(document)
+        .data(crate::graphql::executor::RequestOrigin::Remote);
+    serde_json::to_value(schema.execute(request).await).unwrap()
+}
+
+async fn local_query(schema: &PublicSchema, document: &str) -> Value {
+    let request = async_graphql::Request::new(document)
+        .data(crate::graphql::executor::RequestOrigin::Local);
+    serde_json::to_value(schema.execute(request).await).unwrap()
 }
 
 fn track(path: &str, title: &str, artist: &str) -> AudioTrack {
@@ -275,14 +283,14 @@ async fn playback_joins_the_queue_state_and_the_player_state() {
         .unwrap()
         .set("audio_play_mode", 2)
         .unwrap();
-    let played = query(
+    let played = local_query(
         &schema,
         r#"mutation { audioPlayPath(path: "/music/one.mp3") { path } }"#,
     )
     .await;
     assert!(played.get("errors").is_none(), "{played}");
 
-    let state = query(
+    let state = local_query(
         &schema,
         r#"query { audioPlayback { path mode isPlaying positionMs } }"#,
     )
@@ -818,7 +826,7 @@ async fn playing_by_id_leaves_order_and_removing_current_clears_the_engine() {
             ("/three", "Three", "Artist"),
         ],
     );
-    let played = query(
+    let played = local_query(
         &schema,
         r#"mutation { playAudio(mediaId:"test:/two") { mediaId path } }"#,
     )
@@ -827,12 +835,12 @@ async fn playing_by_id_leaves_order_and_removing_current_clears_the_engine() {
         played["data"]["playAudio"]["mediaId"], "test:/two",
         "{played}"
     );
-    query(
+    local_query(
         &schema,
         r#"mutation { reorderAudioQueue(mediaIds:["test:/two","test:/one"]) }"#,
     )
     .await;
-    let page = query(
+    let page = local_query(
         &schema,
         r#"{ audioQueueItems(query:"",offset:0,limit:10) { mediaId } }"#,
     )
@@ -841,13 +849,13 @@ async fn playing_by_id_leaves_order_and_removing_current_clears_the_engine() {
         page["data"]["audioQueueItems"],
         json!([{"mediaId":"test:/two"},{"mediaId":"test:/one"},{"mediaId":"test:/three"}])
     );
-    let removed = query(
+    let removed = local_query(
         &schema,
         r#"mutation { removeAudioFromQueue(mediaId:"test:/two") }"#,
     )
     .await;
     assert!(removed["errors"].is_null(), "{removed}");
-    let state = query(&schema, "{ audioPlayback { mediaId path } }").await;
+    let state = local_query(&schema, "{ audioPlayback { mediaId path } }").await;
     assert!(state["errors"].is_null(), "{state}");
     assert_eq!(
         state["data"]["audioPlayback"]["mediaId"],
@@ -1088,9 +1096,11 @@ async fn playlist_covers_use_the_shared_catalog_without_platform_requests() {
 #[tokio::test]
 async fn browser_selection_advances_in_rust_without_dispatching_the_server_player() {
     let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
+    let browser_db = database(&schema).remote_audio();
     schema
         .data::<Arc<crate::services::audio::host::Audio>>()
         .unwrap()
+        .remote()
         .run_playback(|db, _| plain_rs::media::audio::playback::snapshot(db))
         .await
         .unwrap();
@@ -1098,8 +1108,9 @@ async fn browser_selection_advances_in_rust_without_dispatching_the_server_playe
         &schema,
         &[("/one.mp3", "One", "Artist"), ("/two.mp3", "Two", "Artist")],
     );
-    domain::save_audio_current(database(&schema), "/one.mp3").unwrap();
-    let before = plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap();
+    domain::save_audio_current(&browser_db, "/one.mp3").unwrap();
+    let local_before = plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap();
+    let before = plain_rs::media::audio::playback::snapshot(&browser_db).unwrap();
     let document = format!(
         r#"mutation {{ advanceAudioSelection(action:NEXT,expectedPath:"/one.mp3",expectedRevision:{}) {{ track {{ mediaId path }} revision positionMs }} }}"#,
         before.revision
@@ -1119,9 +1130,10 @@ async fn browser_selection_advances_in_rust_without_dispatching_the_server_playe
     assert!(duplicate["errors"].is_null(), "{duplicate}");
     assert!(duplicate["data"]["advanceAudioSelection"].is_null());
     assert_eq!(
-        domain::get_audio_current(database(&schema)).unwrap(),
+        domain::get_audio_current(&browser_db).unwrap(),
         "/two.mp3"
     );
+    assert_eq!(plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap(), local_before);
     let mode = query(
         &schema,
         "mutation { updateAudioPlayMode(mode: REPEAT_ONE) }",
@@ -1149,7 +1161,7 @@ async fn playback_snapshot_reuses_identity_and_reads_sdk_playback_facts_once() {
     seed_queue(&schema, &[("/one.mp3", "One", "Artist")]);
     domain::save_audio_current(database(&schema), "/one.mp3").unwrap();
     let expected = plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap();
-    let result = query(
+    let result = local_query(
         &schema,
         "{ audioPlayback { mediaId path revision isPlaying positionMs } }",
     )
@@ -1264,11 +1276,13 @@ async fn browser_actual_start_and_progress_use_main_history_without_host_command
     schema
         .data::<Arc<crate::services::audio::host::Audio>>()
         .unwrap()
+        .remote()
         .run_playback(|db, _| plain_rs::media::audio::playback::snapshot(db))
         .await
         .unwrap();
     seed_queue(&schema, &[("/one.mp3", "One", "Artist")]);
-    let db = database(&schema);
+    let local_before = plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap();
+    let db = &database(&schema).remote_audio();
     let selected =
         plain_rs::media::audio::playback::prepare_track(db, &track("/one.mp3", "One", "Artist"))
             .unwrap();
@@ -1307,6 +1321,7 @@ async fn browser_actual_start_and_progress_use_main_history_without_host_command
         domain::history_page(db, 0, 10, "").unwrap()[0].play_count,
         1
     );
+    assert_eq!(plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap(), local_before);
 }
 
 #[tokio::test]
@@ -1335,7 +1350,7 @@ async fn queue_query_id_selection_keeps_order_and_rejects_missing_ids_before_ins
             ("/music/b.mp3", "B", "Artist"),
         ],
     );
-    let db = database(&schema);
+    let db = &database(&schema).remote_audio();
     domain::clear_queue(db).unwrap();
     let response = query(&schema, r#"mutation {addAudioToQueue(query:"ids:test:/music/b.mp3,test:/music/a.mp3,test:/music/b.mp3")}"#).await;
     assert_eq!(response["data"]["addAudioToQueue"], true, "{response}");

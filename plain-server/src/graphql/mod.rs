@@ -9,3 +9,6 @@ pub mod resolvers;
 
 #[cfg(feature = "core")]
 pub mod executor;
+
+#[cfg(feature = "core")]
+pub(crate) mod enum_literals;

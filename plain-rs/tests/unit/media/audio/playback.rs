@@ -120,10 +120,12 @@ fn failed_current_media_write_keeps_the_source_and_runtime_unchanged() {
     indexed_current(&db, "one").unwrap();
     let before = seek(&db, 123).unwrap();
     register_audio(&db, &audio_queue::AudioTrack::from_path_stem("two"));
-    let prefs_path = crate::prefs::default_path(dir.path());
-    std::fs::remove_file(&prefs_path).unwrap();
-    std::fs::create_dir(&prefs_path).unwrap();
+    let store = db.key_values().unwrap();
+    let stored = store.get("local_audio_current_media_id").unwrap();
+    store.set_write_failure_for_test(true);
     assert!(audio_queue::save_audio_current(&db, "two").is_err());
+    store.set_write_failure_for_test(false);
+    assert_eq!(store.get("local_audio_current_media_id").unwrap(), stored);
     assert_eq!(snapshot(&db).unwrap(), before);
     assert_eq!(audio_queue::get_audio_current(&db).unwrap(), "one");
 }
@@ -157,11 +159,13 @@ fn current_and_progress_reset_are_atomic() {
     indexed_current(&db, "one").unwrap();
     audio_queue::save_audio_current(&db, "one").unwrap();
     seek(&db, 123).unwrap();
-    let prefs_path = crate::prefs::default_path(dir.path());
-    std::fs::remove_file(&prefs_path).unwrap();
-    std::fs::create_dir(&prefs_path).unwrap();
     register_audio(&db, &audio_queue::AudioTrack::from_path_stem("two"));
+    let store = db.key_values().unwrap();
+    let stored = store.get("local_audio_current_media_id").unwrap();
+    store.set_write_failure_for_test(true);
     assert!(audio_queue::save_audio_current(&db, "two").is_err());
+    store.set_write_failure_for_test(false);
+    assert_eq!(store.get("local_audio_current_media_id").unwrap(), stored);
     assert_eq!(audio_queue::get_audio_current(&db).unwrap(), "one");
     assert_eq!(snapshot(&db).unwrap().position_ms, 123);
     assert_eq!(seek(&db, 456).unwrap().position_ms, 456);

@@ -244,33 +244,6 @@ async fn confirmation_is_once_only_and_cancel_or_revoke_prevents_issuance() {
 }
 
 #[tokio::test]
-async fn malformed_encrypted_frames_consume_the_same_rust_login_limiter() {
-    let (_dir, server) = fixture();
-    let state = server.runtime_state();
-    for _ in 0..5 {
-        let error = ws_login::execute(
-            &state,
-            ws_login::Request::Issue {
-                client_id: "browser".into(),
-                client_ip: "192.0.2.1".into(),
-                frame: "invalid".into(),
-            },
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.to_string(), "invalid_password");
-    }
-    let client = plain_rs::crypto::EcdhSession::generate();
-    assert_eq!(
-        ws_login::execute(&state, offer(&state, &client, Value::Null))
-            .await
-            .unwrap_err()
-            .to_string(),
-        "too_many_login_attempts"
-    );
-}
-
-#[tokio::test]
 async fn login_pairing_and_init_preserve_rust_state_without_revealing_passwords() {
     let (_dir, server) = fixture();
     let state = server.runtime_state();

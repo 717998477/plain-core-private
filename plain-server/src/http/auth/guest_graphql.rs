@@ -108,6 +108,7 @@ impl Query {
 }
 fn schema_builder() -> async_graphql::SchemaBuilder<Query, EmptyMutation, EmptySubscription> {
     Schema::build(Query, EmptyMutation, EmptySubscription)
+        .extension(crate::graphql::enum_literals::EnumLiteralValidation)
 }
 
 async fn execute(state: &ServerState, id: &str, body: &[u8]) -> (u16, Vec<u8>) {

@@ -6,7 +6,7 @@ async fn export_uses_owned_snapshots_and_preserves_attachment_bytes_without_host
     let directory = tempfile::tempdir().unwrap();
     let paths = plain_rs::data_paths::DataPaths::new(directory.path());
     let prefs = Arc::new(Prefs::load(&paths.prefs()).unwrap());
-    prefs.set("backup-test", "user").unwrap();
+    prefs.set("device_name", "Backup fixture").unwrap();
     let db = Arc::new(Db::open(&paths.database()).unwrap());
     db.with_conn(|conn| conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE backup_values (id INTEGER PRIMARY KEY,value TEXT); INSERT INTO backup_values VALUES (1,'committed');").unwrap());
     let store = Arc::new(LazyDb::from_open(paths.kv(), db.key_values().unwrap()));
@@ -61,14 +61,14 @@ async fn export_uses_owned_snapshots_and_preserves_attachment_bytes_without_host
     );
     let kv = plain_rs::kv::Db::open(&restored.path().join("files/fjall")).unwrap();
     assert_eq!(kv.get(b"binary").unwrap().unwrap().as_ref(), [0u8, 255, 3]);
-    for (name, expected) in [("prefs.json", "user")] {
+    for (name, expected) in [("prefs.json", "Backup fixture")] {
         let mut json = String::new();
         zip.by_name(&format!("files/{name}"))
             .unwrap()
             .read_to_string(&mut json)
             .unwrap();
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&json).unwrap()["backup-test"],
+            serde_json::from_str::<serde_json::Value>(&json).unwrap()["device_name"],
             expected
         );
     }

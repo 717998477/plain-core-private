@@ -147,6 +147,9 @@ impl DurationCache {
                     batch.remove(key);
                 }
             }
+            if removed.is_empty() {
+                return Ok(0);
+            }
             db.apply_batch(batch)?;
             db.flush()?;
             Ok(removed.len())
@@ -161,6 +164,7 @@ impl DurationCache {
         self.revision.fetch_add(1, Ordering::AcqRel);
         self.with_db(|db| {
             let mut batch = db.batch();
+            let mut changed = false;
             for entry in db.scan_prefix(PREFIX) {
                 let (key, value) = entry?;
                 let value: Duration = serde_json::from_slice(&value)?;
@@ -169,7 +173,11 @@ impl DurationCache {
                     || roots.iter().any(|root| path.starts_with(root))
                 {
                     batch.remove(key);
+                    changed = true;
                 }
+            }
+            if !changed {
+                return Ok(());
             }
             db.apply_batch(batch)?;
             db.flush()

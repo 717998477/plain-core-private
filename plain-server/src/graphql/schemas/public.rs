@@ -180,6 +180,7 @@ pub(crate) fn build_with_runtime(
     mobile: Arc<crate::mobile::Runtime>,
 ) -> PublicSchema {
     let builder = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+        .extension(crate::graphql::enum_literals::EnumLiteralValidation)
         .register_output_type::<crate::graphql::resolvers::media::item::MediaItem>()
         .data(models);
     let builder = services.configure_schema(builder, db, host, prefs, events);
