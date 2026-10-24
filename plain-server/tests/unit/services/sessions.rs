@@ -348,9 +348,9 @@ async fn main_schema_keeps_secrets_local_and_remote_metadata_and_resource_token_
     let local = native.execute(query.into()).await;
     assert!(local.errors.is_empty(), "{:?}", local.errors);
     let local = local.data.into_json().unwrap();
-    let settings = serde_json::to_value(server.native_management().unwrap().prefs_snapshot().unwrap()).unwrap();
+    let settings = server.native_management().unwrap().preferences().unwrap();
     assert_eq!(settings["password"], "secret");
-    assert_eq!(settings["urlToken"], "resource-token");
+    assert_eq!(settings["url_token"], "resource-token");
     assert_eq!(local["peers"][0]["key"], "peer-secret");
     assert_eq!(local["chatChannels"][0]["key"], "channel-secret");
     assert_eq!(local["sessions"][0]["token"], session.token);

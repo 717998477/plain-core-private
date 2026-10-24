@@ -122,3 +122,12 @@ fn unknown_or_modified_keys_never_gain_access() {
         assert!(!accessible(key, true), "{key}");
     }
 }
+
+#[test]
+fn native_read_keys_do_not_allow_generic_preference_writes() {
+    for key in [UPDATE_INFO, APP_UPDATE_AVAILABLE, ONBOARDING_COMPLETED, SIGNATURE_PUBLIC_KEY] {
+        assert_eq!(access(key), None, "{key}");
+        assert!(!accessible(key, false), "{key}");
+        assert!(!accessible(key, true), "{key}");
+    }
+}

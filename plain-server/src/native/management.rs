@@ -1,4 +1,3 @@
-use plain_rs::prefs::pref_keys::{AUTO_CHECK_UPDATE, SKIP_VERSION};
 use crate::assembly::server::ServerState;
 use plain_rs::events::WsEvent;
 use serde::{Deserialize, Serialize};
@@ -35,20 +34,6 @@ pub struct NativeWebLoginRequests {
     pub next_after: Option<String>,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NativePrefs {
-    #[serde(flatten)]
-    state: plain_rs::prefs::security::SecurityState,
-    app_update_available: bool,
-    update_info: plain_rs::prefs::security::UpdateInfo,
-    auto_check_update: bool,
-    skip_version: String,
-    onboarding_completed: bool,
-    #[serde(flatten)]
-    settings: plain_rs::prefs::settings::Settings,
-}
-
 #[derive(Clone)]
 pub struct NativeManagement {
     state: ServerState,
@@ -57,39 +42,6 @@ pub struct NativeManagement {
 impl NativeManagement {
     pub(crate) fn new(state: ServerState) -> Self {
         Self { state }
-    }
-
-    pub async fn set_pref(&self, key: &str, value: serde_json::Value) -> Result<bool, String> {
-        self.state.native_client_id()?;
-        crate::services::settings::preferences::Preferences::from_server(&self.state)
-            .set(key, value)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn prefs_snapshot(&self) -> Result<NativePrefs, String> {
-        self.state.native_client_id()?;
-        let state = plain_rs::prefs::security::snapshot(&self.state.prefs)
-            .map_err(|error| error.to_string())?;
-        let version = self
-            .state
-            .host
-            .startup_property("appVersion")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let update_info = crate::services::settings::updates::info(&self.state).map_err(|e| e.to_string())?;
-        let skip_version = self.state.prefs.get_or(SKIP_VERSION, String::new());
-        let app_update_available = plain_rs::updates::available(&update_info, version, &skip_version);
-        Ok(NativePrefs {
-            state,
-            app_update_available,
-            update_info,
-            skip_version,
-            auto_check_update: self.state.prefs.get_or(AUTO_CHECK_UPDATE, true),
-            onboarding_completed: self.state.store.get().map_err(|e| e.to_string())?
-                .get_json("onboarding_completed").map_err(|e| e.to_string())?.unwrap_or(false),
-            settings: plain_rs::prefs::settings::snapshot(&self.state.prefs).map_err(|e| e.to_string())?,
-        })
     }
 
     pub fn complete_onboarding(&self) -> Result<bool, String> {

@@ -113,7 +113,7 @@ async fn native_preference_writes_share_validation_and_commit_notifications() {
     );
     assert_eq!(preference_updates(&mut events), 1);
     assert_eq!(
-        serde_json::to_value(management.prefs_snapshot().unwrap()).unwrap()["httpPort"],
+        management.preferences().unwrap()["http_port"],
         8181
     );
     assert!(
@@ -142,7 +142,7 @@ async fn native_preference_writes_share_validation_and_commit_notifications() {
     );
     assert_eq!(preference_updates(&mut events), 1);
     assert_eq!(
-        serde_json::to_value(management.prefs_snapshot().unwrap()).unwrap()["loginRequireApproval"],
+        management.preferences().unwrap()["login_require_approval"],
         false
     );
     core.stop_core().await;
@@ -152,4 +152,45 @@ async fn native_preference_writes_share_validation_and_commit_notifications() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn keyed_native_reads_observe_committed_writes_and_reject_private_or_unknown_keys() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(directory.path()).unwrap();
+    let management = core.native_management().unwrap();
+    assert_eq!(management.get_pref("http_port").unwrap(), serde_json::json!(8080));
+    assert!(management.set_pref("http_port", serde_json::json!(8282)).await.unwrap());
+    assert_eq!(management.get_pref("http_port").unwrap(), serde_json::json!(8282));
+    let keys = vec!["http_port".into(), "client_id".into()];
+    let selected = management.get_prefs(&keys).unwrap();
+    assert_eq!(selected.len(), 2);
+    assert_eq!(selected["http_port"], serde_json::json!(8282));
+    assert_eq!(selected["client_id"], management.get_pref("client_id").unwrap());
+    for key in ["unknown", "httpPort", "master_secret", "signature_key_pair"] {
+        assert!(management.get_pref(key).is_err(), "{key}");
+        assert!(management.get_prefs(&[key.into()]).is_err(), "{key}");
+    }
+    core.stop_core().await;
+    assert!(management.get_pref("http_port").is_err());
+    assert!(management.get_prefs(&keys).is_err());
+}
+
+#[tokio::test]
+async fn derived_native_keys_are_readable_but_not_writable() {
+    use plain_rs::prefs::pref_keys as keys;
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let management = core.native_management().unwrap();
+    let before = state.prefs.entries_sorted();
+    let mut events = state.events.subscribe();
+    for key in [keys::UPDATE_INFO, keys::APP_UPDATE_AVAILABLE, keys::ONBOARDING_COMPLETED, keys::SIGNATURE_PUBLIC_KEY] {
+        let value = management.get_pref(key).unwrap();
+        assert_eq!(management.get_prefs(&[key.into()]).unwrap()[key], value);
+        assert!(management.set_pref(key, value).await.is_err(), "{key}");
+    }
+    assert_eq!(state.prefs.entries_sorted(), before);
+    assert_eq!(preference_updates(&mut events), 0);
+    core.stop_core().await;
 }

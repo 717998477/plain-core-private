@@ -54,9 +54,8 @@ async fn main_settings_derive_update_availability_from_current_version_and_skip(
         update(&state, json!({"newVersion":"999.0.0"})).unwrap();
         state.prefs.set(SKIP_VERSION, skip).unwrap();
         let value =
-            serde_json::to_value(core.native_management().unwrap().prefs_snapshot().unwrap())
-                .unwrap();
-        assert_eq!(value["appUpdateAvailable"], available);
+            core.native_management().unwrap().preferences().unwrap();
+        assert_eq!(value["app_update_available"], available);
     }
     assert!(requests.try_recv().is_err());
     core.stop_core().await;

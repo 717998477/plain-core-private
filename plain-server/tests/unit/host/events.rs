@@ -813,22 +813,30 @@ async fn http_status_snapshots_replace_stale_listener_events_without_exposing_ge
 }
 
 #[tokio::test]
-async fn preference_updates_send_only_changed_values_and_skip_unchanged_snapshots() {
+async fn preference_updates_send_only_changed_values_and_skip_unchanged_values() {
     let directory = tempfile::tempdir().unwrap();
     let core = ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let bridge = Arc::new(core.host_events());
     state.prefs.set("http_port", 8181).unwrap();
     bridge.prefs_changed().await;
-    assert_eq!(bridge.prefs_snapshot().await.unwrap()["httpPort"], 8181);
+    let initial = bridge.preferences().await.unwrap();
+    assert_eq!(initial["http_port"], 8181);
+    assert_eq!(initial["feed_auto_refresh_interval"], 7200);
+    assert_eq!(initial["pkg_sort_by"], 4);
+    assert!(!initial.contains_key("httpPort"));
+    assert!(!initial.contains_key("feedAutoRefreshIntervalSec"));
+    assert!(!initial.contains_key("packageSortBy"));
     state.prefs.set("http_port", 8080).unwrap();
+    state.prefs.set("feed_auto_refresh_interval", 900).unwrap();
+    state.prefs.set("pkg_sort_by", 5).unwrap();
     let sender = bridge.clone();
     let update = tokio::spawn(async move { sender.prefs_changed().await });
     loop {
         let request = bridge.next_request().await.unwrap();
         let is_preferences = request["method"] == "prefsChanged";
         if is_preferences {
-            assert_eq!(request["params"], json!({"values":{"httpPort":8080}}));
+            assert_eq!(request["params"], json!({"values":{"http_port":8080,"feed_auto_refresh_interval":900,"pkg_sort_by":5}}));
         }
         bridge
             .reply(json!({"id":request["id"],"result":null}))

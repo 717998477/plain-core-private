@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, mpsc};
 pub struct HostEvents {
     state: ServerState,
     generation: u64,
-    preferences: Mutex<Option<Value>>,
+    preferences: Mutex<Option<serde_json::Map<String, Value>>>,
     requests: Mutex<mpsc::Receiver<Value>>,
     events: Mutex<crate::native::events::NativeEventStream>,
 }
@@ -47,11 +47,10 @@ impl HostEvents {
             events: Mutex::new(events),
         }
     }
-    pub async fn prefs_snapshot(&self) -> Result<Value, String> {
+    pub async fn preferences(&self) -> Result<serde_json::Map<String, Value>, String> {
         let mut previous = self.preferences.lock().await;
         let current = crate::native::management::NativeManagement::new(self.state.clone())
-            .prefs_snapshot()
-            .and_then(|snapshot| serde_json::to_value(snapshot).map_err(|e| e.to_string()))?;
+            .preferences()?;
         *previous = Some(current.clone());
         Ok(current)
     }
@@ -62,18 +61,15 @@ impl HostEvents {
             return;
         };
         let current = match crate::native::management::NativeManagement::new(self.state.clone())
-            .prefs_snapshot()
-            .and_then(|snapshot| serde_json::to_value(snapshot).map_err(|e| e.to_string()))
+            .preferences()
         {
-            Ok(snapshot) => snapshot,
+            Ok(values) => values,
             Err(error) => {
-                log::error!("Host preferences snapshot failed: {error}");
+                log::error!("Host preferences read failed: {error}");
                 return;
             }
         };
         let changes: serde_json::Map<_, _> = current
-            .as_object()
-            .unwrap()
             .iter()
             .filter(|(key, value)| baseline.get(*key) != Some(*value))
             .map(|(key, value)| (key.clone(), value.clone()))

@@ -67,7 +67,7 @@ async fn adb_token_verification_uses_native_management_and_has_no_graphql_oracle
     core.stop_core().await;
 }
 #[tokio::test]
-async fn native_user_settings_snapshot_preserves_defaults_and_json_values() {
+async fn native_preferences_preserve_defaults_and_use_storage_keys() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open_with_cache(
         &directory.path().join("data"),
@@ -81,13 +81,13 @@ async fn native_user_settings_snapshot_preserves_defaults_and_json_values() {
         .set("feed_auto_refresh_interval", 2345)
         .unwrap();
     let expected =
-        serde_json::to_value(plain_rs::prefs::settings::snapshot(&state.prefs).unwrap()).unwrap();
+        plain_rs::prefs::settings::values(&state.prefs).unwrap();
     let actual =
-        serde_json::to_value(core.native_management().unwrap().prefs_snapshot().unwrap()).unwrap();
-    for (key, value) in expected.as_object().unwrap() {
+        core.native_management().unwrap().preferences().unwrap();
+    for (key, value) in &expected {
         assert_eq!(&actual[key], value, "{key}");
     }
-    assert_eq!(actual["feedAutoRefreshIntervalSec"], 2345);
+    assert_eq!(actual["feed_auto_refresh_interval"], 2345);
     core.stop_core().await;
 }
 

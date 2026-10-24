@@ -1,3 +1,5 @@
+mod entries;
+pub use entries::{get_entry, set_entry, values};
 mod actions;
 use super::pref_keys as keys;
 mod patch;
@@ -465,51 +467,3 @@ pub fn patch(prefs: &Prefs, patch: SettingsPatch) -> anyhow::Result<bool> {
 #[cfg(test)]
 #[path = "../../../tests/unit/prefs/user.rs"]
 mod tests;
-
-pub fn set_entry(prefs: &Prefs, key: &str, value: Value) -> anyhow::Result<Option<bool>> {
-    let field = match key {
-        keys::HTTP_PORT => "httpPort",
-        keys::HTTPS_PORT => "httpsPort",
-        keys::DARK_THEME => "darkTheme",
-        keys::AMOLED_DARK_THEME => "amoledDarkTheme",
-        keys::PDF_FOLLOW_DARK_THEME => "pdfFollowDarkTheme",
-        keys::KEEP_AWAKE => "keepAwake",
-        keys::LOCALE => "locale",
-        keys::BACKGROUND_SERVICE_ENABLED => "backgroundServiceEnabled",
-        keys::DESKTOP_ACCESS => "desktopAccess",
-        keys::DLNA => "dlna",
-        keys::DEVELOPER_MODE => "developerMode",
-        keys::ALLOW_ANY_HOST => "allowAnyHost",
-        keys::DEVICE_NAME => "deviceName",
-        keys::HTTPS => "https",
-        keys::WEB_ADDRESS_BAR_EXPANDED => "webAddressBarExpanded",
-        keys::SCREEN_MIRROR_QUALITY => "screenMirrorQuality",
-        keys::AUDIO_PLAY_MODE => "audioPlayMode",
-        keys::AUDIO_PLAYBACK_SPEED => "audioPlaybackSpeed",
-        keys::IMAGE_GRID_CELLS_PER_ROW => "imageGridCellsPerRow",
-        keys::VIDEO_GRID_CELLS_PER_ROW => "videoGridCellsPerRow",
-        keys::SHOW_HIDDEN_FILES => "showHiddenFiles",
-        keys::FEED_AUTO_REFRESH => "feedAutoRefresh",
-        keys::FEED_AUTO_REFRESH_INTERVAL => "feedAutoRefreshIntervalSec",
-        keys::FEED_AUTO_REFRESH_ONLY_WIFI => "feedAutoRefreshOnlyWifi",
-        keys::FEED_FONT_SCALE => "feedFontScale",
-        keys::EDITOR_WRAP_CONTENT => "editorWrapContent",
-        keys::EDITOR_FONT_SIZE => "editorFontSize",
-        keys::EDITOR_STATUS_BAR => "editorStatusBar",
-        keys::NEARBY_DISCOVERABLE => "nearbyDiscoverable",
-        keys::AI_IMAGE_SEARCH_ENABLED => "aiImageSearchEnabled",
-        keys::NOTIFICATION_FILTER => "notificationFilter",
-        keys::POMODORO_SETTINGS => "pomodoroSettings",
-        keys::APP_HOME_FEATURES => "appHomeFeatures",
-        keys::LAUNCHER_SHORTCUTS => "launcherShortcuts",
-        keys::AUDIO_SORT_BY => "audioSortBy",
-        keys::VIDEO_SORT_BY => "videoSortBy",
-        keys::IMAGE_SORT_BY => "imageSortBy",
-        keys::DOC_SORT_BY => "docSortBy",
-        keys::FILE_SORT_BY => "fileSortBy",
-        keys::PACKAGE_SORT_BY => "packageSortBy",
-        _ => return Ok(None),
-    };
-    let patch = serde_json::from_value(serde_json::json!({field:value}))?;
-    Ok(Some(self::patch(prefs, patch)?))
-}

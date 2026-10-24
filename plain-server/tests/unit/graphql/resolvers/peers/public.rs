@@ -249,14 +249,14 @@ async fn main_identity_rename_and_pairing_code_use_shared_preferences_and_refuse
     let value = response.data.into_json().unwrap();
     assert_eq!(value["app"]["clientId"], executor.client_id());
     let settings =
-        serde_json::to_value(core.native_management().unwrap().prefs_snapshot().unwrap()).unwrap();
+        core.native_management().unwrap().preferences().unwrap();
     assert_eq!(
-        plain_rs::utils::base64::base64_decode(settings["signaturePublicKey"].as_str().unwrap())
+        plain_rs::utils::base64::base64_decode(settings["signature_public_key"].as_str().unwrap())
             .len(),
         32
     );
-    assert!(!settings["mdnsHostname"].as_str().unwrap().is_empty());
-    let public_key = settings["signaturePublicKey"].clone();
+    assert!(!settings["mdns_hostname"].as_str().unwrap().is_empty());
+    let public_key = settings["signature_public_key"].clone();
     let changed = executor
         .execute(async_graphql::Request::new(
             r#"mutation{updateDeviceName(name:"Shared device")}"#,
@@ -269,8 +269,8 @@ async fn main_identity_rename_and_pairing_code_use_shared_preferences_and_refuse
     let value = response.data.into_json().unwrap();
     assert_eq!(value["app"]["deviceName"], "Shared device");
     assert_eq!(
-        serde_json::to_value(core.native_management().unwrap().prefs_snapshot().unwrap()).unwrap()
-            ["signaturePublicKey"],
+        core.native_management().unwrap().preferences().unwrap()
+            ["signature_public_key"],
         public_key
     );
     let management = core.native_management().unwrap();
