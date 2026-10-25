@@ -56,12 +56,10 @@ async fn native_catalog_reads_rows_counts_ids_and_buckets_without_a_host() {
 #[tokio::test]
 async fn platform_catalog_reads_os_facts_without_a_local_catalogue() {
     let host = Arc::new(
-        Host::with_startup_properties(
-            json!({"media.systemCatalog":true})
-                .as_object()
-                .unwrap()
-                .clone(),
-        )
+        Host::with_startup_config(crate::host::startup::StartupConfig {
+            system_media_catalog: true,
+            ..crate::platform::startup::config()
+        })
         .unwrap(),
     );
     let (generation, mut requests) = host.connect();

@@ -93,14 +93,14 @@ async fn native_recent_files_use_the_owned_preferences_without_media_or_host_dis
 }
 
 async fn sdk_recents(
-    properties: serde_json::Value,
+    config: crate::host::startup::StartupConfig,
+    volumes: serde_json::Value,
     provider_rows: serde_json::Value,
 ) -> (Result<Vec<serde_json::Value>>, Vec<String>) {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
-    let host =
-        Arc::new(Host::with_startup_properties(properties.as_object().unwrap().clone()).unwrap());
+    let host = Arc::new(Host::with_startup_config(config).unwrap());
     let platform = FilePlatform::new(
         host.clone(),
         state.db.clone(),
@@ -119,6 +119,7 @@ async fn sdk_recents(
             let method = request["method"].as_str().unwrap();
             calls.push(method.to_owned());
             let result = match method {
+                "systemMountFacts" => volumes.clone(),
                 "systemFileIndexRows" => {
                     assert_eq!(request["params"]["limit"], 100);
                     assert_eq!(request["params"]["offset"], 0);
@@ -141,7 +142,7 @@ async fn sdk_recents(
         }
         calls
     });
-    let result = platform.recent_files(&state.prefs).await;
+    let result = platform.recent_files().await;
     host.disconnect(generation);
     let calls = worker.await.unwrap();
     core.stop_core().await;
@@ -152,7 +153,11 @@ async fn sdk_recents(
 async fn sdk_catalog_reuses_startup_metadata_and_queries_only_provider_rows() {
     let rows = json!([{"name":"catalog.txt","path":"/catalog.txt","size":42}]);
     let (result, calls) = sdk_recents(
-        json!({"files.recentCatalog":true,"files.recentRoot":null}),
+        crate::host::startup::StartupConfig {
+            recent_files_catalog: true,
+            ..crate::platform::startup::config()
+        },
+        json!([]),
         rows.clone(),
     )
     .await;
@@ -165,7 +170,11 @@ async fn sdk_filesystem_scan_runs_in_rust_without_provider_or_per_file_host_call
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("file.txt"), b"sample").unwrap();
     let (result, calls) = sdk_recents(
-        json!({"files.recentCatalog":false,"files.recentRoot":dir.path()}),
+        crate::host::startup::StartupConfig {
+            recent_files_catalog: false,
+            ..crate::platform::startup::config()
+        },
+        json!([{"driveType":"INTERNAL_STORAGE","path":dir.path()}]),
         json!([]),
     )
     .await;
@@ -175,30 +184,31 @@ async fn sdk_filesystem_scan_runs_in_rust_without_provider_or_per_file_host_call
     assert_eq!(files[0]["size"], 6);
     assert!(files[0]["createdAt"].is_null());
     assert!(files[0]["mediaId"].is_null());
-    assert!(calls.is_empty());
+    assert_eq!(calls, ["systemMountFacts"]);
 }
 
 #[tokio::test]
 async fn invalid_recent_source_is_rejected_without_guessing_or_provider_fallback() {
-    for properties in [
-        json!({}),
-        json!({"files.recentCatalog":false,"files.recentRoot":"relative"}),
+    for volumes in [
+        json!([]),
+        json!([{"driveType":"INTERNAL_STORAGE","path":"relative"}]),
     ] {
-        let (result, calls) = sdk_recents(properties, json!([])).await;
+        let (result, calls) = sdk_recents(crate::platform::startup::config(), volumes, json!([])).await;
         assert!(result.is_err());
-        assert!(calls.is_empty());
+        assert_eq!(calls, ["systemMountFacts"]);
     }
 }
 
 #[tokio::test]
-async fn sdk_without_a_catalog_or_filesystem_source_uses_the_shared_history() {
+async fn sdk_without_a_catalog_requires_a_primary_storage_directory() {
     let (result, calls) = sdk_recents(
-        json!({"files.recentCatalog":false,"files.recentRoot":null}),
+        crate::platform::startup::config(),
+        json!([]),
         json!([{ "name":"must not request provider rows" }]),
     )
     .await;
-    assert!(result.unwrap().is_empty());
-    assert!(calls.is_empty());
+    assert!(result.is_err());
+    assert_eq!(calls, ["systemMountFacts"]);
 }
 
 #[tokio::test]

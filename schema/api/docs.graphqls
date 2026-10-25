@@ -1,16 +1,3 @@
-type Doc implements MediaItem {
-	durationMs: Long!
-	id: ID!
-	title: String!
-	path: String!
-	extension: String!
-	size: Long!
-	bucketId: ID!
-	createdAt: Instant!
-	updatedAt: Instant!
-	tags: [Tag!]!
-}
-
 type DocExtGroup {
 	ext: String!
 	count: Int!

@@ -1,4 +1,15 @@
 use super::*;
+use crate::host::startup::StartupConfig;
+
+fn startup_json() -> Value {
+    json!({
+        "debug": false, "name": "fixture", "deviceType": "COMPUTER",
+        "buildChannel": "GITHUB", "downloadsDir": "", "manufacturer": "",
+        "model": "", "osName": "", "osVersion": "", "appVersion": "",
+        "appBuildNumber": "", "cpuArch": "", "wifiAwareSupported": false,
+        "recentFilesCatalog": false, "systemMediaCatalog": false, "supportedAbis": []
+    })
+}
 
 #[tokio::test]
 async fn generation_bound_calls_never_enter_a_replacement_host_queue() {
@@ -108,16 +119,13 @@ async fn capacity_is_bounded_and_errors_are_not_empty_successes() {
 
 #[tokio::test]
 async fn startup_properties_need_no_host_and_keep_dynamic_samples_fresh() {
-    let properties = serde_json::json!({"appVersion":"1.2.3","model":"device"})
-        .as_object()
-        .unwrap()
-        .clone();
-    let host = Arc::new(Host::with_startup_properties(properties).unwrap());
-    let fixed = host
-        .call("systemProperties", json!({"names":["appVersion","model"]}))
-        .await
-        .unwrap();
-    assert_eq!(fixed, json!({"appVersion":"1.2.3","model":"device"}));
+    let host = Arc::new(Host::with_startup_config(StartupConfig {
+        app_version: "1.2.3".into(),
+        model: "device".into(),
+        ..crate::platform::startup::config()
+    }).unwrap());
+    assert_eq!(host.startup().app_version, "1.2.3");
+    assert_eq!(host.startup().model, "device");
     let (generation, mut incoming) = host.connect();
     for active in [true, false] {
         let caller = host.clone();
@@ -125,7 +133,7 @@ async fn startup_properties_need_no_host_and_keep_dynamic_samples_fresh() {
             caller
                 .call(
                     "systemProperties",
-                    json!({"names":["model","wifiAwareRunning"]}),
+                    json!({"names":["wifiAwareRunning"]}),
                 )
                 .await
                 .unwrap()
@@ -139,7 +147,7 @@ async fn startup_properties_need_no_host_and_keep_dynamic_samples_fresh() {
         .unwrap();
         assert_eq!(
             request.await.unwrap(),
-            json!({"model":"device","wifiAwareRunning":active})
+            json!({"wifiAwareRunning":active})
         );
     }
     assert!(incoming.try_recv().is_err());
@@ -153,9 +161,9 @@ fn dynamic_properties_cannot_be_frozen_as_startup_information() {
         "android.battery",
         "permissions",
     ] {
-        let mut properties = serde_json::Map::new();
-        properties.insert(key.into(), Value::Null);
-        assert!(Host::with_startup_properties(properties).is_err(), "{key}");
+        let mut value = startup_json();
+        value[key] = Value::Null;
+        assert!(serde_json::from_value::<StartupConfig>(value).is_err(), "{key}");
     }
 }
 
@@ -165,30 +173,31 @@ fn startup_values_are_validated_before_the_host_is_created() {
         ("debug", json!(null)),
         ("model", json!(123)),
         ("wifiAwareSupported", json!("true")),
-        ("files.recentCatalog", json!(1)),
-        ("media.systemCatalog", json!("true")),
-        ("files.recentRoot", json!([])),
+        ("recentFilesCatalog", json!(1)),
+        ("systemMediaCatalog", json!("true")),
         ("socModel", json!(false)),
         ("deviceType", json!("UNKNOWN")),
         ("buildChannel", json!("unknown")),
-        ("android.sdkVersion", json!(-1)),
-        ("android.sdkVersion", json!(2147483648_i64)),
-        ("android.buildTime", json!("today")),
+        ("androidSdkVersion", json!(-1)),
+        ("androidSdkVersion", json!(2147483648_i64)),
+        ("androidBuildTime", json!("today")),
         ("supportedAbis", json!("arm64-v8a")),
         ("supportedAbis", json!(["arm64-v8a", 1])),
         ("supportedAbis", json!([""])),
         ("updateSource", json!("https://example.test/releases")),
         ("updateSource", json!({"url":123})),
     ] {
-        let properties = [(key.into(), value)].into_iter().collect();
-        let error = Host::with_startup_properties(properties).err().unwrap();
-        assert_eq!(error, format!("Invalid startup system property: {key}"));
+        let mut config = startup_json();
+        config[key] = value;
+        let result = serde_json::from_value::<StartupConfig>(config)
+            .map_err(|error| error.to_string())
+            .and_then(Host::with_startup_config);
+        assert!(result.is_err(), "{key}");
     }
-    let properties = json!({"socModel":null,"files.recentRoot":null})
-        .as_object()
-        .unwrap()
-        .clone();
-    assert!(Host::with_startup_properties(properties).is_ok());
+    let mut value = startup_json();
+    value["socModel"] = Value::Null;
+    let config = serde_json::from_value::<StartupConfig>(value).unwrap();
+    assert!(Host::with_startup_config(config).is_ok());
 }
 
 #[test]
@@ -197,11 +206,13 @@ fn startup_accepts_sdk_abi_arrays_and_optional_update_sources() {
         json!({"supportedAbis":["arm64-v8a","armeabi-v7a"],"updateSource":{"url":"https://example.test/releases","pageUrl":"https://example.test","assets":[{"nameSuffix":".apk"}]}}),
         json!({"supportedAbis":[],"updateSource":null}),
     ] {
-        let properties = properties.as_object().unwrap().clone();
-        let host = Host::with_startup_properties(properties.clone()).unwrap();
-        for (key, value) in properties {
-            assert_eq!(host.startup_property(&key), Some(&value));
-        }
+        let mut value = startup_json();
+        value["supportedAbis"] = properties["supportedAbis"].clone();
+        value["updateSource"] = properties["updateSource"].clone();
+        let config = serde_json::from_value::<StartupConfig>(value).unwrap();
+        let host = Host::with_startup_config(config).unwrap();
+        assert_eq!(json!(host.startup().supported_abis), properties["supportedAbis"]);
+        assert_eq!(host.startup().update_source.is_some(), !properties["updateSource"].is_null());
     }
 }
 
@@ -216,7 +227,7 @@ async fn absent_fixed_values_fail_without_a_host_request() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error, "Missing startup system property: model");
+    assert_eq!(error, "Unsupported dynamic system property: model");
     assert!(incoming.try_recv().is_err());
 }
 
@@ -229,7 +240,7 @@ async fn unknown_properties_never_fall_back_to_dynamic_host_requests() {
             .call("systemProperties", json!({"names":["language", name]}))
             .await
             .unwrap_err();
-        assert_eq!(error, format!("Unsupported system property: {name}"));
+        assert_eq!(error, format!("Unsupported dynamic system property: {name}"));
     }
     assert!(incoming.try_recv().is_err());
 }
@@ -267,23 +278,23 @@ async fn repeated_dynamic_names_are_sampled_once_per_request() {
 #[tokio::test]
 async fn cache_root_is_reused_from_startup_without_a_host_request() {
     let root = std::env::temp_dir().join("plain-cache-startup");
-    let host =
-        Host::with_startup_properties(serde_json::from_value(json!({"cacheDir":root})).unwrap())
-            .unwrap();
+    let host = Host::with_startup_config(StartupConfig {
+        cache_dir: Some(root.to_str().unwrap().into()),
+        ..crate::platform::startup::config()
+    }).unwrap();
     let (_generation, mut incoming) = host.connect();
     for _ in 0..3 {
         assert_eq!(
-            host.call("systemProperties", json!({"names":["cacheDir"]}))
-                .await
-                .unwrap(),
-            json!({"cacheDir":root})
+            host.startup().cache_dir.as_deref(),
+            root.to_str()
         );
     }
     assert!(incoming.try_recv().is_err());
     assert!(
-        Host::with_startup_properties(
-            serde_json::from_value(json!({"cacheDir":"relative"})).unwrap()
-        )
+        Host::with_startup_config(StartupConfig {
+            cache_dir: Some("relative".into()),
+            ..crate::platform::startup::config()
+        })
         .is_err()
     );
 }

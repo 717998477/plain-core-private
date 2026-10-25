@@ -239,12 +239,10 @@ async fn cancel_invalidates_the_generation_and_late_tls_bytes_cannot_commit_a_fi
 #[test]
 fn default_shared_download_layout_uses_startup_root_without_another_host_call() {
     let root = tempfile::tempdir().unwrap();
-    let host = crate::host::bridge::Host::with_startup_properties(
-        json!({"downloadsDir":root.path()})
-            .as_object()
-            .unwrap()
-            .clone(),
-    )
+    let host = crate::host::bridge::Host::with_startup_config(crate::host::startup::StartupConfig {
+        downloads_dir: root.path().to_str().unwrap().into(),
+        ..crate::platform::startup::config()
+    })
     .unwrap();
     let (_generation, mut requests) = host.connect();
     for _ in 0..3 {
@@ -266,9 +264,10 @@ fn default_shared_download_layout_uses_startup_root_without_another_host_call() 
 fn invalid_default_download_roots_fail_without_replacing_an_explicit_target() {
     let root = tempfile::tempdir().unwrap();
     for value in ["", "relative", "bad\0path"] {
-        let host = crate::host::bridge::Host::with_startup_properties(
-            json!({"downloadsDir":value}).as_object().unwrap().clone(),
-        )
+        let host = crate::host::bridge::Host::with_startup_config(crate::host::startup::StartupConfig {
+            downloads_dir: value.into(),
+            ..crate::platform::startup::config()
+        })
         .unwrap();
         assert!(downloads_directory(&host, "").is_err());
         assert_eq!(

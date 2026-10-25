@@ -137,7 +137,6 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
     group!(
         "Query",
         "videos",
-        resolvers::videos::progress::VideoProgressQuery,
         resolvers::videos::public::VideosQuery
     );
     group!("Query", "tags", resolvers::tags::public::TagsQuery);
@@ -145,6 +144,7 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
         "Query",
         "media",
         resolvers::media::scan::MediaScanQuery,
+        resolvers::media::play_history::MediaPlayHistoryQuery,
         resolvers::media::public::MediaQuery
     );
     group!(
@@ -269,16 +269,12 @@ pub(super) fn files(sdl: &str) -> BTreeMap<String, String> {
         resolvers::chat::host::ChatHostMutation,
         resolvers::chat::public::ChatMutation
     );
-    group!(
-        "Mutation",
-        "videos",
-        resolvers::videos::progress::VideoProgressMutation
-    );
     group!("Mutation", "tags", resolvers::tags::public::TagsMutation);
     group!(
         "Mutation",
         "media",
-        resolvers::media::scan::MediaScanMutation
+        resolvers::media::scan::MediaScanMutation,
+        resolvers::media::play_history::MediaPlayHistoryMutation
     );
     group!(
         "Mutation",

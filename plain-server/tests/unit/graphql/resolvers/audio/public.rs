@@ -3,6 +3,7 @@ use crate::graphql::schemas::public::PublicSchema;
 use crate::host::bridge::Host;
 use plain_rs::db::Db;
 use plain_rs::prefs::Prefs;
+use plain_rs::media::play_history;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -1190,7 +1191,7 @@ async fn overview_projects_the_authoritative_catalog_without_sdk_metadata_calls(
         &[("/one.mp3", "One", "Artist"), ("/two.mp3", "Two", "Artist")],
     );
     database(&schema)
-        .media_play_history_start(plain_rs::enums::DataType::Audio, "test:/two.mp3", 0)
+        .media_play_history_record(plain_rs::enums::DataType::Audio, "test:/two.mp3", 0)
         .unwrap();
     let result = query(&schema,"{ audioOverview { artists { name itemCount playCount samplePath } recentItems { id path } } }").await;
     assert!(result["errors"].is_null(), "{result}");
@@ -1271,30 +1272,24 @@ async fn native_album_tags_reach_playlist_covers_without_platform_catalog_calls(
 }
 
 #[tokio::test]
-async fn browser_actual_start_and_progress_use_main_history_without_host_commands() {
+async fn browser_history_writes_do_not_change_the_current_player_or_call_the_host() {
     let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
-    schema
-        .data::<Arc<crate::services::audio::host::Audio>>()
-        .unwrap()
-        .remote()
-        .run_playback(|db, _| plain_rs::media::audio::playback::snapshot(db))
-        .await
-        .unwrap();
     seed_queue(&schema, &[("/one.mp3", "One", "Artist")]);
     let local_before = plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap();
-    let db = &database(&schema).remote_audio();
-    let selected =
-        plain_rs::media::audio::playback::prepare_track(db, &track("/one.mp3", "One", "Artist"))
-            .unwrap();
+    let db = database(&schema);
     let mut events = schema
         .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()
         .unwrap()
         .subscribe();
-    for (started, position, changed) in [(true, 123, true), (true, 234, false), (false, 456, false)]
+    for (method, position, changed) in [
+        ("recordMediaPlay", 123, true),
+        ("saveMediaPlayProgress", 234, false),
+        ("saveMediaPlayProgress", 456, false),
+    ]
     {
-        let response = query(&schema, &format!(r#"mutation {{ reportAudioPlayback(path:"/one.mp3",revision:{},positionMs:{position},started:{started}) }}"#, selected.revision)).await;
+        let response = query(&schema, &format!(r#"mutation {{ {method}(mediaId:"test:/one.mp3",type:AUDIO,positionMs:{position}) }}"#)).await;
         assert!(response["errors"].is_null(), "{response}");
-        assert_eq!(response["data"]["reportAudioPlayback"], true);
+        assert_eq!(response["data"][method], true);
         if changed {
             assert_eq!(
                 events.try_recv().unwrap().event_type,
@@ -1303,38 +1298,26 @@ async fn browser_actual_start_and_progress_use_main_history_without_host_command
         }
         assert!(events.try_recv().is_err());
     }
-    let history = domain::history_page(db, 0, 10, "").unwrap();
+    let history = play_history::matching(db, &[]).unwrap();
     assert_eq!(history[0].play_count, 1);
-    assert_eq!(
-        db.media_play_history_get(plain_rs::enums::DataType::Audio, &history[0].media_id)
-            .unwrap()
-            .unwrap()
-            .position_ms,
-        456
-    );
-    plain_rs::media::audio::playback::prepare_track(db, &track("/one.mp3", "One", "Artist"))
-        .unwrap();
-    let stale = query(&schema, &format!(r#"mutation {{ reportAudioPlayback(path:"/one.mp3",revision:{},positionMs:999,started:true) }}"#, selected.revision)).await;
-    assert_eq!(stale["data"]["reportAudioPlayback"], false);
-    assert!(events.try_recv().is_err());
-    assert_eq!(
-        domain::history_page(db, 0, 10, "").unwrap()[0].play_count,
-        1
-    );
+    assert_eq!(history[0].position_ms, 456);
+    let next = query(&schema, r#"mutation { recordMediaPlay(mediaId:"test:/one.mp3",type:AUDIO,positionMs:0) }"#).await;
+    assert!(next["errors"].is_null(), "{next}");
+    assert_eq!(play_history::matching(db, &[]).unwrap()[0].play_count, 2);
     assert_eq!(plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap(), local_before);
 }
 
 #[tokio::test]
-async fn browser_playback_report_requires_storage_authorization() {
+async fn browser_history_writes_require_storage_authorization() {
     let (_dir, schema) = fixture_with("[]", |method, _| panic!("unexpected host call {method}"));
     let response = query(
         &schema,
-        r#"mutation { reportAudioPlayback(path:"/one.mp3",revision:1,positionMs:0,started:true) }"#,
+        r#"mutation { recordMediaPlay(mediaId:"test:/one.mp3",type:AUDIO,positionMs:0) }"#,
     )
     .await;
     assert!(!response["errors"].is_null(), "{response}");
     assert!(
-        domain::history_page(database(&schema), 0, 10, "")
+        play_history::matching(database(&schema), &[])
             .unwrap()
             .is_empty()
     );

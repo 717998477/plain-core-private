@@ -31,11 +31,6 @@ async fn configured_device_names_need_no_network_or_host_facts() {
 async fn native_default_name_never_asks_for_a_combined_address_report() {
     let host = crate::host::bridge::Host::default();
     let (_generation, mut requests) = host.connect();
-    assert!(
-        !crate::services::device::info::default_device_name(&host)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(!host.startup().name.is_empty());
     assert!(requests.try_recv().is_err());
 }

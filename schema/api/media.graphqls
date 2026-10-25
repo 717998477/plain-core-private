@@ -6,6 +6,16 @@ type MediaBucket {
 	topItemPaths: [String!]!
 }
 
+interface MediaItem {
+	id: ID!
+	title: String!
+	path: String!
+	size: Long!
+	bucketId: ID!
+	createdAt: Instant!
+	updatedAt: Instant!
+}
+
 type MediaPlayHistory {
 	mediaId: ID!
 	mediaType: MediaDataType!
@@ -37,8 +47,8 @@ enum ScanState {
 
 extend type Mutation {
 	pauseMediaScan: Boolean!
-	recordMediaPlay(mediaId: ID!, type: MediaDataType!, positionMs: Long!): Boolean!
 	rebuildMediaIndex(root: String!): Boolean!
+	recordMediaPlay(mediaId: ID!, type: MediaDataType!, positionMs: Long!): Boolean!
 	resumeMediaScan: Boolean!
 	saveMediaPlayProgress(mediaId: ID!, type: MediaDataType!, positionMs: Long!): Boolean!
 	setMediaSourceDirs(dirs: [String!]!): Boolean!

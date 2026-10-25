@@ -22,9 +22,10 @@ fn fixture() -> (
     .unwrap();
     let mut state = core.runtime_state();
     state.host = Arc::new(
-        crate::host::bridge::Host::with_startup_properties(
-            serde_json::from_value(json!({"wifiAwareSupported":true})).unwrap(),
-        )
+        crate::host::bridge::Host::with_startup_config(crate::host::startup::StartupConfig {
+            wifi_aware_supported: true,
+            ..crate::platform::startup::config()
+        })
         .unwrap(),
     );
     let (generation, requests) = state.host.connect();

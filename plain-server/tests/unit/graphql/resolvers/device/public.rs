@@ -49,7 +49,13 @@ fn fixture(
     prefs.set("device_name", "Pixel 8").unwrap();
     prefs.set("developer_mode", true).unwrap();
     let db = Arc::new(Db::open(&dir.path().join("data.db")).unwrap());
-    let host = Arc::new(Host::with_startup_properties(json!({"deviceType":"PHONE","buildChannel":"GITHUB","downloadsDir":"/downloads","debug":false}).as_object().unwrap().clone()).unwrap());
+    let host = Arc::new(Host::with_startup_config(crate::host::startup::StartupConfig {
+        device_type: plain_rs::chat::enums::DeviceType::Phone,
+        build_channel: "GITHUB".into(),
+        downloads_dir: "/downloads".into(),
+        debug: false,
+        ..crate::platform::startup::config()
+    }).unwrap());
     stub(host.clone(), handler);
     let directory = dir.path().to_path_buf();
     let (events, _) = tokio::sync::broadcast::channel(16);

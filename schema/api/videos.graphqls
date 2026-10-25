@@ -1,20 +1,3 @@
-type Video implements MediaItem {
-	width: Int!
-	height: Int!
-	rotation: Int!
-	id: ID!
-	title: String!
-	path: String!
-	durationMs: Long!
-	size: Long!
-	bucketId: ID!
-	createdAt: Instant!
-	updatedAt: Instant!
-	takenAt: Instant
-	isFavorite: Boolean!
-	tags: [Tag!]!
-}
-
 extend type Query {
 	videoCount(query: String!): Int!
 	videos(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Video!]!

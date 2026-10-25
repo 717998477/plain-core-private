@@ -27,6 +27,18 @@ cargo test --workspace --locked     # Test Rust functionality in all packages
 cargo run -p plainapp -- run --help  # Build plainapp and show run-command help
 ```
 
+## Generated contracts
+
+Regenerate GraphQL and SQLite artifacts from the current Rust implementation with Node.js and Rust:
+
+```sh
+node scripts/gen-schema.mjs --write
+```
+
+The command writes `schema/database.sql`, the main schema fragments in `schema/api/`, and `schema/guest-api.graphqls` and `schema/peer-api.graphqls`. It builds and runs the three schema snapshot checks. Omit `--write` to verify the generated files without updating them.
+
+Desktop consumes these same fragments. After a contract change, run `yarn graphql:codegen` in the sibling `plain-desktop` checkout to refresh its operation types. Mobile reads the Core schema directly and keeps no separate SDL copy.
+
 ## Deploy the CLI
 
 `plainapp` is a single executable with the web UI compiled into it, and a Linux host runs it as the systemd service `plainapp`.

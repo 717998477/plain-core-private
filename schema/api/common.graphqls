@@ -2,6 +2,22 @@ type ActionResult {
 	affectedCount: Int!
 }
 
+type Audio implements MediaItem {
+	albumId: ID!
+	id: ID!
+	title: String!
+	artist: String!
+	path: String!
+	durationMs: Long!
+	size: Long!
+	bucketId: ID!
+	createdAt: Instant!
+	updatedAt: Instant!
+	isFavorite: Boolean!
+	albumFileId: String!
+	tags: [Tag!]!
+}
+
 enum DeviceType {
 	COMPUTER
 	PHONE
@@ -9,6 +25,19 @@ enum DeviceType {
 	TV
 	NAS
 	OTHER
+}
+
+type Doc implements MediaItem {
+	durationMs: Long!
+	id: ID!
+	title: String!
+	path: String!
+	extension: String!
+	size: Long!
+	bucketId: ID!
+	createdAt: Instant!
+	updatedAt: Instant!
+	tags: [Tag!]!
 }
 
 enum FileSortBy {
@@ -19,6 +48,22 @@ enum FileSortBy {
 	NAME_ASC
 	NAME_DESC
 	TAKEN_AT_DESC
+}
+
+type Image implements MediaItem {
+	id: ID!
+	title: String!
+	path: String!
+	size: Long!
+	width: Int!
+	height: Int!
+	rotation: Int!
+	bucketId: ID!
+	createdAt: Instant!
+	updatedAt: Instant!
+	takenAt: Instant
+	isFavorite: Boolean!
+	tags: [Tag!]!
 }
 
 scalar Instant
@@ -34,16 +79,6 @@ enum MediaDataType {
 	VIDEO
 	IMAGE
 	DOC
-}
-
-interface MediaItem {
-	id: ID!
-	title: String!
-	path: String!
-	size: Long!
-	bucketId: ID!
-	createdAt: Instant!
-	updatedAt: Instant!
 }
 
 type Peer {
@@ -81,6 +116,23 @@ type Tag {
 	name: String!
 	type: Int!
 	count: Int!
+}
+
+type Video implements MediaItem {
+	width: Int!
+	height: Int!
+	rotation: Int!
+	id: ID!
+	title: String!
+	path: String!
+	durationMs: Long!
+	size: Long!
+	bucketId: ID!
+	createdAt: Instant!
+	updatedAt: Instant!
+	takenAt: Instant
+	isFavorite: Boolean!
+	tags: [Tag!]!
 }
 
 """

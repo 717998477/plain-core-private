@@ -14,12 +14,11 @@ async fn app_and_remote_access_share_listeners_without_background_service() {
         directory.path(),
         &token,
         prefs.clone(),
-        serde_json::Map::new(),
+        crate::platform::startup::config(),
         0,
         0,
         cert.cert.pem().into_bytes(),
         cert.key_pair.serialize_pem().into_bytes(),
-        false,
     )
     .await
     .unwrap();
@@ -377,16 +376,16 @@ async fn startup_device_name_initialization_is_shared_and_preserves_user_changes
         if let Some(initial) = initial {
             prefs.set("device_name", initial).unwrap();
         }
-        let properties = serde_json::json!({"name":"Startup Name"})
-            .as_object()
-            .unwrap()
-            .clone();
+        let config = crate::host::startup::StartupConfig {
+            name: "Startup Name".into(),
+            ..crate::platform::startup::config()
+        };
         let token = plain_rs::utils::base64::base64_encode(&[7; 32]);
-        let (state, stop, _stopped) = ContentServer::build_state_with_properties(
+        let (state, stop, _stopped) = ContentServer::build_state_with_config(
             directory.path(),
             &token,
             prefs.clone(),
-            properties,
+            config,
         )
         .unwrap();
         assert_eq!(

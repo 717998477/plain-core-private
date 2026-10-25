@@ -309,7 +309,7 @@ fn public_schema_exposes_the_contract_it_has_to_serve() {
         "audioPlaylists: [AudioPlaylist!]!",
         "audioPlaylistItems(id: ID!, query: String!, offset: Int!, limit: Int!): [AudioItem!]!",
         "audioPlaylistItemCount(id: ID!, query: String!): Int!",
-        "audioPlayHistory(query: String!, offset: Int!, limit: Int!): [AudioPlayHistory!]!",
+        "mediaPlayHistory(query: String!, offset: Int!, limit: Int!): [MediaPlayHistory!]!",
         "playAudio(mediaId: ID!): AudioItem!",
         "updateAudioPlayMode(mode: MediaPlayMode!): Boolean!",
         "clearAudioQueue: Boolean!",

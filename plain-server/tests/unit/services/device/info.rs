@@ -1,6 +1,27 @@
 use super::*;
+use crate::host::startup::StartupConfig;
 use serde_json::json;
 use std::sync::Arc;
+
+fn android_startup_config() -> StartupConfig {
+    StartupConfig {
+        android_sdk_version: Some(35),
+        android_version_code_name: Some("REL".into()),
+        android_security_patch: Some("2024-01-01".into()),
+        android_bootloader: Some("bootloader".into()),
+        android_fingerprint: Some("fingerprint".into()),
+        android_hardware: Some("hardware".into()),
+        android_radio_version: Some("radio".into()),
+        android_board: Some("board".into()),
+        android_build_brand: Some("brand".into()),
+        android_build_number: Some("build".into()),
+        android_device: Some("device".into()),
+        android_java_vm_version: Some("vm".into()),
+        android_gl_es_version: Some("3.2".into()),
+        android_build_time: Some(1700000000123),
+        ..crate::platform::startup::config()
+    }
+}
 
 #[test]
 fn cpu_model_parser_preserves_the_pre_migration_fallback() {
@@ -39,7 +60,6 @@ async fn selected_properties_use_one_exchange_and_refresh_mutable_values() {
             direct(&[], std::path::Path::new("/")).unwrap(),
             values,
             true,
-            false,
         )
         .unwrap();
         assert_eq!(info.language, language);
@@ -95,10 +115,10 @@ async fn direct_only_selection_never_requests_platform_properties() {
 
 #[test]
 fn nested_type_selection_preserves_nullable_object_presence() {
+    let host = Host::with_startup_config(android_startup_config()).unwrap();
     let info = apply_sdk(
-        direct(&[], std::path::Path::new("/")).unwrap(),
+        startup(&host).unwrap(),
         Map::new(),
-        true,
         true,
     )
     .unwrap();
@@ -108,7 +128,6 @@ fn nested_type_selection_preserves_nullable_object_presence() {
         direct(&[], std::path::Path::new("/")).unwrap(),
         Map::new(),
         false,
-        false,
     )
     .unwrap();
     assert!(info.display.is_none());
@@ -117,11 +136,16 @@ fn nested_type_selection_preserves_nullable_object_presence() {
 
 #[test]
 fn raw_build_milliseconds_and_soc_fallback_map_in_rust() {
-    let mut direct_info = direct(&[], std::path::Path::new("/")).unwrap();
-    direct_info.cpu_model = Some("Proc CPU".into());
-    let values = json!({"socModel":"unknown", "android.sdkVersion":35, "android.buildTime":1700000000123i64}).as_object().unwrap().clone();
-    let info = apply_sdk(direct_info, values, false, true).unwrap();
-    assert_eq!(info.cpu_model.as_deref(), Some("Proc CPU"));
+    let expected_cpu = direct(&["cpuModel".into()], std::path::Path::new("/"))
+        .unwrap()
+        .cpu_model;
+    let host = Host::with_startup_config(StartupConfig {
+        soc_model: Some("unknown".into()),
+        ..android_startup_config()
+    })
+    .unwrap();
+    let info = startup(&host).unwrap();
+    assert_eq!(info.cpu_model, expected_cpu);
     let android = info.android.unwrap();
     assert_eq!(android.sdk_version, 35);
     assert_eq!(android.build_time.0.timestamp_millis(), 1700000000123);
@@ -187,23 +211,20 @@ async fn fixed_device_information_is_reused_and_storage_remains_live() {
 
 #[tokio::test]
 async fn fixed_device_information_is_reused_without_platform_requests() {
-    let host = Host::default();
-    let (generation, mut requests) = host.connect();
-    let mut fixed = apply_sdk(
-        direct(&[], std::path::Path::new("/")).unwrap(),
-        json!({
-            "name":"startup-device", "manufacturer":"startup-maker", "model":"startup-model",
-            "osVersion":"startup-os", "appVersion":"startup-version", "appBuildNumber":"42",
-            "cpuArch":"startup-arch", "socModel":"startup-cpu",
-            "android.sdkVersion":35, "android.buildTime":1700000000123i64
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-        false,
-        true,
-    )
+    let host = Host::with_startup_config(StartupConfig {
+        name: "startup-device".into(),
+        manufacturer: "startup-maker".into(),
+        model: "startup-model".into(),
+        os_version: "startup-os".into(),
+        app_version: "startup-version".into(),
+        app_build_number: "42".into(),
+        cpu_arch: "startup-arch".into(),
+        soc_model: Some("startup-cpu".into()),
+        ..android_startup_config()
+    })
     .unwrap();
+    let (generation, mut requests) = host.connect();
+    let mut fixed = startup(&host).unwrap();
     fixed.total_memory = Long(123);
     let fields = FIELDS
         .iter()
@@ -247,12 +268,14 @@ async fn fixed_device_information_is_reused_without_platform_requests() {
 
 #[tokio::test]
 async fn default_device_name_reuses_startup_metadata_without_a_host_request() {
-    let host =
-        Host::with_startup_properties(json!({"name":"startup-name"}).as_object().unwrap().clone())
-            .unwrap();
+    let host = Host::with_startup_config(StartupConfig {
+        name: "startup-name".into(),
+        ..crate::platform::startup::config()
+    })
+    .unwrap();
     let (generation, mut requests) = host.connect();
     for _ in 0..2 {
-        assert_eq!(default_device_name(&host).await.unwrap(), "startup-name");
+        assert_eq!(host.startup().name, "startup-name");
     }
     assert!(requests.try_recv().is_err());
     host.disconnect(generation);
