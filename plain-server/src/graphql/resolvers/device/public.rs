@@ -156,12 +156,6 @@ impl App {
 
 #[ComplexObject]
 impl App {
-    async fn network(&self) -> async_graphql::Result<crate::platform::network::NetworkStatus> {
-        crate::platform::network::snapshot()
-            .await
-            .map_err(async_graphql::Error::new)
-    }
-
     async fn app_dir(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
         Ok(ctx
             .data::<crate::assembly::services::Services>()?

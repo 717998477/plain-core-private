@@ -58,37 +58,27 @@ pub(crate) async fn ipv4() -> Result<String, String> {
     Ok(address.to_string())
 }
 
-#[derive(async_graphql::SimpleObject, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct NetworkStatus {
-    pub ipv4_addresses: Vec<String>,
-    pub primary_ipv4: String,
-}
-
-pub(crate) async fn snapshot() -> Result<NetworkStatus, String> {
+pub(crate) async fn lan_ipv4_addresses() -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(|| {
         #[cfg(not(target_os = "ios"))]
         let interfaces = interfaces();
         #[cfg(target_os = "ios")]
         let interfaces = ios::interfaces()?;
-        Ok(sample(&interfaces))
+        Ok(select_lan_ipv4_addresses(&interfaces))
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
-fn sample(interfaces: &[Interface]) -> NetworkStatus {
-    let addresses = lan_ipv4_addresses(interfaces);
-    NetworkStatus {
-        primary_ipv4: addresses.first().cloned().unwrap_or_default(),
-        ipv4_addresses: addresses,
-    }
-}
-
 pub(crate) async fn lan_ipv4() -> Result<String, String> {
-    Ok(snapshot().await?.primary_ipv4)
+    Ok(lan_ipv4_addresses()
+        .await?
+        .into_iter()
+        .next()
+        .unwrap_or_default())
 }
 
-fn lan_ipv4_addresses(interfaces: &[Interface]) -> Vec<String> {
+fn select_lan_ipv4_addresses(interfaces: &[Interface]) -> Vec<String> {
     let mut addresses = interfaces
         .iter()
         .filter(|interface| {

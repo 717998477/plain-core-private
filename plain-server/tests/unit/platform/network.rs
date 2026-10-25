@@ -1,7 +1,10 @@
 use super::*;
 
 fn select_lan_ipv4(interfaces: &[Interface]) -> String {
-    sample(interfaces).primary_ipv4
+    select_lan_ipv4_addresses(interfaces)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
 }
 
 fn interface(kind: InterfaceType, addresses: &[&str]) -> Interface {
@@ -79,5 +82,8 @@ fn network_sample_deduplicates_addresses_without_including_tunnels() {
         &["203.0.113.1/24", "203.0.113.1/24"],
     );
     let tunnel = interface(InterfaceType::Tunnel, &["198.51.100.1/24"]);
-    assert_eq!(sample(&[wireless, tunnel]).ipv4_addresses, ["203.0.113.1"]);
+    assert_eq!(
+        select_lan_ipv4_addresses(&[wireless, tunnel]),
+        ["203.0.113.1"]
+    );
 }

@@ -26,7 +26,6 @@ type App {
 	httpsPort: Int!
 	deviceName: String!
 	developerMode: Boolean!
-	network: NetworkStatus!
 	appDir: String!
 	deviceType: DeviceType!
 	capabilities: [Capability!]!
@@ -139,11 +138,6 @@ so a caller can confirm what it asked for without a round trip.
 type KeyValuePair {
 	key: String!
 	value: String!
-}
-
-type NetworkStatus {
-	ipv4Addresses: [String!]!
-	primaryIpv4: String!
 }
 
 enum Permission {

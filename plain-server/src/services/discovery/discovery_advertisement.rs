@@ -55,9 +55,9 @@ async fn facts(state: &ServerState) -> Result<Facts> {
     let name = state.host.startup().name.clone();
     let device_type = device_type(state);
     let version = state.host.startup().app_version.clone();
-    let (network, (aware_supported, aware_running)) = tokio::try_join!(
+    let (addresses, (aware_supported, aware_running)) = tokio::try_join!(
         async {
-            crate::platform::network::snapshot()
+            crate::platform::network::lan_ipv4_addresses()
                 .await
                 .map_err(anyhow::Error::msg)
         },
@@ -68,7 +68,7 @@ async fn facts(state: &ServerState) -> Result<Facts> {
         device_type,
         version,
         platform: std::env::consts::OS.to_uppercase(),
-        ips: network.ipv4_addresses,
+        ips: addresses,
         aware_supported,
         aware_running,
     })

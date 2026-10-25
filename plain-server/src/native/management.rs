@@ -44,6 +44,11 @@ impl NativeManagement {
         Self { state }
     }
 
+    pub async fn lan_ipv4_addresses(&self) -> Result<Vec<String>, String> {
+        self.state.native_client_id()?;
+        crate::platform::network::lan_ipv4_addresses().await
+    }
+
     pub fn complete_onboarding(&self) -> Result<bool, String> {
         self.state.native_client_id()?;
         let changed = self.state.store.get().map_err(|e| e.to_string())?
