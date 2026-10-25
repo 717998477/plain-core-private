@@ -21,7 +21,7 @@ fn fixture() -> (tempfile::TempDir, ContentServer) {
 async fn position_facts_keep_exact_milliseconds_without_snapshots_or_public_refreshes() {
     let (_directory, core) = fixture();
     let state = core.runtime_state();
-    let bridge = core.host_events();
+    let bridge = core.host_events().unwrap();
     state.dlna.state.write().await.media_uri = "https://example.test/current".into();
     let version = state.dlna.state.read().await.version;
     let mut public = state.events.subscribe();
@@ -63,7 +63,7 @@ async fn position_facts_keep_exact_milliseconds_without_snapshots_or_public_refr
 async fn stale_players_cannot_change_the_current_media_and_seek_acknowledgements_match_targets() {
     let (_directory, core) = fixture();
     let state = core.runtime_state();
-    let bridge = core.host_events();
+    let bridge = core.host_events().unwrap();
     {
         let mut renderer = state.dlna.state.write().await;
         renderer.media_uri = "https://example.test/current".into();
@@ -150,7 +150,7 @@ async fn stale_players_cannot_change_the_current_media_and_seek_acknowledgements
 async fn reports_waiting_on_state_cannot_commit_after_the_host_is_replaced() {
     let (_directory, core) = fixture();
     let state = core.runtime_state();
-    let original = core.host_events();
+    let original = core.host_events().unwrap();
     let mut locked = state.dlna.state.write().await;
     locked.media_uri = "https://example.test/current".into();
     let mut report = Box::pin(
@@ -167,7 +167,7 @@ async fn reports_waiting_on_state_cannot_commit_after_the_host_is_replaced() {
         std::task::Poll::Ready(())
     })
     .await;
-    let _replacement = core.host_events();
+    let _replacement = core.host_events().unwrap();
     drop(locked);
     report.await.unwrap();
     assert_eq!(state.dlna.state.read().await.current_position_ms, 0);

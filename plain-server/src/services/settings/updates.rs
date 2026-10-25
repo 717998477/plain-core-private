@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow, ensure};
 use plain_rs::{
     events::WsEvent,
     prefs::security::UpdateInfo,
-    updates::{Release, Source},
+    updates::Release,
 };
 use std::{sync::OnceLock, time::Duration};
 
@@ -99,11 +99,7 @@ fn project(
     state: &ServerState,
 ) -> Result<crate::graphql::resolvers::app::capability_types::AppUpdate> {
     let info = info(state)?;
-    let version = state
-        .host
-        .startup_property("appVersion")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow!("Missing startup app version"))?;
+    let version = &state.host.startup().app_version;
     let latest = info.latest_release.as_ref();
     Ok(
         crate::graphql::resolvers::app::capability_types::AppUpdate {
@@ -142,25 +138,13 @@ async fn attempt(state: &ServerState, cache: &mut Cache) -> Result<AppUpdateStat
 
 async fn fetch(state: &ServerState) -> Result<AppUpdateStatus> {
     let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis())?;
-    let source: Source = serde_json::from_value(
-        state
-            .host
-            .startup_property("updateSource")
-            .cloned()
-            .ok_or_else(|| anyhow!("Missing update source"))?,
-    )?;
-    let abis: Vec<String> = serde_json::from_value(
-        state
-            .host
-            .startup_property("supportedAbis")
-            .cloned()
-            .ok_or_else(|| anyhow!("Missing supported ABIs"))?,
-    )?;
-    let version = state
-        .host
-        .startup_property("appVersion")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow!("Missing startup app version"))?;
+    let startup = state.host.startup();
+    let source = startup
+        .update_source
+        .as_ref()
+        .ok_or_else(|| anyhow!("Missing update source"))?;
+    let abis = &startup.supported_abis;
+    let version = &startup.app_version;
     let url = reqwest::Url::parse(&source.url)?;
     ensure!(
         url.scheme() == "https" && url.host_str().is_some(),
@@ -190,9 +174,9 @@ async fn fetch(state: &ServerState) -> Result<AppUpdateStatus> {
         bytes.extend_from_slice(&chunk);
     }
     let release: Release = serde_json::from_slice(&bytes)?;
-    let latest = plain_rs::updates::release_info(&release, &source)?;
+    let latest = plain_rs::updates::release_info(&release, source)?;
     let mut info: UpdateInfo = info(state)?;
-    let available = plain_rs::updates::apply_release(&mut info, version, &state.prefs.get_or(SKIP_VERSION, String::new()), &abis, &source, &release);
+    let available = plain_rs::updates::apply_release(&mut info, version, &state.prefs.get_or(SKIP_VERSION, String::new()), abis, source, &release);
     let mut patch = serde_json::json!({"latestRelease":latest});
     if available {
         patch.as_object_mut().unwrap().extend(serde_json::json!({"newVersion":info.new_version,"log":info.log,"publishDate":info.publish_date,"size":info.size,"downloadUrl":info.download_url}).as_object().unwrap().clone());

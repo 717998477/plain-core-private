@@ -265,7 +265,7 @@ async fn native_transport_snapshots_follow_current_routes_without_graphql_reads(
         .transport
         .begin(&second, &[TransportType::Aware])
         .unwrap();
-    let bridge = core.host_events();
+    let bridge = core.host_events().unwrap();
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
         "HTTP_SERVER_STATE_CHANGED"

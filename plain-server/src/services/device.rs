@@ -1,6 +1,7 @@
 #[cfg(any(target_os = "ios", all(test, target_os = "macos")))]
 mod apple;
 pub(crate) mod info;
+pub(crate) mod permissions;
 mod native_battery;
 
 use crate::graphql::resolvers::device::public::{DeviceStatus, Temperature};

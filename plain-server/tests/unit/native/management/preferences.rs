@@ -174,6 +174,7 @@ async fn keyed_native_reads_observe_committed_writes_and_reject_private_or_unkno
     core.stop_core().await;
     assert!(management.get_pref("http_port").is_err());
     assert!(management.get_prefs(&keys).is_err());
+    assert!(management.get_prefs(&[]).is_err());
 }
 
 #[tokio::test]
@@ -192,5 +193,155 @@ async fn derived_native_keys_are_readable_but_not_writable() {
     }
     assert_eq!(state.prefs.entries_sorted(), before);
     assert_eq!(preference_updates(&mut events), 0);
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn keyed_identity_and_permission_reads_ignore_unrelated_invalid_data() {
+    use plain_rs::prefs::pref_keys as keys;
+    use serde_json::json;
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let management = core.native_management().unwrap();
+    let client_id = management.get_pref(keys::CLIENT_ID).unwrap();
+    let url_token = management.get_pref(keys::URL_TOKEN).unwrap();
+    state
+        .prefs
+        .set(keys::API_PERMISSIONS, vec!["CAMERA"])
+        .unwrap();
+    state
+        .prefs
+        .set(keys::EDITOR_FONT_SIZE, "invalid font size")
+        .unwrap();
+    state
+        .prefs
+        .set(keys::PASSWORD_TYPE, "invalid password type")
+        .unwrap();
+    state
+        .prefs
+        .set(keys::SIGNATURE_KEY_PAIR, "invalid signing identity")
+        .unwrap();
+    state
+        .store
+        .get()
+        .unwrap()
+        .set_json(keys::UPDATE_INFO, json!("invalid update info"))
+        .unwrap();
+    state
+        .store
+        .get()
+        .unwrap()
+        .set_json(keys::ONBOARDING_COMPLETED, json!("invalid flag"))
+        .unwrap();
+    assert!(management.preferences().is_err());
+    assert_eq!(management.get_pref(keys::CLIENT_ID).unwrap(), client_id);
+    assert_eq!(management.get_pref(keys::URL_TOKEN).unwrap(), url_token);
+    assert_eq!(
+        management.get_pref(keys::API_PERMISSIONS).unwrap(),
+        json!(["CAMERA"])
+    );
+    let selected = management
+        .get_prefs(&[
+            keys::CLIENT_ID.into(),
+            keys::URL_TOKEN.into(),
+            keys::API_PERMISSIONS.into(),
+        ])
+        .unwrap();
+    assert_eq!(selected.len(), 3);
+    assert_eq!(selected[keys::CLIENT_ID], client_id);
+    assert_eq!(selected[keys::URL_TOKEN], url_token);
+    assert_eq!(selected[keys::API_PERMISSIONS], json!(["CAMERA"]));
+    for key in [
+        keys::EDITOR_FONT_SIZE,
+        keys::PASSWORD_TYPE,
+        keys::SIGNATURE_PUBLIC_KEY,
+        keys::UPDATE_INFO,
+        keys::ONBOARDING_COMPLETED,
+        "unknown",
+        keys::MASTER_SECRET,
+        keys::SIGNATURE_KEY_PAIR,
+    ] {
+        assert!(management.get_pref(key).is_err(), "{key}");
+        assert!(management.get_prefs(&[key.into()]).is_err(), "{key}");
+    }
+    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn derived_native_reads_use_only_their_current_dependencies() {
+    use plain_rs::prefs::pref_keys as keys;
+    use serde_json::json;
+    let directory = tempfile::tempdir().unwrap();
+    let core = ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let management = core.native_management().unwrap();
+    let public_key = management.get_pref(keys::SIGNATURE_PUBLIC_KEY).unwrap();
+    state
+        .prefs
+        .set(keys::EDITOR_FONT_SIZE, "invalid font size")
+        .unwrap();
+    state
+        .prefs
+        .set(keys::PASSWORD_TYPE, "invalid password type")
+        .unwrap();
+    assert_eq!(
+        management.get_pref(keys::SIGNATURE_PUBLIC_KEY).unwrap(),
+        public_key
+    );
+    assert_eq!(
+        management.get_pref(keys::ONBOARDING_COMPLETED).unwrap(),
+        json!(false)
+    );
+    state
+        .store
+        .get()
+        .unwrap()
+        .set_json(keys::ONBOARDING_COMPLETED, true)
+        .unwrap();
+    assert_eq!(
+        management.get_pref(keys::ONBOARDING_COMPLETED).unwrap(),
+        json!(true)
+    );
+    state
+        .store
+        .get()
+        .unwrap()
+        .set_json(keys::UPDATE_INFO, json!({"newVersion":"999.0.0"}))
+        .unwrap();
+    assert_eq!(
+        management.get_pref(keys::UPDATE_INFO).unwrap()["newVersion"],
+        "999.0.0"
+    );
+    assert_eq!(
+        management.get_pref(keys::APP_UPDATE_AVAILABLE).unwrap(),
+        json!(true)
+    );
+    state.prefs.set(keys::SKIP_VERSION, "999.0.0").unwrap();
+    assert_eq!(
+        management.get_pref(keys::APP_UPDATE_AVAILABLE).unwrap(),
+        json!(false)
+    );
+    state.prefs.set(keys::SKIP_VERSION, 123).unwrap();
+    assert!(management.get_pref(keys::APP_UPDATE_AVAILABLE).is_err());
+    assert_eq!(
+        management.get_pref(keys::UPDATE_INFO).unwrap()["newVersion"],
+        "999.0.0"
+    );
+    state
+        .store
+        .get()
+        .unwrap()
+        .set_json(keys::UPDATE_INFO, json!("invalid update info"))
+        .unwrap();
+    assert!(management.get_pref(keys::UPDATE_INFO).is_err());
+    assert_eq!(
+        management.get_pref(keys::SIGNATURE_PUBLIC_KEY).unwrap(),
+        public_key
+    );
+    assert_eq!(
+        management.get_pref(keys::ONBOARDING_COMPLETED).unwrap(),
+        json!(true)
+    );
     core.stop_core().await;
 }

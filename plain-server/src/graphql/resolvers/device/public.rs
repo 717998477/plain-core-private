@@ -141,39 +141,12 @@ pub struct App {
     permissions_sample: Arc<tokio::sync::OnceCell<Result<Vec<String>, String>>>,
 }
 
-fn startup_text(ctx: &Context<'_>, name: &str) -> async_graphql::Result<String> {
-    ctx.data::<Arc<Host>>()?
-        .startup_property(name)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            async_graphql::Error::new(format!("Missing startup system property: {name}"))
-        })
-}
-
 impl App {
     async fn granted_permissions(&self, ctx: &Context<'_>) -> async_graphql::Result<&Vec<String>> {
         self.permissions_sample
             .get_or_init(|| async {
-                let names: Vec<&str> = <Permission as async_graphql::EnumType>::items()
-                    .iter()
-                    .map(|item| item.name)
-                    .collect();
-                let sample = host_call(ctx, "systemPermissionFacts", json!({"permissions":names}))
-                    .await
-                    .map_err(|error| error.message)?;
-                let grants = sample["granted"]
-                    .as_object()
-                    .ok_or("Invalid permission sample")?;
-                let mut granted = Vec::new();
-                for name in names {
-                    match grants.get(name).and_then(Value::as_bool) {
-                        Some(true) => granted.push(name.to_owned()),
-                        Some(false) => {}
-                        None => return Err(format!("Missing permission sample: {name}")),
-                    }
-                }
-                Ok(granted)
+                let host = ctx.data::<Arc<Host>>().map_err(|error| error.message)?;
+                crate::services::device::permissions::granted(host).await
             })
             .await
             .as_ref()
@@ -198,7 +171,7 @@ impl App {
             .into_owned())
     }
     async fn device_type(&self, ctx: &Context<'_>) -> async_graphql::Result<DeviceType> {
-        Ok(device_type(&startup_text(ctx, "deviceType")?))
+        Ok(device_type(ctx.data::<Arc<Host>>()?.startup().device_type.as_str()))
     }
     async fn capabilities(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Capability>> {
         let mut names = self
@@ -227,37 +200,29 @@ impl App {
             .collect())
     }
     async fn build_channel(&self, ctx: &Context<'_>) -> async_graphql::Result<AppChannelType> {
-        Ok(app_channel(&startup_text(ctx, "buildChannel")?))
+        Ok(app_channel(&ctx.data::<Arc<Host>>()?.startup().build_channel))
     }
     async fn permissions(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Permission>> {
         let grants = self.granted_permissions(ctx).await?;
-        let configured: Vec<String> = ctx
-            .data::<Arc<plain_rs::prefs::Prefs>>()?
-            .get_or(plain_rs::prefs::pref_keys::API_PERMISSIONS, Vec::new());
-        let local = crate::http::auth::public_gate::is_local(ctx);
-        let mut permissions: Vec<_> = grants
+        let names = if crate::http::auth::public_gate::is_local(ctx) {
+            grants.clone()
+        } else {
+            crate::services::device::permissions::enabled(
+                ctx.data::<Arc<plain_rs::prefs::Prefs>>()?,
+                grants,
+            )
+            .map_err(async_graphql::Error::new)?
+        };
+        Ok(names
             .iter()
-            .filter(|name| local || configured.contains(name))
             .filter_map(|name| Permission::parse(name))
-            .collect();
-        for (name, permission) in [
-            ("RECORD_AUDIO", Permission::RecordAudio),
-            ("ADB", Permission::Adb),
-        ] {
-            if grants.iter().any(|grant| grant == name) && !permissions.contains(&permission) {
-                permissions.push(permission);
-            }
-        }
-        Ok(permissions)
+            .collect())
     }
     async fn downloads_dir(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
-        startup_text(ctx, "downloadsDir")
+        Ok(ctx.data::<Arc<Host>>()?.startup().downloads_dir.clone())
     }
     async fn debug(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
-        ctx.data::<Arc<Host>>()?
-            .startup_property("debug")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| async_graphql::Error::new("Missing startup system property: debug"))
+        Ok(ctx.data::<Arc<Host>>()?.startup().debug)
     }
 }
 

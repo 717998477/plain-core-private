@@ -40,30 +40,13 @@ pub(crate) const ANDROID_FIELDS: &[&str] = &[
 ];
 
 pub(crate) fn sdk_properties(fields: &[String]) -> Vec<String> {
+    if !cfg!(any(target_os = "android", target_os = "ios")) {
+        return Vec::new();
+    }
     fields
         .iter()
-        .filter_map(|field| {
-            #[cfg(target_os = "android")]
-            match field.as_str() {
-                "name" | "manufacturer" | "model" | "osVersion" | "appVersion"
-                | "appBuildNumber" | "language" | "cpuArch" => return Some(field.clone()),
-                "cpuModel" => return Some("socModel".into()),
-                name if name.starts_with("display.") || name.starts_with("android.") => {
-                    return Some(field.clone());
-                }
-                _ => {}
-            }
-            #[cfg(target_os = "ios")]
-            match field.as_str() {
-                "name" | "osName" | "osVersion" | "appVersion" | "appBuildNumber" | "language" => {
-                    return Some(field.clone());
-                }
-                name if name.starts_with("display.") => return Some(field.clone()),
-                _ => {}
-            }
-            let _ = field;
-            None
-        })
+        .filter(|field| field.as_str() == "language" || field.starts_with("display."))
+        .cloned()
         .collect()
 }
 
@@ -73,29 +56,85 @@ pub(crate) fn startup(host: &Host) -> Result<DeviceInfo, String> {
         .filter(|field| !matches!(**field, "totalStorage" | "language"))
         .map(|field| (*field).to_owned())
         .collect();
-    let mut names = sdk_properties(&fields);
-    if cfg!(target_os = "android") {
-        names.extend(
-            ANDROID_FIELDS
-                .iter()
-                .map(|field| format!("android.{field}")),
-        );
+    let mut info = direct(&fields, std::path::Path::new(""))?;
+    let config = host.startup();
+    info.name = config.name.clone();
+    info.manufacturer = config.manufacturer.clone();
+    info.model = config.model.clone();
+    info.os_name = config.os_name.clone();
+    info.os_version = config.os_version.clone();
+    info.app_version = config.app_version.clone();
+    info.app_build_number = config.app_build_number.clone();
+    info.cpu_arch = config.cpu_arch.clone();
+    if let Some(model) = config
+        .soc_model
+        .as_ref()
+        .filter(|model| !model.trim().is_empty() && model.as_str() != "unknown")
+    {
+        info.cpu_model = Some(model.clone());
     }
-    let properties = names
-        .into_iter()
-        .map(|name| {
-            host.startup_property(&name)
-                .cloned()
-                .map(|value| (name.clone(), value))
-                .ok_or_else(|| format!("Missing startup system property: {name}"))
-        })
-        .collect::<Result<Map<String, Value>, String>>()?;
-    apply_sdk(
-        direct(&fields, std::path::Path::new(""))?,
-        properties,
-        false,
-        false,
-    )
+    if let Some(sdk_version) = config.android_sdk_version {
+        info.android = Some(AndroidExtras {
+            sdk_version,
+            version_code_name: config
+                .android_version_code_name
+                .clone()
+                .ok_or("Missing Android version code name")?,
+            security_patch: config
+                .android_security_patch
+                .clone()
+                .ok_or("Missing Android security patch")?,
+            bootloader: config
+                .android_bootloader
+                .clone()
+                .ok_or("Missing Android bootloader")?,
+            fingerprint: config
+                .android_fingerprint
+                .clone()
+                .ok_or("Missing Android fingerprint")?,
+            hardware: config
+                .android_hardware
+                .clone()
+                .ok_or("Missing Android hardware")?,
+            radio_version: config
+                .android_radio_version
+                .clone()
+                .ok_or("Missing Android radio version")?,
+            board: config
+                .android_board
+                .clone()
+                .ok_or("Missing Android board")?,
+            build_brand: config
+                .android_build_brand
+                .clone()
+                .ok_or("Missing Android build brand")?,
+            build_number: config
+                .android_build_number
+                .clone()
+                .ok_or("Missing Android build number")?,
+            device: config
+                .android_device
+                .clone()
+                .ok_or("Missing Android device")?,
+            java_vm_version: config
+                .android_java_vm_version
+                .clone()
+                .ok_or("Missing Android Java VM version")?,
+            gl_es_version: config
+                .android_gl_es_version
+                .clone()
+                .ok_or("Missing Android GL ES version")?,
+            build_time: Instant(
+                chrono::DateTime::from_timestamp_millis(
+                    config
+                        .android_build_time
+                        .ok_or("Missing Android build time")?,
+                )
+                .ok_or("Invalid Android build timestamp")?,
+            ),
+        });
+    }
+    Ok(info)
 }
 
 pub(crate) async fn collect(
@@ -104,10 +143,7 @@ pub(crate) async fn collect(
     fields: Vec<String>,
     mut fixed: DeviceInfo,
 ) -> Result<DeviceInfo, String> {
-    let names = sdk_properties(&fields)
-        .into_iter()
-        .filter(|name| name == "language" || name.starts_with("display."))
-        .collect();
+    let names = sdk_properties(&fields);
     let display = cfg!(any(target_os = "android", target_os = "ios"))
         && fields.iter().any(|name| name == "display");
     let sdk = read_properties(host, names);
@@ -124,15 +160,7 @@ pub(crate) async fn collect(
         }
     };
     let (sdk, direct) = tokio::join!(sdk, direct);
-    apply_sdk(direct?, sdk?, display, false)
-}
-
-pub(crate) async fn default_device_name(host: &Host) -> Result<String, String> {
-    host.startup_property("name")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or("Missing startup device name".into())
+    apply_sdk(direct?, sdk?, display)
 }
 
 async fn read_properties(host: &Host, names: Vec<String>) -> Result<Map<String, Value>, String> {
@@ -148,10 +176,7 @@ async fn read_properties(host: &Host, names: Vec<String>) -> Result<Map<String, 
             .get(name)
             .ok_or_else(|| format!("missing system property: {name}"))?;
         let valid = match name.as_str() {
-            "socModel" => value.is_null() || value.is_string(),
-            "display.width" | "display.height" | "android.sdkVersion" | "android.buildTime" => {
-                value.as_i64().is_some()
-            }
+            "display.width" | "display.height" => value.as_i64().is_some(),
             "display.density" => value
                 .as_f64()
                 .is_some_and(|value| value.is_finite() && value > 0.0),
@@ -168,35 +193,9 @@ fn apply_sdk(
     mut info: DeviceInfo,
     sdk: Map<String, Value>,
     display: bool,
-    android: bool,
 ) -> Result<DeviceInfo, String> {
-    let string = |key: &str| {
-        sdk.get(key)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned()
-    };
-    for (key, target) in [
-        ("name", &mut info.name),
-        ("manufacturer", &mut info.manufacturer),
-        ("model", &mut info.model),
-        ("osName", &mut info.os_name),
-        ("osVersion", &mut info.os_version),
-        ("appVersion", &mut info.app_version),
-        ("appBuildNumber", &mut info.app_build_number),
-        ("language", &mut info.language),
-        ("cpuArch", &mut info.cpu_arch),
-    ] {
-        if sdk.contains_key(key) {
-            *target = string(key);
-        }
-    }
-    if let Some(model) = sdk
-        .get("socModel")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty() && *value != "unknown")
-    {
-        info.cpu_model = Some(model.to_owned());
+    if let Some(language) = sdk.get("language").and_then(Value::as_str) {
+        info.language = language.to_owned();
     }
     if display || sdk.keys().any(|key| key.starts_with("display.")) {
         info.display = Some(DisplayInfo {
@@ -212,34 +211,6 @@ fn apply_sdk(
                 .get("display.density")
                 .and_then(Value::as_f64)
                 .unwrap_or_default(),
-        });
-    }
-    if android || sdk.keys().any(|key| key.starts_with("android.")) {
-        info.android = Some(AndroidExtras {
-            sdk_version: sdk
-                .get("android.sdkVersion")
-                .and_then(Value::as_i64)
-                .unwrap_or_default() as i32,
-            version_code_name: string("android.versionCodeName"),
-            security_patch: string("android.securityPatch"),
-            bootloader: string("android.bootloader"),
-            fingerprint: string("android.fingerprint"),
-            hardware: string("android.hardware"),
-            radio_version: string("android.radioVersion"),
-            board: string("android.board"),
-            build_brand: string("android.buildBrand"),
-            build_number: string("android.buildNumber"),
-            device: string("android.device"),
-            java_vm_version: string("android.javaVmVersion"),
-            gl_es_version: string("android.glEsVersion"),
-            build_time: Instant(
-                chrono::DateTime::from_timestamp_millis(
-                    sdk.get("android.buildTime")
-                        .and_then(Value::as_i64)
-                        .unwrap_or_default(),
-                )
-                .ok_or("invalid Android build timestamp")?,
-            ),
         });
     }
     Ok(info)
@@ -290,66 +261,6 @@ fn direct(fields: &[String], directory: &std::path::Path) -> Result<DeviceInfo, 
     if selected("totalStorage") {
         info.total_storage = Long(super::storage_bytes(directory, true)?);
     }
-    #[cfg(target_os = "android")]
-    {
-        info.os_name = "Android".into();
-    }
-    #[cfg(target_os = "ios")]
-    {
-        info.manufacturer = "Apple".into();
-        if selected("model") || selected("cpuArch") {
-            let machine = machine()?;
-            info.model = machine.clone();
-            info.cpu_arch = machine;
-        }
-    }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        if selected("name") {
-            info.name = sysinfo::System::host_name().unwrap_or_default();
-        }
-        if selected("cpuArch") {
-            info.cpu_arch = std::env::consts::ARCH.into();
-        }
-        if selected("osName") {
-            #[cfg(target_os = "linux")]
-            {
-                info.os_name = plain_rs::platform::linux::device_info::os_release();
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                info.os_name = sysinfo::System::name().unwrap_or_default();
-            }
-        }
-        if selected("osVersion") {
-            #[cfg(target_os = "linux")]
-            {
-                info.os_version = plain_rs::platform::linux::device_info::os_release();
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                info.os_version = sysinfo::System::os_version().unwrap_or_default();
-            }
-        }
-        if selected("appVersion") {
-            info.app_version = crate::platform::version::version().into();
-        }
-        if selected("appBuildNumber") {
-            info.app_build_number = crate::platform::version::full_version();
-        }
-        #[cfg(target_os = "linux")]
-        {
-            if selected("manufacturer") {
-                info.manufacturer = plain_rs::platform::linux::device_info::dmi_manufacturer();
-            }
-            if selected("model") {
-                info.model = plain_rs::platform::linux::device_info::dmi_model();
-                if info.model.is_empty() {
-                    info.model = std::env::var("PLAINAPP_MODEL").unwrap_or_default();
-                }
-            }
-        }
-    }
     #[cfg(not(target_os = "ios"))]
     if selected("cpuModel") {
         #[cfg(target_os = "android")]
@@ -388,18 +299,6 @@ fn cpu_model(text: &str) -> Option<String> {
         .find(|(key, _)| key.trim() == "model name")
         .map(|(_, value)| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-}
-
-#[cfg(target_os = "ios")]
-fn machine() -> Result<String, String> {
-    let mut name = std::mem::MaybeUninit::<libc::utsname>::uninit();
-    if unsafe { libc::uname(name.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    let name = unsafe { name.assume_init() };
-    Ok(unsafe { std::ffi::CStr::from_ptr(name.machine.as_ptr()) }
-        .to_string_lossy()
-        .into_owned())
 }
 
 #[cfg(test)]

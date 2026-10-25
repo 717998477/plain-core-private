@@ -5,6 +5,9 @@ pub mod query;
 pub mod bridge;
 
 #[cfg(feature = "core")]
+pub mod startup;
+
+#[cfg(feature = "core")]
 pub mod resources;
 
 #[cfg(feature = "core")]

@@ -90,7 +90,7 @@ async fn complete_stream_is_published_with_identity_and_restored_without_client_
         ContentServer::open_with_cache(&_dir.path().join("data"), &_dir.path().join("cache"))
             .unwrap();
     let state = core.runtime_state();
-    let bridge = Arc::new(core.host_events());
+    let bridge = Arc::new(core.host_events().unwrap());
     let (reported, mut reports) = tokio::sync::mpsc::unbounded_channel();
     let serving = tokio::spawn(bridge.serve(
         |method, _| async move {

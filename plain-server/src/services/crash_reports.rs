@@ -18,11 +18,7 @@ pub(crate) async fn write(state: &ServerState, report: String) -> Result<String,
         state.device.fixed_info()?,
     )
     .await?;
-    let channel = state
-        .host
-        .startup_property("buildChannel")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("Missing startup system property: buildChannel")?;
+    let channel = &state.host.startup().build_channel;
     let mut body = String::new();
     let version = if info.app_build_number.is_empty() {
         info.app_version.clone()

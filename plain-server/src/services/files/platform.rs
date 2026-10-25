@@ -130,17 +130,9 @@ impl FilePlatform {
         Ok(self.cache.clone())
     }
 
-    pub(crate) async fn recent_files(
-        &self,
-        prefs: &plain_rs::prefs::Prefs,
-    ) -> Result<Vec<serde_json::Value>> {
+    pub(crate) async fn recent_files(&self) -> Result<Vec<serde_json::Value>> {
         if self.uses_sdk() {
-            let catalog = self
-                .host
-                .startup_property("files.recentCatalog")
-                .and_then(serde_json::Value::as_bool)
-                .ok_or_else(|| anyhow!("invalid recent catalog support"))?;
-            if catalog {
+            if self.host.startup().recent_files_catalog {
                 let mut plan = crate::host::query::Plan::default();
                 plan.add(
                     "mime_type != ?".into(),
@@ -159,23 +151,26 @@ impl FilePlatform {
                 )
                 .map_err(Into::into);
             }
-            match self.host.startup_property("files.recentRoot") {
-                Some(serde_json::Value::Null) => {}
-                Some(serde_json::Value::String(root)) if Path::new(root).is_absolute() => {
-                    let root = PathBuf::from(root);
-                    let entries = tokio::task::spawn_blocking(move || {
-                        plain_rs::files::filesystem::recent::list(&root, 100)
-                    })
-                    .await?;
-                    return Ok(entries.into_iter().map(|entry| json!({
-                        "name":Path::new(&entry.path).file_name().and_then(|name| name.to_str()).unwrap_or_default(),
-                        "path":entry.path,"permission":"","mediaId":null,"createdAt":null,
-                        "updatedAt":entry.updated_at.timestamp_millis(),"size":entry.size,
-                        "isDir":false,"childCount":0
-                    })).collect());
-                }
-                _ => bail!("invalid recent filesystem root"),
+            let volumes = self.host
+                .call(crate::host::platform::SYSTEM_MOUNT_FACTS, json!({}))
+                .await.map_err(anyhow::Error::msg)?;
+            let root = volumes.as_array().ok_or_else(|| anyhow!("Invalid storage volumes"))?
+                .iter().find(|volume| volume["driveType"] == "INTERNAL_STORAGE")
+                .and_then(|volume| volume["path"].as_str())
+                .ok_or_else(|| anyhow!("Primary storage directory unavailable"))?;
+            if !Path::new(root).is_absolute() {
+                bail!("Absolute primary storage directory required");
             }
+            let root = PathBuf::from(root);
+            let entries = tokio::task::spawn_blocking(move || {
+                plain_rs::files::filesystem::recent::list(&root, 100)
+            }).await?;
+            return Ok(entries.into_iter().map(|entry| json!({
+                "name":Path::new(&entry.path).file_name().and_then(|name| name.to_str()).unwrap_or_default(),
+                "path":entry.path,"permission":"","mediaId":null,"createdAt":null,
+                "updatedAt":entry.updated_at.timestamp_millis(),"size":entry.size,
+                "isDir":false,"childCount":0
+            })).collect());
         }
         let mut items = Vec::new();
         for path in plain_rs::recent_files::list(self.db.key_values().ok_or_else(|| anyhow!("KV store unavailable"))?.as_ref(), 500)? {

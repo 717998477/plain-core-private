@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, mpsc};
 pub struct HostEvents {
     state: ServerState,
     generation: u64,
-    preferences: Mutex<Option<serde_json::Map<String, Value>>>,
+    preferences: Mutex<serde_json::Map<String, Value>>,
     requests: Mutex<mpsc::Receiver<Value>>,
     events: Mutex<crate::native::events::NativeEventStream>,
 }
@@ -21,7 +21,9 @@ impl Drop for ServingSession<'_> {
 }
 
 impl HostEvents {
-    pub(crate) fn new(state: ServerState) -> Self {
+    pub(crate) fn new(state: ServerState) -> Result<Self, String> {
+        let preferences =
+            crate::native::management::NativeManagement::new(state.clone()).preferences()?;
         let events = crate::native::events::NativeEventStream::new(state.clone(), None);
         let (generation, requests) = state.host.connect();
         state.ble_scans.set_owner(generation);
@@ -39,63 +41,34 @@ impl HostEvents {
                 ),
             );
         });
-        Self {
-            preferences: Mutex::new(None),
+        Ok(Self {
+            preferences: Mutex::new(preferences),
             state,
             generation,
             requests: Mutex::new(requests),
             events: Mutex::new(events),
-        }
-    }
-    pub async fn preferences(&self) -> Result<serde_json::Map<String, Value>, String> {
-        let mut previous = self.preferences.lock().await;
-        let current = crate::native::management::NativeManagement::new(self.state.clone())
-            .preferences()?;
-        *previous = Some(current.clone());
-        Ok(current)
+        })
     }
 
-    pub async fn prefs_changed(&self) {
+    pub async fn prefs_changed(&self) -> Result<(), String> {
         let mut previous = self.preferences.lock().await;
-        let Some(baseline) = previous.as_ref() else {
-            return;
-        };
-        let current = match crate::native::management::NativeManagement::new(self.state.clone())
-            .preferences()
-        {
-            Ok(values) => values,
-            Err(error) => {
-                log::error!("Host preferences read failed: {error}");
-                return;
-            }
-        };
+        let current =
+            crate::native::management::NativeManagement::new(self.state.clone()).preferences()?;
         let changes: serde_json::Map<_, _> = current
             .iter()
-            .filter(|(key, value)| baseline.get(*key) != Some(*value))
+            .filter(|(key, value)| previous.get(*key) != Some(*value))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
+        *previous = current;
         if changes.is_empty() {
-            return;
+            return Ok(());
         }
-        loop {
-            let result = tokio::select! {
-                biased;
-                _ = self.wait_disconnected() => return,
-                result = self.state.host.call_current(
-                    self.generation, "prefsChanged", json!({"values": changes}),
-                ) => result,
-            };
-            match result {
-                Ok(_) => {
-                    *previous = Some(current);
-                    return;
-                }
-                Err(error) => log::warn!("Host preferences update failed; retrying: {error}"),
-            }
-            tokio::select! {
-                _ = self.wait_disconnected() => return,
-                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
-            }
+        tokio::select! {
+            biased;
+            _ = self.wait_disconnected() => Ok(()),
+            result = self.state.host.call_current(
+                self.generation, "prefsChanged", json!({"values": changes}),
+            ) => result.map(|_| ()),
         }
     }
 
@@ -376,7 +349,7 @@ pub(crate) struct TestHost(HostEvents);
 #[cfg(test)]
 impl TestHost {
     pub(crate) fn new(server: &crate::assembly::server::ContentServer) -> Self {
-        Self(server.host_events())
+        Self(server.host_events().unwrap())
     }
     pub(crate) async fn next(
         &mut self,

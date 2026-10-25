@@ -8,7 +8,7 @@ async fn platform_callbacks_before_write_reply_do_not_republish_received_text() 
     let directory = tempfile::tempdir().unwrap();
     let (server, _, _) = start(&directory);
     let state = server.runtime_state();
-    let bridge = Arc::new(server.host_events());
+    let bridge = Arc::new(server.host_events().unwrap());
     let callbacks = bridge.clone();
     let serving = tokio::spawn(bridge.clone().serve(
         move |method, params| {
@@ -96,7 +96,7 @@ fn start(dir: &tempfile::TempDir) -> (ContentServer, String, Arc<plain_rs::prefs
 async fn native_report_http_search_delete_and_restart_share_one_clipboard() {
     let dir = tempfile::tempdir().unwrap();
     let (server, token, prefs) = start(&dir);
-    let bridge = server.host_events();
+    let bridge = server.host_events().unwrap();
     let mut events = server.runtime_state().events.subscribe();
     let payload = json!({"text": "100%_ 🌍", "sensitive": true}).to_string();
     bridge

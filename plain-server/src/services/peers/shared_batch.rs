@@ -21,11 +21,8 @@ pub(crate) fn downloads_directory(
     target: &str,
 ) -> Result<String> {
     let directory = if target.is_empty() {
-        let root = host
-            .startup_property("downloadsDir")
-            .and_then(Value::as_str)
-            .filter(|root| !root.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Downloads directory unavailable"))?;
+        let root = &host.startup().downloads_dir;
+        ensure!(!root.is_empty(), "Downloads directory unavailable");
         std::path::Path::new(root).join("PlainApp")
     } else {
         std::path::PathBuf::from(target)

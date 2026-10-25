@@ -22,17 +22,11 @@ pub struct Host {
     ready: Notify,
     capacity: Semaphore,
     connection: watch::Sender<u64>,
-    properties: serde_json::Map<String, Value>,
+    startup: super::startup::StartupConfig,
 }
 impl Default for Host {
     fn default() -> Self {
-        Self {
-            state: Arc::new(Mutex::new(State::default())),
-            ready: Notify::new(),
-            capacity: Semaphore::new(REQUEST_CAPACITY),
-            connection: watch::channel(0).0,
-            properties: crate::platform::startup::properties(),
-        }
+        Self::new(crate::platform::startup::config())
     }
 }
 struct Pending {
@@ -44,45 +38,6 @@ impl Drop for Pending {
         self.state.lock().unwrap().pending.remove(&self.id);
     }
 }
-fn is_startup_property(key: &str) -> bool {
-    matches!(
-        key,
-        "cacheDir"
-            | "name"
-            | "deviceType"
-            | "buildChannel"
-            | "downloadsDir"
-            | "debug"
-            | "manufacturer"
-            | "model"
-            | "osName"
-            | "osVersion"
-            | "updateSource"
-            | "supportedAbis"
-            | "appVersion"
-            | "appBuildNumber"
-            | "cpuArch"
-            | "socModel"
-            | "wifiAwareSupported"
-            | "files.recentCatalog"
-            | "files.recentRoot"
-            | "media.systemCatalog"
-            | "android.sdkVersion"
-            | "android.versionCodeName"
-            | "android.securityPatch"
-            | "android.bootloader"
-            | "android.fingerprint"
-            | "android.hardware"
-            | "android.radioVersion"
-            | "android.board"
-            | "android.buildBrand"
-            | "android.buildNumber"
-            | "android.device"
-            | "android.javaVmVersion"
-            | "android.glEsVersion"
-            | "android.buildTime"
-    )
-}
 fn is_dynamic_property(key: &str) -> bool {
     matches!(
         key,
@@ -90,61 +45,30 @@ fn is_dynamic_property(key: &str) -> bool {
     )
 }
 impl Host {
-    pub fn with_startup_properties(
-        properties: serde_json::Map<String, Value>,
-    ) -> Result<Self, String> {
-        for (key, value) in &properties {
-            if !is_startup_property(key) {
-                return Err(format!("System property is not fixed at startup: {key}"));
-            }
-            let valid = match key.as_str() {
-                "cacheDir" => value
-                    .as_str()
-                    .is_some_and(|path| std::path::Path::new(path).is_absolute()),
-                "debug" | "wifiAwareSupported" | "files.recentCatalog" | "media.systemCatalog" => {
-                    value.is_boolean()
-                }
-                "socModel" | "files.recentRoot" => value.is_null() || value.is_string(),
-                "supportedAbis" => value.as_array().is_some_and(|abis| {
-                    abis.iter()
-                        .all(|abi| abi.as_str().is_some_and(|abi| !abi.is_empty()))
-                }),
-                "updateSource" => {
-                    value.is_null()
-                        || serde_json::from_value::<plain_rs::updates::Source>(value.clone())
-                            .is_ok()
-                }
-                "android.sdkVersion" => value
-                    .as_i64()
-                    .is_some_and(|number| number > 0 && number <= i32::MAX as i64),
-                "android.buildTime" => value.as_i64().is_some(),
-                "deviceType" => value.as_str().is_some_and(|name| {
-                    matches!(
-                        name,
-                        "COMPUTER" | "PHONE" | "TABLET" | "TV" | "NAS" | "OTHER"
-                    )
-                }),
-                "buildChannel" => value
-                    .as_str()
-                    .is_some_and(|name| matches!(name, "GITHUB" | "GOOGLE" | "FDROID")),
-                _ => value.is_string(),
-            };
-            if !valid {
-                return Err(format!("Invalid startup system property: {key}"));
-            }
+    fn new(startup: super::startup::StartupConfig) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(State::default())),
+            ready: Notify::new(),
+            capacity: Semaphore::new(REQUEST_CAPACITY),
+            connection: watch::channel(0).0,
+            startup,
         }
-        let mut host = Self::default();
-        host.properties.extend(properties);
-        Ok(host)
     }
-    pub(crate) fn startup_property(&self, name: &str) -> Option<&Value> {
-        self.properties.get(name)
+    pub fn with_startup_config(startup: super::startup::StartupConfig) -> Result<Self, String> {
+        #[cfg(target_os = "ios")]
+        let startup = {
+            let mut config = startup;
+            crate::platform::startup::read_device_info(&mut config)?;
+            config
+        };
+        startup.validate()?;
+        Ok(Self::new(startup))
     }
-
+    pub fn startup(&self) -> &super::startup::StartupConfig {
+        &self.startup
+    }
     pub(crate) fn uses_system_media_catalog(&self) -> bool {
-        self.startup_property("media.systemCatalog")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
+        self.startup.system_media_catalog
     }
     pub(crate) fn needs_socket_cleanup(&self) -> bool {
         self.state.lock().unwrap().peer_sockets
@@ -236,16 +160,11 @@ impl Host {
             let mut dynamic = Vec::new();
             for name in names {
                 let name = name.as_str().ok_or("Invalid system property name")?;
-                if let Some(value) = self.properties.get(name) {
-                    values.insert(name.to_owned(), value.clone());
-                } else if is_startup_property(name) {
-                    return Err(format!("Missing startup system property: {name}"));
-                } else if is_dynamic_property(name) {
-                    if !dynamic.iter().any(|existing| existing == name) {
-                        dynamic.push(name.to_owned());
-                    }
-                } else {
-                    return Err(format!("Unsupported system property: {name}"));
+                if !is_dynamic_property(name) {
+                    return Err(format!("Unsupported dynamic system property: {name}"));
+                }
+                if !dynamic.iter().any(|existing| existing == name) {
+                    dynamic.push(name.to_owned());
                 }
             }
             if !dynamic.is_empty() {

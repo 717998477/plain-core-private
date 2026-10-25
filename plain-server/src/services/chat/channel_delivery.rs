@@ -98,8 +98,7 @@ async fn deliver(
     ) {
         Device {
             name: plain_rs::prefs::settings::snapshot(&state.prefs)?.device_name,
-            device_type: crate::services::discovery::discovery_advertisement::device_type(state)
-                .await?,
+            device_type: crate::services::discovery::discovery_advertisement::device_type(state),
         }
     } else {
         Device {

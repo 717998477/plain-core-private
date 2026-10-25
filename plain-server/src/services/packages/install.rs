@@ -187,11 +187,7 @@ pub(crate) async fn execute(services: &Services, host: Arc<Host>, path: &str) ->
             .await
             .map_err(anyhow::Error::msg)?;
         let mut profile: splits::Profile = serde_json::from_value(facts)?;
-        profile.abi_order = serde_json::from_value(
-            host.startup_property("supportedAbis")
-                .cloned()
-                .ok_or_else(|| anyhow!("Missing startup ABIs"))?,
-        )?;
+        profile.abi_order = host.startup().supported_abis.clone();
         ensure!(
             profile.density_dpi > 0 && !profile.abi_order.is_empty(),
             "Invalid package install profile"

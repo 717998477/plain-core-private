@@ -53,7 +53,7 @@ impl Runtime {
 
     pub async fn run(self: Arc<Self>) -> Result<(), String> {
         let _multicast = crate::host::multicast::MulticastSession::new(&self.multicast);
-        let session = Arc::new(self.core.host_events());
+        let session = Arc::new(self.core.host_events()?);
         let requests = self.clone();
         let result = session
             .serve(

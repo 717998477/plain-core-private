@@ -117,11 +117,7 @@ impl Runtime {
                 .prefs
                 .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
                 .unwrap_or_default();
-            let aware_supported = state
-                .host
-                .startup_property("wifiAwareSupported")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
+            let aware_supported = state.host.startup().wifi_aware_supported;
             Some(plain_rs::discovery::advertisement::ble(
                 &id,
                 aware_supported,

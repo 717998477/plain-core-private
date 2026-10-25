@@ -98,7 +98,7 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
         prefs,
     )
     .unwrap();
-    let bridge = std::sync::Arc::new(server.host_events());
+    let bridge = std::sync::Arc::new(server.host_events().unwrap());
     let host = bridge.clone();
     let consumer = tokio::spawn(async move {
         while let Some(request) = host.next_request().await {
@@ -700,7 +700,7 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
     };
     insert("owned-client", true);
     insert("unregistered-client", false);
-    let bridge = core.host_events();
+    let bridge = core.host_events().unwrap();
     assert_eq!(
         bridge.next_event().await.unwrap()["type"],
         "HTTP_SERVER_STATE_CHANGED"
@@ -800,7 +800,7 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
         "PEER_NOTIFICATIONS_UPDATED"
     );
 
-    let replacement = core.host_events();
+    let replacement = core.host_events().unwrap();
     assert!(bridge.next_event().await.is_none());
     assert_eq!(
         replacement.next_event().await.unwrap()["type"],

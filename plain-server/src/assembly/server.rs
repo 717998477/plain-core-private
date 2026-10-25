@@ -276,7 +276,7 @@ impl ContentServer {
         &self.state.directory
     }
 
-    pub fn host_events(&self) -> crate::host::events::HostEvents {
+    pub fn host_events(&self) -> Result<crate::host::events::HostEvents, String> {
         crate::host::events::HostEvents::new(self.state.clone())
     }
 
@@ -285,26 +285,23 @@ impl ContentServer {
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
     ) -> Result<(ServerState, watch::Sender<bool>, watch::Receiver<bool>), String> {
-        Self::build_state_with_properties(directory, token, prefs, serde_json::Map::new())
+        Self::build_state_with_config(directory, token, prefs, crate::platform::startup::config())
     }
-    fn build_state_with_properties(
+    fn build_state_with_config(
         directory: &Path,
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
-        properties: serde_json::Map<String, serde_json::Value>,
+        config: crate::host::startup::StartupConfig,
     ) -> Result<(ServerState, watch::Sender<bool>, watch::Receiver<bool>), String> {
         crate::assembly::core_dependencies::CoreDependencies::validate_token(token)?;
         if !directory.is_absolute() {
             return Err("Absolute core data directory required".into());
         }
-        let host = Arc::new(crate::host::bridge::Host::with_startup_properties(
-            properties,
+        let host = Arc::new(crate::host::bridge::Host::with_startup_config(
+            config,
         )?);
         std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-        let cache_directory = match host
-            .startup_property("cacheDir")
-            .and_then(serde_json::Value::as_str)
-        {
+        let cache_directory = match host.startup().cache_dir.as_deref() {
             Some(path) => PathBuf::from(path),
             None => plain_rs::cache_paths::system::resolve(directory)?,
         };
@@ -353,15 +350,12 @@ impl ContentServer {
             .get::<String>(plain_rs::prefs::pref_keys::DEVICE_NAME)
             .map_err(|error| error.to_string())?
             .is_none_or(|name| name.trim().is_empty())
-            && let Some(name) = host
-                .startup_property("name")
-                .and_then(serde_json::Value::as_str)
-                .filter(|name| !name.trim().is_empty())
+            && !host.startup().name.trim().is_empty()
         {
             plain_rs::prefs::settings::patch(
                 &prefs,
                 plain_rs::prefs::settings::SettingsPatch {
-                    device_name: Some(name.to_owned()),
+                    device_name: Some(host.startup().name.clone()),
                     ..Default::default()
                 },
             )
@@ -426,6 +420,7 @@ impl ContentServer {
             receiver.clone(),
         ));
         let dlna = Arc::new(crate::services::casting::receiver::receiver_engine::DlnaEngine::new());
+        let build_debug = host.startup().debug;
         let state = ServerState {
             ble_advertising: Arc::new(
                 crate::services::discovery::ble_advertising::Runtime::default(),
@@ -498,7 +493,7 @@ impl ContentServer {
             )),
             directory: directory.clone(),
             http_server: Arc::new(crate::services::http_server::Runtime::default()),
-            build_debug: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            build_debug: Arc::new(std::sync::atomic::AtomicBool::new(build_debug)),
             web_root: Arc::new(std::sync::RwLock::new(None)),
             web_bundle: Arc::new(std::sync::RwLock::new(Some(Arc::new(
                 crate::http::routes::web_bundle::EmbeddedBundle,
@@ -584,10 +579,10 @@ impl ContentServer {
             return Err("URL token persistence failed".into());
         }
         let token = plain_rs::crypto::gen_token();
-        let mut properties = serde_json::Map::new();
-        properties.insert("cacheDir".into(), serde_json::json!(cache_directory));
+        let mut config = crate::platform::startup::config();
+        config.cache_dir = Some(cache_directory.to_string_lossy().into_owned());
         let (state, stop, _) =
-            Self::build_state_with_properties(directory, &token, prefs, properties)?;
+            Self::build_state_with_config(directory, &token, prefs, config)?;
         Ok(Self {
             port: 0,
             state,
@@ -615,17 +610,17 @@ impl ContentServer {
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
     ) -> Result<Self, String> {
-        Self::start_with_properties(directory, token, prefs, serde_json::Map::new())
+        Self::start_with_config(directory, token, prefs, crate::platform::startup::config())
     }
 
-    pub(crate) fn start_with_properties(
+    pub(crate) fn start_with_config(
         directory: &Path,
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
-        properties: serde_json::Map<String, serde_json::Value>,
+        config: crate::host::startup::StartupConfig,
     ) -> Result<Self, String> {
         let (state, stop, mut receiver) =
-            Self::build_state_with_properties(directory, token, prefs, properties)?;
+            Self::build_state_with_config(directory, token, prefs, config)?;
         let router = crate::http::routes::public::build_router(state.clone(), receiver.clone());
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -653,22 +648,20 @@ impl ContentServer {
         directory: &Path,
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
-        properties: serde_json::Map<String, serde_json::Value>,
+        config: crate::host::startup::StartupConfig,
         http: u16,
         https: u16,
         cert: Vec<u8>,
         key: Vec<u8>,
-        debug: bool,
     ) -> Result<Self, String> {
         let (state, stop, _) =
-            Self::build_state_with_properties(directory, token, prefs, properties)?;
+            Self::build_state_with_config(directory, token, prefs, config)?;
         let mut server = Self {
             port: 0,
             state,
             task: None,
             stop,
         };
-        server.set_build_debug(debug);
         server.port = server.start_public(http, https, cert, key).await?.0;
         Ok(server)
     }

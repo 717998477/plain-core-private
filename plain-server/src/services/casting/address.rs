@@ -6,7 +6,7 @@ pub(crate) async fn device_name(state: &ServerState) -> Result<String, String> {
     if !settings.device_name.is_empty() {
         return Ok(settings.device_name);
     }
-    crate::services::device::info::default_device_name(&state.host).await
+    Ok(state.host.startup().name.clone())
 }
 
 fn http_base(ip: &str, port: u16) -> Result<String, String> {

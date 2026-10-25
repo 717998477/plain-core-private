@@ -172,3 +172,49 @@ fn bootstrap_preserves_the_saved_mdns_name() {
         "custom-device.local"
     );
 }
+
+#[test]
+fn keyed_security_reads_preserve_snapshot_defaults_without_reading_unrelated_keys() {
+    let prefs = Prefs::in_memory();
+    assert_eq!(get_entry(&prefs, PASSWORD_TYPE).unwrap(), Some(json!(2)));
+    assert_eq!(
+        get_entry(&prefs, LOGIN_REQUIRE_APPROVAL).unwrap(),
+        Some(json!(true))
+    );
+    assert_eq!(
+        get_entry(&prefs, ROTATE_URL_TOKEN_ON_RESTART).unwrap(),
+        Some(json!(false))
+    );
+    assert_eq!(get_entry(&prefs, API_PERMISSIONS).unwrap(), Some(json!([])));
+    assert_eq!(
+        get_entry(&prefs, AUTO_CHECK_UPDATE).unwrap(),
+        Some(json!(true))
+    );
+    assert_eq!(get_entry(&prefs, SKIP_VERSION).unwrap(), Some(json!("")));
+    bootstrap(&prefs).unwrap();
+    let state = snapshot(&prefs).unwrap();
+    assert_eq!(
+        get_entry(&prefs, CLIENT_ID).unwrap(),
+        Some(json!(state.client_id))
+    );
+    assert_eq!(
+        get_entry(&prefs, SIGNATURE_PUBLIC_KEY).unwrap(),
+        Some(json!(state.signature_public_key))
+    );
+    prefs.set(SIGNATURE_KEY_PAIR, "invalid identity").unwrap();
+    prefs.set(PASSWORD_TYPE, "invalid type").unwrap();
+    prefs.set(API_PERMISSIONS, vec!["CAMERA"]).unwrap();
+    assert_eq!(
+        get_entry(&prefs, API_PERMISSIONS).unwrap(),
+        Some(json!(["CAMERA"]))
+    );
+    assert_eq!(
+        get_entry(&prefs, PASSWORD).unwrap(),
+        Some(json!(state.password))
+    );
+    assert!(get_entry(&prefs, SIGNATURE_PUBLIC_KEY).is_err());
+    assert!(get_entry(&prefs, PASSWORD_TYPE).is_err());
+    for key in [MASTER_SECRET, SIGNATURE_KEY_PAIR, "unknown"] {
+        assert_eq!(get_entry(&prefs, key).unwrap(), None, "{key}");
+    }
+}

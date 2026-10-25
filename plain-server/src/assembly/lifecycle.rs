@@ -59,12 +59,7 @@ impl PublicDiscovery {
                     crate::services::discovery::mdns_runtime::Request::Publish {},
                 )
                 .await?;
-                if state
-                    .host
-                    .startup_property("wifiAwareSupported")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-                {
+                if state.host.startup().wifi_aware_supported {
                     crate::services::peers::status_outgoing::ensure_aware(&state).await?;
                 }
                 Ok(())

@@ -7,7 +7,10 @@ pub use update::{ReleaseInfo, UpdateInfo, UpdatePatch};
 use super::{Prefs, PrefsError, Result};
 use keys::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
+
+const DEFAULT_PASSWORD_TYPE: i32 = 2;
+const DEFAULT_LOGIN_REQUIRE_APPROVAL: bool = true;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,10 +74,10 @@ pub fn bootstrap(prefs: &Prefs) -> Result<()> {
             ensure(map, URL_TOKEN, crate::gen_token)?;
         }
         if !map.contains_key(PASSWORD_TYPE) {
-            put(map, PASSWORD_TYPE, 2)?;
+            put(map, PASSWORD_TYPE, DEFAULT_PASSWORD_TYPE)?;
         }
         if !map.contains_key(LOGIN_REQUIRE_APPROVAL) {
-            put(map, LOGIN_REQUIRE_APPROVAL, true)?;
+            put(map, LOGIN_REQUIRE_APPROVAL, DEFAULT_LOGIN_REQUIRE_APPROVAL)?;
         }
         runtime_defaults(map)?;
         Ok(())
@@ -194,30 +197,54 @@ pub fn signing_keypair(prefs: &Prefs) -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn signature_public_key(prefs: &Prefs) -> anyhow::Result<String> {
+    let keypair = signing_keypair(prefs)?;
+    Ok(crate::base64_encode(
+        &crate::ed25519_public_from_keypair(&keypair).unwrap(),
+    ))
+}
+
+pub fn get_entry(prefs: &Prefs, key: &str) -> anyhow::Result<Option<Value>> {
+    let value = match key {
+        PASSWORD | ADB_TOKEN | URL_TOKEN | CLIENT_ID | MDNS_HOSTNAME | SKIP_VERSION => {
+            json!(prefs.get::<String>(key)?.unwrap_or_default())
+        }
+        PASSWORD_TYPE => json!(prefs.get::<i32>(key)?.unwrap_or(DEFAULT_PASSWORD_TYPE)),
+        LOGIN_REQUIRE_APPROVAL => json!(
+            prefs
+                .get::<bool>(key)?
+                .unwrap_or(DEFAULT_LOGIN_REQUIRE_APPROVAL)
+        ),
+        ROTATE_URL_TOKEN_ON_RESTART => json!(prefs.get::<bool>(key)?.unwrap_or_default()),
+        API_PERMISSIONS => json!(prefs.get::<Vec<String>>(key)?.unwrap_or_default()),
+        AUTO_CHECK_UPDATE => json!(prefs.get::<bool>(key)?.unwrap_or(true)),
+        SIGNATURE_PUBLIC_KEY => json!(signature_public_key(prefs)?),
+        _ => return Ok(None),
+    };
+    Ok(Some(value))
+}
+
 pub fn snapshot(prefs: &Prefs) -> anyhow::Result<SecurityState> {
     let map: Map<String, Value> = prefs.entries().into_iter().collect();
-    let keypair = signing_keypair(prefs)?;
     Ok(SecurityState {
         password: read(&map, PASSWORD)?,
         password_type: map
             .get(PASSWORD_TYPE)
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?
-            .unwrap_or(2),
+            .unwrap_or(DEFAULT_PASSWORD_TYPE),
         login_require_approval: map
             .get(LOGIN_REQUIRE_APPROVAL)
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?
-            .unwrap_or(true),
+            .unwrap_or(DEFAULT_LOGIN_REQUIRE_APPROVAL),
         rotate_url_token_on_restart: read(&map, ROTATE_URL_TOKEN_ON_RESTART)?,
         adb_token: read(&map, ADB_TOKEN)?,
         url_token: read(&map, URL_TOKEN)?,
         api_permissions: read(&map, API_PERMISSIONS)?,
         client_id: read(&map, CLIENT_ID)?,
         mdns_hostname: read(&map, MDNS_HOSTNAME)?,
-        signature_public_key: crate::base64_encode(
-            &crate::ed25519_public_from_keypair(&keypair).unwrap(),
-        ),
+        signature_public_key: signature_public_key(prefs)?,
     })
 }
 

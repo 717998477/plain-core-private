@@ -1,4 +1,4 @@
-use plain_rs::prefs::pref_keys::{AUTO_CHECK_UPDATE, SKIP_VERSION};
+use plain_rs::prefs::pref_keys::{API_PERMISSIONS, AUTO_CHECK_UPDATE, SKIP_VERSION};
 use plain_rs::{
     events::WsEvent,
     prefs::Prefs,
@@ -25,6 +25,9 @@ impl SecurityPreferences<'_> {
             security::set_entry(self.prefs, key, value)?
         };
         self.notify(changed);
+        if changed && key == API_PERMISSIONS {
+            self.notify_permissions_changed().await?;
+        }
         if key == plain_rs::prefs::pref_keys::MDNS_HOSTNAME {
             if let Some(state) = self.server {
                 state.mdns.update_hostname(state).await?;
@@ -36,6 +39,9 @@ impl SecurityPreferences<'_> {
     pub(crate) async fn remove(&self, key: &str) -> anyhow::Result<bool> {
         let changed = plain_rs::prefs::security::remove_entry(self.prefs, key)?;
         self.notify(changed);
+        if changed && key == API_PERMISSIONS {
+            self.notify_permissions_changed().await?;
+        }
         if key == plain_rs::prefs::pref_keys::MDNS_HOSTNAME {
             if let Some(state) = self.server {
                 state.mdns.update_hostname(state).await?;
@@ -66,6 +72,24 @@ impl SecurityPreferences<'_> {
                 let _ = events.send(WsEvent::broadcast("PREFS_UPDATED", "{}".into()));
             }
         }
+    }
+
+    async fn notify_permissions_changed(&self) -> anyhow::Result<()> {
+        if let Some(events) = self.events {
+            let state = self
+                .server
+                .ok_or_else(|| anyhow::anyhow!("Permission runtime unavailable"))?;
+            let granted = crate::services::device::permissions::granted(&state.host)
+                .await
+                .map_err(anyhow::Error::msg)?;
+            let permissions = crate::services::device::permissions::enabled(self.prefs, &granted)
+                .map_err(anyhow::Error::msg)?;
+            let _ = events.send(WsEvent::broadcast(
+                "PERMISSIONS_UPDATED",
+                serde_json::to_string(&permissions)?,
+            ));
+        }
+        Ok(())
     }
 }
 

@@ -83,7 +83,7 @@ impl FilesQuery {
         public_gate::require(ctx, prefs(ctx), &[STORAGE])?;
         let items = ctx
             .data::<Arc<crate::services::files::platform::FilePlatform>>()?
-            .recent_files(prefs(ctx))
+            .recent_files()
             .await?;
         Ok(items.iter().map(file).collect())
     }

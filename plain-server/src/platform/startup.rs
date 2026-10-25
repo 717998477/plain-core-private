@@ -1,26 +1,67 @@
-pub(crate) fn properties() -> serde_json::Map<String, serde_json::Value> {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        serde_json::json!({"media.systemCatalog":false})
-            .as_object()
-            .unwrap()
-            .clone()
+use crate::host::startup::StartupConfig;
+use plain_rs::chat::enums::DeviceType;
+
+pub(crate) fn config() -> StartupConfig {
+    #[cfg(target_os = "linux")]
+    let (manufacturer, model, os_name, os_version) = {
+        let model = plain_rs::platform::linux::device_info::dmi_model();
+        let model = if model.is_empty() {
+            std::env::var("PLAINAPP_MODEL").unwrap_or_default()
+        } else {
+            model
+        };
+        let os = plain_rs::platform::linux::device_info::os_release();
+        (
+            plain_rs::platform::linux::device_info::dmi_manufacturer(),
+            model,
+            os.clone(),
+            os,
+        )
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (manufacturer, model, os_name, os_version) = (
+        String::new(),
+        String::new(),
+        sysinfo::System::name().unwrap_or_default(),
+        sysinfo::System::os_version().unwrap_or_default(),
+    );
+    StartupConfig {
+        debug: cfg!(debug_assertions),
+        name: plain_rs::prefs::identity::default_device_name(),
+        device_type: DeviceType::Computer,
+        build_channel: "GITHUB".into(),
+        downloads_dir: dirs::download_dir()
+            .and_then(|path| path.into_os_string().into_string().ok())
+            .unwrap_or_default(),
+        manufacturer,
+        model,
+        os_name,
+        os_version,
+        app_version: crate::platform::version::version().into(),
+        app_build_number: crate::platform::version::full_version(),
+        cpu_arch: std::env::consts::ARCH.into(),
+        supported_abis: vec![std::env::consts::ARCH.into()],
+        update_source: Some(plain_rs::updates::Source {
+            url: "https://api.github.com/repos/plainhub/plain-desktop/releases/latest".into(),
+            page_url: "https://github.com/plainhub/plain-desktop/releases/latest".into(),
+            assets: Vec::new(),
+        }),
+        ..Default::default()
     }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        serde_json::json!({
-            "media.systemCatalog":false,
-            "name":plain_rs::prefs::identity::default_device_name(),
-            "deviceType":"COMPUTER",
-            "updateSource":{"url":"https://api.github.com/repos/plainhub/plain-desktop/releases/latest","pageUrl":"https://github.com/plainhub/plain-desktop/releases/latest","assets":[]},
-            "supportedAbis":[std::env::consts::ARCH],
-            "appVersion":crate::platform::version::version(),
-            "buildChannel":"GITHUB",
-            "downloadsDir":dirs::download_dir().and_then(|path| path.into_os_string().into_string().ok()).unwrap_or_default(),
-            "debug":cfg!(debug_assertions)
-        })
-        .as_object()
-        .unwrap()
-        .clone()
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) fn read_device_info(config: &mut StartupConfig) -> Result<(), String> {
+    let mut name = std::mem::MaybeUninit::<libc::utsname>::uninit();
+    if unsafe { libc::uname(name.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
     }
+    let name = unsafe { name.assume_init() };
+    let machine = unsafe { std::ffi::CStr::from_ptr(name.machine.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    config.manufacturer = "Apple".into();
+    config.model = machine.clone();
+    config.cpu_arch = machine;
+    Ok(())
 }

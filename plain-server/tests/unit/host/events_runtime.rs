@@ -16,7 +16,7 @@ impl Drop for Waiting {
 async fn serving_relays_events_while_request_waits_and_cancels_on_stop() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
-    let session = Arc::new(core.host_events());
+    let session = Arc::new(core.host_events().unwrap());
     let dropped = Arc::new(AtomicBool::new(false));
     let started = Arc::new(tokio::sync::Notify::new());
     let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
@@ -58,7 +58,7 @@ async fn serving_relays_events_while_request_waits_and_cancels_on_stop() {
 async fn serving_preserves_request_errors_and_old_session_cannot_disconnect_replacement() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
-    let session = Arc::new(core.host_events());
+    let session = Arc::new(core.host_events().unwrap());
     let runner = tokio::spawn(session.serve(
         |method, _params| async move {
             if method == "failingRequest" {
@@ -77,7 +77,7 @@ async fn serving_preserves_request_errors_and_old_session_cannot_disconnect_repl
             .unwrap_err(),
         "platform failure"
     );
-    let replacement = core.host_events();
+    let replacement = core.host_events().unwrap();
     runner.await.unwrap().unwrap();
     let host = core.runtime_state().host.clone();
     let request = tokio::spawn(async move { host.call("replacementRequest", json!({})).await });
@@ -98,7 +98,7 @@ async fn serving_preserves_request_errors_and_old_session_cannot_disconnect_repl
 async fn aborting_runner_disconnects_session_even_with_retained_handle() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
-    let session = Arc::new(core.host_events());
+    let session = Arc::new(core.host_events().unwrap());
     let started = Arc::new(tokio::sync::Notify::new());
     let runner = tokio::spawn(session.clone().serve(
         {

@@ -32,20 +32,12 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
         Request::Ble {} => unreachable!(),
     }
 }
-pub(crate) async fn device_type(state: &ServerState) -> Result<plain_rs::chat::enums::DeviceType> {
-    let value = state
-        .host
-        .startup_property("deviceType")
-        .ok_or_else(|| anyhow::anyhow!("Missing startup device type"))?;
-    Ok(serde_json::from_value(value.clone())?)
+pub(crate) fn device_type(state: &ServerState) -> plain_rs::chat::enums::DeviceType {
+    state.host.startup().device_type
 }
 
 async fn aware_flags(state: &ServerState) -> Result<(bool, bool)> {
-    let supported = state
-        .host
-        .startup_property("wifiAwareSupported")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let supported = state.host.startup().wifi_aware_supported;
     if !supported {
         return Ok((false, false));
     }
@@ -60,16 +52,9 @@ async fn aware_flags(state: &ServerState) -> Result<(bool, bool)> {
     Ok((true, running))
 }
 async fn facts(state: &ServerState) -> Result<Facts> {
-    let name = crate::services::device::info::default_device_name(&state.host)
-        .await
-        .map_err(anyhow::Error::msg)?;
-    let device_type = device_type(state).await?;
-    let version = state
-        .host
-        .startup_property("appVersion")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("Missing startup app version"))?
-        .to_owned();
+    let name = state.host.startup().name.clone();
+    let device_type = device_type(state);
+    let version = state.host.startup().app_version.clone();
     let (network, (aware_supported, aware_running)) = tokio::try_join!(
         async {
             crate::platform::network::snapshot()

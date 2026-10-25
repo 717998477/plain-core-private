@@ -177,11 +177,7 @@ async fn execute_owned(state: ServerState, command: Command) -> Result<AppUpdate
     let info = updates::info(&state)?;
     match command {
         Command::Start => {
-            let version = state
-                .host
-                .startup_property("appVersion")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| anyhow!("Missing startup app version"))?;
+            let version = &state.host.startup().app_version;
             ensure!(
                 plain_rs::updates::available(&info, version, &state.prefs.get_or(SKIP_VERSION, String::new())),
                 "No application update available"
@@ -436,11 +432,7 @@ async fn save_stream<B: AsRef<[u8]>>(
         "Update download cancelled"
     );
     let current = updates::info(&state)?;
-    let version = state
-        .host
-        .startup_property("appVersion")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    let version = &state.host.startup().app_version;
     ensure!(
         Identity::from(&current) == *identity && plain_rs::updates::available(&current, version, &state.prefs.get_or(SKIP_VERSION, String::new())),
         "Update source changed during download"
@@ -465,11 +457,7 @@ fn percentage(downloaded: u64, total: Option<u64>) -> i32 {
         .unwrap_or(0)
 }
 fn restored(state: &ServerState, info: &UpdateInfo) -> Result<Option<String>> {
-    let version = state
-        .host
-        .startup_property("appVersion")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    let version = &state.host.startup().app_version;
     if info.downloaded_apk_path.is_empty() || !plain_rs::updates::available(info, version, &state.prefs.get_or(SKIP_VERSION, String::new())) {
         return Ok(None);
     }
