@@ -91,18 +91,11 @@ pub(crate) async fn cast_with_mime(
     }
     if item.audio {
         let track = item.clone();
-        let _ = state
+        state
             .audio
-            .run(move |db, _lib| {
-                plain_rs::media::audio::queue::on_playing(
-                    db,
-                    &track.path,
-                    &track.title,
-                    &track.artist,
-                    track.duration_ms,
-                )
-            })
-            .await;
+            .run(move |db, _lib| plain_rs::media::audio::queue::on_playing(db, &track.path))
+            .await
+            .map_err(|error| error.message)?;
     }
     if !advance {
         unsubscribe(state).await;

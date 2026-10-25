@@ -15,19 +15,7 @@ type Video implements MediaItem {
 	tags: [Tag!]!
 }
 
-type VideoPlayProgress {
-	mediaId: ID!
-	positionMs: Long!
-	updatedAt: Instant!
-}
-
-extend type Mutation {
-	recordVideoPlay(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
-	saveVideoPlayProgress(mediaId: ID!, positionMs: Long!): VideoPlayProgress!
-}
-
 extend type Query {
-	recentVideoPlayProgress(since: Instant!): [VideoPlayProgress!]!
 	videoCount(query: String!): Int!
 	videos(query: String!, offset: Int!, limit: Int!, sortBy: FileSortBy!): [Video!]!
 }

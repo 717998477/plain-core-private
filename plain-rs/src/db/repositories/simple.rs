@@ -8,7 +8,6 @@ use crate::db::models::simple::PomodoroItemRow;
 use crate::db::models::simple::SessionRow;
 use crate::db::models::simple::ShareRow;
 use crate::db::models::simple::TrashedMessageRow;
-use crate::db::models::simple::VideoPlayProgressRow;
 
 const SESSION_COLUMNS: &str = "client_id, name, type, client_ip, os_name, os_version, \
      browser_name, browser_version, token, last_seen_at, created_at, updated_at";
@@ -16,7 +15,6 @@ const SHARE_COLUMNS: &str = "id, name, password, url_token, expires_at, read_onl
      created_at, updated_at";
 const POMODORO_COLUMNS: &str =
     "id, date, completed_count, total_work_secs, total_break_secs, created_at, updated_at";
-const VIDEO_PROGRESS_COLUMNS: &str = "media_id, position_ms, played_at";
 const EMBEDDING_COLUMNS: &str = "id, path, embedding, created_at, updated_at";
 
 fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
@@ -59,14 +57,6 @@ fn pomodoro_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroItemRo
         total_break_secs: row.get(4)?,
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
-    })
-}
-
-fn video_progress_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoPlayProgressRow> {
-    Ok(VideoPlayProgressRow {
-        media_id: row.get(0)?,
-        position_ms: row.get(1)?,
-        updated_at: row.get(2)?,
     })
 }
 
@@ -304,46 +294,6 @@ impl Db {
 
     pub fn pomodoro_delete(&self, id: &str) -> rusqlite::Result<usize> {
         self.with_conn(|c| c.execute("DELETE FROM pomodoro_items WHERE id=?1", [id]))
-    }
-
-    pub fn video_progress_recent(
-        &self,
-        since: &str,
-    ) -> rusqlite::Result<Vec<VideoPlayProgressRow>> {
-        self.with_conn(|c| {
-            let mut stmt = c.prepare(&format!(
-                "SELECT {VIDEO_PROGRESS_COLUMNS} FROM media_play_history WHERE media_type=2 AND played_at >= ?1"
-            ))?;
-            stmt.query_map([since], video_progress_from_row)?.collect()
-        })
-    }
-
-    pub fn video_progress_get(
-        &self,
-        media_id: &str,
-    ) -> rusqlite::Result<Option<VideoPlayProgressRow>> {
-        self.with_conn(|c| {
-            c.query_row(
-                &format!(
-                    "SELECT {VIDEO_PROGRESS_COLUMNS} FROM media_play_history WHERE media_type=2 AND media_id=?1"
-                ),
-                [media_id],
-                video_progress_from_row,
-            )
-            .optional()
-        })
-    }
-
-    pub fn video_progress_upsert(&self, row: &VideoPlayProgressRow) -> rusqlite::Result<()> {
-        self.with_conn(|c| {
-            let changed = c.execute(
-                "INSERT INTO media_play_history (media_id, position_ms, play_count, played_at, media_type)
-                 VALUES (?1, ?2, 0, ?3, 2) ON CONFLICT(media_id) DO UPDATE SET position_ms=excluded.position_ms,played_at=excluded.played_at WHERE media_play_history.media_type=excluded.media_type",
-                params![row.media_id, row.position_ms, crate::utils::dbtime::normalize(&row.updated_at)?],
-            )?;
-            if changed == 0 { return Err(rusqlite::Error::QueryReturnedNoRows); }
-            Ok(())
-        })
     }
 
     pub fn embedding_list(&self) -> rusqlite::Result<Vec<ImageEmbeddingRow>> {

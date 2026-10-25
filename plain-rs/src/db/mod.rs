@@ -38,9 +38,8 @@ pub use crate::sqlite_browse::TableColumnMeta;
 #[cfg(feature = "library")]
 pub use models::{
     ArchivedConversationRow, AuditEventRow, ClipboardRow, FavoriteFolderRow, HISTORY_KEEP,
-    ImageEmbeddingRow, MediaPlayHistoryRow, PlayHistory, Playlist, PlaylistItem, PomodoroItemRow,
-    QueueItem, SessionRow, ShareRow, TagRelationRow, TagRow, TrashedMessageRow,
-    VideoPlayProgressRow,
+    ImageEmbeddingRow, MediaPlayHistoryRow, Playlist, PlaylistItem, PomodoroItemRow, QueueItem,
+    SessionRow, ShareRow, TagRelationRow, TagRow, TrashedMessageRow,
 };
 #[cfg(feature = "chat")]
 pub use models::{DAppFile, DChannel, DChat, DNearbyDeviceCache, DPeer};

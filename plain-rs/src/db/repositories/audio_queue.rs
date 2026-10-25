@@ -1,6 +1,5 @@
 use crate::db::Db;
 pub use crate::db::models::audio_queue::HISTORY_KEEP;
-pub use crate::db::models::audio_queue::PlayHistory;
 pub use crate::db::models::audio_queue::Playlist;
 pub use crate::db::models::audio_queue::PlaylistItem;
 pub use crate::db::models::audio_queue::QueueItem;
@@ -158,31 +157,6 @@ pub(crate) mod io {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect()
     }
-    fn history_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<PlayHistory> {
-        Ok(PlayHistory {
-            path: r.get(0)?,
-            title: r.get(1)?,
-            artist: r.get(2)?,
-            duration_ms: r.get(3)?,
-            play_count: r.get(4)?,
-            played_at: r.get(5)?,
-            media_id: r.get(6)?,
-        })
-    }
-    pub fn all_history(c: &Connection) -> rusqlite::Result<Vec<PlayHistory>> {
-        c.prepare("SELECT m.path,m.title,m.artist,m.duration_ms,h.play_count,h.played_at,h.media_id FROM media_play_history h JOIN audio_media m USING(media_id) WHERE h.media_type=1 ORDER BY h.played_at DESC,h.rowid DESC")?.query_map([],history_row)?.collect()
-    }
-    pub fn upsert_history(c: &Connection, p: &PlayHistory) -> rusqlite::Result<()> {
-        c.execute("INSERT INTO media_play_history (media_id,position_ms,play_count,played_at,media_type) SELECT media_id,0,?2,?3,1 FROM audio_media WHERE path=?1 ON CONFLICT(media_id) DO UPDATE SET play_count=excluded.play_count,played_at=excluded.played_at WHERE media_play_history.media_type=excluded.media_type",params![p.path,p.play_count,p.played_at])?;
-        Ok(())
-    }
-    pub fn history_by_path(c: &Connection, path: &str) -> rusqlite::Result<Option<PlayHistory>> {
-        c.query_row("SELECT m.path,m.title,m.artist,m.duration_ms,h.play_count,h.played_at,h.media_id FROM media_play_history h JOIN audio_media m USING(media_id) WHERE h.media_type=1 AND m.path=?",[path],history_row).optional()
-    }
-    pub fn trim_history(c: &Connection, keep: usize) -> rusqlite::Result<()> {
-        c.execute("DELETE FROM media_play_history WHERE media_type=1 AND media_id IN (SELECT media_id FROM audio_media) AND media_id NOT IN (SELECT h.media_id FROM media_play_history h JOIN audio_media m USING(media_id) WHERE h.media_type=1 ORDER BY h.played_at DESC,h.rowid DESC LIMIT ?1)",[keep as i64])?;
-        Ok(())
-    }
     pub fn remove_playlist_items_by_paths(
         c: &Connection,
         paths: &[String],
@@ -254,18 +228,6 @@ pub fn remove_playlist_item(db: &Db, id: &str, path: &str) -> rusqlite::Result<(
 }
 pub fn playlist_item_counts(db: &Db) -> rusqlite::Result<std::collections::HashMap<String, usize>> {
     db.with_conn(|c| io::playlist_item_counts(c))
-}
-pub fn all_history(db: &Db) -> rusqlite::Result<Vec<PlayHistory>> {
-    db.with_conn(|c| io::all_history(c))
-}
-pub fn upsert_history(db: &Db, p: &PlayHistory) -> rusqlite::Result<()> {
-    db.with_conn(|c| io::upsert_history(c, p))
-}
-pub fn history_by_path(db: &Db, path: &str) -> rusqlite::Result<Option<PlayHistory>> {
-    db.with_conn(|c| io::history_by_path(c, path))
-}
-pub fn trim_history(db: &Db, keep: usize) -> rusqlite::Result<()> {
-    db.with_conn(|c| io::trim_history(c, keep))
 }
 pub fn remove_playlist_items_by_paths(db: &Db, paths: &[String]) -> rusqlite::Result<()> {
     db.with_conn(|c| io::remove_playlist_items_by_paths(c, paths))

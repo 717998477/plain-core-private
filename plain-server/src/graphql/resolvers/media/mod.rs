@@ -9,3 +9,6 @@ pub mod item;
 
 #[cfg(feature = "core")]
 pub mod scan;
+
+#[cfg(feature = "core")]
+pub mod play_history;

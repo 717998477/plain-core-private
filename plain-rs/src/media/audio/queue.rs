@@ -4,8 +4,6 @@ use rusqlite::OptionalExtension;
 use std::collections::HashSet;
 
 use crate::db::Db;
-use crate::db::HISTORY_KEEP;
-use crate::db::PlayHistory;
 use crate::db::Playlist;
 use crate::db::PlaylistItem;
 use crate::db::QueueItem;
@@ -108,21 +106,14 @@ pub fn save_audio_mode(prefs: &crate::prefs::Prefs, mode: &str) -> DomainResult<
         .map_err(|e| DomainError::Other(e.to_string()))
 }
 
-pub fn on_playing(
-    db: &Db,
-    path: &str,
-    title: &str,
-    artist: &str,
-    duration_ms: i64,
-) -> DomainResult<()> {
+pub fn on_playing(db: &Db, path: &str) -> DomainResult<()> {
     if path.is_empty() {
         return Ok(());
     }
-    validate_duration(duration_ms)?;
     transaction(db, |c, state| {
         io::save_current(c, path, state)?;
         state.select(path)?;
-        record_history_conn(c, path, title, artist, duration_ms)?;
+        record_history_conn(c, path)?;
         Ok(())
     })
 }
@@ -597,35 +588,6 @@ pub fn remove_playlist_query(db: &Db, playlist_id: &str, query: &str) -> DomainR
         Ok(count)
     })
 }
-pub fn history_page(
-    db: &Db,
-    offset: i64,
-    limit: i64,
-    text: &str,
-) -> DomainResult<Vec<PlayHistory>> {
-    if offset < 0 || limit < 0 {
-        return Err(DomainError::Other("invalid pagination".into()));
-    }
-    Ok(crate::db::audio_queue::all_history(db)?
-        .into_iter()
-        .filter(|h| {
-            matches_query(
-                &AudioTrack {
-                    media_id: Some(h.media_id.clone()),
-                    path: h.path.clone(),
-                    title: h.title.clone(),
-                    artist: h.artist.clone(),
-                    duration_ms: h.duration_ms,
-                    album_id: String::new(),
-                },
-                text,
-            )
-        })
-        .skip(offset.max(0) as usize)
-        .take(limit.max(0) as usize)
-        .collect())
-}
-
 fn transaction<T>(
     db: &Db,
     operation: impl FnOnce(&rusqlite::Connection, &mut super::state::State) -> DomainResult<T>,
@@ -638,26 +600,12 @@ fn validate_duration(value: i64) -> DomainResult<()> {
     }
     Ok(())
 }
-pub(crate) fn record_history_conn(
-    c: &rusqlite::Connection,
-    path: &str,
-    _title: &str,
-    _artist: &str,
-    _duration_ms: i64,
-) -> DomainResult<()> {
+pub(crate) fn record_history_conn(c: &rusqlite::Connection, path: &str) -> DomainResult<()> {
     let media_id = c.query_row("SELECT media_id FROM audio_media WHERE path=?1 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?1",[path],|row|row.get::<_,String>(0)).optional()?;
     let Some(media_id) = media_id else {
         return Ok(());
     };
     crate::db::media_play_history::record_play(c, crate::enums::DataType::Audio, &media_id, 0)?;
-    let count: i64 = c.query_row(
-        "SELECT COUNT(*) FROM media_play_history h JOIN audio_media m USING(media_id) WHERE h.media_type=1",
-        [],
-        |r| r.get(0),
-    )?;
-    if count > (HISTORY_KEEP * 5 / 4) as i64 {
-        io::trim_history(c, HISTORY_KEEP)?;
-    }
     Ok(())
 }
 
@@ -708,21 +656,6 @@ pub fn move_queued(db: &Db, from: i32, to: i32) -> DomainResult<()> {
         }
         io::replace_queue_items(c, &items)?;
         Ok(())
-    })
-}
-pub fn record_history(
-    db: &Db,
-    path: &str,
-    title: &str,
-    artist: &str,
-    duration_ms: i64,
-) -> DomainResult<()> {
-    if path.is_empty() {
-        return Err(DomainError::Other("empty audio path".into()));
-    }
-    validate_duration(duration_ms)?;
-    transaction(db, |c, _| {
-        record_history_conn(c, path, title, artist, duration_ms)
     })
 }
 pub fn track_by_path_conn(

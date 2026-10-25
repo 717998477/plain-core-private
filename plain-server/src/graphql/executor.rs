@@ -160,7 +160,7 @@ pub(crate) fn content_changes(request: &Request) -> bool {
                             "setClipboard"
                                 | "deleteClipboardItems"
                                 | "advanceAudioSelection"
-                                | "reportAudioPlayback"
+                                | "saveMediaPlayProgress"
                                 | "sendChatItems"
                                 | "forwardChatItems"
                                 | "sendShare"

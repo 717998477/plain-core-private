@@ -35,40 +35,6 @@ pub struct AudioCommandsMutation;
 
 #[Object]
 impl AudioCommandsMutation {
-    async fn report_audio_playback(
-        &self,
-        ctx: &Context<'_>,
-        path: String,
-        revision: Long,
-        position_ms: Long,
-        started: bool,
-    ) -> Result<bool> {
-        crate::http::auth::public_gate::require(
-            ctx,
-            ctx.data::<Arc<Prefs>>()?,
-            &["WRITE_EXTERNAL_STORAGE"],
-        )?;
-        let report = super::public::audio(ctx)?
-            .run_playback(move |db, _| {
-                playback::report_selection(
-                    db,
-                    &playback::Playback {
-                        path,
-                        revision: revision.0,
-                        position_ms: position_ms.0,
-                    },
-                    started,
-                )
-            })
-            .await?;
-        if report.history_changed {
-            crate::services::audio::reports::publish_library_updated(
-                ctx.data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?,
-            );
-        }
-        Ok(report.accepted)
-    }
-
     async fn advance_audio_selection(
         &self,
         ctx: &Context<'_>,

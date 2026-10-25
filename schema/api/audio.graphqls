@@ -52,16 +52,6 @@ type AudioOverview {
 	recentItems: [Audio!]!
 }
 
-type AudioPlayHistory {
-	mediaId: ID!
-	path: String!
-	title: String!
-	artist: String!
-	durationMs: Long!
-	playCount: Int!
-	playedAt: Instant!
-}
-
 type AudioPlayback {
 	revision: Long!
 	mediaId: ID
@@ -124,7 +114,6 @@ extend type Mutation {
 	removeAudioFromQueue(mediaId: ID!): Boolean!
 	removeAudioPlaylistItem(id: ID!, query: String!): ActionResult!
 	reorderAudioQueue(mediaIds: [ID!]!): Boolean!
-	reportAudioPlayback(path: String!, revision: Long!, positionMs: Long!, started: Boolean!): Boolean!
 	updateAudioPlayMode(mode: MediaPlayMode!): Boolean!
 	updateAudioPlaylist(id: ID!, name: String!): AudioPlaylist!
 }
@@ -135,7 +124,6 @@ extend type Query {
 	audioLyricsByPath(path: String!): String
 	audioMetadata(path: String!): AudioItem!
 	audioOverview: AudioOverview!
-	audioPlayHistory(query: String!, offset: Int!, limit: Int!): [AudioPlayHistory!]!
 	audioPlayback: AudioPlayback!
 	audioPlaylistCovers(ids: [ID!]!): [AudioPlaylistCovers!]!
 	audioPlaylistItemCount(id: ID!, query: String!): Int!

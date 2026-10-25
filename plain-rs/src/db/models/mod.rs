@@ -30,7 +30,7 @@ pub mod tag;
 #[cfg(feature = "chat")]
 pub use app_file::DAppFile;
 #[cfg(feature = "library")]
-pub use audio_queue::{HISTORY_KEEP, PlayHistory, Playlist, PlaylistItem, QueueItem};
+pub use audio_queue::{HISTORY_KEEP, Playlist, PlaylistItem, QueueItem};
 #[cfg(feature = "chat")]
 pub use channel::DChannel;
 #[cfg(feature = "chat")]
@@ -43,8 +43,8 @@ pub use nearby_device::DNearbyDeviceCache;
 pub use peer::DPeer;
 #[cfg(feature = "library")]
 pub use simple::{
-    ArchivedConversationRow, ClipboardRow, ImageEmbeddingRow, PomodoroItemRow, SessionRow,
-    ShareRow, TrashedMessageRow, VideoPlayProgressRow,
+    ArchivedConversationRow, ClipboardRow, ImageEmbeddingRow, PomodoroItemRow, SessionRow, ShareRow,
+    TrashedMessageRow,
 };
 #[cfg(feature = "library")]
 pub use tag::{TagRelationRow, TagRow};

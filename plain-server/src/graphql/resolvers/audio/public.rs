@@ -5,7 +5,6 @@ use crate::host::bridge::Host;
 use crate::http::auth::public_gate;
 use crate::services::audio::host::Audio as AudioService;
 use async_graphql::{Context, Object, SimpleObject};
-use plain_rs::db::PlayHistory;
 use plain_rs::db::Playlist;
 use plain_rs::enums::DataType;
 use plain_rs::media::audio::queue as domain;
@@ -83,20 +82,6 @@ impl Audio {
         )
         .await
     }
-}
-
-#[derive(SimpleObject, Clone, Debug)]
-pub struct AudioPlayHistory {
-    pub media_id: async_graphql::ID,
-    pub path: String,
-    pub title: String,
-    pub artist: String,
-    #[graphql(name = "durationMs")]
-    pub duration_ms: Long,
-    #[graphql(name = "playCount")]
-    pub play_count: i32,
-    #[graphql(name = "playedAt")]
-    pub played_at: Instant,
 }
 
 #[derive(SimpleObject, Clone, Debug)]
@@ -352,20 +337,6 @@ impl AudioQuery {
             .try_into()?)
     }
 
-    async fn audio_play_history(
-        &self,
-        ctx: &Context<'_>,
-        query: String,
-        offset: i32,
-        limit: i32,
-    ) -> async_graphql::Result<Vec<AudioPlayHistory>> {
-        Ok(audio(ctx)?
-            .run(move |db, _| domain::history_page(db, offset as i64, limit as i64, &query))
-            .await?
-            .into_iter()
-            .map(history)
-            .collect::<async_graphql::Result<Vec<_>>>()?)
-    }
     async fn audio_playback(&self, ctx: &Context<'_>) -> async_graphql::Result<AudioPlayback> {
         let (current, media_id) = audio(ctx)?
             .run(|db, _| {
@@ -711,18 +682,6 @@ fn playlist(row: Playlist, count: usize) -> async_graphql::Result<AudioPlaylist>
         item_count: count.try_into()?,
         created_at: crate::graphql::resolvers::common::content_common::instant(&row.created_at)?,
         updated_at: crate::graphql::resolvers::common::content_common::instant(&row.updated_at)?,
-    })
-}
-
-fn history(row: PlayHistory) -> async_graphql::Result<AudioPlayHistory> {
-    Ok(AudioPlayHistory {
-        media_id: row.media_id.into(),
-        path: row.path,
-        title: row.title,
-        artist: row.artist,
-        duration_ms: Long(row.duration_ms),
-        play_count: row.play_count.clamp(0, i64::from(i32::MAX)) as i32,
-        played_at: crate::graphql::resolvers::common::content_common::instant(&row.played_at)?,
     })
 }
 

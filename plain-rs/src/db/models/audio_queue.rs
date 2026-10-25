@@ -30,14 +30,3 @@ pub struct PlaylistItem {
     pub sort_order: i64,
     pub added_at: String,
 }
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct PlayHistory {
-    pub media_id: String,
-    pub path: String,
-    pub title: String,
-    pub artist: String,
-    pub duration_ms: i64,
-    pub play_count: i64,
-    pub played_at: String,
-}

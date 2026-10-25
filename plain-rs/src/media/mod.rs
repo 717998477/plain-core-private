@@ -14,7 +14,8 @@ pub mod actions;
 
 pub mod images;
 
-pub mod videos;
+#[cfg(feature = "library")]
+pub mod play_history;
 
 pub mod audio;
 

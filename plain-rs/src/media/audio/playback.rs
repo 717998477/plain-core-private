@@ -52,40 +52,6 @@ pub fn report(db: &Db, path: &str, revision: i64, position_ms: i64) -> DomainRes
     })
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ReportResult {
-    pub accepted: bool,
-    pub history_changed: bool,
-}
-
-pub fn report_selection(db: &Db, report: &Playback, started: bool) -> DomainResult<ReportResult> {
-    if report.path.is_empty() || report.revision < 0 || report.position_ms < 0 {
-        return Err(DomainError::Other("invalid audio playback report".into()));
-    }
-    db.restore_audio_current()?;
-    db.audio_transaction(|tx, state| {
-        if state.playback.path != report.path || state.playback.revision != report.revision {
-            return Ok(ReportResult::default());
-        }
-        state.playback.position_ms = report.position_ms;
-        let history_changed = if started && state.started_revision != report.revision {
-            let track = crate::media::audio::queue::track_by_path_conn(tx, &report.path)?
-                .unwrap_or_else(|| {
-                    crate::media::audio::queue::AudioTrack::from_path_stem(&report.path)
-                });
-            record_started(tx, state, &track, report.revision)?;
-            track.media_id.is_some()
-        } else {
-            save_position(tx, &report.path, report.position_ms)?;
-            false
-        };
-        Ok(ReportResult {
-            accepted: true,
-            history_changed,
-        })
-    })
-}
-
 pub fn prepare_track(
     db: &Db,
     track: &crate::media::audio::queue::AudioTrack,
@@ -140,13 +106,7 @@ fn record_started(
     track: &crate::media::audio::queue::AudioTrack,
     revision: i64,
 ) -> DomainResult<()> {
-    crate::media::audio::queue::record_history_conn(
-        tx,
-        &track.path,
-        &track.title,
-        &track.artist,
-        track.duration_ms,
-    )?;
+    crate::media::audio::queue::record_history_conn(tx, &track.path)?;
     save_position(tx, &track.path, state.playback.position_ms)?;
     state.started_revision = revision;
     Ok(())
@@ -157,7 +117,22 @@ fn save_position(
     path: &str,
     position_ms: i64,
 ) -> rusqlite::Result<()> {
-    conn.execute("UPDATE media_play_history SET position_ms=?1,played_at=?2 WHERE media_type=1 AND media_id=(SELECT media_id FROM audio_media WHERE path=?3 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?3)",rusqlite::params![position_ms,crate::utils::dbtime::now_iso_millis(),path])?;
+    use rusqlite::OptionalExtension;
+    let media_id = conn
+        .query_row(
+            "SELECT media_id FROM audio_media WHERE path=?1 UNION SELECT a.media_id FROM platform_audio_aliases a JOIN audio_media m USING(media_id) WHERE a.path=?1",
+            [path],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(media_id) = media_id {
+        crate::db::media_play_history::update_progress(
+            conn,
+            crate::enums::DataType::Audio,
+            &media_id,
+            position_ms,
+        )?;
+    }
     Ok(())
 }
 

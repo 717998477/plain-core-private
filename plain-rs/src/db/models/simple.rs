@@ -52,13 +52,6 @@ pub struct PomodoroItemRow {
     pub updated_at: String,
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct VideoPlayProgressRow {
-    pub media_id: String,
-    pub position_ms: i64,
-    pub updated_at: String,
-}
-
 /// The embedding blob is base64-encoded in JSON so the FFI payload stays
 /// text-safe across the JNI and C ABI boundaries.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

@@ -2,15 +2,12 @@ use crate::graphql::resolvers::tags::domain_types::Tag;
 use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
 use crate::graphql::types::facts::flag;
-use crate::graphql::types::facts::id;
 use crate::graphql::types::facts::integer;
 use crate::graphql::types::facts::optional_instant;
 use crate::graphql::types::facts::rows;
 use crate::http::auth::public_gate;
-use async_graphql::{Context, Enum, Object, SimpleObject};
-use chrono::{DateTime, Utc};
+use async_graphql::{Context, Object, SimpleObject};
 use serde_json::{Value, json};
-use std::{collections::HashMap, path::Path, sync::Arc};
 
 use crate::graphql::resolvers::media::public::STORAGE;
 use crate::graphql::resolvers::media::public::media_count;
@@ -83,23 +80,25 @@ impl VideosQuery {
             }),
         )
         .await?;
-        Ok(rows(&items, |item| {
-            let row = row(item);
-            Video {
-                width: integer(item, "width") as i32,
-                height: integer(item, "height") as i32,
-                rotation: integer(item, "rotation") as i32,
-                id: row.id.into(),
-                title: row.title,
-                path: row.path,
-                duration_ms: Long(integer(item, "durationMs")),
-                size: row.size,
-                bucket_id: row.bucket_id,
-                created_at: row.created_at,
-                updated_at: row.updated_at,
-                taken_at: optional_instant(item, "takenAt"),
-                is_favorite: flag(item, "isFavorite"),
-            }
-        }))
+        Ok(rows(&items, video_from_facts))
+    }
+}
+
+pub(crate) fn video_from_facts(item: &Value) -> Video {
+    let row = row(item);
+    Video {
+        width: integer(item, "width") as i32,
+        height: integer(item, "height") as i32,
+        rotation: integer(item, "rotation") as i32,
+        id: row.id,
+        title: row.title,
+        path: row.path,
+        duration_ms: Long(integer(item, "durationMs")),
+        size: row.size,
+        bucket_id: row.bucket_id,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        taken_at: optional_instant(item, "takenAt"),
+        is_favorite: flag(item, "isFavorite"),
     }
 }
