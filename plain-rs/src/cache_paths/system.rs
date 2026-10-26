@@ -1,8 +1,8 @@
+#[cfg(any(test, not(any(target_os = "android", target_os = "ios"))))]
 use sha2::{Digest, Sha256};
-use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
+#[cfg(any(test, not(any(target_os = "android", target_os = "ios"))))]
+use std::ffi::OsStr;
 
 pub fn resolve(data_directory: &Path) -> Result<PathBuf, String> {
     if !data_directory.is_absolute() {
@@ -32,6 +32,7 @@ pub fn resolve(data_directory: &Path) -> Result<PathBuf, String> {
     }
 }
 
+#[cfg(any(test, not(any(target_os = "android", target_os = "ios"))))]
 #[derive(Clone, Copy)]
 enum Family {
     Xdg,
@@ -39,9 +40,11 @@ enum Family {
     Windows,
 }
 
+#[cfg(any(test, not(any(target_os = "android", target_os = "ios"))))]
 fn absolute(value: Option<&OsStr>) -> Option<PathBuf> {
     value.map(PathBuf::from).filter(|path| path.is_absolute())
 }
+#[cfg(any(test, not(any(target_os = "android", target_os = "ios"))))]
 fn base(
     family: Family,
     home: Option<&OsStr>,
@@ -57,6 +60,7 @@ fn base(
     };
     root.ok_or("System cache directory unavailable".into())
 }
+#[cfg(any(test, not(any(target_os = "android", target_os = "ios"))))]
 fn scoped(base: &Path, directory: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in directory.components() {

@@ -152,7 +152,7 @@ fn keyed_values_include_defaults_without_writing_and_round_trip_through_validate
     let initial = values(&prefs).unwrap();
     assert_eq!(initial[keys::HTTP_PORT], 8080);
     assert_eq!(initial[keys::FEED_AUTO_REFRESH_INTERVAL], 7200);
-    assert_eq!(initial[keys::PACKAGE_SORT_BY], 4);
+    assert_eq!(initial[keys::PACKAGE_SORT_BY], "NAME_ASC");
     assert_eq!(prefs.entries(), stored);
     for key in initial.keys() {
         assert!(keys::access(key).is_some(), "{key}");
@@ -160,7 +160,7 @@ fn keyed_values_include_defaults_without_writing_and_round_trip_through_validate
     for (key, value) in [
         (keys::HTTP_PORT, serde_json::json!(8181)),
         (keys::FEED_AUTO_REFRESH_INTERVAL, serde_json::json!(900)),
-        (keys::PACKAGE_SORT_BY, serde_json::json!(5)),
+        (keys::PACKAGE_SORT_BY, serde_json::json!("NAME_DESC")),
     ] {
         assert_eq!(set_entry(&prefs, key, value.clone()).unwrap(), Some(true));
         assert_eq!(values(&prefs).unwrap()[key], value);

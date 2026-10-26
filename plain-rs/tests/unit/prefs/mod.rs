@@ -92,7 +92,7 @@ fn remove_persists_and_reports_presence() {
 #[test]
 fn clear_empties_and_persists() {
     let (dir, prefs) = tmp_prefs("clear");
-    prefs.set("audio_sort_by", 1u32).unwrap();
+    prefs.set("audio_sort_by", "DATE_DESC").unwrap();
     prefs.set("locale", "x").unwrap();
     prefs.clear().unwrap();
     assert_eq!(prefs.entries(), vec![]);
@@ -114,19 +114,19 @@ fn get_or_returns_stored_or_default() {
 #[test]
 fn entries_sorted_with_json_rendered_values() {
     let (_dir, prefs) = tmp_prefs("entries");
-    prefs.set("video_sort_by", "v").unwrap();
-    prefs.set("audio_sort_by", vec![1u32, 2]).unwrap();
+    prefs.set("device_name", "v").unwrap();
+    prefs.set("api_permissions", vec!["A", "B"]).unwrap();
 
     let entries = prefs.entries_sorted();
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].0, "audio_sort_by");
-    assert_eq!(entries[0].1, "[1,2]");
-    assert_eq!(entries[1].0, "video_sort_by");
+    assert_eq!(entries[0].0, "api_permissions");
+    assert_eq!(entries[0].1, "[\"A\",\"B\"]");
+    assert_eq!(entries[1].0, "device_name");
     // Strings render as JSON (quoted) — plain-desktop parity.
     assert_eq!(entries[1].1, "\"v\"");
 
     let values = prefs.entries();
-    assert_eq!(values[0].1, serde_json::json!([1u32, 2]));
+    assert_eq!(values[0].1, serde_json::json!(["A", "B"]));
     assert_eq!(values[1].1, serde_json::json!("v"));
 }
 

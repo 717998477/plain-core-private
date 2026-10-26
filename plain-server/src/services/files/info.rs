@@ -148,9 +148,6 @@ fn image_reader(mut reader: impl Read + Seek) -> Result<Value, String> {
     }
     Ok(facts)
 }
-fn image_facts(bytes: &[u8]) -> Value {
-    image_facts_with_exif(bytes, None)
-}
 fn image_facts_with_exif(bytes: &[u8], exif: Option<&[u8]>) -> Value {
     let metadata_bytes = exif.unwrap_or(bytes);
     let metadata = plain_rs::utils::image_metadata::read(metadata_bytes);

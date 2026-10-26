@@ -1,3 +1,4 @@
+use plain_rs::prefs::security::PasswordType;
 use crate::assembly::server::ServerState;
 use axum::{
     Json,
@@ -188,6 +189,7 @@ async fn execute(
 /// nothing is handed to the platform — is testable without standing up a
 /// whole server: a document that queries the schema and never reaches the
 /// host is the thing to pin down.
+#[cfg(test)]
 pub(crate) async fn run(
     schema: &crate::graphql::schemas::public::PublicSchema,
     request: &str,
@@ -283,10 +285,13 @@ pub(crate) async fn init(
     let authenticated = key
         .as_ref()
         .is_some_and(|key| plain_rs::crypto::xchacha_decrypt_raw(key, &body).is_some());
-    let password_required = state
-        .prefs
-        .get_or(plain_rs::prefs::pref_keys::PASSWORD_TYPE, 2_i32)
-        == 1;
+    let password_required = match plain_rs::prefs::security::password_type(&state.prefs) {
+        Ok(value) => value == PasswordType::Fixed,
+        Err(error) => {
+            log::error!("Invalid password type: {error}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     let pair = match crate::services::peers::peer_wire::signing_keypair(&state.prefs) {
         Ok(pair) => pair,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),

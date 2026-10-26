@@ -30,7 +30,7 @@ impl HostLibrary {
         }
     }
     pub fn refresh(&mut self) -> DomainResult<()> {
-        if crate::platform::audio_catalog::uses_system_catalog() {
+        if self.host.uses_system_media_catalog() {
             self.db.use_platform_audio_catalog()?;
             let mut ids = self.db.audio_reference_ids()?;
             for id in self.db.audio_selected_ids() {
@@ -48,7 +48,7 @@ impl HostLibrary {
     }
 
     pub fn restore_current(&mut self) -> DomainResult<()> {
-        if crate::platform::audio_catalog::uses_system_catalog() {
+        if self.host.uses_system_media_catalog() {
             self.db.use_platform_audio_catalog()?;
             if self.db.audio_restore_needed() {
                 let id = self.db.audio_current_media_id();
@@ -63,7 +63,7 @@ impl HostLibrary {
     }
 
     pub fn cache_paths(&mut self, paths: &[String]) -> DomainResult<()> {
-        if crate::platform::audio_catalog::uses_system_catalog() && !paths.is_empty() {
+        if self.host.uses_system_media_catalog() && !paths.is_empty() {
             self.db.forget_platform_audio_paths(paths)?;
             let rows: Vec<AudioMedia> = self.resolve(&[], paths)?;
             self.db.cache_platform_audio(&rows, false)?;
@@ -79,7 +79,7 @@ impl HostLibrary {
     }
 
     pub fn cache_ids(&mut self, ids: &[String]) -> DomainResult<()> {
-        if crate::platform::audio_catalog::uses_system_catalog() && !ids.is_empty() {
+        if self.host.uses_system_media_catalog() && !ids.is_empty() {
             let rows: Vec<AudioMedia> = self.resolve(ids, &[])?;
             self.db.cache_platform_audio(&rows, false)?;
         }

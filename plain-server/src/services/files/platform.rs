@@ -192,7 +192,7 @@ impl FilePlatform {
         sort: crate::graphql::resolvers::files::types::FileSortBy,
         count_only: bool,
     ) -> Result<serde_json::Value> {
-        if self.uses_sdk() {
+        if self.host.uses_system_media_catalog() {
             return super::indexed::platform(
                 &self.db, &self.host, &query, offset, limit, sort, count_only,
             )

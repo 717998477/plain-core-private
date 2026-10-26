@@ -9,6 +9,7 @@ use crate::http::auth::public_gate;
 use crate::mobile::contacts::types::*;
 use crate::mobile::contacts::write as contact_write;
 use crate::mobile::contacts::write::Action;
+use crate::services::capabilities;
 use async_graphql::{Context, ID, Object};
 use plain_rs::prefs::Prefs;
 use serde_json::{Value, json};
@@ -30,6 +31,9 @@ impl ContactsQuery {
         limit: i32,
     ) -> async_graphql::Result<Vec<Contact>> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[READ])?;
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CONTACTS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         if public_gate::is_local(ctx) && !public_gate::require_granted(ctx, &[READ]).await? {
             return Ok(Vec::new());
         }
@@ -49,6 +53,9 @@ impl ContactsQuery {
     }
 
     async fn contact_count(&self, ctx: &Context<'_>, query: String) -> async_graphql::Result<i32> {
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CONTACTS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         if !public_gate::require_granted(
             ctx,
             &[if public_gate::is_local(ctx) {
@@ -83,6 +90,9 @@ impl ContactsQuery {
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Vec<ContactSource>> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[READ])?;
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CONTACTS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         Ok(
             super::projection::sources(host_json(ctx, "systemContactSources", json!({})).await?)
                 .iter()
@@ -96,6 +106,9 @@ impl ContactsQuery {
 
     async fn contact_groups(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<ContactGroup>> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[READ])?;
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CONTACTS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         Ok(
             super::projection::groups(host_json(ctx, "systemContactGroupFacts", json!({})).await?)
                 .iter()
@@ -162,6 +175,9 @@ impl ContactsMutation {
             ));
         }
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &[WRITE])?;
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CONTACTS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         crate::mobile::query::require_narrowing(
             ctx.data_unchecked::<Arc<plain_rs::db::Db>>(),
             crate::host::query::Provider::Contact,

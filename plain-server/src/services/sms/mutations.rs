@@ -81,7 +81,6 @@ impl Mutations {
             );
         }
         let _guard = self.lock.lock().await;
-        crate::services::capabilities::require(&self.host, "SMS").await?;
         let result = query::execute(
             &self.db,
             &self.host,

@@ -266,7 +266,7 @@ async fn unauthenticated_init_never_returns_or_rotates_passwords_and_reports_exp
     let state = core.runtime_state();
     state.prefs.set("password", "preserved-password").unwrap();
     crate::services::peers::peer_wire::signing_keypair(&state.prefs).unwrap();
-    for mode in [1_i32, 2_i32] {
+    for mode in ["FIXED", "NONE"] {
         state.prefs.set("password_type", mode).unwrap();
         let before = std::fs::read(directory.path().join("prefs.json")).unwrap();
         let mut events = state.events.subscribe();
@@ -292,7 +292,7 @@ async fn unauthenticated_init_never_returns_or_rotates_passwords_and_reports_exp
             .unwrap();
             assert!(payload.get("password").is_none());
             assert_eq!(payload["authenticated"], false);
-            assert_eq!(payload["passwordRequired"], mode == 1);
+            assert_eq!(payload["passwordRequired"], mode == "FIXED");
             assert!(!payload.to_string().contains("preserved-password"));
             assert!(
                 !payload

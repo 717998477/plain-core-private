@@ -16,7 +16,7 @@ fn fixture() -> (tempfile::TempDir, ContentServer) {
     prefs.set("desktop_access", true).unwrap();
     prefs.set("login_require_approval", false).unwrap();
     prefs.set("password", "secret").unwrap();
-    prefs.set("password_type", 1_i32).unwrap();
+    prefs.set("password_type", "FIXED").unwrap();
     prefs.set("client_id", "phone").unwrap();
     let (private, _public) = plain_rs::crypto::ed25519_generate();
     prefs
@@ -300,7 +300,7 @@ async fn login_pairing_and_init_preserve_rust_state_without_revealing_passwords(
     assert_eq!(response["authenticated"], true);
     assert_eq!(response["passwordRequired"], true);
     assert!(!response["signaturePublicKey"].as_str().unwrap().is_empty());
-    state.prefs.set("password_type", 2_i32).unwrap();
+    state.prefs.set("password_type", "NONE").unwrap();
     let response = graphql::init(
         State(state.clone()),
         axum::extract::ConnectInfo("127.0.0.1:1".parse().unwrap()),

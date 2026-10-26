@@ -25,6 +25,20 @@ impl ServerState {
             }
         };
         let ports = (listeners.http_port, listeners.https_port);
+        if let Err(error) = crate::services::settings::preferences::Preferences::from_server(self)
+            .patch(plain_rs::prefs::settings::SettingsPatch {
+                http_port: Some(i32::from(ports.0)),
+                https_port: Some(i32::from(ports.1)),
+                ..Default::default()
+            })
+            .await
+        {
+            let error = error.to_string();
+            listeners.shutdown().await;
+            self.http_server.failed(error.clone());
+            let _ = self.events.send(self.http_server.status().event());
+            return Err(error);
+        }
         self.http_server.started(ports);
         {
             let _control = self.peer_status.control.lock().await;
@@ -53,7 +67,7 @@ impl ServerState {
         ));
         Ok(ports)
     }
-    pub(crate) async fn configured_public_identity(
+    pub(crate) async fn http_configuration(
         &self,
     ) -> Result<(u16, u16, Vec<u8>, Vec<u8>), String> {
         let settings =
@@ -73,7 +87,7 @@ impl ServerState {
 
     pub(crate) async fn restart_public_locked(&self) -> Result<(u16, u16), String> {
         self.native_client_id()?;
-        let (http, https, cert, key) = self.configured_public_identity().await?;
+        let (http, https, cert, key) = self.http_configuration().await?;
         {
             let mut server = self.public_server.lock().await.take();
             crate::assembly::lifecycle::stop_locked(self, &mut server).await;

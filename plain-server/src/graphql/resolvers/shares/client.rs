@@ -3,7 +3,7 @@ use super::client_models::{SharedBrowseResult, SharedLink};
 use crate::assembly::{server::ServerState, services::Services};
 use crate::services::peers::shared_client;
 use async_graphql::{Context, Object};
-use plain_rs::{chat::messages::share_card, files::shares::client};
+use plain_rs::chat::messages::share_card;
 
 fn error(value: anyhow::Error) -> async_graphql::Error {
     async_graphql::Error::new(value.to_string())

@@ -1,6 +1,9 @@
+#[cfg(not(target_os = "android"))]
 use crate::host::startup::StartupConfig;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use plain_rs::chat::enums::DeviceType;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn config() -> StartupConfig {
     #[cfg(target_os = "linux")]
     let (manufacturer, model, os_name, os_version) = {

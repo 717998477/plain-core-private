@@ -1,6 +1,6 @@
-use super::types::{ScanProgress, ScanState};
+use super::types::ScanProgress;
 use crate::assembly::server::ServerState;
-use crate::services::files::scanning::{self, Command, State};
+use crate::services::files::scanning::{self, Command};
 use async_graphql::{Context, Object, Result};
 
 async fn state<'a>(ctx: &'a Context<'_>) -> Result<&'a ServerState> {
@@ -26,13 +26,7 @@ impl MediaScanQuery {
                 .total
                 .map(|total| total.saturating_sub(progress.indexed)),
             total: progress.total,
-            state: match progress.state {
-                State::Idle => ScanState::IDLE,
-                State::Running => ScanState::RUNNING,
-                State::Paused => ScanState::PAUSED,
-                State::Stopped => ScanState::STOPPED,
-                State::Failed => ScanState::FAILED,
-            },
+            state: progress.state,
             error: progress.error,
         })
     }
@@ -48,8 +42,12 @@ async fn command(ctx: &Context<'_>, action: Command) -> Result<bool> {
 pub struct MediaScanMutation;
 #[Object]
 impl MediaScanMutation {
-    async fn rebuild_media_index(&self, ctx: &Context<'_>, root: String) -> Result<bool> {
-        command(ctx, Command::Rebuild(root)).await
+    async fn rebuild_media_index(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "root")] _root: String,
+    ) -> Result<bool> {
+        command(ctx, Command::Rebuild(#[cfg(feature = "media")] _root)).await
     }
     async fn pause_media_scan(&self, ctx: &Context<'_>) -> Result<bool> {
         command(ctx, Command::Pause).await
@@ -60,8 +58,12 @@ impl MediaScanMutation {
     async fn stop_media_scan(&self, ctx: &Context<'_>) -> Result<bool> {
         command(ctx, Command::Stop).await
     }
-    async fn set_media_source_dirs(&self, ctx: &Context<'_>, dirs: Vec<String>) -> Result<bool> {
-        command(ctx, Command::SetDirectories(dirs)).await
+    async fn set_media_source_dirs(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "dirs")] _dirs: Vec<String>,
+    ) -> Result<bool> {
+        command(ctx, Command::SetDirectories(#[cfg(feature = "media")] _dirs)).await
     }
 }
 

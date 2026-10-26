@@ -6,9 +6,10 @@ use plain_rs::{
     media::actions::{Action, Item, Outcome},
 };
 use rusqlite::OptionalExtension;
+#[cfg(feature = "media")]
+use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 pub fn capabilities() -> &'static [&'static str] {

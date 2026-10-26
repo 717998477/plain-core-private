@@ -1,3 +1,4 @@
+use plain_rs::prefs::security::PasswordType;
 use crate::assembly::server::ServerState;
 use plain_rs::db::SessionRow;
 use serde_json::{Value, json};
@@ -105,19 +106,17 @@ enum Protection {
 
 impl Protection {
     fn validate(&self, state: &ServerState, request: &Value) -> anyhow::Result<()> {
-        let password_type = state
-            .prefs
-            .get_or(plain_rs::prefs::pref_keys::PASSWORD_TYPE, 2_i32);
+        let password_type = plain_rs::prefs::security::password_type(&state.prefs)?;
         match self {
             Self::Password(digest) => anyhow::ensure!(
-                password_type == 1
+                password_type == PasswordType::Fixed
                     && *digest == password_digest(&state.prefs)
                     && text(request, "password") == *digest,
                 "invalid_password"
             ),
             Self::Temporary(channel) => {
                 anyhow::ensure!(
-                    password_type == 2 && request.get("password").is_none(),
+                    password_type == PasswordType::None && request.get("password").is_none(),
                     "invalid_login_request"
                 );
                 anyhow::ensure!(
@@ -476,10 +475,8 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                     frame,
                 } => {
                     anyhow::ensure!(
-                        state
-                            .prefs
-                            .get_or(plain_rs::prefs::pref_keys::PASSWORD_TYPE, 2_i32)
-                            == 1,
+                        plain_rs::prefs::security::password_type(&state.prefs)?
+                            == PasswordType::Fixed,
                         "password_required"
                     );
                     (

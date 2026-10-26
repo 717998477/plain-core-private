@@ -3,7 +3,9 @@
 use crate::graphql::resolvers::device::public::DeviceType;
 use crate::graphql::resolvers::device::public::device_type as parse_device_type;
 use crate::host::bridge::Host;
+use crate::http::auth::public_gate;
 use async_graphql::{Context, Enum, InputObject, Object, SimpleObject};
+use plain_rs::prefs::Prefs;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -167,9 +169,8 @@ impl PeersQuery {
             .collect())
     }
 
-    /// The SIM slots the platform reports. Empty on a device with no
-    /// telephony, which is the honest answer rather than an error.
     async fn sims(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Sim>> {
+        public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &["READ_PHONE_NUMBERS"])?;
         let facts = host_call(ctx, "systemSimFacts", json!({})).await?;
         Ok(crate::graphql::types::facts::rows(&facts, |value| Sim {
             id: crate::graphql::types::facts::id(value, "id"),

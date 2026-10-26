@@ -176,7 +176,7 @@ fn bootstrap_preserves_the_saved_mdns_name() {
 #[test]
 fn keyed_security_reads_preserve_snapshot_defaults_without_reading_unrelated_keys() {
     let prefs = Prefs::in_memory();
-    assert_eq!(get_entry(&prefs, PASSWORD_TYPE).unwrap(), Some(json!(2)));
+    assert_eq!(get_entry(&prefs, PASSWORD_TYPE).unwrap(), Some(json!("NONE")));
     assert_eq!(
         get_entry(&prefs, LOGIN_REQUIRE_APPROVAL).unwrap(),
         Some(json!(true))

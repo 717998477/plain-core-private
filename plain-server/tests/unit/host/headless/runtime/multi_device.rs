@@ -132,7 +132,7 @@ async fn native_password_and_approval_pairing_enables_actual_chat_and_preserves_
     query(
         &second.native,
         r#"mutation{
-        passwordType:setPref(key:"password_type",value:1)
+        passwordType:setPref(key:"password_type",value:"FIXED")
         password:setPref(key:"password",value:"fixture-password")
         twoFactor:setPref(key:"login_require_approval",value:true)
     }"#,

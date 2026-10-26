@@ -1,3 +1,9 @@
+mod sort;
+pub use sort::FileSortBy;
+mod play_mode;
+pub use play_mode::MediaPlayMode;
+mod theme;
+pub use theme::DarkTheme;
 mod entries;
 pub use entries::{get_entry, set_entry, values};
 mod actions;

@@ -1,3 +1,4 @@
+#[cfg(test)]
 use plain_rs::db::{MediaFileRow, audio_catalog::AudioMedia};
 use plain_rs::error::{DomainError, DomainResult};
 use plain_rs::media::audio::queue::AudioTrack;
@@ -37,6 +38,7 @@ fn track(path: &str, facts: plain_rs::media::probe::ProbedMeta) -> AudioTrack {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn from_row(row: MediaFileRow) -> AudioMedia {
     AudioMedia {
         media_id: Some(row.id),

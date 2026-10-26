@@ -15,9 +15,6 @@ fn fields(value: &Value, names: &[&str], predicate: fn(&Value) -> bool) -> Resul
     }
     Ok(())
 }
-fn integer(value: &Value) -> bool {
-    value.as_i64().is_some()
-}
 fn positive(value: &Value) -> bool {
     value
         .as_i64()
@@ -37,27 +34,8 @@ pub(super) fn validate(patch: &SettingsPatch) -> Result<()> {
     {
         ensure!(cells > 0, "Invalid grid size");
     }
-    for sort in [
-        patch.audio_sort_by,
-        patch.video_sort_by,
-        patch.image_sort_by,
-        patch.doc_sort_by,
-        patch.file_sort_by,
-        patch.package_sort_by,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        ensure!((0..=6).contains(&sort), "Invalid sort order");
-    }
-    if let Some(mode) = patch.audio_play_mode {
-        ensure!((0..=2).contains(&mode), "Invalid audio play mode");
-    }
     if let Some(speed) = patch.audio_playback_speed {
         ensure!(speed.is_finite() && speed > 0.0, "Invalid playback speed");
-    }
-    if let Some(mode) = patch.dark_theme {
-        ensure!((0..=2).contains(&mode), "Invalid theme");
     }
     for value in [patch.feed_auto_refresh_interval, patch.editor_font_size]
         .into_iter()

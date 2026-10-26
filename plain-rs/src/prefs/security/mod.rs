@@ -9,14 +9,21 @@ use keys::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-const DEFAULT_PASSWORD_TYPE: i32 = 2;
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PasswordType {
+    None,
+    Fixed,
+}
+
+const DEFAULT_PASSWORD_TYPE: PasswordType = PasswordType::None;
 const DEFAULT_LOGIN_REQUIRE_APPROVAL: bool = true;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SecurityState {
     pub password: String,
-    pub password_type: i32,
+    pub password_type: PasswordType,
     pub login_require_approval: bool,
     pub rotate_url_token_on_restart: bool,
     pub adb_token: String,
@@ -92,6 +99,10 @@ fn runtime_defaults(map: &mut Map<String, Value>) -> Result<()> {
         put(map, LOG_LEVEL, "info")?;
     }
     Ok(())
+}
+
+pub fn password_type(prefs: &Prefs) -> Result<PasswordType> {
+    Ok(prefs.get(PASSWORD_TYPE)?.unwrap_or(DEFAULT_PASSWORD_TYPE))
 }
 
 pub fn dev_token(prefs: &Prefs) -> Result<String> {
@@ -209,7 +220,7 @@ pub fn get_entry(prefs: &Prefs, key: &str) -> anyhow::Result<Option<Value>> {
         PASSWORD | ADB_TOKEN | URL_TOKEN | CLIENT_ID | MDNS_HOSTNAME | SKIP_VERSION => {
             json!(prefs.get::<String>(key)?.unwrap_or_default())
         }
-        PASSWORD_TYPE => json!(prefs.get::<i32>(key)?.unwrap_or(DEFAULT_PASSWORD_TYPE)),
+        PASSWORD_TYPE => json!(password_type(prefs)?),
         LOGIN_REQUIRE_APPROVAL => json!(
             prefs
                 .get::<bool>(key)?

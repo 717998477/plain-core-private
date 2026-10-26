@@ -1,6 +1,3 @@
-#[cfg(feature = "core")]
-pub mod deletes;
-
 pub mod contacts;
 
 pub mod phone_calls;

@@ -148,13 +148,10 @@ impl Runtime {
             .unwrap_or_default()
     }
     pub(crate) fn browser_activity(&self) -> Vec<crate::services::discovery::local::MdnsActivity> {
-        let guard = self.session.lock().unwrap();
-        let Some(session) = guard.as_ref() else {
-            return Vec::new();
-        };
         #[cfg(target_os = "macos")]
         {
-            session.system_browser.activity()
+            let guard = self.session.lock().unwrap();
+            guard.as_ref().map(|session| session.system_browser.activity()).unwrap_or_default()
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -214,12 +211,6 @@ impl Runtime {
         let status_db = state.db.clone();
         let status_events = state.events.clone();
         let visible = scanning.clone();
-        let system_observer = observer.clone();
-        let system_visible = visible.clone();
-        let system_weak = weak.clone();
-        let system_events = status_events.clone();
-        let system_status = status.clone();
-        let system_db = status_db.clone();
         let browser = MdnsServiceBrowser::new(id, hostname.clone(), move |found| {
             let Some(runtime) = weak.upgrade() else {
                 return;
@@ -282,6 +273,12 @@ impl Runtime {
         // one, so it feeds the same observer and the same event stream.
         #[cfg(target_os = "macos")]
         let system_browser = {
+            let system_observer = context.clone();
+            let system_visible = scanning.clone();
+            let system_weak = Arc::downgrade(self);
+            let system_events = state.events.clone();
+            let system_status = state.peer_status.clone();
+            let system_db = state.db.clone();
             let system_browser =
                 crate::services::discovery::local::macos_dns_sd::MacDnsSdBrowser::new(
                     move |found| {

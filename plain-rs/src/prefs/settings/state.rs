@@ -1,3 +1,4 @@
+use super::{DarkTheme, FileSortBy, MediaPlayMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -6,7 +7,7 @@ use serde_json::Value;
 pub struct Settings {
     pub http_port: i32,
     pub https_port: i32,
-    pub dark_theme: i32,
+    pub dark_theme: DarkTheme,
     pub amoled_dark_theme: bool,
     pub pdf_follow_dark_theme: bool,
     pub keep_awake: bool,
@@ -20,7 +21,7 @@ pub struct Settings {
     pub https: bool,
     pub web_address_bar_expanded: bool,
     pub screen_mirror_quality: Value,
-    pub audio_play_mode: i32,
+    pub audio_play_mode: MediaPlayMode,
     pub audio_playback_speed: f32,
     pub image_grid_cells_per_row: i32,
     pub video_grid_cells_per_row: i32,
@@ -39,19 +40,19 @@ pub struct Settings {
     pub pomodoro_settings: Value,
     pub app_home_features: String,
     pub launcher_shortcuts: String,
-    pub audio_sort_by: i32,
-    pub video_sort_by: i32,
-    pub image_sort_by: i32,
-    pub doc_sort_by: i32,
-    pub file_sort_by: i32,
-    pub package_sort_by: i32,
+    pub audio_sort_by: FileSortBy,
+    pub video_sort_by: FileSortBy,
+    pub image_sort_by: FileSortBy,
+    pub doc_sort_by: FileSortBy,
+    pub file_sort_by: FileSortBy,
+    pub package_sort_by: FileSortBy,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             http_port: 8080,
             https_port: 8443,
-            dark_theme: 0,
+            dark_theme: DarkTheme::UseDeviceTheme,
             amoled_dark_theme: false,
             pdf_follow_dark_theme: false,
             keep_awake: true,
@@ -65,7 +66,7 @@ impl Default for Settings {
             https: false,
             web_address_bar_expanded: false,
             screen_mirror_quality: serde_json::json!({"mode":"HD","resolution":1080}),
-            audio_play_mode: 0,
+            audio_play_mode: MediaPlayMode::Repeat,
             audio_playback_speed: 1.0,
             image_grid_cells_per_row: 3,
             video_grid_cells_per_row: 3,
@@ -83,12 +84,12 @@ impl Default for Settings {
             pomodoro_settings: serde_json::json!({"workDurationMin":25,"shortBreakDurationMin":5,"longBreakDurationMin":15,"pomodorosBeforeLongBreak":4,"showNotification":true,"playSoundOnComplete":true,"soundPath":"","originalSoundName":""}),
             app_home_features: "IMAGES|VIDEOS|AUDIO|DOCS|FILES|NOTES|FEEDS".into(),
             launcher_shortcuts: "NOTES|DOCS|FEEDS|POMODORO_TIMER".into(),
-            audio_sort_by: 1,
-            video_sort_by: 6,
-            image_sort_by: 6,
-            doc_sort_by: 1,
-            file_sort_by: 4,
-            package_sort_by: 4,
+            audio_sort_by: FileSortBy::DateDesc,
+            video_sort_by: FileSortBy::TakenAtDesc,
+            image_sort_by: FileSortBy::TakenAtDesc,
+            doc_sort_by: FileSortBy::DateDesc,
+            file_sort_by: FileSortBy::NameAsc,
+            package_sort_by: FileSortBy::NameAsc,
         }
     }
 }

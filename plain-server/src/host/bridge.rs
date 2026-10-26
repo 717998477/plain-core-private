@@ -24,6 +24,7 @@ pub struct Host {
     connection: watch::Sender<u64>,
     startup: super::startup::StartupConfig,
 }
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl Default for Host {
     fn default() -> Self {
         Self::new(crate::platform::startup::config())

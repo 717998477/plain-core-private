@@ -116,7 +116,7 @@ pub(crate) async fn dispatch_incoming(
     if characteristic_uuid.eq_ignore_ascii_case(ble::NEARBY_CHAR_UUID) {
         nearby::dispatch(&state, remote_host, bytes).await
     } else {
-        dispatch(state, remote_host, bytes).await
+        dispatch(state, bytes).await
     }
 }
 
@@ -131,7 +131,6 @@ async fn receive(socket: &mut WebSocket, timeout: Duration) -> Result<Vec<u8>> {
 }
 pub(crate) async fn dispatch(
     state: ServerState,
-    remote_host: String,
     data: &[u8],
 ) -> Result<Vec<u8>> {
     let request = Request::decode(data)?;
@@ -179,12 +178,8 @@ pub(crate) async fn dispatch(
     #[cfg(feature = "http_transport")]
     {
         req.extensions_mut()
-            .insert(crate::host::resources::RemoteHost(remote_host));
-        req.extensions_mut()
             .insert(crate::http::ConnectionScheme("https"));
     }
-    #[cfg(not(feature = "http_transport"))]
-    let _ = remote_host;
     use tower::ServiceExt;
     let response = crate::http::routes::public::peer_router(state)
         .oneshot(req)

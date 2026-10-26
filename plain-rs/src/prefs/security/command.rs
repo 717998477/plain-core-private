@@ -8,7 +8,7 @@ pub enum Command {
         password: String,
     },
     SetPasswordType {
-        value: i32,
+        value: PasswordType,
     },
     SetLoginRequireApproval {
         enabled: bool,
@@ -40,9 +40,6 @@ impl Command {
             *hostname = hostname.trim().to_owned();
         }
         match self {
-            Self::SetPasswordType { value } if ![1, 2].contains(&value) => {
-                anyhow::bail!("Invalid password type")
-            }
             Self::SetMdnsHostname { ref hostname } => validate_hostname(hostname)?,
             Self::SetApiPermission { ref permission, .. } => anyhow::ensure!(
                 PERMISSIONS.contains(&permission.as_str()),

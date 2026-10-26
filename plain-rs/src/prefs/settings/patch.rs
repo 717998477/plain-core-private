@@ -1,3 +1,4 @@
+use super::{DarkTheme, FileSortBy, MediaPlayMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -6,7 +7,7 @@ use serde_json::Value;
 pub struct SettingsPatch {
     pub http_port: Option<i32>,
     pub https_port: Option<i32>,
-    pub dark_theme: Option<i32>,
+    pub dark_theme: Option<DarkTheme>,
     pub amoled_dark_theme: Option<bool>,
     pub pdf_follow_dark_theme: Option<bool>,
     pub keep_awake: Option<bool>,
@@ -20,7 +21,7 @@ pub struct SettingsPatch {
     pub https: Option<bool>,
     pub web_address_bar_expanded: Option<bool>,
     pub screen_mirror_quality: Option<Value>,
-    pub audio_play_mode: Option<i32>,
+    pub audio_play_mode: Option<MediaPlayMode>,
     pub audio_playback_speed: Option<f32>,
     pub image_grid_cells_per_row: Option<i32>,
     pub video_grid_cells_per_row: Option<i32>,
@@ -39,10 +40,10 @@ pub struct SettingsPatch {
     pub pomodoro_settings: Option<Value>,
     pub app_home_features: Option<String>,
     pub launcher_shortcuts: Option<String>,
-    pub audio_sort_by: Option<i32>,
-    pub video_sort_by: Option<i32>,
-    pub image_sort_by: Option<i32>,
-    pub doc_sort_by: Option<i32>,
-    pub file_sort_by: Option<i32>,
-    pub package_sort_by: Option<i32>,
+    pub audio_sort_by: Option<FileSortBy>,
+    pub video_sort_by: Option<FileSortBy>,
+    pub image_sort_by: Option<FileSortBy>,
+    pub doc_sort_by: Option<FileSortBy>,
+    pub file_sort_by: Option<FileSortBy>,
+    pub package_sort_by: Option<FileSortBy>,
 }

@@ -97,6 +97,7 @@ use plain_rs::peers::pairing::protocol::PairingCancel;
 use plain_rs::peers::pairing::sessions::Sessions;
 use plain_rs::peers::pairing::sessions::Target;
 use std::str::FromStr;
+#[cfg(test)]
 pub(crate) fn start(
     prefs: &Prefs,
     sessions: &Sessions,

@@ -138,17 +138,6 @@ impl Runtime {
         tokio::fs::copy(path, destination).await?;
         Ok(plain_rs::utils::mime::mime_from_ext(path).to_owned())
     }
-    pub fn snapshot(&self) -> Value {
-        json!(
-            self.state
-                .lock()
-                .unwrap()
-                .pending
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        )
-    }
     pub async fn cancel_all(&self) {
         let _guard = self.send.lock().await;
         for cancel in self.state.lock().unwrap().cancels.values() {
@@ -206,6 +195,7 @@ impl Runtime {
         thread_id: String,
     ) -> anyhow::Result<String> {
         anyhow::ensure!(!number.trim().is_empty(), "MMS recipient is required");
+        crate::services::capabilities::require(&self.host, "SMS").await?;
         let _guard = self.send.lock().await;
         let id = format!("pending_mms_{}", uuid::Uuid::new_v4());
         let temporary = OwnedAttachments(self.directory.join("mms_attachments").join(&id));
@@ -431,13 +421,6 @@ fn matching(pending: &Pending, candidates: Vec<Candidate>) -> Vec<i64> {
         })
         .map(|c| c.id)
         .collect()
-}
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum Command {
-    Snapshot,
-    CancelAll,
-    Replay,
 }
 #[cfg(test)]
 #[path = "../../../tests/unit/services/sms/mms.rs"]

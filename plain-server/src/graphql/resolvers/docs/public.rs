@@ -1,15 +1,13 @@
 use crate::graphql::resolvers::tags::domain_types::Tag;
 use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
-use crate::graphql::types::facts::id;
 use crate::graphql::types::facts::rows;
 use crate::graphql::types::facts::text;
 use crate::http::auth::public_gate;
-use async_graphql::{Context, Enum, Object, SimpleObject};
-use chrono::{DateTime, Utc};
+use async_graphql::{Context, Object, SimpleObject};
 use plain_rs::enums::DataType;
-use serde_json::{Value, json};
-use std::{collections::HashMap, path::Path, sync::Arc};
+use serde_json::json;
+use std::path::Path;
 
 use crate::graphql::resolvers::media::public::STORAGE;
 use crate::graphql::resolvers::media::public::media_count;

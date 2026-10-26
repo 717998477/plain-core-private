@@ -1,4 +1,6 @@
-use std::{path::Path, sync::OnceLock};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::sync::OnceLock;
 
 #[cfg(target_os = "macos")]
 const EXCLUDED_SYSTEM_ROOTS: &[&str] = &[

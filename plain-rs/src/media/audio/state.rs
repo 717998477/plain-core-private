@@ -32,7 +32,7 @@ impl State {
 
     pub fn advance(&mut self) -> DomainResult<()> {
         self.playback.revision = NEXT_REVISION
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |revision| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |revision| {
                 revision.checked_add(1)
             })
             .map_err(|_| DomainError::Other("audio revision overflow".into()))?;

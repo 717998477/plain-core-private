@@ -1,10 +1,5 @@
 use crate::assembly::server::ServerState;
 use anyhow::{Result, ensure};
-use axum::{
-    body::Body,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
 use futures_util::StreamExt;
 use plain_rs::db::DPeer;
 use serde_json::{Value, json};
@@ -106,28 +101,6 @@ pub(crate) async fn limited(response: reqwest::Response, limit: usize) -> Result
         body.extend_from_slice(&bytes);
     }
     Ok(body)
-}
-pub(crate) fn streaming(
-    response: reqwest::Response,
-    permit: tokio::sync::OwnedSemaphorePermit,
-    stop: tokio::sync::watch::Receiver<bool>,
-) -> Result<Response> {
-    let status = StatusCode::from_u16(response.status().as_u16())?;
-    let length = response.content_length();
-    let stream = futures_util::stream::unfold(
-        (response.bytes_stream(), permit, stop),
-        |(mut stream, permit, mut stop)| async move {
-            let chunk = tokio::select! { _=stop.changed()=>None,chunk=tokio::time::timeout(Duration::from_secs(30),stream.next())=>match chunk { Ok(chunk)=>chunk.map(|chunk|chunk.map_err(std::io::Error::other)), Err(_)=>Some(Err(std::io::Error::new(std::io::ErrorKind::TimedOut,"Peer file stalled"))) } };
-            chunk.map(|chunk| (chunk, (stream, permit, stop)))
-        },
-    );
-    let mut response = (status, Body::from_stream(stream)).into_response();
-    if let Some(length) = length {
-        response
-            .headers_mut()
-            .insert("content-length", length.to_string().parse()?);
-    }
-    Ok(response)
 }
 #[cfg(all(test, feature = "http_transport"))]
 #[path = "../../../tests/unit/services/peers/peer_lan.rs"]

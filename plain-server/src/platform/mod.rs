@@ -14,9 +14,6 @@ pub(crate) mod startup;
 pub(crate) mod media_cache;
 
 #[cfg(feature = "core")]
-pub(crate) mod audio_catalog;
-
-#[cfg(feature = "core")]
 pub(crate) mod image_catalog;
 
 #[cfg(feature = "core")]

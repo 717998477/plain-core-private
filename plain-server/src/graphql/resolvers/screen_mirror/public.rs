@@ -1,10 +1,5 @@
 //! Public `/graphql` screen-mirror roots.
 //!
-//! Mirroring lives in the media pipeline, so every field here is a thin
-//! projection of what the platform reports: nothing is gated, matching
-//! plain-app, which only checks the RECORD_AUDIO runtime grant when a caller
-//! asks to route audio.
-
 use crate::graphql::types::facts::integer;
 use crate::graphql::types::facts::text;
 use crate::host::bridge::Host;
@@ -85,6 +80,9 @@ impl ScreenMirrorQuery {
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<ScreenMirrorQuality> {
+        crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "SCREEN_MIRROR")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let stored =
             plain_rs::prefs::settings::snapshot(ctx.data_unchecked::<Arc<plain_rs::prefs::Prefs>>())?
                 .screen_mirror_quality;
@@ -117,6 +115,9 @@ impl ScreenMirrorMutation {
     /// Returns false when the device has not granted RECORD_AUDIO yet; the
     /// platform asks for it and the caller retries.
     async fn request_screen_mirror_audio(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "SCREEN_MIRROR")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let granted = ctx
             .data_unchecked::<Arc<Host>>()
             .call("systemRequestScreenMirrorAudio", serde_json::json!({}))
@@ -142,6 +143,9 @@ impl ScreenMirrorMutation {
         ctx: &Context<'_>,
         mode: ScreenMirrorMode,
     ) -> async_graphql::Result<bool> {
+        crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "SCREEN_MIRROR")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let quality = serde_json::json!({"mode":mode.name(),"resolution":if mode==ScreenMirrorMode::Smooth {720}else{1080}});
         crate::graphql::resolvers::settings::state::preferences(ctx)?
             .set(plain_rs::prefs::pref_keys::SCREEN_MIRROR_QUALITY, quality)
@@ -171,14 +175,16 @@ impl SettingsMutation {
         ctx: &Context<'_>,
         feature: Option<WebSettingsFeature>,
     ) -> async_graphql::Result<bool> {
-        dispatch(
-            ctx,
-            "systemOpenWebSettings",
-            serde_json::json!({
-                "feature": feature.map(|feature| feature.as_str()),
-            }),
-        )
-        .await
+        ctx.data_unchecked::<Arc<Host>>()
+            .call(
+                "systemOpenWebSettings",
+                serde_json::json!({
+                    "feature": feature.map(|feature| feature.as_str()),
+                }),
+            )
+            .await
+            .map_err(async_graphql::Error::new)?;
+        Ok(true)
     }
 }
 
@@ -213,6 +219,9 @@ impl WebSettingsFeature {
 }
 
 async fn state(ctx: &Context<'_>) -> async_graphql::Result<Value> {
+    crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "SCREEN_MIRROR")
+        .await
+        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
     ctx.data_unchecked::<Arc<Host>>()
         .call("systemScreenMirrorState", serde_json::json!({}))
         .await
@@ -220,6 +229,9 @@ async fn state(ctx: &Context<'_>) -> async_graphql::Result<Value> {
 }
 
 async fn dispatch(ctx: &Context<'_>, method: &str, params: Value) -> async_graphql::Result<bool> {
+    crate::services::capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "SCREEN_MIRROR")
+        .await
+        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
     ctx.data_unchecked::<Arc<Host>>()
         .call(method, params)
         .await

@@ -59,16 +59,3 @@ impl Action {
         Ok(changed)
     }
 }
-
-// Kotlin compares simple character case mappings, without expanding ligatures.
-fn same_term(left: &str, right: &str) -> bool {
-    fn upper(c: char) -> char {
-        let mut mapping = c.to_uppercase();
-        let first = mapping.next().unwrap();
-        if mapping.next().is_none() { first } else { c }
-    }
-    left.chars().count() == right.chars().count()
-        && left.chars().zip(right.chars()).all(|(a, b)| {
-            a == b || upper(a) == upper(b) || a.to_lowercase().next() == b.to_lowercase().next()
-        })
-}

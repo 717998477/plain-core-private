@@ -11,7 +11,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::AtomicBool,
     },
 };
 use tokio::sync::watch;

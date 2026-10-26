@@ -202,6 +202,7 @@ fn cache_path(root: &Path, path: &str, source: &Source, operation: Operation) ->
         .join(&key[..2])
         .join(format!("{key}.mp4"))
 }
+#[cfg(any(test, not(any(target_os = "android", target_os = "ios"))))]
 fn declared_capabilities(available: bool) -> Vec<&'static str> {
     if available {
         vec!["VIDEO_REMUX", "VIDEO_TRANSCODE", "VIDEO_3GP_CONVERT"]
@@ -212,38 +213,41 @@ fn declared_capabilities(available: bool) -> Vec<&'static str> {
 pub fn capabilities() -> Vec<&'static str> {
     #[cfg(target_os = "android")]
     {
-        return plain_rs::platform::android::media::capabilities();
+        plain_rs::platform::android::media::capabilities()
     }
     #[cfg(target_os = "ios")]
     {
-        return Vec::new();
+        Vec::new()
     }
-    let ffmpeg = cfg!(feature = "media")
-        && std::env::var_os("PATH").is_some_and(|paths| {
-            std::env::split_paths(&paths).any(|path| {
-                let file = path.join(if cfg!(windows) {
-                    "ffmpeg.exe"
-                } else {
-                    "ffmpeg"
-                });
-                let Ok(metadata) = file.metadata() else {
-                    return false;
-                };
-                if !metadata.is_file() {
-                    return false;
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    metadata.permissions().mode() & 0o111 != 0
-                }
-                #[cfg(not(unix))]
-                {
-                    true
-                }
-            })
-        });
-    declared_capabilities(ffmpeg)
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let ffmpeg = cfg!(feature = "media")
+            && std::env::var_os("PATH").is_some_and(|paths| {
+                std::env::split_paths(&paths).any(|path| {
+                    let file = path.join(if cfg!(windows) {
+                        "ffmpeg.exe"
+                    } else {
+                        "ffmpeg"
+                    });
+                    let Ok(metadata) = file.metadata() else {
+                        return false;
+                    };
+                    if !metadata.is_file() {
+                        return false;
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        metadata.permissions().mode() & 0o111 != 0
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        true
+                    }
+                })
+            });
+        declared_capabilities(ffmpeg)
+    }
 }
 
 #[cfg(target_os = "android")]

@@ -29,7 +29,7 @@ pub struct Completed {
     pub failed_ids: Vec<String>,
 }
 impl MediaActions {
-    pub fn new(
+    pub(crate) fn new(
         #[cfg(feature = "media")] scans: Arc<super::media_scans::MediaScans>,
         platform: Arc<super::platform::FilePlatform>,
         db: Arc<Db>,

@@ -1,5 +1,4 @@
 use crate::assembly::server::ServerState;
-use crate::services::peers::status_outgoing;
 use serde_json::json;
 
 pub struct Controller {

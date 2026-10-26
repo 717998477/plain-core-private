@@ -15,14 +15,13 @@
 //! shared writer cannot finish an unknown-length chunk.
 
 use crate::assembly::server::ServerState;
-use crate::services::files::upload_chunks::{MAX_UPLOAD_WRITE_BYTES, UploadChunk};
+use crate::services::files::upload_chunks::MAX_UPLOAD_WRITE_BYTES;
 use axum::{
     extract::{FromRequest, Multipart, Request, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use serde_json::json;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 
@@ -167,7 +166,7 @@ async fn store_chunk(
     match chunk.finish().await {
         Ok(saved) => Ok(saved as i64),
         // Short writes keep the wording the HTTP clients already match on.
-        Err(error) if written != declared => Err(format!(
+        Err(_) if written != declared => Err(format!(
             "Chunk {} final size mismatch: expected {}, saved {written}",
             info.index, info.size
         )),

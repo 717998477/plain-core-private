@@ -282,7 +282,7 @@ async fn playback_joins_the_queue_state_and_the_player_state() {
     schema
         .data::<Arc<Prefs>>()
         .unwrap()
-        .set("audio_play_mode", 2)
+        .set("audio_play_mode", "SHUFFLE")
         .unwrap();
     let played = local_query(
         &schema,

@@ -108,7 +108,7 @@ async fn passwordless_native_management_displays_the_same_code_and_commits_only_
     let (_remote_dir, remote, port) = server().await;
     let state = local.runtime_state();
     let remote_state = remote.runtime_state();
-    remote_state.prefs.set("password_type", 2_i32).unwrap();
+    remote_state.prefs.set("password_type", "NONE").unwrap();
     remote_state.prefs.set("login_require_approval", false).unwrap();
     let mut events = remote_state.events.subscribe();
     let remote_id = remote_state.native_client_id().unwrap();
@@ -173,7 +173,7 @@ async fn actual_native_management_uses_encrypted_auth_and_saves_both_grants_once
     let (_remote_dir, remote, remote_port) = server().await;
     let state = local.runtime_state();
     let remote_state = remote.runtime_state();
-    remote_state.prefs.set("password_type", 1_i32).unwrap();
+    remote_state.prefs.set("password_type", "FIXED").unwrap();
     remote_state
         .prefs
         .set("password", "fixture-password")
@@ -312,7 +312,7 @@ async fn no_password_still_requires_remote_approval_and_cancel_prevents_local_co
     let (_remote_dir, remote, port) = server().await;
     let state = local.runtime_state();
     let remote_state = remote.runtime_state();
-    remote_state.prefs.set("password_type", 2_i32).unwrap();
+    remote_state.prefs.set("password_type", "NONE").unwrap();
     let mut events = remote_state.events.subscribe();
     let first = pairing_attempts::start(
         &state,
@@ -365,7 +365,7 @@ async fn wrong_password_never_creates_a_local_grant() {
     let (_remote_dir, remote, port) = server().await;
     let state = local.runtime_state();
     let other = remote.runtime_state();
-    other.prefs.set("password_type", 1_i32).unwrap();
+    other.prefs.set("password_type", "FIXED").unwrap();
     other.prefs.set("password", "fixture-password").unwrap();
     let first = pairing_attempts::start(
         &state,
@@ -477,7 +477,7 @@ async fn remote_rejection_and_native_scope_closure_do_not_save_credentials() {
             .unwrap()
             .is_empty()
     );
-    other.prefs.set("password_type", 1_i32).unwrap();
+    other.prefs.set("password_type", "FIXED").unwrap();
     other.prefs.set("password", "fixture-password").unwrap();
     let scope = crate::native::graphql::NativeRequestScope::default();
     let response = local.native_graphql().unwrap().execute_scoped(async_graphql::Request::new(format!("mutation {{ pairDevice(input: {{ host: \"127.0.0.1:{port}\", mode: MANAGE }}) {{ generation }} }}")), scope.clone()).await;
@@ -510,7 +510,7 @@ async fn a_local_commit_failure_preserves_the_old_row_and_reports_the_remote_gra
     let (_remote_dir, remote, port) = server().await;
     let state = local.runtime_state();
     let other = remote.runtime_state();
-    other.prefs.set("password_type", 1_i32).unwrap();
+    other.prefs.set("password_type", "FIXED").unwrap();
     other.prefs.set("password", "fixture-password").unwrap();
     let remote_id = other.native_client_id().unwrap();
     let signing = crate::services::peers::peer_wire::signing_keypair(&other.prefs).unwrap();

@@ -143,6 +143,7 @@ fn apply(
 #[derive(Clone)]
 pub(crate) enum IdentitySource {
     Json(std::path::PathBuf),
+    #[cfg(any(test, feature = "headless"))]
     Pem {
         certificate: std::path::PathBuf,
         key: std::path::PathBuf,
@@ -158,6 +159,7 @@ impl IdentitySource {
     fn load(&self) -> Result<(Vec<u8>, Vec<u8>), String> {
         match self {
             Self::Json(path) => load(path),
+            #[cfg(any(test, feature = "headless"))]
             Self::Pem { certificate, key } => {
                 let pair = plain_rs::tls::ensure_self_signed_pem(
                     certificate,
@@ -174,6 +176,7 @@ impl IdentitySource {
     fn save(&self, cert: &[u8], private_key: &[u8]) -> Result<(), String> {
         match self {
             Self::Json(path) => save(path, cert, private_key),
+            #[cfg(any(test, feature = "headless"))]
             Self::Pem { certificate, key } => {
                 config(cert, private_key)?;
                 for (path, bytes) in [(key, private_key), (certificate, cert)] {

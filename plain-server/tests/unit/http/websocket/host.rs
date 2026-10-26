@@ -83,7 +83,7 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
     prefs.set("desktop_access", true).unwrap();
     prefs.set("login_require_approval", true).unwrap();
     prefs.set("password", "secret").unwrap();
-    prefs.set("password_type", 1_i32).unwrap();
+    prefs.set("password_type", "FIXED").unwrap();
     prefs.set("client_id", "phone").unwrap();
     let (private, _) = plain_rs::crypto::ed25519_generate();
     prefs
@@ -251,7 +251,7 @@ async fn malformed_login_frames_exhaust_the_ip_limit_before_decryption_despite_r
     let (_directory, core) = public_fixture();
     let state = core.runtime_state();
     state.prefs.set("password", "secret").unwrap();
-    state.prefs.set("password_type", 1_i32).unwrap();
+    state.prefs.set("password_type", "FIXED").unwrap();
     state.prefs.set("login_require_approval", false).unwrap();
     let digest = plain_rs::utils::hex::bytes_to_hex(&sha2::Sha512::digest(b"secret"));
     let client = plain_rs::crypto::EcdhSession::generate();

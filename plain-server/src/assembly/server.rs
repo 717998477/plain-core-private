@@ -1,8 +1,9 @@
 use axum::{Router, extract::DefaultBodyLimit, http::HeaderMap, routing::get};
 use plain_rs::db::Db;
 use plain_rs::events::WsEvent;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::net::{Ipv4Addr, TcpListener};
 use std::{
-    net::{Ipv4Addr, TcpListener},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -27,6 +28,7 @@ pub(crate) struct ServerState {
     external_index_task: Arc<parking_lot::Mutex<Option<JoinHandle<()>>>>,
     pub(crate) update_checks: Arc<crate::services::settings::updates::Runtime>,
     pub(crate) duration_updates: Arc<crate::services::files::duration_updates::Runtime>,
+    #[cfg(test)]
     pub(crate) duration_cache: Arc<plain_rs::media::duration_cache::DurationCache>,
     pub(crate) store: Arc<plain_rs::kv::LazyDb>,
     #[cfg(feature = "http_transport")]
@@ -80,6 +82,7 @@ pub(crate) struct ServerState {
     pub(crate) dlna: Arc<crate::services::casting::receiver::receiver_engine::DlnaEngine>,
     pub(crate) sms_sends: Arc<crate::services::sms::send_runtime::Runtime>,
     pub(crate) image_models: Arc<crate::services::images::models::Runtime>,
+    #[cfg(test)]
     pub(crate) image_index: Arc<crate::services::images::index::ImageIndex>,
     pub(crate) mobile: Arc<crate::mobile::Runtime>,
     pub(crate) cast: Arc<crate::services::casting::dlna_sender_runtime::Runtime>,
@@ -165,10 +168,6 @@ impl ContentServer {
         &self,
     ) -> std::sync::Arc<crate::services::casting::receiver::receiver_engine::DlnaEngine> {
         self.state.dlna.clone()
-    }
-
-    pub fn peer_status(&self) -> std::sync::Arc<crate::services::peers::peer_status::Runtime> {
-        self.state.peer_status.clone()
     }
 
     pub async fn close_native_scope(
@@ -280,13 +279,6 @@ impl ContentServer {
         crate::host::events::HostEvents::new(self.state.clone())
     }
 
-    fn build_state(
-        directory: &Path,
-        token: &str,
-        prefs: Arc<plain_rs::prefs::Prefs>,
-    ) -> Result<(ServerState, watch::Sender<bool>, watch::Receiver<bool>), String> {
-        Self::build_state_with_config(directory, token, prefs, crate::platform::startup::config())
-    }
     fn build_state_with_config(
         directory: &Path,
         token: &str,
@@ -437,6 +429,7 @@ impl ContentServer {
             pomodoro_task: Arc::new(parking_lot::Mutex::new(None)),
             external_index_task: Default::default(),
             update_checks: Arc::new(crate::services::settings::updates::Runtime::default()),
+            #[cfg(test)]
             duration_cache: services.duration_cache.clone(),
             duration_updates: services.duration_updates.clone(),
             store,
@@ -478,6 +471,7 @@ impl ContentServer {
             archives: services.archives,
             upload_chunks: services.upload_chunks,
             files: services.files,
+            #[cfg(test)]
             image_index: services.index.clone(),
             audio: services.audio,
             host,
@@ -552,10 +546,12 @@ impl ContentServer {
         &self.state.cache
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn open(directory: &Path) -> Result<Self, String> {
         let cache = plain_rs::cache_paths::system::resolve(directory)?;
         Self::open_with_cache(directory, &cache)
     }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn open_with_cache(directory: &Path, cache_directory: &Path) -> Result<Self, String> {
         tokio::runtime::Handle::try_current().map_err(|error| error.to_string())?;
         if !directory.is_absolute() {
@@ -581,22 +577,25 @@ impl ContentServer {
         let token = plain_rs::crypto::gen_token();
         let mut config = crate::platform::startup::config();
         config.cache_dir = Some(cache_directory.to_string_lossy().into_owned());
-        let (state, stop, _) =
-            Self::build_state_with_config(directory, &token, prefs, config)?;
-        Ok(Self {
-            port: 0,
-            state,
-            task: None,
-            stop,
-        })
+        Self::start_core_with_config(directory, &token, prefs, config)
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn start_core(
         directory: &Path,
         token: &str,
         prefs: Arc<plain_rs::prefs::Prefs>,
     ) -> Result<Self, String> {
-        let (state, stop, _) = Self::build_state(directory, token, prefs)?;
+        Self::start_core_with_config(directory, token, prefs, crate::platform::startup::config())
+    }
+
+    pub fn start_core_with_config(
+        directory: &Path,
+        token: &str,
+        prefs: Arc<plain_rs::prefs::Prefs>,
+        config: crate::host::startup::StartupConfig,
+    ) -> Result<Self, String> {
+        let (state, stop, _) = Self::build_state_with_config(directory, token, prefs, config)?;
         Ok(Self {
             port: 0,
             state,
@@ -605,6 +604,7 @@ impl ContentServer {
         })
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn start(
         directory: &Path,
         token: &str,
@@ -613,6 +613,7 @@ impl ContentServer {
         Self::start_with_config(directory, token, prefs, crate::platform::startup::config())
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) fn start_with_config(
         directory: &Path,
         token: &str,
@@ -654,14 +655,7 @@ impl ContentServer {
         cert: Vec<u8>,
         key: Vec<u8>,
     ) -> Result<Self, String> {
-        let (state, stop, _) =
-            Self::build_state_with_config(directory, token, prefs, config)?;
-        let mut server = Self {
-            port: 0,
-            state,
-            task: None,
-            stop,
-        };
+        let mut server = Self::start_core_with_config(directory, token, prefs, config)?;
         server.port = server.start_public(http, https, cert, key).await?.0;
         Ok(server)
     }
@@ -689,8 +683,8 @@ impl ContentServer {
     pub async fn start_configured_public(&self) -> Result<(u16, u16), String> {
         let _core = self.state.shutdown.lock().await;
         self.state.native_client_id()?;
-        let (http, https, cert, key) = match self.state.configured_public_identity().await {
-            Ok(identity) => identity,
+        let (http, https, cert, key) = match self.state.http_configuration().await {
+            Ok(configuration) => configuration,
             Err(error) => {
                 if self.state.public_server.lock().await.is_none() {
                     self.state.http_server.failed(error.clone());

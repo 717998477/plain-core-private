@@ -58,7 +58,7 @@ impl Runtime {
         if state.http_port != 0 {
             HttpStatus {
                 state: "started",
-                message: String::new(),
+                message: state.error.clone(),
             }
         } else if !state.error.is_empty() {
             HttpStatus {
@@ -151,15 +151,7 @@ pub(crate) fn restart(
                     })
                     .await
                     .map_err(|error| error.to_string())?;
-                let ports = state.restart_public_locked().await?;
-                preferences.patch(plain_rs::prefs::settings::SettingsPatch {
-                    http_port: Some(i32::from(ports.0)),
-                    https_port: Some(i32::from(ports.1)),
-                    ..Default::default()
-                })
-                .await
-                .map_err(|error| error.to_string())?;
-                Ok(ports)
+                state.restart_public_locked().await
             }
             .await;
             state.http_server.finish(revision, result);

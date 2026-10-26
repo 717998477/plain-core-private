@@ -1,4 +1,5 @@
 use crate::host::bridge::Host;
+use crate::services::capabilities;
 use plain_rs::prefs::Prefs;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -183,6 +184,7 @@ pub(crate) async fn execute(prefs: &Prefs, host: &Host, request: Request) -> any
     let configured: Vec<String> =
         prefs.get_or(plain_rs::prefs::pref_keys::API_PERMISSIONS, Vec::new());
     anyhow::ensure!(permission_allowed(&configured), "no_permission");
+    capabilities::require(host, "CONTACTS").await?;
     match request.action {
         Action::CreateContact | Action::UpdateContact => {
             let input = request

@@ -34,17 +34,7 @@ impl MediaDataType {
     }
 }
 
-/// Media-index scan lifecycle, shared by `scanProgress.state` and the
-/// `media:scan:progress` WS payload (same values on both wires).
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[allow(non_camel_case_types, clippy::upper_case_acronyms)] // SDL contract names
-pub enum ScanState {
-    IDLE,
-    RUNNING,
-    PAUSED,
-    STOPPED,
-    FAILED,
-}
+pub use crate::services::files::scanning::ScanState;
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ScanProgress {

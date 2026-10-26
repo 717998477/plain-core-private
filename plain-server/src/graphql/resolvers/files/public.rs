@@ -11,12 +11,10 @@ use crate::graphql::resolvers::files::types::VideoFileInfo;
 use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
 use crate::graphql::types::facts::flag;
-use crate::graphql::types::facts::id;
 use crate::graphql::types::facts::integer;
 use crate::graphql::types::facts::list;
 use crate::graphql::types::facts::rows;
 use crate::graphql::types::facts::text;
-use crate::host::bridge::Host;
 use crate::http::auth::public_gate;
 use crate::services::files::browse as file_reads;
 use async_graphql::{Context, Enum, Object};
@@ -216,18 +214,6 @@ enum PathKind {
     Dir,
 }
 
-impl From<FileSortBy> for SortBy {
-    fn from(sort_by: FileSortBy) -> Self {
-        match sort_by {
-            FileSortBy::DateAsc => SortBy::DateAsc,
-            FileSortBy::DateDesc => SortBy::DateDesc,
-            FileSortBy::SizeAsc => SortBy::SizeAsc,
-            FileSortBy::SizeDesc => SortBy::SizeDesc,
-            FileSortBy::NameAsc | FileSortBy::TakenAtDesc => SortBy::NameAsc,
-            FileSortBy::NameDesc => SortBy::NameDesc,
-        }
-    }
-}
 
 /// The probe is chosen by file *name*, not by sniffing: the client may pass
 /// a display name that differs from the on-disk one, and plain-app keys off
@@ -444,19 +430,8 @@ fn epoch_datetime() -> DateTime<Utc> {
     DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_default()
 }
 
-fn host<'a>(ctx: &'a Context<'_>) -> &'a Arc<Host> {
-    ctx.data_unchecked::<Arc<Host>>()
-}
-
 fn prefs<'a>(ctx: &'a Context<'_>) -> &'a Arc<plain_rs::prefs::Prefs> {
     ctx.data_unchecked::<Arc<plain_rs::prefs::Prefs>>()
-}
-
-async fn host_call(ctx: &Context<'_>, method: &str, params: Value) -> async_graphql::Result<Value> {
-    host(ctx)
-        .call(method, params)
-        .await
-        .map_err(async_graphql::Error::new)
 }
 
 #[cfg(test)]

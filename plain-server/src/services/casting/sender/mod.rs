@@ -30,6 +30,7 @@ pub mod didl;
 #[cfg(feature = "system")]
 pub mod discovery;
 pub mod xml_sax;
+#[cfg(feature = "system")]
 use crate::services::casting::media_alias;
 pub mod soap;
 pub mod ssdp;

@@ -1,3 +1,4 @@
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(super) fn read() -> (Option<i32>, bool) {
     #[cfg(target_os = "macos")]
     {

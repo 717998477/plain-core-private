@@ -10,9 +10,9 @@ use crate::graphql::types::facts::integer;
 use crate::graphql::types::facts::text;
 use crate::graphql::types::facts::{host_json, provider_params};
 use crate::host::bridge::Host;
-use crate::host::query as provider_plan;
 use crate::host::query::Provider;
 use crate::http::auth::public_gate;
+use crate::services::capabilities;
 use async_graphql::{Context, Enum, ID, Object, SimpleObject};
 use plain_rs::db::Db;
 use plain_rs::prefs::Prefs;
@@ -107,6 +107,9 @@ impl CallsQuery {
         if public_gate::is_local(ctx) && !public_gate::require_granted(ctx, &[READ]).await? {
             return Ok(Vec::new());
         }
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CALLS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
 
         let facts = host_json(
             ctx,
@@ -167,6 +170,9 @@ impl CallsQuery {
         if !public_gate::require_granted(ctx, &[WRITE]).await? {
             return Ok(0);
         }
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CALLS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let count = ctx
             .data_unchecked::<Arc<Host>>()
             .call(
@@ -209,6 +215,9 @@ impl CallsMutation {
             &query,
         )
         .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CALLS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         let ids: Vec<Value> = host_json(
             ctx,
             "systemCallIds",
@@ -249,6 +258,9 @@ impl CallsMutation {
         show_dialer: bool,
     ) -> async_graphql::Result<bool> {
         public_gate::require(ctx, ctx.data_unchecked::<Arc<Prefs>>(), &["CALL_PHONE"])?;
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CALL_PHONE")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         ctx.data_unchecked::<Arc<Host>>()
             .call(
                 "systemMakeCall",

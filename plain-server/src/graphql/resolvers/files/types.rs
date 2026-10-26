@@ -146,43 +146,4 @@ pub struct FileInfo {
     pub data: Option<MediaFileInfo>,
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug, serde::Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum FileSortBy {
-    DateAsc,
-    DateDesc,
-    SizeAsc,
-    SizeDesc,
-    NameAsc,
-    NameDesc,
-    TakenAtDesc,
-}
-
-impl FileSortBy {
-    pub(crate) fn from_ordinal(value: i32) -> async_graphql::Result<Self> {
-        Ok(match value {
-            0 => Self::DateAsc,
-            1 => Self::DateDesc,
-            2 => Self::SizeAsc,
-            3 => Self::SizeDesc,
-            4 => Self::NameAsc,
-            5 => Self::NameDesc,
-            6 => Self::TakenAtDesc,
-            _ => return Err("invalid file sort order".into()),
-        })
-    }
-
-    /// The wire name the search DSL and the platform layer sort by. It
-    /// doubles as the `sortBy` value the host provider route accepts.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            FileSortBy::DateAsc => "DATE_ASC",
-            FileSortBy::DateDesc => "DATE_DESC",
-            FileSortBy::SizeAsc => "SIZE_ASC",
-            FileSortBy::SizeDesc => "SIZE_DESC",
-            FileSortBy::NameAsc => "NAME_ASC",
-            FileSortBy::NameDesc => "NAME_DESC",
-            FileSortBy::TakenAtDesc => "TAKEN_AT_DESC",
-        }
-    }
-}
+pub use plain_rs::prefs::settings::FileSortBy;

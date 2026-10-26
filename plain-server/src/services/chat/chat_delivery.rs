@@ -2,7 +2,6 @@ use crate::assembly::server::ServerState;
 use plain_rs::db::DPeer;
 use plain_rs::transport::contract::PeerTransport;
 use plain_rs::transport::contract::message_response;
-use serde_json::json;
 pub(crate) struct Transport {
     state: ServerState,
     attempt: plain_rs::transport::router::Attempt,

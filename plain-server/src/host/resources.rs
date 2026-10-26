@@ -9,9 +9,6 @@ use std::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 
-#[derive(Clone)]
-pub(crate) struct RemoteHost(pub String);
-
 struct Pending {
     generation: u64,
     attached: oneshot::Sender<()>,

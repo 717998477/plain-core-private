@@ -1,6 +1,7 @@
 use crate::graphql::resolvers::tags::domain_types::Tag;
 use crate::graphql::resolvers::tags::domain_types::TagRelation;
 use crate::host::bridge::Host;
+use crate::services::capabilities;
 use async_graphql::{Context, Object};
 use plain_rs::db::Db;
 use plain_rs::db::TagRow;
@@ -162,6 +163,11 @@ async fn provider_query_keys(
     kind: DataType,
     query: &str,
 ) -> async_graphql::Result<Vec<String>> {
+    if kind == DataType::Contact {
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CONTACTS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+    }
     if kind == DataType::Sms {
         let facts = crate::services::sms::query::execute(
             db(ctx),
@@ -177,6 +183,9 @@ async fn provider_query_keys(
             .map_err(|error| async_graphql::Error::new(error.to_string()));
     }
     let method = if kind == DataType::Call {
+        capabilities::require(ctx.data_unchecked::<Arc<Host>>(), "CALLS")
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
         "systemCallIds"
     } else {
         "systemContactIds"

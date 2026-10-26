@@ -1,5 +1,5 @@
 use plain_rs::{prefs::Prefs, utils::search_dsl};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_lowercase()

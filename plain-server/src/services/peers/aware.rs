@@ -34,6 +34,7 @@ pub(crate) struct Runtime {
 
 impl Runtime {
     pub(crate) async fn ensure(&self, state: &ServerState) -> Result<()> {
+        crate::services::capabilities::require(&state.host, "WIFI_AWARE").await?;
         let mut work = self.work.lock().await;
         work.enabled = true;
         work.rejected.clear();
@@ -41,6 +42,7 @@ impl Runtime {
     }
 
     pub(crate) async fn subscribe(&self, state: &ServerState, id: &str) -> Result<bool> {
+        crate::services::capabilities::require(&state.host, "WIFI_AWARE").await?;
         let mut work = self.work.lock().await;
         let peer = peers::get(&state.db, id)?.ok_or_else(|| anyhow::anyhow!("Unknown peer"))?;
         work.requested.insert(id.to_owned(), peer.status);

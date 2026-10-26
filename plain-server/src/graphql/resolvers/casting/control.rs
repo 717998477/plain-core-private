@@ -9,7 +9,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
-use serde_json::{Value, json};
 use std::{collections::HashMap, net::SocketAddr};
 
 /// Control points send a small description document; a larger cap than they

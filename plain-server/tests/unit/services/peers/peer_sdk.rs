@@ -205,7 +205,6 @@ async fn ble_incoming_file_uses_root_encrypted_fid_and_eof_without_native_http_b
         .unwrap();
         let bytes = crate::services::discovery::ble_http::dispatch(
             state.clone(),
-            "fixture BLE MAC".into(),
             &request,
         )
         .await

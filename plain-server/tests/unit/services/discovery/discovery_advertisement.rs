@@ -37,11 +37,6 @@ async fn native_advertisements_use_current_preferences_without_host_calls() {
     let second = execute(&state, Request::Reply {}).await.unwrap();
     assert_eq!(second["name"], "Current device");
     assert_eq!(second["port"], 0);
-    let ble = execute(&state, Request::Ble {}).await.unwrap();
-    assert_eq!(
-        plain_rs::utils::base64::base64_decode(ble.as_str().unwrap()),
-        advertisement::ble("fixture-root", false, false).unwrap()
-    );
     for ip in second["ips"].as_array().unwrap() {
         assert!(ip.as_str().unwrap().parse::<std::net::Ipv4Addr>().is_ok());
     }

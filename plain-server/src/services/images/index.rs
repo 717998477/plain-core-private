@@ -82,13 +82,6 @@ impl ImageIndex {
             idle.await;
         }
     }
-    pub(crate) fn search(
-        &self,
-        embedding: &str,
-        limit: usize,
-    ) -> DomainResult<Vec<image_embeddings::SearchResult>> {
-        image_embeddings::search(&self.db, embedding, limit)
-    }
     pub(crate) fn search_with_score(
         &self,
         embedding: &str,

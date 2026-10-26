@@ -2,7 +2,7 @@ use crate::prefs::pref_keys::CLIPBOARD_DIRECTIONS;
 use crate::prefs::Prefs;
 use anyhow::{Result, ensure};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 const APPLIED: &str = "clipboard_last_item";
 

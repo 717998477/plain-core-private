@@ -114,7 +114,7 @@ fn feed_model(_ctx: &Context<'_>, row: FeedRow) -> GqlResult<Feed> {
     })
 }
 
-fn entry_model(ctx: &Context<'_>, row: FeedEntryRow) -> GqlResult<FeedEntry> {
+fn entry_model(row: FeedEntryRow) -> GqlResult<FeedEntry> {
     Ok(FeedEntry {
         id: ID(row.id),
         feed_id: ID(row.feed_id),
@@ -170,7 +170,7 @@ impl FeedQuery {
 
     async fn feed_entry(&self, ctx: &Context<'_>, id: ID) -> GqlResult<Option<FeedEntry>> {
         plain_rs::feeds::entry_get(ctx.data::<Arc<Db>>()?, id.as_str())?
-            .map(|row| entry_model(ctx, row))
+            .map(entry_model)
             .transpose()
     }
 
@@ -183,7 +183,7 @@ impl FeedQuery {
     ) -> GqlResult<Vec<FeedEntry>> {
         plain_rs::feeds::search(ctx.data::<Arc<Db>>()?, &query, limit, offset)?
             .into_iter()
-            .map(|row| entry_model(ctx, row))
+            .map(entry_model)
             .collect()
     }
 }
@@ -259,7 +259,6 @@ impl FeedMutation {
     async fn sync_feed_entry_content(&self, ctx: &Context<'_>, id: ID) -> GqlResult<FeedEntry> {
         let assets = ctx.data_opt::<Arc<feeds::FeedAssets>>().cloned();
         entry_model(
-            ctx,
             feeds::sync_entry_content_with_assets(
                 ctx.data::<Arc<Db>>()?,
                 id.as_str(),

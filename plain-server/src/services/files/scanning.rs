@@ -4,10 +4,13 @@ use anyhow::Result;
 pub(crate) struct Progress {
     pub indexed: i32,
     pub total: Option<i32>,
-    pub state: State,
+    pub state: ScanState,
     pub error: Option<String>,
 }
-pub(crate) enum State {
+/// Media-index scan lifecycle, shared by `scanProgress.state` and the
+/// `media:scan:progress` WS payload (same values on both wires).
+#[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum ScanState {
     Idle,
     Running,
     Paused,
@@ -15,11 +18,11 @@ pub(crate) enum State {
     Failed,
 }
 pub(crate) enum Command {
-    Rebuild(String),
+    Rebuild(#[cfg(feature = "media")] String),
     Pause,
     Resume,
     Stop,
-    SetDirectories(Vec<String>),
+    SetDirectories(#[cfg(feature = "media")] Vec<String>),
 }
 
 async fn available(state: &ServerState) -> Result<()> {
@@ -34,7 +37,7 @@ pub(crate) async fn progress(state: &ServerState) -> Result<Progress> {
             return Ok(Progress {
                 indexed: 0,
                 total: Some(0),
-                state: State::Idle,
+                state: ScanState::Idle,
                 error: None,
             });
         };
@@ -42,11 +45,11 @@ pub(crate) async fn progress(state: &ServerState) -> Result<Progress> {
             indexed: snapshot.processed_files.try_into()?,
             total: snapshot.total_files.map(i32::try_from).transpose()?,
             state: match snapshot.status {
-                Status::Running => State::Running,
-                Status::Paused => State::Paused,
-                Status::Cancelling | Status::Cancelled => State::Stopped,
-                Status::Completed => State::Idle,
-                Status::Failed => State::Failed,
+                Status::Running => ScanState::Running,
+                Status::Paused => ScanState::Paused,
+                Status::Cancelling | Status::Cancelled => ScanState::Stopped,
+                Status::Completed => ScanState::Idle,
+                Status::Failed => ScanState::Failed,
             },
             error: snapshot.error,
         })

@@ -405,7 +405,7 @@ impl AudioMutation {
         crate::graphql::resolvers::settings::state::update(
             ctx,
             plain_rs::prefs::settings::SettingsPatch {
-                audio_play_mode: Some(mode.ordinal()),
+                audio_play_mode: Some(mode),
                 ..Default::default()
             },
         )
@@ -697,9 +697,7 @@ pub(crate) fn audio(ctx: &Context<'_>) -> async_graphql::Result<AudioService> {
 fn library_sort(
     ctx: &Context<'_>,
 ) -> async_graphql::Result<crate::graphql::resolvers::files::types::FileSortBy> {
-    crate::graphql::resolvers::files::types::FileSortBy::from_ordinal(
-        plain_rs::prefs::settings::snapshot(prefs(ctx))?.audio_sort_by,
-    )
+    Ok(plain_rs::prefs::settings::snapshot(prefs(ctx))?.audio_sort_by)
 }
 
 fn prefs<'a>(ctx: &'a Context<'_>) -> &'a Arc<plain_rs::prefs::Prefs> {

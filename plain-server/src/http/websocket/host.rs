@@ -1,11 +1,10 @@
+use plain_rs::prefs::security::PasswordType;
 use crate::assembly::server::ServerState;
 use axum::{
-    Json,
     extract::{
         ConnectInfo, Query, State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket},
     },
-    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
@@ -186,12 +185,13 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                     Some(Ok(Message::Binary(frame))) => frame,
                     Some(Ok(Message::Ping(bytes))) => { if socket.send(Message::Pong(bytes)).await.is_err() { break; } continue; },
                     Some(Ok(Message::Text(text))) if params.auth.as_deref() == Some("2") => {
-                        if temporary_started || text.len() > 4096 || state.prefs.get_or(plain_rs::prefs::pref_keys::PASSWORD_TYPE, 2_i32) != 2 {
+                        if temporary_started || text.len() > 4096 {
                             let _ = socket.send(close(1008, "invalid_login_request")).await;
                             break;
                         }
                         temporary_started = true;
                         let hello = (|| -> anyhow::Result<_> {
+                            anyhow::ensure!(plain_rs::prefs::security::password_type(&state.prefs)? == PasswordType::None, "invalid_login_request");
                             anyhow::ensure!(enabled(&state), "desktop_access_disabled");
                             crate::http::auth::ws_login::admit_attempt(&state, &params.cid, &ip, &id)?;
                             let request = serde_json::from_str::<crate::http::auth::login_channel::ClientHello>(&text)?;
@@ -273,7 +273,16 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                     let _ = state.events.send(WsEvent::broadcast("WEB_SOCKET_REGISTERED", "{}".into()));
                 } else {
                     let controls = controls(&plain);
-                    if !controls.is_empty() { let _ = state.host.call("systemScreenMirrorControls", json!({"inputs":controls})).await; }
+                    if !controls.is_empty() {
+                        if let Err(error) = crate::services::capabilities::require(&state.host, "SCREEN_MIRROR").await {
+                            log::warn!("Screen mirror controls: {error}");
+                            let _ = socket.send(close(1008, "unsupported_capability")).await;
+                            break;
+                        }
+                        if let Err(error) = state.host.call("systemScreenMirrorControls", json!({"inputs":controls})).await {
+                            log::warn!("Screen mirror controls: {error}");
+                        }
+                    }
                 }
                 continue;
             },
@@ -332,10 +341,15 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
         }
     }
     if state.main_ws.snapshot().is_empty() {
-        let _ = state
-            .host
-            .call("systemScreenMirrorResetTouch", json!({}))
-            .await;
+        match crate::services::capabilities::snapshot(&state.host).await {
+            Ok(capabilities) if capabilities.iter().any(|value| value == "SCREEN_MIRROR") => {
+                if let Err(error) = state.host.call("systemScreenMirrorResetTouch", json!({})).await {
+                    log::warn!("Screen mirror touch cleanup: {error}");
+                }
+            }
+            Ok(_) => {}
+            Err(error) => log::warn!("Screen mirror touch cleanup: {error}"),
+        }
     }
     let _ = tokio::time::timeout(Duration::from_secs(1), socket.close()).await;
 }

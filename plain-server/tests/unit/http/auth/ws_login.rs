@@ -235,7 +235,7 @@ async fn passwordless_server() -> (
     let directory = tempfile::tempdir().unwrap();
     let server = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = server.runtime_state();
-    state.prefs.set("password_type", 2_i32).unwrap();
+    state.prefs.set("password_type", "NONE").unwrap();
     state.prefs.set("login_require_approval", true).unwrap();
     state.prefs.set("password", "unexposed-password").unwrap();
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
@@ -496,7 +496,7 @@ async fn disconnect_expiry_mode_changes_and_repeated_requests_cannot_create_a_pa
                     .at = Instant::now() - Duration::from_secs(301)
             }
             "mode" => {
-                state.prefs.set("password_type", 1_i32).unwrap();
+                state.prefs.set("password_type", "FIXED").unwrap();
             }
             "replay" => {
                 socket.send(Message::Binary(frame.into())).await.unwrap();

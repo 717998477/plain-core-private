@@ -40,6 +40,7 @@ macro_rules! data_kind {
                     _ => Self::Custom,
                 }
             }
+            #[cfg(test)]
             pub(crate) fn android(self) -> i64 {
                 match self {
                     Self::Custom => 0,

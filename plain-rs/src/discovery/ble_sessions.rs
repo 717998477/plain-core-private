@@ -11,7 +11,9 @@
 //! multi-connection table, the per-peer capacity limit, and idle expiry that
 //! the old Kotlin `BleServerProtocol` duplicated in a second language.
 
-use crate::protocols::ble::{self, Assembler};
+use crate::protocols::ble::Assembler;
+#[cfg(test)]
+use crate::protocols::ble;
 use anyhow::{Result, ensure};
 use std::{
     collections::HashMap,
@@ -51,15 +53,11 @@ pub struct Sessions {
 impl Sessions {
     /// Feed one raw GATT write. Returns whether more frames are needed, or the
     /// assembled request once the final frame lands.
-    ///
-    /// `nearby` marks the Nearby characteristic so a completed request records
-    /// its id for later response correlation.
     pub fn write(
         &self,
         address: &str,
         characteristic: &str,
         value: &[u8],
-        nearby: bool,
     ) -> Result<Outcome> {
         let key = (address.to_string(), characteristic.to_ascii_lowercase());
         let mut table = self.table.lock().unwrap();
@@ -161,9 +159,9 @@ mod tests {
         let parts = frames(&message, 7);
         assert!(parts.len() > 1, "fixture must span several frames");
         for part in &parts[..parts.len() - 1] {
-            assert_eq!(sessions.write("mac", "c", part, false).unwrap(), Outcome::Pending);
+            assert_eq!(sessions.write("mac", "c", part).unwrap(), Outcome::Pending);
         }
-        match sessions.write("mac", "c", parts.last().unwrap(), false).unwrap() {
+        match sessions.write("mac", "c", parts.last().unwrap()).unwrap() {
             Outcome::Complete { request_id, body } => {
                 assert_eq!(request_id, 7);
                 // The body is the reassembled BLE *message* (length prefix +
@@ -179,9 +177,9 @@ mod tests {
         let sessions = Sessions::default();
         let message = ble::message(&[], b"hello world hello world").unwrap();
         let parts = frames(&message, 7);
-        sessions.write("mac", "c", &parts[0], false).unwrap();
+        sessions.write("mac", "c", &parts[0]).unwrap();
         // Jump straight to the last frame, skipping the middle.
-        assert!(sessions.write("mac", "c", parts.last().unwrap(), false).is_err());
+        assert!(sessions.write("mac", "c", parts.last().unwrap()).is_err());
     }
 
     #[test]
@@ -199,10 +197,10 @@ mod tests {
         let message = ble::message(&[], &[0u8; 64]).unwrap();
         let parts = frames(&message, 7);
         // First characteristic starts a session.
-        sessions.write("mac", "a", &parts[0], false).unwrap();
+        sessions.write("mac", "a", &parts[0]).unwrap();
         // Second characteristic for the same peer is still within capacity.
-        sessions.write("mac", "b", &parts[0], false).unwrap();
+        sessions.write("mac", "b", &parts[0]).unwrap();
         // A third concurrent characteristic exceeds the per-peer limit.
-        assert!(sessions.write("mac", "c", &parts[0], false).is_err());
+        assert!(sessions.write("mac", "c", &parts[0]).is_err());
     }
 }

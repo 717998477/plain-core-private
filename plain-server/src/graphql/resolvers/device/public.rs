@@ -4,7 +4,6 @@ use crate::graphql::types::Instant;
 use crate::graphql::types::KeyValuePair;
 use crate::graphql::types::Long;
 use crate::graphql::types::facts::flag;
-use crate::graphql::types::facts::text;
 use crate::host::bridge::Host;
 use async_graphql::{ComplexObject, Context, Enum, Object, SimpleObject};
 use serde_json::{Value, json};

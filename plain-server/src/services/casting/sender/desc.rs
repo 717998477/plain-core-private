@@ -11,22 +11,29 @@
 //! (e.g. UI-triggered polling), and relying on `http.Client` timeouts
 //! makes description fetches more reliable. We follow the same pattern.
 
+#[cfg(feature = "system")]
 use std::time::Duration;
 
 use crate::services::casting::sender::xml_sax::Event;
 use crate::services::casting::sender::xml_sax::Reader;
 
+#[cfg(feature = "system")]
 use crate::services::casting::sender::ssdp::ssdp_search;
 use crate::services::casting::sender::types::DiscoveredDevice;
 use crate::services::casting::sender::types::UpnpService;
+#[cfg(feature = "system")]
 use crate::services::casting::sender::util::dlna_debug_enabled;
+#[cfg(feature = "system")]
 use crate::services::casting::sender::util::dlna_debug_payload_enabled;
+#[cfg(feature = "system")]
 use crate::services::casting::sender::util::truncate_for_log;
 
 /// Per-request HTTP timeout for the device-descriptor fetch (Go uses 2s).
+#[cfg(feature = "system")]
 const FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 /// Hard cap on the descriptor body size (2 MiB). Real descriptors are <8
 /// KiB, but some weird firmwares stuff a lot in there.
+#[cfg(feature = "system")]
 const FETCH_BODY_CAP: usize = 2 << 20;
 
 /// Fetch the XML at `location` and parse it into a `DiscoveredDevice`.

@@ -562,6 +562,7 @@ impl NativeMediaCatalog {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(test, feature = "media"))]
     fn forget_path(&self, path: &str) -> Result<usize, String> {
         self.state.native_client_id()?;
         let types = self

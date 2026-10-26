@@ -6,19 +6,12 @@ use serde_json::{Value, json};
 pub(crate) enum Request {
     Reply {},
     Mdns {},
-    Ble {},
 }
 pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Value> {
     let id = state
         .prefs
         .get::<String>(plain_rs::prefs::pref_keys::CLIENT_ID)?
         .unwrap_or_default();
-    if matches!(request, Request::Ble {}) {
-        let (supported, running) = aware_flags(state).await?;
-        return Ok(json!(plain_rs::utils::base64::base64_encode(
-            &advertisement::ble(&id, supported, running)?
-        )));
-    }
     let settings = plain_rs::prefs::settings::snapshot(&state.prefs)?;
     let name = settings.device_name;
     let port = state.public_ports().await.map(|ports| ports.1).unwrap_or(0);
@@ -29,7 +22,6 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> Result<Val
             &reply,
             &plain_rs::prefs::ensure_mdns_hostname(&state.prefs),
         )?)?),
-        Request::Ble {} => unreachable!(),
     }
 }
 pub(crate) fn device_type(state: &ServerState) -> plain_rs::chat::enums::DeviceType {

@@ -8,10 +8,14 @@
 use std::time::Duration;
 
 use crate::services::casting::sender::types::DiscoveredDevice;
+#[cfg(feature = "system")]
 use crate::services::casting::sender::util::dlna_debug_enabled;
+#[cfg(feature = "system")]
 use crate::services::casting::sender::util::dlna_debug_payload_enabled;
+#[cfg(feature = "system")]
 use crate::services::casting::sender::util::truncate_for_log;
 use crate::services::casting::sender::util::xml_escape;
+#[cfg(feature = "system")]
 use std::io::Read;
 
 /// Per-call HTTP timeout (Go: 3s). Real TVs are often slow; the timeout
