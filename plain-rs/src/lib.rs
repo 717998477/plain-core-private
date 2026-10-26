@@ -120,5 +120,7 @@ pub use utils::hostname::platform_hostname;
 #[cfg(feature = "library")]
 pub mod sessions;
 
+#[cfg(feature = "kv")]
 pub mod sms_sends;
+#[cfg(feature = "kv")]
 pub mod recent_files;
