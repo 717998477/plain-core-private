@@ -328,7 +328,11 @@ impl HostEvents {
             return Err("host disconnected".into());
         }
         let event = event.ok_or("host event type not allowed")?;
-        let _ = self.state.events.send(event);
+        if crate::http::websocket::host::is_screen_event(event.event_type) {
+            let _ = self.state.main_ws.screen_events.send(event);
+        } else {
+            let _ = self.state.events.send(event);
+        }
         Ok(())
     }
 }

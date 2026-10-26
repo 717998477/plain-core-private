@@ -59,6 +59,7 @@ fn rejecting_confirmation_retains_the_legacy_retry_close_code() {
     runtime.connections.lock().unwrap().insert(
         "connection".into(),
         Connection {
+            channel: Channel::Events,
             client_id: "client".into(),
             registered: false,
             pending: Some("request".into()),
@@ -436,11 +437,7 @@ async fn native_event_socket_registers_without_a_session_and_encrypts_events_wit
         serde_json::from_slice::<Value>(&payload).unwrap(),
         json!({"probe":true})
     );
-    for kind in [
-        "SCREEN_MIRROR_VIDEO",
-        "SCREEN_MIRROR_AUDIO",
-        "IMAGE_EDITOR_UPDATE",
-    ] {
+    for kind in ["IMAGE_EDITOR_UPDATE"] {
         let payload = vec![0, 1, 255, 0, 4];
         state
             .events
@@ -609,7 +606,7 @@ async fn encrypted_timed_controls_forward_exact_json_and_touch_inputs_once_and_r
     let responder = tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
             let result = match request["method"].as_str().unwrap() {
-                "systemCapabilities" => json!([]),
+                "systemCapabilities" => json!(["SCREEN_MIRROR"]),
                 "systemScreenMirrorResetTouch" => json!(true),
                 "systemScreenMirrorControls" => {
                     sent.send(request["params"]["inputs"].clone())
@@ -690,6 +687,7 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
         state.main_ws.connections.lock().unwrap().insert(
             id.into(),
             Connection {
+                channel: Channel::Events,
                 client_id: id.into(),
                 registered,
                 outgoing,

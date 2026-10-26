@@ -215,6 +215,7 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
         assert!(bridge.publish_text(kind, "{}".into()).await.is_err());
         assert!(bridge.publish_binary(kind, vec![]).is_err());
     }
+    let mut screen = server.runtime_state().main_ws.screen_events.subscribe();
     for kind in HOST_TEXT_TYPES {
         if matches!(
             *kind,
@@ -247,16 +248,34 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
             assert!(public.try_recv().is_err(), "{kind}");
         } else {
             bridge.publish_text(kind, "{}".into()).await.unwrap();
-            assert!(public.recv().await.unwrap().is_host_event());
+            let receiver = if crate::http::websocket::host::is_screen_event(kind) {
+                &mut screen
+            } else {
+                &mut public
+            };
+            assert!(receiver.recv().await.unwrap().is_host_event());
         }
     }
     for kind in HOST_BINARY_TYPES {
         bridge.publish_binary(kind, vec![1, 2, 3]).unwrap();
         assert_eq!(
-            public.recv().await.unwrap().binary_payload,
+            screen.recv().await.unwrap().binary_payload,
             Some(vec![1, 2, 3])
         );
     }
+    for _ in 0..300 {
+        bridge
+            .publish_binary("SCREEN_MIRROR_VIDEO", vec![1, 2, 3])
+            .unwrap();
+    }
+    assert!(matches!(
+        screen.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+    ));
+    assert!(matches!(
+        public.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
     assert!(
         tokio::time::timeout(Duration::from_millis(20), bridge.next_event())
             .await

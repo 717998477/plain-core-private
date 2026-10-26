@@ -34,6 +34,7 @@ pub(crate) fn build_router(state: ServerState, receiver: watch::Receiver<bool>) 
                 .layer(DefaultBodyLimit::max(15 * 60 * 1000 * 1000)),
         )
         .route("/", get(crate::http::websocket::host::upgrade))
+        .route("/screen", get(crate::http::websocket::host::upgrade_screen))
         .route(
             "/media/:id",
             get(crate::services::casting::cast_runtime::media),

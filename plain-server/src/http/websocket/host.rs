@@ -1,4 +1,3 @@
-use plain_rs::prefs::security::PasswordType;
 use crate::assembly::server::ServerState;
 use axum::{
     extract::{
@@ -9,17 +8,39 @@ use axum::{
 };
 use futures_util::StreamExt;
 use plain_rs::events::WsEvent;
+use plain_rs::prefs::security::PasswordType;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::HashMap, net::SocketAddr, sync::Mutex, time::Duration};
 use tokio::sync::mpsc;
 
-#[derive(Default)]
 pub(crate) struct Runtime {
+    pub(crate) screen_events: tokio::sync::broadcast::Sender<WsEvent>,
     connections: Mutex<HashMap<String, Connection>>,
     replay: crate::http::auth::replay::Replay,
 }
+impl Default for Runtime {
+    fn default() -> Self {
+        Self {
+            connections: Mutex::default(),
+            replay: Default::default(),
+            screen_events: tokio::sync::broadcast::channel(256).0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Channel {
+    Events,
+    Screen,
+}
+
+pub(crate) fn is_screen_event(kind: &str) -> bool {
+    matches!(kind, "SCREEN_MIRROR_VIDEO" | "SCREEN_MIRROR_AUDIO")
+}
+
 struct Connection {
+    channel: Channel,
     client_id: String,
     registered: bool,
     outgoing: mpsc::Sender<Message>,
@@ -39,7 +60,9 @@ impl Runtime {
             .lock()
             .unwrap()
             .values()
-            .filter(|c| c.registered && c.closing.borrow().is_none())
+            .filter(|c| {
+                c.channel == Channel::Events && c.registered && c.closing.borrow().is_none()
+            })
             .map(|c| c.client_id.clone())
             .collect();
         ids.sort();
@@ -132,9 +155,26 @@ pub(crate) async fn upgrade(
     let Some(ws) = ws else {
         return crate::http::routes::static_host::fallback(State(state), request).await;
     };
-    ws.on_upgrade(move |socket| run(socket, state, params, remote.ip().to_string()))
+    ws.on_upgrade(move |socket| {
+        run(
+            socket,
+            state,
+            params,
+            remote.ip().to_string(),
+            Channel::Events,
+        )
+    })
+    .into_response()
+}
+pub(crate) async fn upgrade_screen(
+    State(state): State<ServerState>,
+    Query(params): Query<Params>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    ws.on_upgrade(move |socket| run(socket, state, params, String::new(), Channel::Screen))
         .into_response()
 }
+
 async fn completed(state: &ServerState, result: &Value) {
     let mut request = result["request"].clone();
     if let Some(request) = request.as_object_mut() {
@@ -142,7 +182,17 @@ async fn completed(state: &ServerState, result: &Value) {
     }
     let _ = state.events.send(WsEvent::broadcast("WEB_LOGIN_COMPLETED", json!({"request":request,"chatPaired":result["response"]["chatPaired"],"clientIp":result["clientIp"]}).to_string()));
 }
-async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: String) {
+async fn run(
+    mut socket: WebSocket,
+    mut state: ServerState,
+    params: Params,
+    ip: String,
+    channel: Channel,
+) {
+    if channel == Channel::Screen && params.auth.is_some() {
+        let _ = socket.send(close(1008, "invalid_request")).await;
+        return;
+    }
     if !enabled(&state) || params.cid.is_empty() {
         let reason = if params.cid.is_empty() {
             "`cid` is missing"
@@ -158,6 +208,7 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
     state.main_ws.connections.lock().unwrap().insert(
         id.clone(),
         Connection {
+            channel,
             client_id: params.cid.clone(),
             registered: false,
             outgoing: sender,
@@ -167,7 +218,10 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
     );
     let mut registered = false;
     let mut stream = None;
-    let mut receiver = state.events.subscribe();
+    let mut receiver = match channel {
+        Channel::Events => state.events.subscribe(),
+        Channel::Screen => state.main_ws.screen_events.subscribe(),
+    };
     let mut pending: Option<String> = None;
     let mut temporary_channel = None;
     let mut temporary_started = false;
@@ -264,14 +318,27 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
                     Err(()) => { let _ = socket.send(close(1013,"invalid_request")).await; break; }
                 };
                 if !registered {
+                    if channel == Channel::Screen {
+                        if let Err(error) = crate::services::capabilities::require(&state.host, "SCREEN_MIRROR").await {
+                            log::warn!("Screen mirror connection: {error}");
+                            let _ = socket.send(close(1008, "unsupported_capability")).await;
+                            break;
+                        }
+                    }
                     stream = Some(plain_rs::protocols::websocket::Stream::new(&frame));
                     registered = true;
                     if let Some(c) = state.main_ws.connections.lock().unwrap().get_mut(&id) { c.registered = true; }
-                    state.main_ws.changed(&state);
-                                        let _ = state.mobile.mms.replay();
-                    if let Err(error) = state.sms_sends.replay() { log::error!("SMS send replay: {error}"); }
-                    let _ = state.events.send(WsEvent::broadcast("WEB_SOCKET_REGISTERED", "{}".into()));
+                    if channel == Channel::Events {
+                        state.main_ws.changed(&state);
+                        let _ = state.mobile.mms.replay();
+                        if let Err(error) = state.sms_sends.replay() { log::error!("SMS send replay: {error}"); }
+                        let _ = state.events.send(WsEvent::broadcast("WEB_SOCKET_REGISTERED", "{}".into()));
+                    }
                 } else {
+                    if channel != Channel::Events {
+                        let _ = socket.send(close(1008, "invalid_request")).await;
+                        break;
+                    }
                     let controls = controls(&plain);
                     if !controls.is_empty() {
                         if let Err(error) = crate::services::capabilities::require(&state.host, "SCREEN_MIRROR").await {
@@ -288,6 +355,7 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
             },
             event = receiver.recv(), if registered => {
                 let event = match event { Ok(event) => event, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { let _ = socket.send(close(1013,"slow_client")).await; break; }, Err(_) => break };
+                if is_screen_event(event.event_type) != (channel == Channel::Screen) { continue; }
                 if event.target_cid.as_ref().is_some_and(|cid| cid != &params.cid) { continue; }
                 let Some(event) = event.into_public() else { continue; };
                 if !enabled(&state) { break; }
@@ -324,8 +392,11 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
         .await;
     }
     state.main_ws.connections.lock().unwrap().remove(&id);
-    state.main_ws.changed(&state);
-    if registered
+    if channel == Channel::Events {
+        state.main_ws.changed(&state);
+    }
+    if channel == Channel::Events
+        && registered
         && !state
             .main_ws
             .snapshot()
@@ -340,10 +411,14 @@ async fn run(mut socket: WebSocket, mut state: ServerState, params: Params, ip: 
             log::warn!("Discovery client cleanup: {error}");
         }
     }
-    if state.main_ws.snapshot().is_empty() {
+    if channel == Channel::Events && state.main_ws.snapshot().is_empty() {
         match crate::services::capabilities::snapshot(&state.host).await {
             Ok(capabilities) if capabilities.iter().any(|value| value == "SCREEN_MIRROR") => {
-                if let Err(error) = state.host.call("systemScreenMirrorResetTouch", json!({})).await {
+                if let Err(error) = state
+                    .host
+                    .call("systemScreenMirrorResetTouch", json!({}))
+                    .await
+                {
                     log::warn!("Screen mirror touch cleanup: {error}");
                 }
             }
