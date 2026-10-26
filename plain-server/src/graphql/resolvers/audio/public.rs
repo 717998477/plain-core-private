@@ -1,6 +1,7 @@
 use crate::graphql::resolvers::tags::domain_types::Tag;
 use crate::graphql::types::Instant;
 use crate::graphql::types::Long;
+use crate::host::audio::AudioPlaybackFacts;
 use crate::host::bridge::Host;
 use crate::http::auth::public_gate;
 use crate::services::audio::host::Audio as AudioService;
@@ -348,17 +349,23 @@ impl AudioQuery {
             .await?;
         let mode = domain::play_mode(prefs(ctx))?;
         let player = if is_local(ctx) {
-            host_call(ctx, "systemAudioPlaybackState", json!({})).await?
+            ctx.data_unchecked::<Arc<Host>>()
+                .audio_playback_facts()
+                .await
+                .map_err(async_graphql::Error::new)?
         } else {
-            json!({"isPlaying": false, "positionMs": current.position_ms})
+            AudioPlaybackFacts {
+                is_playing: false,
+                position_ms: current.position_ms,
+            }
         };
         Ok(AudioPlayback {
             revision: Long(current.revision),
             media_id: media_id.map(Into::into),
             path: Some(current.path).filter(|path| !path.is_empty()),
             mode,
-            is_playing: crate::graphql::types::facts::flag(&player, "isPlaying"),
-            position_ms: Long(crate::graphql::types::facts::integer(&player, "positionMs")),
+            is_playing: player.is_playing,
+            position_ms: Long(player.position_ms),
         })
     }
 }
@@ -702,13 +709,6 @@ fn library_sort(
 
 fn prefs<'a>(ctx: &'a Context<'_>) -> &'a Arc<plain_rs::prefs::Prefs> {
     ctx.data_unchecked::<Arc<plain_rs::prefs::Prefs>>()
-}
-
-async fn host_call(ctx: &Context<'_>, method: &str, params: Value) -> async_graphql::Result<Value> {
-    ctx.data_unchecked::<Arc<Host>>()
-        .call(method, params)
-        .await
-        .map_err(async_graphql::Error::new)
 }
 
 #[cfg(test)]

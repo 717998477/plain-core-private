@@ -1,32 +1,19 @@
 use crate::assembly::server::ServerState;
+use crate::host::audio::AudioHostReport;
 use plain_rs::media::audio::{playback, queue::AudioTrack};
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Progress {
-    path: String,
-    revision: i64,
-    position_ms: i64,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Transition {
-    path: String,
-    revision: i64,
-}
 pub(crate) async fn accept(
     state: &ServerState,
     generation: u64,
     kind: &str,
     payload: &str,
 ) -> Result<bool, String> {
+    let Some(report) = AudioHostReport::decode(kind, payload)? else {
+        return Ok(false);
+    };
     let host = state.host.clone();
     let audio = &state.audio;
-    match kind {
-        "AUDIO_PROGRESS_REPORTED" => {
-            let report: Progress =
-                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+    match report {
+        AudioHostReport::Progress(report) => {
             audio
                 .run_playback(move |db, _| {
                     if !host.is_current(generation) {
@@ -39,9 +26,7 @@ pub(crate) async fn accept(
                 .await
                 .map_err(|error| error.message)?;
         }
-        "AUDIO_STARTED_REPORTED" => {
-            let report: Transition =
-                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+        AudioHostReport::Started(report) => {
             let accepted = audio
                 .run_playback(move |db, _| {
                     if !host.is_current(generation) {
@@ -66,9 +51,7 @@ pub(crate) async fn accept(
                 publish_library_updated(&state.events);
             }
         }
-        "AUDIO_COMPLETED_REPORTED" => {
-            let report: Transition =
-                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+        AudioHostReport::Completed(report) => {
             if report.path.is_empty() || report.revision < 0 {
                 return Err("invalid audio completion".into());
             }
@@ -102,7 +85,6 @@ pub(crate) async fn accept(
                 ));
             }
         }
-        _ => return Ok(false),
     }
     Ok(true)
 }

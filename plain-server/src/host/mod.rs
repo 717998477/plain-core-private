@@ -1,4 +1,7 @@
 #[cfg(feature = "core")]
+pub(crate) mod audio;
+
+#[cfg(feature = "core")]
 pub mod query;
 
 #[cfg(feature = "core")]
