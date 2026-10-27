@@ -10,10 +10,12 @@ fn stub(host: Arc<Host>, handler: impl Fn(&str, Value) -> Value + Send + 'static
             let Some(id) = request["id"].as_u64() else {
                 continue;
             };
-            let result = handler(
-                &request["method"].as_str().unwrap_or_default(),
-                request["params"].clone(),
-            );
+            let method = request["method"].as_str().unwrap_or_default();
+            let result = if method == "systemCapabilities" {
+                json!(["SCREEN_MIRROR", "ACCESSIBILITY"])
+            } else {
+                handler(method, request["params"].clone())
+            };
             let _ = host.reply(generation, json!({ "id": id, "result": result }));
         }
     });
@@ -125,10 +127,8 @@ async fn quality_is_read_from_the_single_rust_store() {
 #[tokio::test]
 async fn an_unknown_stored_quality_mode_reads_as_hd() {
     let (_dir, schema) = fixture();
-    stub(schema_host(&schema), |method, _| match method {
-        "systemScreenMirrorQuality" => json!({"mode":"WAT","resolution":1080}),
-        other => panic!("unexpected host call {other}"),
-    });
+    schema.data::<Arc<plain_rs::prefs::Prefs>>().unwrap().set("screen_mirror_quality", json!({"mode":"WAT","resolution":1080})).unwrap();
+    stub(schema_host(&schema), |method, _| panic!("unexpected host call {method}"));
     let response = schema
         .execute(r#"query { screenMirrorQuality { mode resolution } }"#)
         .await;
@@ -179,13 +179,7 @@ async fn start_screen_mirror_passes_the_audio_choice_through() {
 #[tokio::test]
 async fn quality_updates_send_the_mode_name_the_store_understands() {
     let (_dir, schema) = fixture();
-    stub(schema_host(&schema), |method, params| match method {
-        "systemUpdateScreenMirrorQuality" => {
-            assert_eq!(params["mode"], "SMOOTH");
-            json!(true)
-        }
-        other => panic!("unexpected host call {other}"),
-    });
+    stub(schema_host(&schema), |method, _| panic!("unexpected host call {method}"));
     let response = schema
         .execute(r#"mutation { updateScreenMirrorQuality(mode:SMOOTH) }"#)
         .await;
@@ -194,6 +188,7 @@ async fn quality_updates_send_the_mode_name_the_store_understands() {
         response.data.into_json().unwrap()["updateScreenMirrorQuality"],
         true
     );
+    assert_eq!(schema.data::<Arc<plain_rs::prefs::Prefs>>().unwrap().get::<Value>("screen_mirror_quality").unwrap(), Some(json!({"mode":"SMOOTH","resolution":720})));
 }
 
 #[tokio::test]

@@ -12,3 +12,6 @@ pub mod executor;
 
 #[cfg(feature = "core")]
 pub(crate) mod enum_literals;
+
+#[cfg(feature = "core")]
+pub mod subscriptions;

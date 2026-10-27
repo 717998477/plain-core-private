@@ -1,3 +1,4 @@
+use crate::host::bridge::Host;
 use super::*;
 use crate::graphql::schemas::public::PublicSchema;
 use plain_rs::db::Db;

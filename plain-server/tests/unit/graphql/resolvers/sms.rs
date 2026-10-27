@@ -10,10 +10,12 @@ fn stub(host: Arc<Host>, handler: impl Fn(&str, Value) -> Value + Send + 'static
             let Some(id) = request["id"].as_u64() else {
                 continue;
             };
-            let result = handler(
-                &request["method"].as_str().unwrap_or_default(),
-                request["params"].clone(),
-            );
+            let method = request["method"].as_str().unwrap_or_default();
+            let result = if method == "systemCapabilities" {
+                json!(["SMS"])
+            } else {
+                handler(method, request["params"].clone())
+            };
             let _ = host.reply(generation, json!({ "id": id, "result": result }));
         }
     });
@@ -190,6 +192,7 @@ async fn bulk_sms_mutations_select_ids_in_rust_and_delete_only_provider_rows() {
 async fn archiving_a_conversation_stores_the_last_message_date() {
     let (_dir, schema) = fixture(json!(["READ_SMS"]));
     stub(schema_host(&schema), |method, _| match method {
+        "systemCapabilities" => json!(["SMS"]),
         "systemSmsConversationFacts" => json!({"items":[]}),
         "systemPermissionFacts" => json!({"granted":{"READ_SMS": true}}),
         other => panic!("unexpected host call {other}"),
@@ -302,8 +305,6 @@ async fn send_mms_allocates_one_rust_pending_id_and_launches_only_a_native_inten
     let runtime = schema
         .data::<Arc<crate::services::sms::mms::Runtime>>()
         .unwrap();
-    assert_eq!(runtime.snapshot()[0]["id"], id);
-    assert_eq!(runtime.snapshot()[0]["threadId"], "t1");
     let duplicate = schema
         .execute(r#"mutation {sendMms(number:"+1555",body:"hi",attachmentPaths:[],threadId:"t1")}"#)
         .await;

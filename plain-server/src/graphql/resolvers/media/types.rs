@@ -36,7 +36,7 @@ impl MediaDataType {
 
 pub use crate::services::files::scanning::ScanState;
 
-#[derive(SimpleObject, Clone, Debug)]
+#[derive(SimpleObject, Clone, Debug, serde::Deserialize)]
 pub struct ScanProgress {
     pub indexed: i32,
     pub pending: Option<i32>,

@@ -5,7 +5,7 @@ use std::{
 };
 use tokio::sync::{Semaphore, broadcast, watch};
 
-#[derive(Clone, serde::Serialize, async_graphql::SimpleObject)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, async_graphql::SimpleObject)]
 #[serde(rename_all = "camelCase")]
 pub struct FeedSyncState {
     pub feed_id: async_graphql::ID,
@@ -56,6 +56,7 @@ pub struct SyncService {
     revision: std::sync::atomic::AtomicI64,
     notifications: Mutex<()>,
     leases: Mutex<BTreeMap<String, schedule::Lease>>,
+    execution_changed: tokio::sync::Notify,
 }
 impl SyncService {
     pub fn new(
@@ -74,8 +75,13 @@ impl SyncService {
             revision: std::sync::atomic::AtomicI64::new(0),
             notifications: Mutex::new(()),
             leases: Mutex::new(BTreeMap::new()),
+            execution_changed: tokio::sync::Notify::new(),
         })
     }
+    pub(crate) fn execution_state_changed(&self) {
+        self.execution_changed.notify_one();
+    }
+
     fn next_revision(&self) -> crate::graphql::types::Long {
         crate::graphql::types::Long(
             self.revision

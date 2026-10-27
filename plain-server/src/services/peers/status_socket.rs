@@ -67,7 +67,7 @@ pub(crate) async fn connect(
     let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(64 * 1024))
         .max_frame_size(Some(64 * 1024));
-    connect_with_config(url, ws_config).await
+    connect_with_config(url, ws_config, None).await
 }
 
 pub(crate) async fn connect_management(
@@ -75,9 +75,14 @@ pub(crate) async fn connect_management(
 ) -> anyhow::Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
 > {
+    let mut url = reqwest::Url::parse(url)?;
+    url.set_path("/graphql");
     connect_with_config(
-        url,
-        tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default(),
+        url.as_str(),
+        tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+            .max_message_size(Some(1024 * 1024))
+            .max_frame_size(Some(1024 * 1024)),
+        Some(crate::http::websocket::graphql::PROTOCOL),
     )
     .await
 }
@@ -85,16 +90,34 @@ pub(crate) async fn connect_management(
 async fn connect_with_config(
     url: &str,
     ws_config: tokio_tungstenite::tungstenite::protocol::WebSocketConfig,
+    protocol: Option<&str>,
 ) -> anyhow::Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
 > {
     let config = config()?;
-    Ok(tokio_tungstenite::connect_async_tls_with_config(
-        url,
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = url.into_client_request()?;
+    if let Some(protocol) = protocol {
+        request
+            .headers_mut()
+            .insert("sec-websocket-protocol", protocol.parse()?);
+    }
+    let (socket, response) = tokio_tungstenite::connect_async_tls_with_config(
+        request,
         Some(ws_config),
         false,
         Some(tokio_tungstenite::Connector::Rustls(Arc::new(config))),
     )
-    .await?
-    .0)
+    .await?;
+    if let Some(protocol) = protocol {
+        anyhow::ensure!(
+            response
+                .headers()
+                .get("sec-websocket-protocol")
+                .and_then(|value| value.to_str().ok())
+                == Some(protocol),
+            "Invalid subscription subprotocol"
+        );
+    }
+    Ok(socket)
 }

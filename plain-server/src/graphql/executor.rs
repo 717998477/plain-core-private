@@ -27,6 +27,7 @@ impl RequestClient {
     }
 }
 
+#[derive(Clone)]
 pub struct RequestContext {
     #[cfg(feature = "core")]
     state: Option<ServerState>,
@@ -72,6 +73,41 @@ impl RequestContext {
         self.origin
     }
 }
+impl RequestContext {
+    fn prepare(&self, request: Request) -> Result<Request, Response> {
+        let origin = self.origin();
+        let request = request.data(origin);
+        #[cfg(feature = "core")]
+        let request = match self.state.as_ref() {
+            Some(state) => {
+                let client_id = if origin == RequestOrigin::Local {
+                    match state.native_client_id() {
+                        Ok(client_id) => Some(client_id),
+                        Err(error) => {
+                            return Err(Response::from_errors(vec![
+                                async_graphql::ServerError::new(error, None),
+                            ]));
+                        }
+                    }
+                } else {
+                    self.remote_client_id.clone()
+                };
+                let request = request.data(state.clone());
+                match client_id {
+                    Some(client_id) => request
+                        .data(RequestClient {
+                            client_id: client_id.clone(),
+                        })
+                        .data(client_id),
+                    None => request,
+                }
+            }
+            None => request,
+        };
+        Ok(request)
+    }
+}
+
 pub async fn execute_graphql<
     Q: ObjectType + 'static,
     M: ObjectType + 'static,
@@ -82,34 +118,9 @@ pub async fn execute_graphql<
     context: RequestContext,
 ) -> Response {
     let changed = context.notify_changes && content_changes(&request);
-    let origin = context.origin();
-    let request = request.data(origin);
-    #[cfg(feature = "core")]
-    let request = match context.state.as_ref() {
-        Some(state) => {
-            let client_id = if origin == RequestOrigin::Local {
-                match state.native_client_id() {
-                    Ok(client_id) => Some(client_id),
-                    Err(error) => {
-                        return Response::from_errors(vec![async_graphql::ServerError::new(
-                            error, None,
-                        )]);
-                    }
-                }
-            } else {
-                context.remote_client_id.clone()
-            };
-            let request = request.data(state.clone());
-            match client_id {
-                Some(client_id) => request
-                    .data(RequestClient {
-                        client_id: client_id.clone(),
-                    })
-                    .data(client_id),
-                None => request,
-            }
-        }
-        None => request,
+    let request = match context.prepare(request) {
+        Ok(request) => request,
+        Err(response) => return response,
     };
     let response = schema.execute(request).await;
     if changed && response.errors.is_empty() {
@@ -226,6 +237,43 @@ impl GraphqlExecutor {
             RequestContext::local(self.state.clone()),
         )
         .await
+    }
+}
+
+#[cfg(feature = "core")]
+pub(crate) fn subscription_stream(
+    state: ServerState,
+    request: Request,
+    context: RequestContext,
+) -> futures_util::stream::BoxStream<'static, Response> {
+    use futures_util::StreamExt;
+    let valid = (|| {
+        let document = async_graphql::parser::parse_query(&request.query).ok()?;
+        let operations = document
+            .operations
+            .iter()
+            .filter(|(name, _)| {
+                request
+                    .operation_name
+                    .as_deref()
+                    .is_none_or(|selected| name.is_some_and(|name| name.as_str() == selected))
+            })
+            .collect::<Vec<_>>();
+        (operations.len() == 1
+            && operations[0].1.node.ty == async_graphql::parser::types::OperationType::Subscription)
+            .then_some(())
+    })()
+    .is_some();
+    let request = if valid {
+        context.prepare(request)
+    } else {
+        Err(Response::from_errors(vec![
+            async_graphql::ServerError::new("Subscription document required", None),
+        ]))
+    };
+    match request {
+        Ok(request) => state.public.execute_stream(request),
+        Err(response) => futures_util::stream::once(async move { response }).boxed(),
     }
 }
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 export function readApiSchema(directory = fileURLToPath(new URL('../schema/api/', import.meta.url))) {
   const roots = new Map()
   const definitions = readdirSync(directory).filter((name) => name.endsWith('.graphqls')).sort().map((name) => {
-    return readFileSync(join(directory, name), 'utf8').replace(/^(?:extend )?type (Query|Mutation) \{\n([\s\S]*?)^\}/gm, (_, name, fields) => {
+    return readFileSync(join(directory, name), 'utf8').replace(/^(?:extend )?type (Query|Mutation|Subscription) \{\n([\s\S]*?)^\}/gm, (_, name, fields) => {
       roots.set(name, [...(roots.get(name) ?? []), fields.trimEnd()])
       return ''
     }).trim()

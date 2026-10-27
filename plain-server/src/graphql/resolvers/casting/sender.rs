@@ -5,8 +5,9 @@ use crate::graphql::types::Long;
 use crate::services::casting::dlna_sender_runtime::{self as sender, Command};
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 
-#[derive(SimpleObject)]
-struct DlnaSenderDevice {
+#[derive(SimpleObject, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DlnaSenderDevice {
     id: async_graphql::ID,
     host_address: String,
     name: String,
@@ -22,8 +23,9 @@ impl From<sender::Device> for DlnaSenderDevice {
         }
     }
 }
-#[derive(SimpleObject)]
-struct DlnaSenderMedia {
+#[derive(SimpleObject, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DlnaSenderMedia {
     path: String,
     title: String,
     album_art: String,
@@ -68,8 +70,9 @@ impl From<DlnaMediaInput> for sender::Item {
         }
     }
 }
-#[derive(SimpleObject)]
-struct DlnaSenderState {
+#[derive(SimpleObject, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DlnaSenderState {
     version: Long,
     devices: Vec<DlnaSenderDevice>,
     current_device: Option<DlnaSenderDevice>,

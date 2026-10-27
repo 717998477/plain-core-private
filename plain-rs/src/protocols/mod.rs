@@ -6,3 +6,6 @@ pub mod mdns;
 
 #[cfg(feature = "crypto")]
 pub mod websocket;
+
+#[cfg(feature = "crypto")]
+pub mod graphql;

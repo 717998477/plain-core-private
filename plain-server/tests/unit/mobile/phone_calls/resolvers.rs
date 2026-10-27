@@ -10,10 +10,12 @@ fn stub(host: Arc<Host>, handler: impl Fn(&str, Value) -> Value + Send + 'static
             let Some(id) = request["id"].as_u64() else {
                 continue;
             };
-            let result = handler(
-                &request["method"].as_str().unwrap_or_default(),
-                request["params"].clone(),
-            );
+            let method = request["method"].as_str().unwrap_or_default();
+            let result = if method == "systemCapabilities" {
+                json!(["CALLS", "CALL_PHONE"])
+            } else {
+                handler(method, request["params"].clone())
+            };
             let _ = host.reply(generation, json!({ "id": id, "result": result }));
         }
     });

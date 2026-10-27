@@ -36,6 +36,7 @@ async fn preflight(
 async fn cors_uses_actual_scheme_authority_and_safe_preflight_headers() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    core.set_build_debug(false);
     let response = preflight(&core, "https://device.local", "https").await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(

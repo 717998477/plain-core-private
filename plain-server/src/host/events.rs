@@ -50,6 +50,39 @@ impl HostEvents {
         })
     }
 
+    pub async fn observe_session_callbacks(&self) -> Result<(), String> {
+        const CALLBACKS: &[&str] = &[
+            "WEB_REQUEST_RECEIVED",
+            "WEB_LOGIN_REQUESTED",
+            "WEB_LOGIN_CLOSED",
+            "WEB_LOGIN_COMPLETED",
+        ];
+        while let Some(delivery) = self.next_delivery(Some(CALLBACKS)).await {
+            let event = delivery.event;
+            let kind = event.event_type;
+            let method = match kind {
+                "WEB_REQUEST_RECEIVED" => "systemWebActivity",
+                "WEB_LOGIN_REQUESTED" => "systemWebLoginRequested",
+                "WEB_LOGIN_CLOSED" => "systemWebLoginClosed",
+                "WEB_LOGIN_COMPLETED" => "systemWebLoginCompleted",
+                _ => unreachable!("session callback selection changed"),
+            };
+            let params = if kind == "WEB_REQUEST_RECEIVED" {
+                json!({})
+            } else {
+                serde_json::from_str(&event.payload).map_err(|error| error.to_string())?
+            };
+            tokio::select! {
+                biased;
+                _ = self.wait_disconnected() => return Ok(()),
+                result = self.state.host.call_current(self.generation, method, params) => {
+                    if let Err(error) = result { log::warn!("Session host callback {method} failed: {error}"); }
+                },
+            };
+        }
+        Ok(())
+    }
+
     pub async fn prefs_changed(&self) -> Result<(), String> {
         let mut previous = self.preferences.lock().await;
         let current =
@@ -94,7 +127,15 @@ impl HostEvents {
             value = requests.recv() => value,
         }
     }
-    pub async fn next_event(&self) -> Option<Value> {
+    pub async fn next_event(&self, selected: Option<&[&str]>) -> Option<Value> {
+        self.next_delivery(selected)
+            .await
+            .map(crate::native::events::Delivery::into_json)
+    }
+    async fn next_delivery(
+        &self,
+        selected: Option<&[&str]>,
+    ) -> Option<crate::native::events::Delivery> {
         let mut events = self.events.lock().await;
         loop {
             let delivery = tokio::select! {
@@ -102,8 +143,10 @@ impl HostEvents {
                 _ = self.wait_disconnected() => return None,
                 delivery = events.next_delivery() => delivery?,
             };
-            if delivery.event.binary_payload.is_none() {
-                return Some(delivery.into_json());
+            if delivery.event.binary_payload.is_none()
+                && selected.is_none_or(|types| types.contains(&delivery.event.event_type))
+            {
+                return Some(delivery);
             }
         }
     }
@@ -146,7 +189,7 @@ impl HostEvents {
                     };
                     self.reply(reply)?;
                 },
-                event = self.next_event() => {
+                event = self.next_event(None) => {
                     match event {
                         Some(event) => events(event)?,
                         None => break,
@@ -187,138 +230,349 @@ impl HostEvents {
         self.state.thumbnails.submit(token, bytes)
     }
 
-    pub async fn publish_text(&self, kind: &str, payload: String) -> Result<(), String> {
+    pub fn execution_state_changed(&self) -> Result<(), String> {
         if !self.state.host.is_current(self.generation) {
             return Err("host disconnected".into());
         }
-        if crate::services::discovery::pairing_runtime::accept_report(&self.state, kind, &payload)
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            return Ok(());
+        self.state.feeds.execution_state_changed();
+        Ok(())
+    }
+
+    pub fn grant_background_execution(&self, id: String, deadline_ms: i64) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "BACKGROUND_EXECUTION_GRANTED" {
-            return crate::services::feeds::sync_service::schedule::grant(
-                &self.state,
-                serde_json::from_str(&payload).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string());
+        crate::services::feeds::sync_service::schedule::grant(
+            &self.state,
+            id,
+            deadline_ms,
+            self.generation,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    pub async fn revoke_background_execution(&self, id: &str) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "BACKGROUND_EXECUTION_REVOKED" {
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Revoke {
-                id: String,
-            }
-            let value: Revoke =
-                serde_json::from_str(&payload).map_err(|error| error.to_string())?;
-            crate::services::feeds::sync_service::schedule::revoke(&self.state, &value.id).await;
-            return Ok(());
+        crate::services::feeds::sync_service::schedule::revoke(&self.state, id).await;
+        Ok(())
+    }
+
+    pub async fn report_pairing_response(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "CLIPBOARD_REPORTED" {
-            return crate::services::clipboard::report(&self.state, &payload);
+        crate::services::discovery::pairing_runtime::execute(
+            &self.state,
+            crate::services::discovery::pairing_runtime::Request::Complete {
+                response: serde_json::from_str(&payload).map_err(|error| error.to_string())?,
+                sender_ip: String::new(),
+            },
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
+    pub async fn report_notification(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "NOTIFICATION_REPORTED" {
-            return crate::graphql::resolvers::notifications::public::publish(
-                &self.state.prefs,
-                &self.state.events,
-                serde_json::from_str(&payload).map_err(|error| error.to_string())?,
-            );
+
+        return crate::graphql::resolvers::notifications::public::publish(
+            &self.state.prefs,
+            &self.state.events,
+            serde_json::from_str(&payload).map_err(|error| error.to_string())?,
+        );
+    }
+
+    pub async fn report_image_catalog_changed(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "BLE_ADVERTISING_FACTS_REPORTED" {
-            let facts = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
-            return self
-                .state
-                .ble_advertising
-                .report(&self.state, self.generation, facts)
-                .await
-                .map_err(|error| error.to_string());
+
+        serde_json::from_str::<()>(&payload).map_err(|error| error.to_string())?;
+        self.state.image_models.catalog_changed();
+        return Ok(());
+    }
+
+    pub async fn report_network_interfaces_changed(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "BLE_SCAN_STATE_REPORTED" {
-            #[derive(serde::Deserialize)]
-            #[serde(rename_all = "camelCase", deny_unknown_fields)]
-            struct ScanState {
-                scan_id: String,
-                active: bool,
-            }
-            let value: ScanState =
-                serde_json::from_str(&payload).map_err(|error| error.to_string())?;
-            let id = uuid::Uuid::parse_str(&value.scan_id).map_err(|error| error.to_string())?;
-            return self
-                .state
-                .ble_scans
-                .report_state(self.generation, id, value.active)
-                .map_err(|error| error.to_string());
+
+        serde_json::from_str::<()>(&payload).map_err(|error| error.to_string())?;
+        self.state.mdns.network_changed(self.state.clone());
+        let _ = self.state.events.send(WsEvent::broadcast(
+            plain_rs::events::NETWORK_CHANGED,
+            "{}".into(),
+        ));
+        return Ok(());
+    }
+
+    pub async fn report_ble_advertisement(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "BLE_ADVERTISEMENT_REPORTED" {
-            #[derive(serde::Deserialize)]
-            #[serde(rename_all = "camelCase", deny_unknown_fields)]
-            struct Advertisement {
-                scan_id: String,
-                short_id: String,
-            }
-            let value: Advertisement =
-                serde_json::from_str(&payload).map_err(|error| error.to_string())?;
-            crate::services::discovery::ble_scan::seen(
-                &self.state,
-                &value.scan_id,
-                &value.short_id,
-            )
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Advertisement {
+            scan_id: String,
+            short_id: String,
+        }
+        let value: Advertisement =
+            serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+        crate::services::discovery::ble_scan::seen(&self.state, &value.scan_id, &value.short_id)
             .await
             .map_err(|error| error.to_string())?;
-            return Ok(());
+        return Ok(());
+    }
+
+    pub async fn report_ble_scan_state(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "SMS_PART_SENT_REPORTED" {
-            self.state
-                .sms_sends
-                .report(serde_json::from_str(&payload).map_err(|error| error.to_string())?)
-                .map_err(|error| error.to_string())?;
-            return Ok(());
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct ScanState {
+            scan_id: String,
+            active: bool,
         }
-        if kind == "NETWORK_INTERFACES_CHANGED" {
-            serde_json::from_str::<()>(&payload).map_err(|error| error.to_string())?;
-            self.state.mdns.network_changed(self.state.clone());
-            let _ = self.state.events.send(WsEvent::broadcast(
-                plain_rs::events::NETWORK_CHANGED,
-                "{}".into(),
-            ));
-            return Ok(());
+        let value: ScanState = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+        let id = uuid::Uuid::parse_str(&value.scan_id).map_err(|error| error.to_string())?;
+        return self
+            .state
+            .ble_scans
+            .report_state(self.generation, id, value.active)
+            .map_err(|error| error.to_string());
+    }
+
+    pub async fn report_ble_advertising_facts(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if crate::services::casting::receiver::reports::accept(
+
+        let facts = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+        return self
+            .state
+            .ble_advertising
+            .report(&self.state, self.generation, facts)
+            .await
+            .map_err(|error| error.to_string());
+    }
+
+    pub async fn report_media_catalog_changed(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+
+        return crate::services::files::catalog_events::report(&self.state.events, &payload);
+    }
+
+    pub async fn report_screen_mirror_state(&self, payload: String) -> Result<(), String> {
+        self.publish(WsEvent::host_text("SCREEN_MIRRORING", payload))
+    }
+
+    pub async fn report_screen_mirror_codec(&self, payload: String) -> Result<(), String> {
+        self.publish(WsEvent::host_text("SCREEN_MIRROR_VIDEO_CODEC", payload))
+    }
+
+    pub async fn report_screen_mirror_audio_granted(&self, payload: String) -> Result<(), String> {
+        self.publish(WsEvent::host_text("SCREEN_MIRROR_AUDIO_GRANTED", payload))
+    }
+
+    pub async fn report_sms_provider_changed(&self, payload: String) -> Result<(), String> {
+        self.publish(WsEvent::host_text("SMS_PROVIDER_CHANGED", payload))
+    }
+
+    pub async fn report_sms_part_sent(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+
+        self.state
+            .sms_sends
+            .report(serde_json::from_str(&payload).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    pub async fn report_clipboard(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+
+        return crate::services::clipboard::report(&self.state, &payload);
+    }
+
+    pub async fn report_permissions(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+
+        self.state.mdns.permissions_changed(self.state.clone());
+        if let Err(error) = self
+            .state
+            .ble_advertising
+            .reconcile(&self.state, self.generation)
+            .await
+        {
+            log::warn!("BLE advertising permission recovery failed: {error}");
+        }
+
+        self.publish(WsEvent::host_text("PERMISSIONS_UPDATED", payload))
+    }
+
+    pub async fn report_dlna_position(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+        crate::services::casting::receiver::reports::accept(
             &self.state,
             self.generation,
-            kind,
+            "DLNA_POSITION_REPORTED",
             &payload,
         )
-        .await?
-        {
-            return Ok(());
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn report_dlna_playback(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "IMAGE_CATALOG_CHANGED" {
-            serde_json::from_str::<()>(&payload).map_err(|error| error.to_string())?;
-            self.state.image_models.catalog_changed();
-            return Ok(());
+        crate::services::casting::receiver::reports::accept(
+            &self.state,
+            self.generation,
+            "DLNA_PLAYBACK_REPORTED",
+            &payload,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn report_dlna_seek_consumed(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
         }
-        if kind == "PERMISSIONS_UPDATED" {
-            self.state.mdns.permissions_changed(self.state.clone());
-            if let Err(error) = self
-                .state
-                .ble_advertising
-                .reconcile(&self.state, self.generation)
+        crate::services::casting::receiver::reports::accept(
+            &self.state,
+            self.generation,
+            "DLNA_SEEK_CONSUMED_REPORTED",
+            &payload,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn report_dlna_stopped(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+        crate::services::casting::receiver::reports::accept(
+            &self.state,
+            self.generation,
+            "DLNA_STOPPED_REPORTED",
+            &payload,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn report_audio_started(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+        crate::services::audio::reports::accept(
+            &self.state,
+            self.generation,
+            "AUDIO_STARTED_REPORTED",
+            &payload,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn report_audio_completed(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+        crate::services::audio::reports::accept(
+            &self.state,
+            self.generation,
+            "AUDIO_COMPLETED_REPORTED",
+            &payload,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn report_audio_progress(&self, payload: String) -> Result<(), String> {
+        if !self.state.host.is_current(self.generation) {
+            return Err("host disconnected".into());
+        }
+        crate::services::audio::reports::accept(
+            &self.state,
+            self.generation,
+            "AUDIO_PROGRESS_REPORTED",
+            &payload,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub fn report_screen_mirror_video(&self, payload: Vec<u8>) -> Result<(), String> {
+        self.publish(WsEvent::host_binary("SCREEN_MIRROR_VIDEO", payload))
+    }
+
+    pub fn report_screen_mirror_audio(&self, payload: Vec<u8>) -> Result<(), String> {
+        self.publish(WsEvent::host_binary("SCREEN_MIRROR_AUDIO", payload))
+    }
+
+    pub async fn publish_text(&self, kind: &str, payload: String) -> Result<(), String> {
+        match kind {
+            "PAIRING_RESPONSE_REPORTED" => self.report_pairing_response(payload).await,
+            "NOTIFICATION_REPORTED" => self.report_notification(payload).await,
+            "IMAGE_CATALOG_CHANGED" => self.report_image_catalog_changed(payload).await,
+            "NETWORK_INTERFACES_CHANGED" => self.report_network_interfaces_changed(payload).await,
+            "BLE_ADVERTISEMENT_REPORTED" => self.report_ble_advertisement(payload).await,
+            "BLE_SCAN_STATE_REPORTED" => self.report_ble_scan_state(payload).await,
+            "BLE_ADVERTISING_FACTS_REPORTED" => self.report_ble_advertising_facts(payload).await,
+            "MEDIA_CATALOG_CHANGED" => self.report_media_catalog_changed(payload).await,
+            "SCREEN_MIRRORING" => self.report_screen_mirror_state(payload).await,
+            "SCREEN_MIRROR_VIDEO_CODEC" => self.report_screen_mirror_codec(payload).await,
+            "SCREEN_MIRROR_AUDIO_GRANTED" => self.report_screen_mirror_audio_granted(payload).await,
+            "SMS_PROVIDER_CHANGED" => self.report_sms_provider_changed(payload).await,
+            "SMS_PART_SENT_REPORTED" => self.report_sms_part_sent(payload).await,
+            "CLIPBOARD_REPORTED" => self.report_clipboard(payload).await,
+            "PERMISSIONS_UPDATED" => self.report_permissions(payload).await,
+            "DLNA_POSITION_REPORTED" => self.report_dlna_position(payload).await,
+            "DLNA_PLAYBACK_REPORTED" => self.report_dlna_playback(payload).await,
+            "DLNA_SEEK_CONSUMED_REPORTED" => self.report_dlna_seek_consumed(payload).await,
+            "DLNA_STOPPED_REPORTED" => self.report_dlna_stopped(payload).await,
+            "AUDIO_STARTED_REPORTED" => self.report_audio_started(payload).await,
+            "AUDIO_COMPLETED_REPORTED" => self.report_audio_completed(payload).await,
+            "AUDIO_PROGRESS_REPORTED" => self.report_audio_progress(payload).await,
+            _ => {
+                if !self.state.host.is_current(self.generation) {
+                    return Err("host disconnected".into());
+                }
+                if crate::services::discovery::pairing_runtime::accept_report(
+                    &self.state,
+                    kind,
+                    &payload,
+                )
                 .await
-            {
-                log::warn!("BLE advertising permission recovery failed: {error}");
+                .map_err(|error| error.to_string())?
+                {
+                    return Ok(());
+                }
+                self.publish(WsEvent::host_text(kind, payload))
             }
         }
-        if kind == "MEDIA_CATALOG_CHANGED" {
-            return crate::services::files::catalog_events::report(&self.state.events, &payload);
-        }
-        if crate::services::audio::reports::accept(&self.state, self.generation, kind, &payload)
-            .await?
-        {
-            return Ok(());
-        }
-        self.publish(WsEvent::host_text(kind, payload))
     }
     pub fn publish_binary(&self, kind: &str, payload: Vec<u8>) -> Result<(), String> {
         self.publish(WsEvent::host_binary(kind, payload))

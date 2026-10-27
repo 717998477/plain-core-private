@@ -143,7 +143,7 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
         assert!(matches!(response, ClientMessage::Binary(_)));
         let event = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
-                let event = bridge.next_event().await.unwrap();
+                let event = bridge.next_event(None).await.unwrap();
                 if event["type"] == "WEB_LOGIN_REQUESTED" {
                     break event;
                 }
@@ -419,7 +419,7 @@ async fn native_event_socket_registers_without_a_session_and_encrypts_events_wit
     state
         .events
         .send(plain_rs::events::WsEvent::broadcast(
-            "CONTENT_CHANGED",
+            "TEST_PROBE",
             json!({"probe":true}).to_string(),
         ))
         .unwrap();
@@ -432,7 +432,7 @@ async fn native_event_socket_registers_without_a_session_and_encrypts_events_wit
         panic!("Expected encrypted event bytes")
     };
     let (kind, payload) = stream.decode(&bytes, &key).unwrap();
-    assert_eq!(kind, "CONTENT_CHANGED");
+    assert_eq!(kind, "TEST_PROBE");
     assert_eq!(
         serde_json::from_slice::<Value>(&payload).unwrap(),
         json!({"probe":true})
@@ -554,7 +554,7 @@ async fn pairing_success_keeps_native_credentials_out_of_every_network_event_soc
         WsEvent::broadcast(plain_rs::events::WS_PAIRING_SUCCESS, "not json".into()),
         WsEvent::broadcast_binary(plain_rs::events::WS_PAIRING_SUCCESS, key.into_bytes()),
         WsEvent::broadcast("WEB_LOGIN_REQUESTED", "private".into()),
-        WsEvent::broadcast("CONTENT_CHANGED", json!({"probe":true}).to_string()),
+        WsEvent::broadcast("TEST_PROBE", json!({"probe":true}).to_string()),
     ] {
         state.events.send(event).unwrap();
     }
@@ -565,10 +565,10 @@ async fn pairing_success_keeps_native_credentials_out_of_every_network_event_soc
             .unwrap()
             .unwrap();
         let ClientMessage::Binary(frame) = message else {
-            panic!("Expected encrypted content event")
+            panic!("Expected encrypted probe event")
         };
         let (kind, payload) = stream.decode(&frame, &session_key).unwrap();
-        assert_eq!(kind, "CONTENT_CHANGED");
+        assert_eq!(kind, "TEST_PROBE");
         assert_eq!(
             serde_json::from_slice::<Value>(&payload).unwrap(),
             json!({"probe":true})
@@ -700,37 +700,37 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
     insert("unregistered-client", false);
     let bridge = core.host_events().unwrap();
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "HTTP_SERVER_STATE_CHANGED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
     );
-    let initial = bridge.next_event().await.unwrap();
+    let initial = bridge.next_event(None).await.unwrap();
     assert_eq!(initial["type"], "ONLINE_CLIENTS_UPDATED");
     assert_eq!(
         serde_json::from_str::<Value>(initial["payload"].as_str().unwrap()).unwrap(),
         json!(["owned-client"])
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "PEER_TRANSPORT_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "DLNA_SENDER_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "APP_UPDATE_DOWNLOAD_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "PEER_NOTIFICATIONS_UPDATED"
     );
 
@@ -748,7 +748,7 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
         .unwrap()
         .remove("owned-client");
     insert("current-client", true);
-    let current = bridge.next_event().await.unwrap();
+    let current = bridge.next_event(None).await.unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(current["payload"].as_str().unwrap()).unwrap(),
         json!(["current-client"])
@@ -760,80 +760,80 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
             .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
             .unwrap();
     }
-    let reconcile = bridge.next_event().await.unwrap();
+    let reconcile = bridge.next_event(None).await.unwrap();
     assert_eq!(reconcile["type"], "CONTENT_CHANGED");
     assert_eq!(reconcile["reconcile"], true);
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "HTTP_SERVER_STATE_CHANGED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
     );
-    let recovered = bridge.next_event().await.unwrap();
+    let recovered = bridge.next_event(None).await.unwrap();
     assert_eq!(recovered["type"], "ONLINE_CLIENTS_UPDATED");
     assert_eq!(
         serde_json::from_str::<Value>(recovered["payload"].as_str().unwrap()).unwrap(),
         json!(["current-client"])
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "PEER_TRANSPORT_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "DLNA_SENDER_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "APP_UPDATE_DOWNLOAD_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "PEER_NOTIFICATIONS_UPDATED"
     );
 
     let replacement = core.host_events().unwrap();
-    assert!(bridge.next_event().await.is_none());
+    assert!(bridge.next_event(None).await.is_none());
     assert_eq!(
-        replacement.next_event().await.unwrap()["type"],
+        replacement.next_event(None).await.unwrap()["type"],
         "HTTP_SERVER_STATE_CHANGED"
     );
     assert_eq!(
-        replacement.next_event().await.unwrap()["type"],
+        replacement.next_event(None).await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
     );
-    let restored = replacement.next_event().await.unwrap();
+    let restored = replacement.next_event(None).await.unwrap();
     assert_eq!(restored["type"], "ONLINE_CLIENTS_UPDATED");
     assert_eq!(
         serde_json::from_str::<Value>(restored["payload"].as_str().unwrap()).unwrap(),
         json!(["current-client"])
     );
     assert_eq!(
-        replacement.next_event().await.unwrap()["type"],
+        replacement.next_event(None).await.unwrap()["type"],
         "PEER_TRANSPORT_UPDATED"
     );
     assert_eq!(
-        replacement.next_event().await.unwrap()["type"],
+        replacement.next_event(None).await.unwrap()["type"],
         "DLNA_SENDER_UPDATED"
     );
     assert_eq!(
-        replacement.next_event().await.unwrap()["type"],
+        replacement.next_event(None).await.unwrap()["type"],
         "APP_UPDATE_DOWNLOAD_UPDATED"
     );
     assert_eq!(
-        replacement.next_event().await.unwrap()["type"],
+        replacement.next_event(None).await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
     );
     assert_eq!(
-        replacement.next_event().await.unwrap()["type"],
+        replacement.next_event(None).await.unwrap()["type"],
         "PEER_NOTIFICATIONS_UPDATED"
     );
     core.stop_core().await;
-    assert!(replacement.next_event().await.is_none());
+    assert!(replacement.next_event(None).await.is_none());
 }

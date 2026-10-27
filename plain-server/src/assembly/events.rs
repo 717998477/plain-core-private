@@ -11,7 +11,6 @@ pub use plain_rs::events::WS_BOOKMARK_UPDATED;
 pub const WS_DEVICE_NAME_UPDATED: &'static str = "DEVICE_NAME_UPDATED";
 /// Peer file download progress — payload is a JSON array of
 /// `DownloadProgressItem` (id, messageId, downloaded, total, speed, status).
-/// Mirrors plain-app's `EventType.DOWNLOAD_PROGRESS`.
 pub use plain_rs::chat::events::WS_DOWNLOAD_PROGRESS;
 /// Emitted for each LAN device that replied to a discover broadcast.
 /// Payload is a single `DiscoveredDevice` JSON object.

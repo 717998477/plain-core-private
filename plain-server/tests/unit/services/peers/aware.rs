@@ -31,6 +31,10 @@ fn host(state: &ServerState) -> (Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle
     let messages = received.clone();
     let task = tokio::spawn(async move {
         while let Some(request) = receiver.recv().await {
+            if request["method"] == "systemCapabilities" {
+                host.reply(generation, json!({"id":request["id"],"result":["WIFI_AWARE"]})).unwrap();
+                continue;
+            }
             let id = request["id"].clone();
             assert!(
                 matches!(
@@ -142,6 +146,10 @@ async fn database_watch_pushes_key_changes_without_platform_graphql_queries() {
     let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
     let task = tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
+            if request["method"] == "systemCapabilities" {
+                host.reply(generation, json!({"id":request["id"],"result":["WIFI_AWARE"]})).unwrap();
+                continue;
+            }
             assert!(
                 matches!(
                     request["method"].as_str(),
@@ -191,6 +199,10 @@ async fn denied_start_is_not_repeated_by_refresh_but_explicit_retry_can_acquire_
     let calls = count.clone();
     let task = tokio::spawn(async move {
         while let Some(request) = receiver.recv().await {
+            if request["method"] == "systemCapabilities" {
+                host.reply(generation, json!({"id":request["id"],"result":["WIFI_AWARE"]})).unwrap();
+                continue;
+            }
             let attempt = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             host.reply(
                 generation,
@@ -241,6 +253,10 @@ async fn permission_events_retry_rejected_subscriptions_without_a_page_command()
     let task = tokio::spawn(async move {
         let mut attempts = 0;
         while let Some(request) = requests.recv().await {
+            if request["method"] == "systemCapabilities" {
+                host.reply(generation, json!({"id":request["id"],"result":["WIFI_AWARE"]})).unwrap();
+                continue;
+            }
             assert!(matches!(
                 request["method"].as_str(),
                 Some("peerStartAware" | "peerStopAware")

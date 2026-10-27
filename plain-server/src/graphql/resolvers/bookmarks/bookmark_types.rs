@@ -4,7 +4,8 @@ use async_graphql::{ComplexObject, ID, InputObject, SimpleObject};
 use plain_rs::db::bookmark::DBookmark;
 use plain_rs::db::bookmark::DBookmarkGroup;
 
-#[derive(SimpleObject)]
+#[derive(SimpleObject, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[graphql(complex)]
 #[graphql(name = "Bookmark")]
 pub struct Bookmark {

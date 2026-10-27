@@ -90,10 +90,24 @@ impl NativeEventStream {
     }
 
     pub async fn next_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
-        let key = self.frame_key.ok_or("native frame encoding unavailable")?;
         let Some(event) = self.next_delivery().await.map(|delivery| delivery.event) else {
             return Ok(None);
         };
+        self.frame(event).map(Some)
+    }
+    pub async fn next_ui_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
+        loop {
+            let Some(delivery) = self.next_delivery().await else {
+                return Ok(None);
+            };
+            if crate::graphql::subscriptions::registry::migrated(delivery.event.event_type) {
+                continue;
+            }
+            return self.frame(delivery.event).map(Some);
+        }
+    }
+    fn frame(&self, event: WsEvent) -> Result<Vec<u8>, String> {
+        let key = self.frame_key.ok_or("native frame encoding unavailable")?;
         let frame = match event.binary_payload {
             Some(payload) => plain_rs::protocols::websocket::encode_raw(event.event_type, &payload),
             None => plain_rs::protocols::websocket::encode(
@@ -102,9 +116,7 @@ impl NativeEventStream {
                 &key,
             ),
         };
-        frame
-            .map(Some)
-            .ok_or_else(|| "invalid native event frame".into())
+        frame.ok_or_else(|| "invalid native event frame".into())
     }
 
     pub(crate) async fn next_delivery(&mut self) -> Option<Delivery> {

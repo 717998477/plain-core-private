@@ -74,7 +74,8 @@ impl ChatChannel {
     }
 }
 
-#[derive(SimpleObject, Clone, Debug)]
+#[derive(SimpleObject, Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatItem {
     /// `me` when this device created the item, otherwise the client id of
     /// the originating peer.

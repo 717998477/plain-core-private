@@ -84,14 +84,14 @@ async fn encrypted_public_and_ble_rpc_share_auth_executor_and_receipts() {
             }
             let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
             let result = match request["method"].as_str().unwrap() {
-                "systemCapabilities" => json!([]),
+                "systemCapabilities" => json!(["WIFI_AWARE"]),
                 "peerStartAware" => {
                     let port = if count == 0 { 443 } else { 5443 };
                     assert_eq!(
                         request["params"],
                         json!({
                             "peer":{"id":"peer","port":port},
-                            "config":{"pmk":plain_rs::utils::base64::base64_encode(&[7;32]),"isClient":true,"localPort":8443}
+                            "config":{"pmk":plain_rs::utils::base64::base64_encode(&[7;32]),"isClient":true,"localPort":https}
                         })
                     );
 

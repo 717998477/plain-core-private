@@ -117,6 +117,7 @@ async fn rust_falls_back_from_unavailable_socket_and_authenticates_raw_ble_busin
     let responder = tokio::spawn(async move {
         while let Some(request) = receiver.recv().await {
             let response = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => json!({"id":request["id"],"result":["WIFI_AWARE"]}),
                 "peerTransportCapabilities" => json!({"id":request["id"],"result":["BLE","AWARE"]}),
                 "peerStartAware" | "peerStopAware" => {
                     json!({"id":request["id"],"result":true})
@@ -267,18 +268,18 @@ async fn native_transport_snapshots_follow_current_routes_without_graphql_reads(
         .unwrap();
     let bridge = core.host_events().unwrap();
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "HTTP_SERVER_STATE_CHANGED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "ONLINE_CLIENTS_UPDATED"
     );
-    let initial = bridge.next_event().await.unwrap();
+    let initial = bridge.next_event(None).await.unwrap();
     assert_eq!(initial["type"], "PEER_TRANSPORT_UPDATED");
     assert_eq!(
         serde_json::from_str::<Value>(initial["payload"].as_str().unwrap()).unwrap(),
@@ -287,24 +288,24 @@ async fn native_transport_snapshots_follow_current_routes_without_graphql_reads(
         ])
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "DLNA_SENDER_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "APP_UPDATE_DOWNLOAD_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "AUDIO_PLAYBACK_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "PEER_NOTIFICATIONS_UPDATED"
     );
     notify(&state);
     state.transport.abort(&ticket);
-    let current = bridge.next_event().await.unwrap();
+    let current = bridge.next_event(None).await.unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(current["payload"].as_str().unwrap()).unwrap(),
         json!([
@@ -321,22 +322,22 @@ async fn native_transport_snapshots_follow_current_routes_without_graphql_reads(
             ))
             .unwrap();
     }
-    let reconcile = bridge.next_event().await.unwrap();
+    let reconcile = bridge.next_event(None).await.unwrap();
     assert_eq!(reconcile["type"], "CONTENT_CHANGED");
     assert_eq!(reconcile["reconcile"], true);
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "HTTP_SERVER_STATE_CHANGED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "IMAGE_MODELS_UPDATED"
     );
     assert_eq!(
-        bridge.next_event().await.unwrap()["type"],
+        bridge.next_event(None).await.unwrap()["type"],
         "ONLINE_CLIENTS_UPDATED"
     );
-    let restored = bridge.next_event().await.unwrap();
+    let restored = bridge.next_event(None).await.unwrap();
     assert_eq!(restored["type"], "PEER_TRANSPORT_UPDATED");
     assert_eq!(
         serde_json::from_str::<Value>(restored["payload"].as_str().unwrap()).unwrap(),

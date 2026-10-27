@@ -6,7 +6,6 @@ use plain_rs::{
     events::WsEvent,
 };
 use rusqlite::OptionalExtension;
-use serde_json::json;
 use std::{collections::HashMap, sync::Mutex, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_tungstenite::tungstenite::Message;
@@ -216,12 +215,10 @@ async fn retire(workers: &mut HashMap<String, Worker>) {
     }
 }
 
-async fn publish(
+async fn publish_clipboard_change(
     state: &ServerState,
     peer_id: &str,
     identity: &Identity,
-    kind: String,
-    data: serde_json::Value,
     cancelled: &watch::Receiver<bool>,
 ) -> Result<bool> {
     let state = state.clone();
@@ -234,8 +231,12 @@ async fn publish(
                 return Ok(false);
             }
             let _ = state.events.send(WsEvent::broadcast(
-                plain_rs::events::PEER_MANAGEMENT_EVENT,
-                json!({"peerId":peer_id,"type":kind,"data":data}).to_string(),
+                plain_rs::events::PEER_CLIPBOARD_CHANGED,
+                serde_json::to_string(
+                    &crate::graphql::subscriptions::models::PeerClipboardChange {
+                        peer_id: peer_id.clone().into(),
+                    },
+                )?,
             ));
             Ok(true)
         })
@@ -392,43 +393,100 @@ async fn connection_loop(
         if let Ok(Ok(mut socket)) = connected {
             let publication_cancelled = cancelled.clone();
             let exchange = async {
-                let registration = super::management_wire::registration(
+                use super::management_wire::{self, Incoming};
+                use crate::graphql::subscriptions::operation::ClientMessage;
+                let url = reqwest::Url::parse(&identity.url)?;
+                let client = url
+                    .query_pairs()
+                    .find(|(name, _)| name == "cid")
+                    .map(|(_, value)| value.into_owned())
+                    .ok_or_else(|| anyhow!("Management client missing"))?;
+                let registration = management_wire::registration(
                     &key,
+                    &client,
                     chrono::Utc::now().timestamp_millis(),
                 )?;
-                let mut stream = plain_rs::protocols::websocket::Stream::new(&registration);
-                socket.send(Message::Binary(registration.into())).await?;
+                socket
+                    .send(Message::Binary(registration.clone().into()))
+                    .await?;
+                let ack = tokio::time::timeout(Duration::from_secs(10), socket.next())
+                    .await?
+                    .ok_or_else(|| anyhow!("Management handshake closed"))??;
+                let Message::Binary(ack) = ack else {
+                    return Err(anyhow!("Encrypted management acknowledgement required"));
+                };
+                let mut stream = management_wire::acknowledge(&key, &client, &registration, &ack)?;
+                for spec in management_wire::operations() {
+                    let message = ClientMessage::Subscribe {
+                        id: spec.field.into(),
+                        payload: async_graphql::Request::new(
+                            crate::graphql::subscriptions::registry::document(spec),
+                        ),
+                    };
+                    socket
+                        .send(Message::Binary(
+                            management_wire::encode(&message, &key, &mut stream)?.into(),
+                        ))
+                        .await?;
+                }
                 clipboard_changed.notify_one();
                 let messages = async {
-                    while let Some(message) = socket.next().await {
+                    let mut heartbeat = tokio::time::interval_at(
+                        tokio::time::Instant::now() + Duration::from_secs(20),
+                        Duration::from_secs(20),
+                    );
+                    let mut pong_deadline = None;
+                    loop {
+                        let message = tokio::select! {
+                            _ = heartbeat.tick() => {
+                                socket.send(Message::Binary(management_wire::encode(&ClientMessage::Ping { payload: None }, &key, &mut stream)?.into())).await?;
+                                pong_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(10));
+                                continue;
+                            },
+                            _ = async { if let Some(deadline) = pong_deadline { tokio::time::sleep_until(deadline).await } else { std::future::pending::<()>().await } } => return Err(anyhow!("Management heartbeat timeout")),
+                            message = socket.next() => message,
+                        };
+                        let Some(message) = message else {
+                            break;
+                        };
                         match message? {
                             Message::Binary(frame) => {
-                                if let Some((kind, data)) =
-                                    super::management_wire::event(&frame, &key, &mut stream)?
-                                {
-                                    if kind == "CLIPBOARD_CHANGED" {
-                                        if !publish(
-                                            &state,
-                                            &id,
-                                            &identity,
-                                            kind,
-                                            data,
-                                            &publication_cancelled,
-                                        )
-                                        .await?
-                                        {
+                                match management_wire::event(&frame, &key, &mut stream)? {
+                                    Incoming::Pong => pong_deadline = None,
+                                    Incoming::Ready => {
+                                        data_changed.notify_one();
+                                        clipboard_changed.notify_one();
+                                    }
+                                    Incoming::Rejected(error) => {
+                                        log::debug!("Management subscription rejected: {error}")
+                                    }
+                                    Incoming::Event(kind) => {
+                                        if kind == "CLIPBOARD_CHANGED" {
+                                            if !publish_clipboard_change(
+                                                &state,
+                                                &id,
+                                                &identity,
+                                                &publication_cancelled,
+                                            )
+                                            .await?
+                                            {
+                                                break;
+                                            }
+                                            clipboard_changed.notify_one();
+                                        } else {
+                                            data_changed.notify_one();
+                                        }
+                                        delay = Duration::from_secs(1);
+                                        if kind == "PERMISSIONS_UPDATED" {
                                             break;
                                         }
-                                        clipboard_changed.notify_one();
-                                    } else {
-                                        data_changed.notify_one();
                                     }
-                                    delay = Duration::from_secs(1);
                                 }
                             }
                             Message::Ping(bytes) => socket.send(Message::Pong(bytes)).await?,
                             Message::Close(_) => break,
-                            _ => {}
+                            Message::Pong(_) => {}
+                            _ => return Err(anyhow!("Invalid management subscription frame")),
                         }
                     }
                     Ok::<_, anyhow::Error>(())

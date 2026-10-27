@@ -11,10 +11,12 @@ fn stub(host: Arc<Host>, handler: impl Fn(&str, Value) -> Value + Send + 'static
             let Some(id) = request["id"].as_u64() else {
                 continue;
             };
-            let result = handler(
-                &request["method"].as_str().unwrap_or_default(),
-                request["params"].clone(),
-            );
+            let method = request["method"].as_str().unwrap_or_default();
+            let result = if method == "systemCapabilities" {
+                json!(["CONTACTS"])
+            } else {
+                handler(method, request["params"].clone())
+            };
             let _ = host.reply(generation, json!({ "id": id, "result": result }));
         }
     });
@@ -184,6 +186,7 @@ async fn contacts_map_the_host_facts_onto_the_contract_type() {
 #[tokio::test]
 async fn contact_reads_refuse_to_answer_without_the_web_permission() {
     let (_dir, schema) = fixture(json!([]));
+    stub(schema_host(&schema), |method, _| panic!("unexpected provider call {method}"));
     for query in [
         r#"query { contacts(offset:0, limit:1, query:"") { id } }"#,
         r#"query { contactGroups { id } }"#,
@@ -349,10 +352,10 @@ async fn group_writes_return_the_group_they_just_wrote() {
 }
 
 #[tokio::test]
-async fn contact_deletion_rejects_non_narrowing_queries_before_any_host_request() {
+async fn contact_deletion_rejects_non_narrowing_queries_before_provider_calls() {
     let (_directory, schema) = fixture(json!(["WRITE_CONTACTS"]));
     let host = schema_host(&schema);
-    let (_generation, mut requests) = host.connect();
+    let (generation, mut requests) = host.connect();
     for query in [
         "",
         " \t\n",
@@ -365,9 +368,17 @@ async fn contact_deletion_rejects_non_narrowing_queries_before_any_host_request(
             "mutation {{ deleteContacts(query: {}) {{ affectedCount }} }}",
             serde_json::to_string(query).unwrap()
         );
-        let response = tokio::select! {
-            request = requests.recv() => panic!("{query:?} reached the platform provider: {request:?}"),
-            response = schema.execute(document) => response,
+        let execute = schema.execute(document);
+        tokio::pin!(execute);
+        let response = loop {
+            tokio::select! {
+                request = requests.recv() => {
+                    let request = request.unwrap();
+                    assert_eq!(request["method"], "systemCapabilities", "{query:?} reached the platform provider");
+                    host.reply(generation, json!({"id":request["id"],"result":["CONTACTS"]})).unwrap();
+                }
+                response = &mut execute => break response,
+            }
         };
         assert!(
             !response.errors.is_empty(),

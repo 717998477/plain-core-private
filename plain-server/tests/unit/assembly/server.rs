@@ -202,7 +202,7 @@ async fn core_startup_persists_complete_identity_and_only_rotates_url_token_on_r
             "{key}"
         );
     }
-    assert_eq!(prefs.get::<i32>(PASSWORD_TYPE).unwrap(), Some(2));
+    assert_eq!(prefs.get::<String>(PASSWORD_TYPE).unwrap().as_deref(), Some("NONE"));
     assert_eq!(prefs.get::<bool>(LOGIN_REQUIRE_APPROVAL).unwrap(), Some(true));
     let persisted = plain_rs::prefs::Prefs::load(prefs.path()).unwrap();
     assert_eq!(persisted.entries(), first);

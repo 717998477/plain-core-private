@@ -1,3 +1,4 @@
+use serde_json::json;
 use super::super::clipboard::receive as synchronize_clipboard;
 use super::*;
 use plain_rs::{chat::enums::DeviceType, db::chat_store::SaveMode};
@@ -118,24 +119,22 @@ async fn relay_rechecks_credentials_and_addresses_under_the_database_lock() {
     };
     let mut events = state.events.subscribe();
     assert!(
-        publish(
+        publish_clipboard_change(
             &state,
             "peer",
             &expected,
-            "CLIPBOARD_CHANGED".into(),
-            json!({"text":"fixture"}),
             &watch::channel(false).1
         )
         .await
         .unwrap()
     );
     let relayed = std::iter::from_fn(|| events.try_recv().ok())
-        .find(|event| event.event_type == plain_rs::events::PEER_MANAGEMENT_EVENT)
+        .find(|event| event.event_type == plain_rs::events::PEER_CLIPBOARD_CHANGED)
         .unwrap();
-    assert_eq!(relayed.event_type, plain_rs::events::PEER_MANAGEMENT_EVENT);
+    assert_eq!(relayed.event_type, plain_rs::events::PEER_CLIPBOARD_CHANGED);
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&relayed.payload).unwrap(),
-        json!({"peerId":"peer","type":"CLIPBOARD_CHANGED","data":{"text":"fixture"}})
+        json!({"peerId":"peer"})
     );
     assert!(relayed.into_public().is_none());
     state.db.with_conn(|connection| {
@@ -144,12 +143,10 @@ async fn relay_rechecks_credentials_and_addresses_under_the_database_lock() {
             .unwrap()
     });
     assert!(
-        !publish(
+        !publish_clipboard_change(
             &state,
             "peer",
             &expected,
-            "CLIPBOARD_CHANGED".into(),
-            json!({"text":"stale"}),
             &watch::channel(false).1
         )
         .await
@@ -164,19 +161,17 @@ async fn relay_rechecks_credentials_and_addresses_under_the_database_lock() {
             .unwrap()
     });
     assert!(
-        !publish(
+        !publish_clipboard_change(
             &state,
             "peer",
             &expected,
-            "NOTIFICATION_CREATED".into(),
-            json!({"id":"stale"}),
             &watch::channel(false).1
         )
         .await
         .unwrap()
     );
     while let Ok(event) = events.try_recv() {
-        assert_ne!(event.event_type, plain_rs::events::PEER_MANAGEMENT_EVENT);
+        assert_ne!(event.event_type, plain_rs::events::PEER_CLIPBOARD_CHANGED);
     }
     core.stop_core().await;
 }
@@ -195,12 +190,10 @@ async fn a_stopped_core_cannot_relay_an_event_even_when_credentials_still_match(
     };
     core.stop_core().await;
     assert!(
-        !publish(
+        !publish_clipboard_change(
             &state,
             "peer",
             &expected,
-            "CLIPBOARD_CHANGED".into(),
-            json!({"text":"stale"}),
             &watch::channel(false).1
         )
         .await
@@ -227,6 +220,26 @@ async fn actual_management_socket_authenticates_and_relays_only_decrypted_native
     )
     .unwrap();
     let remote_state = remote.runtime_state();
+    remote_state.prefs.set("api_permissions", vec!["CLIPBOARD"]).unwrap();
+    let remote_host = remote_state.host.clone();
+    let (generation, mut remote_requests) = remote_host.connect();
+    let (ready, mut ready_rx) = tokio::sync::mpsc::channel(4);
+    let responder = tokio::spawn(async move {
+        while let Some(request) = remote_requests.recv().await {
+            let method = request["method"].as_str().unwrap_or_default();
+            let result = match method {
+                "systemCapabilities" => json!(["CLIPBOARD"]),
+                "systemPermissionFacts" => {
+                    let granted = request["params"]["permissions"].as_array().unwrap().iter()
+                        .filter_map(|name| name.as_str()).map(|name| (name.to_owned(), json!(true))).collect::<serde_json::Map<_, _>>();
+                    if granted.contains_key("CLIPBOARD") { let _ = ready.try_send(()); }
+                    json!({"granted":granted})
+                },
+                _ => json!({}),
+            };
+            let _ = remote_host.reply(generation, json!({"id":request["id"],"result":result}));
+        }
+    });
     let session = remote
         .native_management()
         .unwrap()
@@ -249,7 +262,6 @@ async fn actual_management_socket_authenticates_and_relays_only_decrypted_native
     .unwrap();
     let state = manager.runtime_state();
     let (host_generation, mut requests) = state.host.connect();
-    let mut remote_events = remote_state.events.subscribe();
     let mut local_events = state.events.subscribe();
     let mut peer = DPeer::new(
         &remote_state.native_client_id().unwrap(),
@@ -260,52 +272,30 @@ async fn actual_management_socket_authenticates_and_relays_only_decrypted_native
     );
     peer.token = session.token;
     peers::save(&state.db, &[peer.clone()], SaveMode::Insert).unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if remote_events.recv().await.unwrap().event_type == "WEB_SOCKET_REGISTERED" {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
-    let pending = tokio::time::timeout(Duration::from_secs(10), requests.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(pending["method"], "systemCapabilities");
-    let payload = json!({"probe":"fixture clipboard hint"});
-    remote_state
-        .events
-        .send(WsEvent::broadcast("CLIPBOARD_CHANGED", payload.to_string()))
-        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), ready_rx.recv()).await.unwrap().unwrap();
+    let payload = json!({"text":"fixture clipboard hint", "sensitive":false, "time":1});
     let relayed = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut ticks = tokio::time::interval(Duration::from_millis(20));
         loop {
-            let event = local_events.recv().await.unwrap();
-            if event.event_type == plain_rs::events::PEER_MANAGEMENT_EVENT {
-                break event;
+            tokio::select! {
+                _ = ticks.tick() => {
+                    remote_state.events.send(WsEvent::broadcast("CLIPBOARD_CHANGED", payload.to_string())).unwrap();
+                }
+                event = local_events.recv() => {
+                    let event = event.unwrap();
+                    if event.event_type == plain_rs::events::PEER_CLIPBOARD_CHANGED { break event; }
+                }
             }
         }
-    })
-    .await
-    .unwrap();
+    }).await.unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&relayed.payload).unwrap(),
-        json!({"peerId":peer.id,"type":"CLIPBOARD_CHANGED","data":payload})
+        json!({"peerId":peer.id})
     );
     assert!(relayed.into_public().is_none());
     state.host.disconnect(host_generation);
     manager.stop_core().await;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let event = remote_events.recv().await.unwrap();
-            if event.event_type == "ONLINE_CLIENTS_UPDATED" && event.payload == "[]" {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
+    responder.abort();
     remote.stop_core().await;
 }
 
@@ -343,19 +333,17 @@ async fn a_cancelled_worker_cannot_publish_even_while_credentials_still_match() 
     let mut events = state.events.subscribe();
     let (_cancel, cancelled) = watch::channel(true);
     assert!(
-        !publish(
+        !publish_clipboard_change(
             &state,
             "peer",
             &expected,
-            "CLIPBOARD_CHANGED".into(),
-            json!({"text":"cancelled"}),
             &cancelled
         )
         .await
         .unwrap()
     );
     while let Ok(event) = events.try_recv() {
-        assert_ne!(event.event_type, plain_rs::events::PEER_MANAGEMENT_EVENT);
+        assert_ne!(event.event_type, plain_rs::events::PEER_CLIPBOARD_CHANGED);
     }
     core.stop_core().await;
 }

@@ -209,7 +209,7 @@ fn versioned_audio_selection_owns_its_content_notification() {
 #[test]
 fn playback_fact_reports_do_not_trigger_generic_content_refresh() {
     assert!(!content_changes(&Request::new(
-        r#"mutation { reportAudioPlayback(path:"song",revision:1,positionMs:0,started:true) }"#
+        r#"mutation { saveMediaPlayProgress(mediaId:"song",type:AUDIO,positionMs:0) }"#
     )));
 }
 

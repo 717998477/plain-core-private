@@ -67,9 +67,5 @@ extend type Query {
 	pairingStates: [PairingState!]!
 	peerFileUrl(id: ID!, expected: PeerRecordInput!, fileId: String!): String!
 	peers: [Peer!]!
-	"""
-	The SIM slots the platform reports. Empty on a device with no
-	telephony, which is the honest answer rather than an error.
-	"""
 	sims: [Sim!]!
 }

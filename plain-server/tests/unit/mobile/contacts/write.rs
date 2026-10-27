@@ -125,6 +125,10 @@ async fn creation_resolves_the_account_before_any_provider_write() {
     let provider = tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
             let method = request["method"].as_str().unwrap().to_owned();
+            if method == "systemCapabilities" {
+                responder.reply(generation, json!({"id":request["id"],"result":["CONTACTS"]})).unwrap();
+                continue;
+            }
             seen.lock().unwrap().push(method.clone());
             let value = match method.as_str() {
                 "systemContactSources" => {

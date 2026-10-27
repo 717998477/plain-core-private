@@ -76,6 +76,7 @@ impl Runtime {
         let _ = state.events.send(self.snapshot_event());
     }
     pub(crate) fn close_client(&self, state: &ServerState, client_id: Option<&str>) {
+        state.subscription_sessions.close_client(client_id);
         let connections = self.connections.lock().unwrap();
         for c in connections
             .values()
@@ -355,6 +356,7 @@ async fn run(
             },
             event = receiver.recv(), if registered => {
                 let event = match event { Ok(event) => event, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { let _ = socket.send(close(1013,"slow_client")).await; break; }, Err(_) => break };
+                if crate::graphql::subscriptions::registry::migrated(event.event_type) { continue; }
                 if is_screen_event(event.event_type) != (channel == Channel::Screen) { continue; }
                 if event.target_cid.as_ref().is_some_and(|cid| cid != &params.cid) { continue; }
                 let Some(event) = event.into_public() else { continue; };

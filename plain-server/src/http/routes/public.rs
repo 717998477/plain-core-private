@@ -18,7 +18,10 @@ pub(crate) fn build_router(state: ServerState, receiver: watch::Receiver<bool>) 
         .route("/nearby", post(crate::http::routes::discovery::call))
         .with_state(state.clone());
     let main_graphql_router = Router::new()
-        .route("/graphql", post(crate::http::routes::graphql::call))
+        .route(
+            "/graphql",
+            post(crate::http::routes::graphql::call).get(crate::http::websocket::graphql::upgrade),
+        )
         .route("/health", get(crate::http::routes::graphql::health))
         .route("/proxyfs", get(crate::http::proxy::host::call))
         .route("/zip/dir", get(crate::http::routes::zip::dir))

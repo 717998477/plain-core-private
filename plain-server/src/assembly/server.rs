@@ -87,6 +87,7 @@ pub(crate) struct ServerState {
     pub(crate) mobile: Arc<crate::mobile::Runtime>,
     pub(crate) cast: Arc<crate::services::casting::dlna_sender_runtime::Runtime>,
     pub(crate) audio: Arc<crate::services::audio::host::Audio>,
+    pub(crate) subscription_sessions: Arc<crate::graphql::subscriptions::session::Sessions>,
     pub(crate) main_ws: Arc<crate::http::websocket::host::Runtime>,
     pub(crate) login_attempts: Arc<std::sync::Mutex<crate::http::auth::ws_login::LoginAttempts>>,
     pub(crate) directory: std::path::PathBuf,
@@ -481,6 +482,7 @@ impl ContentServer {
             image_models: image_models.clone(),
             mobile,
             cast: Arc::new(crate::services::casting::dlna_sender_runtime::Runtime::default()),
+            subscription_sessions: Arc::default(),
             main_ws: Arc::new(crate::http::websocket::host::Runtime::default()),
             login_attempts: Arc::new(std::sync::Mutex::new(
                 crate::http::auth::ws_login::LoginAttempts::default(),
@@ -735,6 +737,7 @@ impl ContentServer {
     }
     pub async fn stop_core(&self) {
         let _shutdown = self.state.shutdown.lock().await;
+        self.state.subscription_sessions.close_client(None);
         if *self.state.stop.borrow() {
             return;
         }
@@ -798,6 +801,7 @@ impl ContentServer {
 }
 impl Drop for ContentServer {
     fn drop(&mut self) {
+        self.state.subscription_sessions.close_client(None);
         let _ = self.stop.send(true);
         if let Some(task) = &self.task {
             task.abort();

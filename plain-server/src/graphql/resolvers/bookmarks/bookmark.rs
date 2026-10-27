@@ -22,7 +22,7 @@ fn bookmark_to_json(b: &DBookmark) -> serde_json::Value {
         "url": b.url,
         "title": b.title,
         "faviconPath": b.favicon_path,
-        "groupId": b.group_id,
+        "groupId": b.group_id.as_deref().unwrap_or_default(),
         "pinned": b.pinned,
         "clickCount": b.click_count,
         "lastClickedAt": b.last_clicked_at,

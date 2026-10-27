@@ -41,7 +41,8 @@ use crate::graphql::resolvers::settings::public::PrefsQuery;
 use crate::graphql::resolvers::tags::public::TagsMutation;
 use crate::graphql::resolvers::tags::public::TagsQuery;
 use crate::host::bridge::Host;
-use async_graphql::{EmptySubscription, MergedObject, Schema};
+use async_graphql::{MergedObject, Schema};
+use crate::graphql::subscriptions::Subscription;
 use plain_rs::db::Db;
 use plain_rs::prefs::Prefs;
 use std::sync::Arc;
@@ -135,7 +136,7 @@ pub struct Mutation(
     DownloadMutation,
 );
 
-pub type PublicSchema = Schema<Query, Mutation, EmptySubscription>;
+pub type PublicSchema = Schema<Query, Mutation, Subscription>;
 
 #[cfg(test)]
 pub fn build(
@@ -179,7 +180,7 @@ pub(crate) fn build_with_runtime(
     models: Arc<crate::services::images::models::Runtime>,
     mobile: Arc<crate::mobile::Runtime>,
 ) -> PublicSchema {
-    let builder = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
+    let builder = Schema::build(Query::default(), Mutation::default(), Subscription::default())
         .extension(crate::graphql::enum_literals::EnumLiteralValidation)
         .register_output_type::<crate::graphql::resolvers::media::item::MediaItem>()
         .data(models);

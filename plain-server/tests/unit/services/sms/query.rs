@@ -174,6 +174,7 @@ async fn the_ids_request_refuses_a_whole_table_selection_before_asking_the_platf
                     continue;
                 };
                 let result = match request["method"].as_str().unwrap_or_default() {
+                    "systemCapabilities" => json!(["SMS"]),
                     "systemSmsIdsFacts" => json!(ids),
                     other => panic!("unexpected host call {other}"),
                 };
@@ -238,7 +239,12 @@ async fn conversation_provider_reports_raw_candidates_and_rust_filters_own_numbe
     let (generation, mut requests) = host.connect();
     let replies = host.clone();
     let responder = tokio::spawn(async move {
-        let request = requests.recv().await.unwrap();
+        let request = loop {
+            let request = requests.recv().await.unwrap();
+            if request["method"] == "systemCapabilities" {
+                replies.reply(generation, json!({"id":request["id"],"result":["SMS"]})).unwrap();
+            } else { break request; }
+        };
         assert_eq!(request["method"], "systemSmsConversationFacts");
         replies.reply(generation, serde_json::json!({"id":request["id"],"result":{"items":[{"id":"thread","date":"2026-10-16T00:00:00Z","snippet":"Message","messageCount":1,"read":true,"addresses":["+1 602 555 0100","+1 480 555 0101"]}],"ownNumbers":["6025550100"],"snippetCandidates":{}}})).unwrap();
     });
@@ -348,7 +354,12 @@ async fn filtered_conversation_rows_and_count_decode_the_actual_android_pair_obj
     let responder = tokio::spawn(async move {
         let mut calls = Vec::new();
         for index in 0..4 {
-            let request = requests.recv().await.unwrap();
+            let request = loop {
+                let request = requests.recv().await.unwrap();
+                if request["method"] == "systemCapabilities" {
+                    replies.reply(generation, json!({"id":request["id"],"result":["SMS"]})).unwrap();
+                } else { break request; }
+            };
             let method = request["method"].as_str().unwrap().to_owned();
             calls.push(method.clone());
             let result = if index % 2 == 0 {

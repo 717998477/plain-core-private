@@ -24,10 +24,10 @@ fn public_fixture() -> (
     (directory, core, prefs)
 }
 use futures_util::SinkExt;
-use tokio_tungstenite::tungstenite::Message as ClientMessage;
+use tokio_tungstenite::tungstenite::{Message as ClientMessage, client::IntoClientRequest};
 
 #[tokio::test]
-async fn screen_binary_media_is_separate_while_codec_and_controls_keep_the_global_socket() {
+async fn screen_binary_media_is_separate_from_subscriptions_and_controls() {
     let (_directory, core, prefs) = public_fixture();
     let key = plain_rs::utils::base64::base64_decode(&plain_rs::prefs::identity::ensure_url_token(
         &prefs,
@@ -36,11 +36,14 @@ async fn screen_binary_media_is_separate_while_codec_and_controls_keep_the_globa
     let bridge = Arc::new(core.host_events().unwrap());
     let host = bridge.clone();
     let (sent, mut received) = mpsc::channel(8);
+    let mirror = Arc::new(std::sync::Mutex::new(json!({"running":false,"codec":null})));
+    let mirror_host = mirror.clone();
     let responder = tokio::spawn(async move {
         while let Some(request) = host.next_request().await {
             let method = request["method"].as_str().unwrap();
             let result = match method {
                 "systemCapabilities" => json!(["SCREEN_MIRROR"]),
+                "systemScreenMirrorState" => mirror_host.lock().unwrap().clone(),
                 "systemScreenMirrorControls" | "systemScreenMirrorResetTouch" => {
                     sent.send((method.to_owned(), request["params"].clone()))
                         .await
@@ -61,15 +64,82 @@ async fn screen_binary_media_is_separate_while_codec_and_controls_keep_the_globa
         chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
     )
     .unwrap();
-    let mut app_stream = plain_rs::protocols::websocket::Stream::new(&registration);
     app.send(ClientMessage::Binary(registration.into()))
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
-        while bridge.next_event().await.unwrap()["type"] != "WEB_SOCKET_REGISTERED" {}
+        while bridge.next_event(None).await.unwrap()["type"] != "WEB_SOCKET_REGISTERED" {}
     })
     .await
     .unwrap();
+    let mut request = format!("ws://127.0.0.1:{}/graphql?cid={client}", core.port)
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        "plain-graphql-ws-v1".parse().unwrap(),
+    );
+    let (mut subscriptions, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let init = plain_rs::protocols::graphql::seal_init(
+        &key,
+        &client,
+        serde_json::to_string(&json!({
+            "timestampMillis":chrono::Utc::now().timestamp_millis(), "clientNonce":"01".repeat(32)
+        }))
+        .unwrap()
+        .as_bytes(),
+    )
+    .unwrap();
+    subscriptions
+        .send(ClientMessage::Binary(init.clone().into()))
+        .await
+        .unwrap();
+    let ClientMessage::Binary(ack) = subscriptions.next().await.unwrap().unwrap() else {
+        panic!("Expected encrypted acknowledgement")
+    };
+    assert!(plain_rs::protocols::graphql::open_ack(&key, &client, &init, &ack).is_some());
+    let mut subscription_stream = plain_rs::protocols::graphql::Stream::new(
+        &client,
+        &init,
+        &ack,
+        plain_rs::protocols::graphql::Role::Client,
+    )
+    .unwrap();
+    for (id, query) in [
+        (
+            "codec",
+            "subscription { screenMirrorVideoCodec { annexB } }",
+        ),
+        ("state", "subscription { screenMirrorState { running } }"),
+    ] {
+        let command = json!({"type":"subscribe", "id":id, "payload":{"query":query}}).to_string();
+        subscriptions
+            .send(ClientMessage::Binary(
+                subscription_stream
+                    .encode(command.as_bytes(), &key)
+                    .unwrap()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    let mut ready = 0;
+    while ready < 2 {
+        let ClientMessage::Binary(frame) =
+            tokio::time::timeout(Duration::from_secs(3), subscriptions.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("Expected subscription frame")
+        };
+        let value: serde_json::Value =
+            serde_json::from_slice(&subscription_stream.decode(&frame, &key).unwrap()).unwrap();
+        if value["payload"]["extensions"]["subscriptionReady"] == true {
+            ready += 1;
+        }
+    }
     for payload in [
         br#"{"type":"screenMirrorControl","input":{"action":"BACK"}}"#.as_slice(),
         &[0x54, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0],
@@ -138,6 +208,7 @@ async fn screen_binary_media_is_separate_while_codec_and_controls_keep_the_globa
             (kind.to_owned(), payload)
         );
     }
+    *mirror.lock().unwrap() = json!({"running":false,"codec":{"annexB":"fixture"}});
     bridge
         .publish_text(
             "SCREEN_MIRROR_VIDEO_CODEC",
@@ -145,21 +216,20 @@ async fn screen_binary_media_is_separate_while_codec_and_controls_keep_the_globa
         )
         .await
         .unwrap();
-    let message = tokio::time::timeout(Duration::from_secs(3), app.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let ClientMessage::Binary(bytes) = message else {
-        panic!("Expected codec on global socket")
-    };
-    assert_eq!(
-        app_stream.decode(&bytes, &key).unwrap(),
-        (
-            "SCREEN_MIRROR_VIDEO_CODEC".into(),
-            br#"{"annexB":"fixture"}"#.to_vec()
-        )
-    );
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let ClientMessage::Binary(frame) = subscriptions.next().await.unwrap().unwrap() else {
+                panic!("Expected codec subscription")
+            };
+            let value: serde_json::Value =
+                serde_json::from_slice(&subscription_stream.decode(&frame, &key).unwrap()).unwrap();
+            if value["payload"]["data"]["screenMirrorVideoCodec"]["annexB"] == "fixture" {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
     let mut control = chrono::Utc::now().timestamp_millis().to_be_bytes().to_vec();
     control.extend_from_slice(br#"{"type":"screenMirrorControl","input":{"action":"HOME"}}"#);
     let control = plain_rs::crypto::xchacha_encrypt_raw(&key, &control).unwrap();
@@ -181,22 +251,25 @@ async fn screen_binary_media_is_separate_while_codec_and_controls_keep_the_globa
             .publish_binary("SCREEN_MIRROR_VIDEO", vec![1, 2, 3])
             .unwrap();
     }
+    *mirror.lock().unwrap() = json!({"running":true,"codec":{"annexB":"fixture"}});
     bridge
-        .publish_text("SCREEN_MIRRORING", "{}".into())
+        .publish_text("SCREEN_MIRRORING", r#"{"running":true}"#.into())
         .await
         .unwrap();
-    let message = tokio::time::timeout(Duration::from_secs(3), app.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let ClientMessage::Binary(bytes) = message else {
-        panic!("Media must not fill global event queue")
-    };
-    assert_eq!(
-        app_stream.decode(&bytes, &key).unwrap(),
-        ("SCREEN_MIRRORING".into(), b"{}".to_vec())
-    );
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let ClientMessage::Binary(frame) = subscriptions.next().await.unwrap().unwrap() else {
+                panic!("Expected mirror state subscription")
+            };
+            let value: serde_json::Value =
+                serde_json::from_slice(&subscription_stream.decode(&frame, &key).unwrap()).unwrap();
+            if value["payload"]["data"]["screenMirrorState"]["running"] == true {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
     app.send(ClientMessage::Binary(control.into()))
         .await
         .unwrap();
@@ -266,5 +339,71 @@ async fn screen_rejects_login_modes_missing_clients_invalid_keys_and_disabled_ac
     assert!(
         matches!(message, ClientMessage::Close(Some(frame)) if frame.reason == "desktop_access_disabled")
     );
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn remote_subscription_cannot_read_local_pairing_credentials() {
+    let (_directory, core, _) = public_fixture();
+    let session = core
+        .native_management()
+        .unwrap()
+        .create_session("Remote subscription fixture".into())
+        .unwrap();
+    let key = plain_rs::base64_decode(&session.token);
+    let client = session.client_id;
+    let mut request = format!("ws://127.0.0.1:{}/graphql?cid={client}", core.port)
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        "plain-graphql-ws-v1".parse().unwrap(),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let init = plain_rs::protocols::graphql::seal_init(
+        &key,
+        &client,
+        json!({
+            "timestampMillis":chrono::Utc::now().timestamp_millis(), "clientNonce":"02".repeat(32)
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    socket
+        .send(ClientMessage::Binary(init.clone().into()))
+        .await
+        .unwrap();
+    let ClientMessage::Binary(ack) = socket.next().await.unwrap().unwrap() else {
+        panic!("Expected encrypted acknowledgement")
+    };
+    assert!(plain_rs::protocols::graphql::open_ack(&key, &client, &init, &ack).is_some());
+    let mut stream = plain_rs::protocols::graphql::Stream::new(
+        &client,
+        &init,
+        &ack,
+        plain_rs::protocols::graphql::Role::Client,
+    )
+    .unwrap();
+    let query = json!({"type":"subscribe","id":"private","payload":{"query":"subscription { pairingSucceeded { deviceId key } }"}}).to_string();
+    socket
+        .send(ClientMessage::Binary(
+            stream.encode(query.as_bytes(), &key).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let ClientMessage::Binary(frame) = tokio::time::timeout(Duration::from_secs(3), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("Expected encrypted authorization response")
+    };
+    let response: serde_json::Value =
+        serde_json::from_slice(&stream.decode(&frame, &key).unwrap()).unwrap();
+    assert_eq!(response["id"], "private");
+    assert_eq!(response["type"], "error");
+    assert_eq!(response["payload"][0]["message"], "no_permission");
     core.shutdown().await;
 }

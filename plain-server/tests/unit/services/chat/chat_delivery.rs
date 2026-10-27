@@ -1,4 +1,5 @@
 #![cfg(feature = "http_transport")]
+use serde_json::json;
 use super::*;
 use serde_json::Value;
 use std::sync::Arc;

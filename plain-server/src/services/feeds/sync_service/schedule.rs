@@ -5,7 +5,6 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use plain_rs::{db::notes_feeds::FeedRow, prefs::settings::Settings};
-use serde::Deserialize;
 use std::time::Duration;
 
 const RESIDENT: &str = "resident";
@@ -107,26 +106,23 @@ pub(super) struct Lease {
     pub(super) done: watch::Sender<bool>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Grant {
-    pub id: String,
-    pub deadline_ms: i64,
-}
-
-pub(crate) fn grant(state: &ServerState, grant: Grant) -> Result<()> {
+pub(crate) fn grant(
+    state: &ServerState,
+    id: String,
+    deadline_ms: i64,
+    generation: u64,
+) -> Result<()> {
     ensure!(
-        !grant.id.is_empty() && grant.id.len() <= 128 && grant.id != RESIDENT,
+        !id.is_empty() && id.len() <= 128 && id != RESIDENT,
         "Invalid background execution ID"
     );
     ensure!(
-        grant.deadline_ms > chrono::Utc::now().timestamp_millis(),
+        deadline_ms > chrono::Utc::now().timestamp_millis(),
         "Background execution already expired"
     );
-    let lease = register(&state.feeds, &grant.id)?;
+    let lease = register(&state.feeds, &id)?;
     let remaining = Duration::from_millis(
-        grant
-            .deadline_ms
+        deadline_ms
             .saturating_sub(chrono::Utc::now().timestamp_millis())
             .max(0) as u64,
     );
@@ -134,7 +130,7 @@ pub(crate) fn grant(state: &ServerState, grant: Grant) -> Result<()> {
     let state = state.clone();
     tokio::spawn(async move {
         let work = async {
-            let mut tasks = queue_due(&state, &grant.id).await?;
+            let mut tasks = queue_due(&state, &id).await?;
             for task in &mut tasks {
                 while task.borrow().active() {
                     task.changed().await?;
@@ -142,7 +138,18 @@ pub(crate) fn grant(state: &ServerState, grant: Grant) -> Result<()> {
             }
             Ok(tasks.iter().all(|task| task.borrow().status == "COMPLETED"))
         };
-        execute_lease(state.feeds.clone(), &grant.id, deadline, lease, work).await;
+        let success = execute_lease(state.feeds.clone(), &id, deadline, lease, work).await;
+        if let Err(error) = state
+            .host
+            .call_current(
+                generation,
+                "systemCompleteBackgroundExecution",
+                serde_json::json!({"id":id,"success":success}),
+            )
+            .await
+        {
+            log::warn!("Background execution completion failed: {error}");
+        }
     });
     Ok(())
 }
@@ -172,7 +179,7 @@ async fn execute_lease(
     deadline: tokio::time::Instant,
     lease: Lease,
     work: impl std::future::Future<Output = Result<bool>>,
-) {
+) -> bool {
     let mut revoked = lease.revoke.subscribe();
     let success = tokio::select! {
         biased;
@@ -205,11 +212,8 @@ async fn execute_lease(
         }
     }
     service.leases.lock().unwrap().remove(id);
-    let _ = service.events.send(WsEvent::broadcast(
-        "BACKGROUND_EXECUTION_FINISHED",
-        serde_json::json!({"id":id,"success":success}).to_string(),
-    ));
     lease.done.send_replace(true);
+    success
 }
 
 pub(crate) async fn revoke(state: &ServerState, id: &str) {
@@ -262,11 +266,12 @@ pub(crate) fn start(state: ServerState) {
             tokio::select! {
                 _ = stop.changed() => break,
                 _ = connection.changed() => {},
+                _ = state.feeds.execution_changed.notified() => {},
                 _ = tokio::time::sleep(delay) => {},
                 _ = async {
                     loop {
                         match events.recv().await {
-                            Ok(event) if matches!(event.event_type, "PREFS_UPDATED" | plain_rs::events::NETWORK_CHANGED | "EXECUTION_STATE_CHANGED" | "FEEDS_FETCHED" | "CONTENT_CHANGED") => break,
+                            Ok(event) if matches!(event.event_type, "PREFS_UPDATED" | plain_rs::events::NETWORK_CHANGED | "FEEDS_FETCHED" | "CONTENT_CHANGED") => break,
                             Err(_) => break,
                             _ => {},
                         }

@@ -1,8 +1,8 @@
-use plain_rs::prefs::pref_keys::SKIP_VERSION;
 use super::updates;
 use crate::{assembly::server::ServerState, graphql::types::Long};
 use anyhow::{Result, anyhow, ensure};
 use futures_util::StreamExt;
+use plain_rs::prefs::pref_keys::SKIP_VERSION;
 use plain_rs::{events::WsEvent, prefs::security::UpdateInfo};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,7 +15,9 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, sync::watch};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, async_graphql::Enum,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AppUpdateDownloadStatus {
     #[default]
@@ -26,7 +28,7 @@ pub enum AppUpdateDownloadStatus {
     Cancelled,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, async_graphql::SimpleObject)]
 #[serde(rename_all = "camelCase")]
 pub struct AppUpdateDownload {
     pub core_id: async_graphql::ID,
@@ -179,7 +181,11 @@ async fn execute_owned(state: ServerState, command: Command) -> Result<AppUpdate
         Command::Start => {
             let version = &state.host.startup().app_version;
             ensure!(
-                plain_rs::updates::available(&info, version, &state.prefs.get_or(SKIP_VERSION, String::new())),
+                plain_rs::updates::available(
+                    &info,
+                    version,
+                    &state.prefs.get_or(SKIP_VERSION, String::new())
+                ),
                 "No application update available"
             );
             let identity = Identity::from(&info);
@@ -434,7 +440,12 @@ async fn save_stream<B: AsRef<[u8]>>(
     let current = updates::info(&state)?;
     let version = &state.host.startup().app_version;
     ensure!(
-        Identity::from(&current) == *identity && plain_rs::updates::available(&current, version, &state.prefs.get_or(SKIP_VERSION, String::new())),
+        Identity::from(&current) == *identity
+            && plain_rs::updates::available(
+                &current,
+                version,
+                &state.prefs.get_or(SKIP_VERSION, String::new())
+            ),
         "Update source changed during download"
     );
     std::fs::write(
@@ -458,7 +469,13 @@ fn percentage(downloaded: u64, total: Option<u64>) -> i32 {
 }
 fn restored(state: &ServerState, info: &UpdateInfo) -> Result<Option<String>> {
     let version = &state.host.startup().app_version;
-    if info.downloaded_apk_path.is_empty() || !plain_rs::updates::available(info, version, &state.prefs.get_or(SKIP_VERSION, String::new())) {
+    if info.downloaded_apk_path.is_empty()
+        || !plain_rs::updates::available(
+            info,
+            version,
+            &state.prefs.get_or(SKIP_VERSION, String::new()),
+        )
+    {
         return Ok(None);
     }
     let path = Path::new(&info.downloaded_apk_path);

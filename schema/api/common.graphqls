@@ -2,6 +2,24 @@ type ActionResult {
 	affectedCount: Int!
 }
 
+type AppUpdateDownload {
+	coreId: ID!
+	taskId: ID!
+	revision: Long!
+	status: AppUpdateDownloadStatus!
+	progress: Int!
+	filePath: String!
+	error: String!
+}
+
+enum AppUpdateDownloadStatus {
+	IDLE
+	DOWNLOADING
+	COMPLETED
+	FAILED
+	CANCELLED
+}
+
 type Audio implements MediaItem {
 	albumId: ID!
 	id: ID!
@@ -16,6 +34,34 @@ type Audio implements MediaItem {
 	isFavorite: Boolean!
 	albumFileId: String!
 	tags: [Tag!]!
+}
+
+type AudioPlaybackChange {
+	revision: Long!
+	positionMs: Long!
+}
+
+type ChannelChange {
+	changed: Boolean!
+	invite: ChannelInvite
+	cancel: ChannelInviteCancellation
+}
+
+type ChannelInvite {
+	channelId: ID!
+	ownerPeerId: ID!
+	ownerPeerName: String!
+}
+
+type ChannelInviteCancellation {
+	channelId: ID!
+	ownerPeerId: ID!
+}
+
+type ClipboardChange {
+	text: String!
+	sensitive: Boolean!
+	time: Long!
 }
 
 enum DeviceType {
@@ -38,6 +84,17 @@ type Doc implements MediaItem {
 	createdAt: Instant!
 	updatedAt: Instant!
 	tags: [Tag!]!
+}
+
+type FeedSyncChange {
+	feedId: ID!
+	error: String
+	cancelled: Boolean
+}
+
+type FeedSyncUpdate {
+	states: [FeedSyncState!]!
+	removed: [ID!]!
 }
 
 enum FileSortBy {
@@ -66,7 +123,23 @@ type Image implements MediaItem {
 	tags: [Tag!]!
 }
 
+type ImageModelsUpdate {
+	version: Long!
+	status: String!
+	downloadProgress: Int!
+	errorMessage: String!
+	modelSize: Long!
+	modelDir: String!
+	isIndexing: Boolean!
+	totalImages: Int!
+	indexedImages: Int!
+}
+
 scalar Instant
+
+type LibraryChange {
+	types: [Int!]!
+}
 
 scalar Long
 
@@ -79,6 +152,39 @@ enum MediaDataType {
 	VIDEO
 	IMAGE
 	DOC
+}
+
+type MirrorCodecConfiguration {
+	annexB: String!
+}
+
+type MirrorState {
+	running: Boolean!
+}
+
+type MmsSendResult {
+	pendingId: ID!
+	success: Boolean!
+	resultCode: Int
+}
+
+type PairingRequestNotice {
+	fromId: ID!
+	fromName: String!
+	port: Int!
+	deviceType: String!
+	ecdhPublicKey: String!
+	signaturePublicKey: String!
+	timestamp: Long!
+	ips: [String!]!
+	signature: String!
+	fromIp: String!
+	awareSupported: Boolean!
+}
+
+type PairingSuccessNotice {
+	deviceId: ID!
+	key: String!
 }
 
 type Peer {
@@ -105,10 +211,83 @@ type PeerAddress {
 	statusWsUrl: String!
 }
 
+type PeerClipboardChange {
+	peerId: ID!
+}
+
 enum PeerStatus {
 	PAIRED
 	UNPAIRED
 	CHANNEL
+}
+
+type PeerTransportState {
+	peerId: ID!
+	transport: String!
+}
+
+type PomodoroAction {
+	today: PomodoroToday!
+	completedState: PomodoroState
+}
+
+type SmsProviderChange {
+	uris: [String!]!
+}
+
+type SmsSendResult {
+	requestId: ID
+	success: Boolean!
+	resultCode: Int
+}
+
+type Subscription {
+	networkChanged: Boolean!
+	httpServerChanged: Boolean!
+	audioLibraryChanged: Boolean!
+	clipboardHistoryChanged: Boolean!
+	peersChanged: Boolean!
+	channelsChanged: ChannelChange!
+	mdnsChanged: Boolean!
+	nearbyDevicesChanged: Boolean!
+	downloadsChanged: Boolean!
+	sharedFolderDownloadsChanged: Boolean!
+	dlnaRendererChanged: Boolean!
+	dlnaSenderUpdated: DlnaSenderState!
+	peerTransportsUpdated: [PeerTransportState!]!
+	onlineClientsUpdated: [String!]!
+	imageModelsUpdated: ImageModelsUpdate!
+	appUpdateDownloadUpdated: AppUpdateDownload!
+	feedSyncUpdated: FeedSyncUpdate!
+	audioPlaybackChanged: AudioPlaybackChange!
+	pairingChanged: Boolean!
+	pairingRequested: PairingRequestNotice!
+	pairingSucceeded: PairingSuccessNotice!
+	pomodoroAction: PomodoroAction!
+	deviceNameUpdated: String!
+	permissionsUpdated: Boolean!
+	contentChanged: Boolean!
+	clipboardChanged: ClipboardChange!
+	peerClipboardChanged: PeerClipboardChange!
+	screenMirrorState: MirrorState!
+	screenMirrorVideoCodec: MirrorCodecConfiguration
+	screenMirrorAudioGranted: Boolean!
+	notificationCreated: Notification!
+	notificationUpdated: Notification!
+	notificationDeleted: Notification!
+	notificationRefreshed: Boolean!
+	messagesCreated: [ChatItem!]!
+	messagesUpdated: [ChatItem!]!
+	messagesDeleted: String!
+	mediaLibraryUpdated: LibraryChange!
+	mediaScanProgress: ScanProgress!
+	bookmarksUpdated: [Bookmark!]!
+	feedsFetched: FeedSyncChange!
+	uploadMergeResult: UploadMergeResult!
+	smsProviderChanged: SmsProviderChange
+	smsSendResult: SmsSendResult!
+	mmsSendResult: MmsSendResult!
+	mmsSent: String!
 }
 
 type Tag {
@@ -116,6 +295,14 @@ type Tag {
 	name: String!
 	type: Int!
 	count: Int!
+}
+
+type UploadMergeResult {
+	fileId: ID!
+	ok: Boolean!
+	value: String
+	mergedSize: Long
+	error: String
 }
 
 type Video implements MediaItem {
@@ -148,4 +335,5 @@ directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 schema {
 	query: Query
 	mutation: Mutation
+	subscription: Subscription
 }

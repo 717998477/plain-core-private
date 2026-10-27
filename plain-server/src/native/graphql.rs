@@ -24,6 +24,28 @@ impl NativeGraphqlExecutor {
         NativeEventStream::scoped(self.state.clone(), self.client_id.clone(), scope)
     }
 
+    pub fn open_subscriptions(&self, scope: NativeRequestScope) -> Result<u64, String> {
+        self.state
+            .subscription_sessions
+            .open(
+                self.state.clone(),
+                crate::graphql::executor::RequestContext::local(self.state.clone()),
+                self.client_id.clone(),
+                None,
+                scope,
+            )
+            .map(|session| session.id)
+    }
+    pub fn subscription_session(
+        &self,
+        id: u64,
+    ) -> Result<std::sync::Arc<crate::graphql::subscriptions::session::Session>, String> {
+        self.state.subscription_sessions.get(id)
+    }
+    pub fn close_subscriptions(&self, id: u64) {
+        self.state.subscription_sessions.close(id);
+    }
+
     pub fn client_id(&self) -> &str {
         &self.client_id
     }

@@ -413,7 +413,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
         .unwrap();
     remote_state
         .prefs
-        .set("api_permissions", json!(["NOTIFICATION_LISTENER"]))
+        .set("api_permissions", json!(["NOTIFICATION_LISTENER", "CLIPBOARD"]))
         .unwrap();
     let session = remote
         .native_management()
@@ -433,6 +433,8 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     let requested = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let reads = Arc::new(AtomicUsize::new(0));
+    let subscription_ready = Arc::new(Notify::new());
+    let sdk_ready = subscription_ready.clone();
     let (
         sdk_facts,
         sdk_allowed,
@@ -454,13 +456,17 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     );
     let responder = tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
+            let (sdk_facts, sdk_allowed, sdk_supported, sdk_hold, sdk_requested, sdk_release, sdk_reads, sdk_ready, host) = (
+                sdk_facts.clone(), sdk_allowed.clone(), sdk_supported.clone(), sdk_hold.clone(), sdk_requested.clone(), sdk_release.clone(), sdk_reads.clone(), sdk_ready.clone(), host.clone()
+            );
+            tokio::spawn(async move {
             let result = match request["method"].as_str().unwrap() {
                 "systemScreenMirrorResetTouch" => json!(true),
                 "systemCapabilities" => {
                     if sdk_supported.load(Ordering::SeqCst) {
-                        json!(["NOTIFICATIONS"])
+                        json!(["NOTIFICATIONS", "CLIPBOARD"])
                     } else {
-                        json!([])
+                        json!(["CLIPBOARD"])
                     }
                 }
                 "systemPermissionFacts" => {
@@ -473,12 +479,13 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
                                 (
                                     name.as_str().unwrap().to_owned(),
                                     json!(
-                                        name == "NOTIFICATION_LISTENER"
-                                            && sdk_allowed.load(Ordering::SeqCst)
+                                        name == "CLIPBOARD" || (name == "NOTIFICATION_LISTENER"
+                                            && sdk_allowed.load(Ordering::SeqCst))
                                     ),
                                 )
                             })
                             .collect();
+                    if granted.contains_key("CLIPBOARD") { sdk_ready.notify_one(); }
                     json!({"granted":granted})
                 }
                 "systemNotificationFacts" => {
@@ -493,6 +500,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
             };
             host.reply(generation, json!({"id":request["id"],"result":result}))
                 .unwrap();
+            });
         }
     });
     let local_dir = tempfile::tempdir().unwrap();
@@ -514,7 +522,6 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     peer.token = session.token;
     peers::save(&state.db, &[peer.clone()], SaveMode::Insert).unwrap();
     let mut local_events = state.events.subscribe();
-    let mut remote_events = remote_state.events.subscribe();
     state.management.start(state.clone()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), requested.notified())
         .await
@@ -523,15 +530,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
         peers::get(&state.db, &peer.id).unwrap().unwrap().name,
         "Authenticated peer"
     );
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if remote_events.recv().await.unwrap().event_type == "WEB_SOCKET_REGISTERED" {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), subscription_ready.notified()).await.unwrap();
     remote_state
         .events
         .send(WsEvent::broadcast(
@@ -554,18 +553,16 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
         .events
         .send(WsEvent::broadcast(
             "CLIPBOARD_CHANGED",
-            json!({"probe":true}).to_string(),
+            json!({"text":"hint", "sensitive":false, "time":1}).to_string(),
         ))
         .unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             let event = local_events.recv().await.unwrap();
-            if event.event_type == plain_rs::events::PEER_MANAGEMENT_EVENT {
+            if event.event_type == plain_rs::events::PEER_CLIPBOARD_CHANGED {
                 let value: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
-                assert_ne!(value["type"], "NOTIFICATION_CREATED");
-                if value["type"] == "CLIPBOARD_CHANGED" {
-                    break;
-                }
+                assert_eq!(value["peerId"], "remote");
+                break;
             }
         }
     })

@@ -114,6 +114,7 @@ async fn partial_deletion_archives_once_batches_the_sdk_and_preserves_existing_t
         [
             "systemCapabilities",
             "systemSmsIdsFacts",
+            "systemCapabilities",
             "systemSmsRowsFacts",
             "systemDeleteSmsRows"
         ]
@@ -187,7 +188,7 @@ async fn an_archive_failure_never_marks_or_deletes_provider_rows() {
             .is_err()
     );
     assert!(fixture.trashed().is_empty());
-    assert_eq!(fixture.calls.lock().unwrap().len(), 3);
+    assert_eq!(fixture.calls.lock().unwrap().len(), 4);
     fixture.finish().await;
 }
 

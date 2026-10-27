@@ -52,7 +52,7 @@ async fn trusted_native_management_events_are_delivered_and_stay_private_on_netw
     let (_directory, core, mut stream, _scope) = fixture();
     snapshots(&mut stream).await;
     let event = WsEvent::broadcast(
-        plain_rs::events::PEER_MANAGEMENT_EVENT,
+        plain_rs::events::PEER_CLIPBOARD_CHANGED,
         "{\"peerId\":\"fixture\"}".into(),
     );
     assert!(event.clone().into_public().is_none());

@@ -244,7 +244,7 @@ async fn a_network_policy_change_cancels_only_automatic_fetches() {
 #[tokio::test(start_paused = true)]
 async fn execution_deadline_cancels_and_drains_only_its_orphaned_automatic_tasks() {
     for manual in [false, true] {
-        let (_dir, service, calls, _started, _release, server, mut events) =
+        let (_dir, service, calls, _started, _release, server, _events) =
             super::super::tests::fixture().await;
         let permits = service.permits.acquire_many(16).await.unwrap();
         let feed = service.db.feed_get("feed").unwrap().unwrap();
@@ -266,7 +266,7 @@ async fn execution_deadline_cancels_and_drains_only_its_orphaned_automatic_tasks
                     lease,
                     std::future::pending::<Result<bool>>(),
                 )
-                .await;
+                .await
             }
         });
         tokio::task::yield_now().await;
@@ -274,7 +274,7 @@ async fn execution_deadline_cancels_and_drains_only_its_orphaned_automatic_tasks
         while !*done.borrow() {
             done.changed().await.unwrap();
         }
-        worker.await.unwrap();
+        assert!(!worker.await.unwrap());
         assert!(!service.leases.lock().unwrap().contains_key("deadline"));
         if manual {
             assert_eq!(tasks[0].borrow().status, "QUEUED");
@@ -287,15 +287,6 @@ async fn execution_deadline_cancels_and_drains_only_its_orphaned_automatic_tasks
             );
         }
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-        let mut completed = Vec::new();
-        while let Ok(event) = events.try_recv() {
-            if event.event_type == "BACKGROUND_EXECUTION_FINISHED" {
-                completed.push(serde_json::from_str::<serde_json::Value>(&event.payload).unwrap());
-            }
-        }
-        assert_eq!(completed.len(), 1);
-        assert_eq!(completed[0]["id"], "deadline");
-        assert_eq!(completed[0]["success"], false);
         service.shutdown().await;
         drop(permits);
         server.abort();

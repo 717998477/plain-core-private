@@ -37,7 +37,7 @@ pub enum PomodoroState {
     ShortBreak,
     LongBreak,
 }
-#[derive(Clone, Serialize, SimpleObject)]
+#[derive(Clone, Serialize, Deserialize, SimpleObject)]
 #[serde(rename_all = "camelCase")]
 pub struct PomodoroToday {
     pub date: Instant,

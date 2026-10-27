@@ -72,6 +72,7 @@ async fn aware_host_only_moves_raw_socket_bytes_rust_performs_tls_crypto_and_gra
                 .unwrap_or_default()
                 .to_string();
             match request["method"].as_str().unwrap() {
+                "systemCapabilities" => { host.reply(generation, json!({"id":request["id"],"result":["WIFI_AWARE"]})).unwrap(); }
                 "peerStartAware" | "peerStopAware" => {
                     host.reply(generation, json!({"id":request["id"],"result":true}))
                         .unwrap();
