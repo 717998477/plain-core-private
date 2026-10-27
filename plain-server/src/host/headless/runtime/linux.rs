@@ -51,7 +51,6 @@ pub(super) async fn dispatch(
                         let _ = db.audit_event_add("unmount", mount, client_id);
                     }, &events);
                     let _ = db.audit_event_add(if result.is_ok() { "format_disk" } else { "format_disk_failed" }, &request.path, client_id);
-                    let _ = core.headless_state().events.send(plain_rs::events::WsEvent::broadcast("DISK_FORMAT_DONE", serde_json::json!({"path":request.path,"ok":result.is_ok(),"error":result.as_ref().err().map(ToString::to_string)}).to_string()));
                     result.map(|_| Value::Bool(true)).map_err(|error| error.to_string())
                 }).await.map_err(|error| error.to_string())?
         }

@@ -82,6 +82,11 @@ pub(super) async fn stream<T: DeserializeOwned + Send + 'static>(
         .ok_or("unknown_subscription")?;
     let receiver = state.events.subscribe();
     authorize(&state, origin, spec).await?;
+    match spec.field {
+        "smsSendResult" => state.sms_sends.replay().map_err(|error| async_graphql::Error::new(error.to_string()))?,
+        "mmsSendResult" => state.mobile.mms.replay().map_err(|error| async_graphql::Error::new(error.to_string()))?,
+        _ => {}
+    }
     let initial = snapshot(&state, name).await?;
     let has_snapshot = initial.is_some();
     if let Some(ready) = ctx.data_opt::<super::session::SubscriptionReady>() {

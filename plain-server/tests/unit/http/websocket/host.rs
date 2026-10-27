@@ -59,7 +59,7 @@ fn rejecting_confirmation_retains_the_legacy_retry_close_code() {
     runtime.connections.lock().unwrap().insert(
         "connection".into(),
         Connection {
-            channel: Channel::Events,
+            channel: Channel::Auth,
             client_id: "client".into(),
             registered: false,
             pending: Some("request".into()),
@@ -336,244 +336,14 @@ async fn root_serves_the_spa_and_old_ws_path_never_upgrades() {
         );
         assert!(response.text().await.unwrap().contains("fixture"));
     }
-    let denied =
-        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/ws?cid=browser", core.port))
-            .await;
+    for path in ["/?cid=browser", "/ws?cid=browser"] {
+    let denied = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}{path}", core.port)).await;
     match denied {
         Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
             assert_eq!(response.status(), 200)
         }
-        _ => panic!("the retired /ws endpoint must never upgrade"),
+        _ => panic!("the retired event endpoint must never upgrade"),
     }
-    core.shutdown().await;
-}
-
-#[tokio::test]
-async fn root_upgrades_then_closes_missing_clients_as_the_pre_migration_app_did() {
-    use futures_util::SinkExt;
-    let (_directory, core) = public_fixture();
-    let (mut socket, response) =
-        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/", core.port))
-            .await
-            .unwrap();
-    assert_eq!(response.status(), 101);
-    let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    match frame {
-        tokio_tungstenite::tungstenite::Message::Close(Some(frame)) => {
-            assert_eq!(u16::from(frame.code), 1008);
-            assert_eq!(frame.reason, "`cid` is missing");
-        }
-        _ => panic!("missing clients require a policy close"),
-    }
-    let (mut socket, response) =
-        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid=browser", core.port))
-            .await
-            .unwrap();
-    assert_eq!(response.status(), 101);
-    socket.close(None).await.unwrap();
-    core.shutdown().await;
-}
-
-#[tokio::test]
-async fn native_event_socket_registers_without_a_session_and_encrypts_events_with_the_owned_url_key()
- {
-    use futures_util::SinkExt;
-    let (_directory, core) = public_fixture();
-    let state = core.runtime_state();
-    let key = plain_rs::utils::base64::base64_decode(&plain_rs::prefs::identity::ensure_url_token(
-        &state.prefs,
-    ));
-    let id = state.native_client_id().unwrap();
-    let mut events = state.events.subscribe();
-    let (mut socket, _) =
-        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid={id}", core.port))
-            .await
-            .unwrap();
-    let frame = plain_rs::crypto::xchacha_encrypt_raw(
-        &key,
-        chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
-    )
-    .unwrap();
-    let mut stream = plain_rs::protocols::websocket::Stream::new(&frame);
-    socket
-        .send(tokio_tungstenite::tungstenite::Message::Binary(
-            frame.into(),
-        ))
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            if events.recv().await.unwrap().event_type == "WEB_SOCKET_REGISTERED" {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
-    assert!(state.main_ws.snapshot().contains(&id));
-    assert!(state.db.session_get(&id).unwrap().is_none());
-    state
-        .events
-        .send(plain_rs::events::WsEvent::broadcast(
-            "TEST_PROBE",
-            json!({"probe":true}).to_string(),
-        ))
-        .unwrap();
-    let frame = tokio::time::timeout(Duration::from_secs(3), socket.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let tokio_tungstenite::tungstenite::Message::Binary(bytes) = frame else {
-        panic!("Expected encrypted event bytes")
-    };
-    let (kind, payload) = stream.decode(&bytes, &key).unwrap();
-    assert_eq!(kind, "TEST_PROBE");
-    assert_eq!(
-        serde_json::from_slice::<Value>(&payload).unwrap(),
-        json!({"probe":true})
-    );
-    for kind in ["IMAGE_EDITOR_UPDATE"] {
-        let payload = vec![0, 1, 255, 0, 4];
-        state
-            .events
-            .send(WsEvent::broadcast_binary(kind, payload.clone()))
-            .unwrap();
-        let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        let tokio_tungstenite::tungstenite::Message::Binary(frame) = message else {
-            panic!("Expected encrypted binary event");
-        };
-        let (_, encrypted) = plain_rs::protocols::websocket::decode_raw(&frame).unwrap();
-        assert_ne!(encrypted, payload);
-        assert_eq!(stream.decode(&frame, &key).unwrap(), (kind.into(), payload));
-        assert!(stream.decode(&frame, &key).is_none());
-        assert!(
-            plain_rs::protocols::websocket::Stream::new(b"another registration")
-                .decode(&frame, &key)
-                .is_none()
-        );
-    }
-    assert!(!state.host.connected());
-    socket.close(None).await.unwrap();
-    core.shutdown().await;
-}
-
-#[cfg(feature = "http_transport")]
-#[tokio::test]
-async fn pairing_success_keeps_native_credentials_out_of_every_network_event_socket() {
-    use futures_util::SinkExt;
-    use tokio_tungstenite::tungstenite::Message as ClientMessage;
-
-    let (_directory, core) = public_fixture();
-    let state = core.runtime_state();
-    let native = core.native_graphql().unwrap();
-    let mut native_events = native.subscribe_events(Default::default()).unwrap();
-    let session =
-        crate::services::sessions::create(&state, "Pairing event fixture".into()).unwrap();
-    let clients = [
-        (session.client_id, plain_rs::base64_decode(&session.token)),
-        (
-            state.native_client_id().unwrap(),
-            plain_rs::base64_decode(&core.native_url_token().unwrap()),
-        ),
-    ];
-    let mut sockets = Vec::new();
-    for (id, key) in clients {
-        let mut events = state.events.subscribe();
-        let (mut socket, _) =
-            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid={id}", core.port))
-                .await
-                .unwrap();
-        let frame = plain_rs::crypto::xchacha_encrypt_raw(
-            &key,
-            chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
-        )
-        .unwrap();
-        let stream = plain_rs::protocols::websocket::Stream::new(&frame);
-        socket
-            .send(ClientMessage::Binary(frame.into()))
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if events.recv().await.unwrap().event_type == "WEB_SOCKET_REGISTERED" {
-                    break;
-                }
-            }
-        })
-        .await
-        .unwrap();
-        assert!(state.main_ws.snapshot().contains(&id));
-        sockets.push((socket, key, stream));
-    }
-    let key = plain_rs::base64_encode(&[19; 32]);
-    crate::services::discovery::pairing_runtime::success(
-        &state,
-        &json!({"id":"paired-peer","name":"Device","key":key}),
-        "192.0.2.1",
-    );
-    let event = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let event = native_events.recv().await.unwrap();
-            if event.event_type == plain_rs::events::WS_PAIRING_SUCCESS {
-                break event;
-            }
-        }
-    })
-    .await
-    .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(&event.payload).unwrap()["key"],
-        key
-    );
-    for (socket, session_key, stream) in &mut sockets {
-        let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        let ClientMessage::Binary(frame) = message else {
-            panic!("Expected encrypted pairing event")
-        };
-        let (kind, payload) = stream.decode(&frame, session_key).unwrap();
-        assert_eq!(kind, plain_rs::events::WS_PAIRING_SUCCESS);
-        assert_eq!(
-            serde_json::from_slice::<Value>(&payload).unwrap(),
-            json!({"deviceId":"paired-peer","deviceName":"Device","ip":"192.0.2.1"})
-        );
-    }
-    for event in [
-        WsEvent::broadcast(plain_rs::events::WS_PAIRING_SUCCESS, "not json".into()),
-        WsEvent::broadcast_binary(plain_rs::events::WS_PAIRING_SUCCESS, key.into_bytes()),
-        WsEvent::broadcast("WEB_LOGIN_REQUESTED", "private".into()),
-        WsEvent::broadcast("TEST_PROBE", json!({"probe":true}).to_string()),
-    ] {
-        state.events.send(event).unwrap();
-    }
-    for (mut socket, session_key, mut stream) in sockets {
-        let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        let ClientMessage::Binary(frame) = message else {
-            panic!("Expected encrypted probe event")
-        };
-        let (kind, payload) = stream.decode(&frame, &session_key).unwrap();
-        assert_eq!(kind, "TEST_PROBE");
-        assert_eq!(
-            serde_json::from_slice::<Value>(&payload).unwrap(),
-            json!({"probe":true})
-        );
-        socket.close(None).await.unwrap();
     }
     core.shutdown().await;
 }
@@ -947,5 +717,85 @@ async fn online_clients_follow_authenticated_graphql_connections() {
     assert!(state.subscription_sessions.snapshot().is_empty());
     let _ = third.close(None).await;
     native.close_subscriptions(native_id);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn remote_pairing_completion_omits_secret_key_and_channel_invites_keep_names() {
+    let (_directory, core) = public_fixture();
+    let state = core.runtime_state();
+    let credentials = core.native_management().unwrap().create_session("Pairing subscription test".into()).unwrap();
+    let client = credentials.client_id;
+    let session = state.subscription_sessions.open(
+        state.clone(),
+        crate::graphql::executor::RequestContext::authenticated_remote(state.clone(), client.clone()),
+        client,
+        Some(plain_rs::base64_decode(&credentials.token)),
+        crate::native::graphql::NativeRequestScope::default(),
+    ).unwrap();
+    session.send(r#"{"type":"subscribe","id":"public","payload":{"query":"subscription { pairingCompleted { deviceId deviceName ip } }"}}"#).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let response: Value = serde_json::from_str(&session.read().await.unwrap()).unwrap();
+            if response["payload"]["extensions"]["subscriptionReady"] == true { break; }
+            assert_ne!(response["type"], "error");
+        }
+    }).await.unwrap();
+    state.events.send(WsEvent::broadcast("PAIRING_SUCCESS", json!({"deviceId":"peer","deviceName":"Peer","ip":"host","key":"secret"}).to_string())).unwrap();
+    let message = tokio::time::timeout(Duration::from_secs(3), session.read()).await.unwrap().unwrap();
+    let response: Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(response["payload"]["data"]["pairingCompleted"], json!({"deviceId":"peer","deviceName":"Peer","ip":"host"}));
+    assert!(!response.to_string().contains("secret"));
+    session.send(r#"{"type":"subscribe","id":"channels","payload":{"query":"subscription { channelsChanged { changed invite { channelId channelName ownerPeerId ownerPeerName } cancel { channelId } } }"}}"#).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let response: Value = serde_json::from_str(&session.read().await.unwrap()).unwrap();
+            if response["id"] == "channels" && response["payload"]["extensions"]["subscriptionReady"] == true { break; }
+            assert_ne!(response["type"], "error");
+        }
+    }).await.unwrap();
+    state.events.send(WsEvent::broadcast("CHANNELS_UPDATED", json!({"changed":true,"invite":{"channelId":"channel","channelName":"Channel","ownerPeerId":"peer","ownerPeerName":"Peer"},"cancel":null}).to_string())).unwrap();
+    let message = tokio::time::timeout(Duration::from_secs(3), session.read()).await.unwrap().unwrap();
+    let response: Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(response["payload"]["data"]["channelsChanged"]["invite"]["channelName"], "Channel");
+    state.subscription_sessions.close(session.id);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn sms_subscription_replays_results_after_its_receiver_is_ready() {
+    let (_directory, core) = public_fixture();
+    let state = core.runtime_state();
+    let (generation, mut requests) = state.host.connect();
+    let host = state.host.clone();
+    let responder = tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            let result = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => json!(["SMS"]),
+                "systemPermissionFacts" => json!({"granted":{"SEND_SMS":true}}),
+                method => panic!("Unexpected host request {method}"),
+            };
+            host.reply(generation, json!({"id":request["id"],"result":result})).unwrap();
+        }
+    });
+    state.sms_sends.register("send".into(), Some("request".into()), 1).unwrap();
+    state.sms_sends.report(serde_json::from_value(json!({
+        "requestId":"send", "partIndex":0, "partCount":1, "success":true, "resultCode":-1
+    })).unwrap()).unwrap();
+    let native = core.native_graphql().unwrap();
+    let id = native.open_subscriptions(crate::native::graphql::NativeRequestScope::default()).unwrap();
+    let session = native.subscription_session(id).unwrap();
+    session.send(r#"{"type":"subscribe","id":"sms","payload":{"query":"subscription { smsSendResult { requestId success resultCode } }"}}"#).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let response: Value = serde_json::from_str(&session.read().await.unwrap()).unwrap();
+            assert_ne!(response["type"], "error");
+            if response["payload"]["data"]["smsSendResult"].is_object() { break response; }
+        }
+    }).await.unwrap();
+    assert_eq!(result["payload"]["data"]["smsSendResult"], json!({"requestId":"request","success":true,"resultCode":-1}));
+    native.close_subscriptions(id);
+    state.host.disconnect(generation);
+    responder.abort();
     core.shutdown().await;
 }

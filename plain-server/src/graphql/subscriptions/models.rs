@@ -67,6 +67,7 @@ pub struct PeerClipboardChange {
 #[serde(rename_all = "camelCase")]
 pub struct ChannelInvite {
     pub channel_id: ID,
+    pub channel_name: String,
     pub owner_peer_id: ID,
     pub owner_peer_name: String,
 }
@@ -132,6 +133,20 @@ pub struct PairingRequestNotice {
 pub struct PairingSuccessNotice {
     pub device_id: ID,
     pub key: String,
+}
+#[derive(SimpleObject, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingCompletedNotice {
+    pub device_id: ID,
+    pub device_name: String,
+    pub ip: String,
+}
+#[derive(SimpleObject, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingProgressNotice {
+    pub device_id: ID,
+    pub device_name: String,
+    pub error: Option<String>,
 }
 #[derive(SimpleObject, Deserialize)]
 #[serde(rename_all = "camelCase")]

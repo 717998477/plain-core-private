@@ -31,9 +31,9 @@ impl Default for Runtime {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Channel {
-    Events,
     Auth,
     Screen,
+    ImageEditor,
 }
 
 pub(crate) fn is_screen_event(kind: &str) -> bool {
@@ -54,21 +54,6 @@ impl Runtime {
             connection.pending.as_deref() == Some(request_id)
                 && connection.closing.borrow().is_none()
         })
-    }
-    pub(crate) fn snapshot(&self) -> Vec<String> {
-        let mut ids: Vec<_> = self
-            .connections
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|c| {
-                c.channel == Channel::Events && c.registered && c.closing.borrow().is_none()
-            })
-            .map(|c| c.client_id.clone())
-            .collect();
-        ids.sort();
-        ids.dedup();
-        ids
     }
     pub(crate) fn close_client(&self, state: &ServerState, client_id: Option<&str>) {
         state.subscription_sessions.close_client(client_id);
@@ -140,27 +125,6 @@ pub(crate) struct Params {
     cid: String,
     auth: Option<String>,
 }
-pub(crate) async fn upgrade(
-    State(state): State<ServerState>,
-    Query(params): Query<Params>,
-    ConnectInfo(remote): ConnectInfo<SocketAddr>,
-    ws: Option<WebSocketUpgrade>,
-    request: axum::extract::Request,
-) -> Response {
-    let Some(ws) = ws else {
-        return crate::http::routes::static_host::fallback(State(state), request).await;
-    };
-    ws.on_upgrade(move |socket| {
-        run(
-            socket,
-            state,
-            params,
-            remote.ip().to_string(),
-            Channel::Events,
-        )
-    })
-    .into_response()
-}
 pub(crate) async fn upgrade_auth(
     State(state): State<ServerState>,
     Query(params): Query<Params>,
@@ -177,6 +141,15 @@ pub(crate) async fn upgrade_screen(
     ws: WebSocketUpgrade,
 ) -> Response {
     ws.on_upgrade(move |socket| run(socket, state, params, String::new(), Channel::Screen))
+        .into_response()
+}
+
+pub(crate) async fn upgrade_image_editor(
+    State(state): State<ServerState>,
+    Query(params): Query<Params>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    ws.on_upgrade(move |socket| run(socket, state, params, String::new(), Channel::ImageEditor))
         .into_response()
 }
 
@@ -225,7 +198,7 @@ async fn run(
     let mut registered = false;
     let mut stream = None;
     let mut receiver = match channel {
-        Channel::Events | Channel::Auth => state.events.subscribe(),
+        Channel::Auth | Channel::ImageEditor => state.events.subscribe(),
         Channel::Screen => state.main_ws.screen_events.subscribe(),
     };
     let mut pending: Option<String> = None;
@@ -315,9 +288,10 @@ async fn run(
                         }
                     }
                 }
-                let key = crate::services::sessions::local_key(&state, &params.cid)
-                    .or_else(|| crate::services::sessions::key(&state.db, &params.cid).ok().flatten());
-                let plain = key.and_then(|key| plain_rs::crypto::xchacha_decrypt_raw(&key,&frame));
+                let Some(key) = crate::services::sessions::local_key(&state, &params.cid)
+                    .or_else(|| crate::services::sessions::key(&state.db, &params.cid).ok().flatten())
+                    else { let _ = socket.send(close(1013,"invalid_request")).await; break; };
+                let plain = plain_rs::crypto::xchacha_decrypt_raw(&key,&frame);
                 let Some(plain) = plain else { let _ = socket.send(close(1013,"invalid_request")).await; break; };
                 let plain = match super::frames::admit(&state.main_ws.replay, &params.cid, &frame, &plain, registered, chrono::Utc::now().timestamp_millis()) {
                     Ok(payload) => payload,
@@ -334,10 +308,9 @@ async fn run(
                     stream = Some(plain_rs::protocols::websocket::Stream::new(&frame));
                     registered = true;
                     if let Some(c) = state.main_ws.connections.lock().unwrap().get_mut(&id) { c.registered = true; }
-                    if channel == Channel::Events {
-                        let _ = state.mobile.mms.replay();
-                        if let Err(error) = state.sms_sends.replay() { log::error!("SMS send replay: {error}"); }
-                        let _ = state.events.send(WsEvent::broadcast("WEB_SOCKET_REGISTERED", "{}".into()));
+                    if channel == Channel::ImageEditor {
+                        let Some(bytes) = stream.as_mut().and_then(|stream| stream.encode("IMAGE_EDITOR_READY", b"", &key)) else { break; };
+                        if socket.send(Message::Binary(bytes)).await.is_err() { break; }
                     }
                 } else {
                     if channel != Channel::Screen {
@@ -360,8 +333,12 @@ async fn run(
             },
             event = receiver.recv(), if registered => {
                 let event = match event { Ok(event) => event, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { let _ = socket.send(close(1013,"slow_client")).await; break; }, Err(_) => break };
-                if crate::graphql::subscriptions::registry::migrated(event.event_type) { continue; }
-                if is_screen_event(event.event_type) != (channel == Channel::Screen) { continue; }
+                let allowed = match channel {
+                    Channel::Screen => is_screen_event(event.event_type),
+                    Channel::ImageEditor => event.event_type == "IMAGE_EDITOR_UPDATE",
+                    Channel::Auth => false,
+                };
+                if !allowed { continue; }
                 if event.target_cid.as_ref().is_some_and(|cid| cid != &params.cid) { continue; }
                 let Some(event) = event.into_public() else { continue; };
                 if !enabled(&state) { break; }
@@ -372,10 +349,7 @@ async fn run(
                 let payload = if let Some(payload) = event.binary_payload {
                     payload
                 } else {
-                    let payload = if event.event_type == plain_rs::chat::events::WS_CHANNELS_UPDATED {
-                        serde_json::from_str::<Value>(&event.payload).ok().and_then(|value|value.get("channels").cloned()).map(|value|value.to_string()).unwrap_or(event.payload)
-                    } else { event.payload };
-                    payload.into_bytes()
+                    event.payload.into_bytes()
                 };
                 let Some(bytes) = stream.as_mut().and_then(|stream| stream.encode(event.event_type, &payload, &key)) else { break; };
                 Message::Binary(bytes)
@@ -398,22 +372,6 @@ async fn run(
         .await;
     }
     state.main_ws.connections.lock().unwrap().remove(&id);
-    if channel == Channel::Events
-        && registered
-        && !state
-            .main_ws
-            .snapshot()
-            .iter()
-            .any(|client| client == &params.cid)
-    {
-        if let Err(error) = state
-            .mdns
-            .release_discovery_client(&state, &params.cid)
-            .await
-        {
-            log::warn!("Discovery client cleanup: {error}");
-        }
-    }
     if channel == Channel::Screen && registered && !state.main_ws.connections.lock().unwrap().values().any(|c| c.channel == Channel::Screen && c.registered) {
         match crate::services::capabilities::snapshot(&state.host).await {
             Ok(capabilities) if capabilities.iter().any(|value| value == "SCREEN_MIRROR") => {

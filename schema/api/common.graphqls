@@ -49,6 +49,7 @@ type ChannelChange {
 
 type ChannelInvite {
 	channelId: ID!
+	channelName: String!
 	ownerPeerId: ID!
 	ownerPeerName: String!
 }
@@ -168,6 +169,18 @@ type MmsSendResult {
 	resultCode: Int
 }
 
+type PairingCompletedNotice {
+	deviceId: ID!
+	deviceName: String!
+	ip: String!
+}
+
+type PairingProgressNotice {
+	deviceId: ID!
+	deviceName: String!
+	error: String
+}
+
 type PairingRequestNotice {
 	fromId: ID!
 	fromName: String!
@@ -242,6 +255,7 @@ type SmsSendResult {
 }
 
 type Subscription {
+	preferencesChanged: Boolean!
 	networkChanged: Boolean!
 	httpServerChanged: Boolean!
 	audioLibraryChanged: Boolean!
@@ -263,6 +277,10 @@ type Subscription {
 	pairingChanged: Boolean!
 	pairingRequested: PairingRequestNotice!
 	pairingSucceeded: PairingSuccessNotice!
+	pairingCompleted: PairingCompletedNotice!
+	pairingStarted: PairingProgressNotice!
+	pairingFailed: PairingProgressNotice!
+	pairingCanceled: PairingProgressNotice!
 	pomodoroSettingsChanged: Boolean!
 	pomodoroAction: PomodoroAction!
 	deviceNameUpdated: String!

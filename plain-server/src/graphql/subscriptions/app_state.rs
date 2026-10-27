@@ -7,6 +7,12 @@ use futures_util::stream::BoxStream;
 pub struct AppStateSubscriptions;
 #[Subscription]
 impl AppStateSubscriptions {
+    async fn preferences_changed(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<BoxStream<'static, Result<bool>>> {
+        events::stream(ctx, "PREFS_UPDATED").await
+    }
     async fn network_changed(&self, ctx: &Context<'_>) -> Result<BoxStream<'static, Result<bool>>> {
         events::stream(ctx, "NETWORK_CHANGED").await
     }
@@ -120,6 +126,30 @@ impl AppStateSubscriptions {
         ctx: &Context<'_>,
     ) -> Result<BoxStream<'static, Result<PairingSuccessNotice>>> {
         events::stream(ctx, "PAIRING_SUCCESS").await
+    }
+    async fn pairing_completed(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<BoxStream<'static, Result<PairingCompletedNotice>>> {
+        events::stream(ctx, "PAIRING_SUCCESS").await
+    }
+    async fn pairing_started(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<BoxStream<'static, Result<PairingProgressNotice>>> {
+        events::stream(ctx, "PAIRING_STARTED").await
+    }
+    async fn pairing_failed(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<BoxStream<'static, Result<PairingProgressNotice>>> {
+        events::stream(ctx, "PAIRING_FAILED").await
+    }
+    async fn pairing_canceled(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<BoxStream<'static, Result<PairingProgressNotice>>> {
+        events::stream(ctx, "PAIRING_CANCELED").await
     }
     async fn pomodoro_settings_changed(
         &self,

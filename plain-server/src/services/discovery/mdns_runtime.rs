@@ -532,11 +532,7 @@ impl Runtime {
         client_id: &str,
     ) -> Result<()> {
         let _operation = self.operation.lock().await;
-        if state
-            .main_ws
-            .snapshot()
-            .iter()
-            .any(|client| client == client_id)
+        if state.subscription_sessions.snapshot().iter().any(|client| client == client_id)
         {
             return Ok(());
         }

@@ -258,6 +258,14 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
     .await;
     execute(&state, Request::Stop {}).await;
     assert_eq!(state.mdns.snapshot()["scanning"], true);
+    let subscription = state.subscription_sessions.open(
+        state.clone(),
+        crate::graphql::executor::RequestContext::authenticated_remote(state.clone(), "first".into()),
+        "first".into(),
+        Some(vec![1; 32]),
+        crate::native::graphql::NativeRequestScope::default(),
+    ).unwrap();
+    subscription.mark_online().unwrap();
     state
         .mdns
         .release_discovery_client(&state, "first")
@@ -275,6 +283,9 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
     .await;
     assert_eq!(state.mdns.snapshot()["scanning"], true);
     crate::native::management::NativeManagement::new(state.clone()).release_mdns_debug_session(debug_a.to_string()).await.unwrap();
+    assert_eq!(state.mdns.snapshot()["scanning"], true);
+    state.subscription_sessions.close(subscription.id);
+    state.mdns.release_discovery_client(&state, "first").await.unwrap();
     assert_eq!(state.mdns.snapshot()["scanning"], false);
     state.host.disconnect(generation);
     responder.abort();

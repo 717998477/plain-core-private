@@ -148,6 +148,9 @@ impl Sessions {
     }
 }
 impl Session {
+    pub(crate) fn client_id(&self) -> &str {
+        &self.client
+    }
     pub fn scope_id(&self) -> &str {
         &self.owner_scope
     }

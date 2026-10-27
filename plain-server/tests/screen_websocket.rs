@@ -27,6 +27,33 @@ use futures_util::SinkExt;
 use tokio_tungstenite::tungstenite::{Message as ClientMessage, client::IntoClientRequest};
 
 #[tokio::test]
+async fn image_editor_socket_authenticates_and_delivers_binary_updates() {
+    let (_directory, core, prefs) = public_fixture();
+    let key = plain_rs::utils::base64::base64_decode(&plain_rs::prefs::identity::ensure_url_token(&prefs));
+    let client = prefs.get::<String>("client_id").unwrap().unwrap();
+    let url = format!("ws://127.0.0.1:{}/image_editor?cid={client}", core.port);
+    let (mut denied, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    denied.send(ClientMessage::Binary(vec![1, 2, 3].into())).await.unwrap();
+    assert!(matches!(denied.next().await.unwrap().unwrap(), ClientMessage::Close(_)));
+
+    let (mut socket, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let registration = plain_rs::crypto::xchacha_encrypt_raw(
+        &key, chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
+    ).unwrap();
+    let mut stream = plain_rs::protocols::websocket::Stream::new(&registration);
+    socket.send(ClientMessage::Binary(registration.into())).await.unwrap();
+    let ClientMessage::Binary(frame) = socket.next().await.unwrap().unwrap() else { panic!("Expected encrypted ready") };
+    assert_eq!(stream.decode(&frame, &key).unwrap(), ("IMAGE_EDITOR_READY".into(), vec![]));
+    let request = async_graphql::Request::new("mutation($id: ID!, $update: String!) { broadcastImageEditorUpdate(id: $id, update: $update) }")
+        .variables(async_graphql::Variables::from_json(json!({"id":"project", "update":"AQID"})));
+    let response = core.native_graphql().unwrap().execute(request).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let ClientMessage::Binary(frame) = tokio::time::timeout(Duration::from_secs(3), socket.next()).await.unwrap().unwrap().unwrap() else { panic!("Expected encrypted update") };
+    assert_eq!(stream.decode(&frame, &key).unwrap(), ("IMAGE_EDITOR_UPDATE".into(), b"\x07project\x01\x02\x03".to_vec()));
+    core.shutdown().await;
+}
+
+#[tokio::test]
 async fn screen_transports_authenticated_media_and_controls_separately_from_subscriptions() {
     let (_directory, core, prefs) = public_fixture();
     let key = plain_rs::utils::base64::base64_decode(&plain_rs::prefs::identity::ensure_url_token(
@@ -55,23 +82,6 @@ async fn screen_transports_authenticated_media_and_controls_separately_from_subs
             let _ = host.reply(json!({"id":request["id"],"result":result}));
         }
     });
-    let (mut app, _) =
-        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid={client}", core.port))
-            .await
-            .unwrap();
-    let registration = plain_rs::crypto::xchacha_encrypt_raw(
-        &key,
-        chrono::Utc::now().timestamp_millis().to_string().as_bytes(),
-    )
-    .unwrap();
-    app.send(ClientMessage::Binary(registration.into()))
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while bridge.next_event(None).await.unwrap()["type"] != "WEB_SOCKET_REGISTERED" {}
-    })
-    .await
-    .unwrap();
     let mut request = format!("ws://127.0.0.1:{}/graphql?cid={client}", core.port)
         .into_client_request()
         .unwrap();

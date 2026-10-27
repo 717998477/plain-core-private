@@ -36,9 +36,9 @@ pub(crate) fn build_router(state: ServerState, receiver: watch::Receiver<bool>) 
             post(crate::graphql::resolvers::uploads::public::upload_chunk)
                 .layer(DefaultBodyLimit::max(15 * 60 * 1000 * 1000)),
         )
-        .route("/", get(crate::http::websocket::host::upgrade))
         .route("/auth", get(crate::http::websocket::host::upgrade_auth))
         .route("/screen", get(crate::http::websocket::host::upgrade_screen))
+        .route("/image_editor", get(crate::http::websocket::host::upgrade_image_editor))
         .route(
             "/media/:id",
             get(crate::services::casting::cast_runtime::media),

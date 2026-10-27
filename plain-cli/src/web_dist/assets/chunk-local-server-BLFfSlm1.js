@@ -1,1 +1,0 @@
-import{a as e}from"./chunk-core-Cig7zpmj.js";import"./chunk-prefs-Boo4BRbT.js";import"./chunk-gql-client-U-Cn8UFS.js";function t(){return e(`native_lan_ipv4_addresses`)}export{t};

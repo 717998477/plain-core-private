@@ -104,7 +104,6 @@ impl WsEvent {
                 | "WEB_LOGIN_REQUESTED"
                 | "WEB_LOGIN_COMPLETED"
                 | "WEB_LOGIN_CLOSED"
-                | "WEB_SOCKET_REGISTERED"
                 | "IMAGE_INDEX_UPDATED"
                 | "DLNA_SENDER_UPDATED"
                 | "IMAGE_MODELS_UPDATED"
