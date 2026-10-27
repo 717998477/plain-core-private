@@ -27,7 +27,7 @@ use futures_util::SinkExt;
 use tokio_tungstenite::tungstenite::{Message as ClientMessage, client::IntoClientRequest};
 
 #[tokio::test]
-async fn screen_binary_media_is_separate_from_subscriptions_and_controls() {
+async fn screen_transports_authenticated_media_and_controls_separately_from_subscriptions() {
     let (_directory, core, prefs) = public_fixture();
     let key = plain_rs::utils::base64::base64_decode(&plain_rs::prefs::identity::ensure_url_token(
         &prefs,
@@ -140,28 +140,6 @@ async fn screen_binary_media_is_separate_from_subscriptions_and_controls() {
             ready += 1;
         }
     }
-    for payload in [
-        br#"{"type":"screenMirrorControl","input":{"action":"BACK"}}"#.as_slice(),
-        &[0x54, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0],
-    ] {
-        let mut plain = chrono::Utc::now().timestamp_millis().to_be_bytes().to_vec();
-        plain.extend_from_slice(payload);
-        app.send(ClientMessage::Binary(
-            plain_rs::crypto::xchacha_encrypt_raw(&key, &plain)
-                .unwrap()
-                .into(),
-        ))
-        .await
-        .unwrap();
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(3), received.recv())
-                .await
-                .unwrap()
-                .unwrap()
-                .0,
-            "systemScreenMirrorControls"
-        );
-    }
     let (mut screen, _) = tokio_tungstenite::connect_async(format!(
         "ws://127.0.0.1:{}/screen?cid={client}",
         core.port
@@ -190,6 +168,28 @@ async fn screen_binary_media_is_separate_from_subscriptions_and_controls() {
             .unwrap(),
         ClientMessage::Pong(_)
     ));
+    for payload in [
+        br#"{"type":"screenMirrorControl","input":{"action":"BACK"}}"#.as_slice(),
+        &[0x54, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0],
+    ] {
+        let mut plain = chrono::Utc::now().timestamp_millis().to_be_bytes().to_vec();
+        plain.extend_from_slice(payload);
+        screen.send(ClientMessage::Binary(
+            plain_rs::crypto::xchacha_encrypt_raw(&key, &plain)
+                .unwrap()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), received.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .0,
+            "systemScreenMirrorControls"
+        );
+    }
     for (kind, payload) in [
         ("SCREEN_MIRROR_VIDEO", vec![0, 255, 1]),
         ("SCREEN_MIRROR_AUDIO", vec![2, 0, 3]),
@@ -237,6 +237,14 @@ async fn screen_binary_media_is_separate_from_subscriptions_and_controls() {
         .send(ClientMessage::Binary(control.clone().into()))
         .await
         .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(3), received.recv())
+            .await.unwrap().unwrap().0,
+        "systemScreenMirrorControls"
+    );
+    screen.send(ClientMessage::Binary(control.into()))
+        .await
+        .unwrap();
     let message = tokio::time::timeout(Duration::from_secs(3), screen.next())
         .await
         .unwrap()
@@ -244,6 +252,14 @@ async fn screen_binary_media_is_separate_from_subscriptions_and_controls() {
         .unwrap();
     assert!(
         matches!(message, ClientMessage::Close(Some(frame)) if frame.reason == "invalid_request")
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(3), received.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        "systemScreenMirrorResetTouch"
     );
     assert!(received.try_recv().is_err());
     for _ in 0..300 {
@@ -270,26 +286,6 @@ async fn screen_binary_media_is_separate_from_subscriptions_and_controls() {
     })
     .await
     .unwrap();
-    app.send(ClientMessage::Binary(control.into()))
-        .await
-        .unwrap();
-    let message = tokio::time::timeout(Duration::from_secs(3), app.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(
-        matches!(message, ClientMessage::Close(Some(frame)) if frame.reason == "invalid_request")
-    );
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(3), received.recv())
-            .await
-            .unwrap()
-            .unwrap()
-            .0,
-        "systemScreenMirrorResetTouch"
-    );
-    assert!(received.try_recv().is_err());
     core.shutdown().await;
     responder.await.unwrap();
 }

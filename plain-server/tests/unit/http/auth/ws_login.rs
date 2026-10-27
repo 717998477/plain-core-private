@@ -275,7 +275,7 @@ async fn passwordless_browser(
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;
     let (mut socket, _) =
-        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/?cid={client_id}&auth=2"))
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/auth?cid={client_id}&auth=2"))
             .await
             .unwrap();
     let (client, hello) = super::super::login_channel::Client::start(client_id).unwrap();
@@ -363,7 +363,7 @@ async fn passwordless_hello_consumes_the_same_ip_limiter_before_key_exchange() {
     let (_, hello) = super::super::login_channel::Client::start("browser").unwrap();
     for index in 0..=LOGIN_ATTEMPT_LIMIT {
         let (mut socket, _) =
-            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/?cid=browser&auth=2"))
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/auth?cid=browser&auth=2"))
                 .await
                 .unwrap();
         socket

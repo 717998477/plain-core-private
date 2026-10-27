@@ -128,7 +128,7 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
     .unwrap();
     for (cid, allowed) in [("rejected-browser", false), ("accepted-browser", true)] {
         let (mut socket, _) =
-            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/?cid={cid}&auth=1"))
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/auth?cid={cid}&auth=1"))
                 .await
                 .unwrap();
         socket
@@ -266,7 +266,7 @@ async fn malformed_login_frames_exhaust_the_ip_limit_before_decryption_despite_r
     for attempt in 0..7 {
         let cid = format!("login-limit-{attempt}");
         let (mut socket, _) = tokio_tungstenite::connect_async(format!(
-            "ws://127.0.0.1:{}/?cid={cid}&auth=1",
+            "ws://127.0.0.1:{}/auth?cid={cid}&auth=1",
             core.port
         ))
         .await
@@ -620,7 +620,7 @@ async fn encrypted_timed_controls_forward_exact_json_and_touch_inputs_once_and_r
         }
     });
     let (mut socket, _) =
-        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/?cid={client}", core.port))
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/screen?cid={client}", core.port))
             .await
             .unwrap();
     socket

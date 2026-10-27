@@ -32,6 +32,7 @@ impl Default for Runtime {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Channel {
     Events,
+    Auth,
     Screen,
 }
 
@@ -167,6 +168,16 @@ pub(crate) async fn upgrade(
     })
     .into_response()
 }
+pub(crate) async fn upgrade_auth(
+    State(state): State<ServerState>,
+    Query(params): Query<Params>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    ws.on_upgrade(move |socket| run(socket, state, params, remote.ip().to_string(), Channel::Auth))
+        .into_response()
+}
+
 pub(crate) async fn upgrade_screen(
     State(state): State<ServerState>,
     Query(params): Query<Params>,
@@ -190,7 +201,8 @@ async fn run(
     ip: String,
     channel: Channel,
 ) {
-    if channel == Channel::Screen && params.auth.is_some() {
+    if (channel == Channel::Auth && !matches!(params.auth.as_deref(), Some("1" | "2")))
+        || (channel != Channel::Auth && params.auth.is_some()) {
         let _ = socket.send(close(1008, "invalid_request")).await;
         return;
     }
@@ -220,7 +232,7 @@ async fn run(
     let mut registered = false;
     let mut stream = None;
     let mut receiver = match channel {
-        Channel::Events => state.events.subscribe(),
+        Channel::Events | Channel::Auth => state.events.subscribe(),
         Channel::Screen => state.main_ws.screen_events.subscribe(),
     };
     let mut pending: Option<String> = None;
@@ -336,7 +348,7 @@ async fn run(
                         let _ = state.events.send(WsEvent::broadcast("WEB_SOCKET_REGISTERED", "{}".into()));
                     }
                 } else {
-                    if channel != Channel::Events {
+                    if channel != Channel::Screen {
                         let _ = socket.send(close(1008, "invalid_request")).await;
                         break;
                     }
@@ -413,7 +425,7 @@ async fn run(
             log::warn!("Discovery client cleanup: {error}");
         }
     }
-    if channel == Channel::Events && state.main_ws.snapshot().is_empty() {
+    if channel == Channel::Screen && registered && !state.main_ws.connections.lock().unwrap().values().any(|c| c.channel == Channel::Screen && c.registered) {
         match crate::services::capabilities::snapshot(&state.host).await {
             Ok(capabilities) if capabilities.iter().any(|value| value == "SCREEN_MIRROR") => {
                 if let Err(error) = state
