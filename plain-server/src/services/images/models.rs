@@ -177,10 +177,6 @@ impl Runtime {
         }
         state.published_version = Some(snapshot.version);
         let _ = self.events.send(snapshot.event());
-        let _ = self.events.send(WsEvent::broadcast(
-            "IMAGE_SEARCH_UPDATED",
-            serde_json::to_string(&snapshot.status).unwrap(),
-        ));
     }
     fn set_status(&self, status: ImageSearchStatusType, error: String) {
         {

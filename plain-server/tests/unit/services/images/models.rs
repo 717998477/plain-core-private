@@ -296,10 +296,6 @@ async fn repeated_model_projections_emit_once_per_changed_snapshot() {
     let first = updates.try_recv().unwrap();
     assert_eq!(first.event_type, "IMAGE_MODELS_UPDATED");
     let first: serde_json::Value = serde_json::from_str(&first.payload).unwrap();
-    assert_eq!(
-        updates.try_recv().unwrap().event_type,
-        "IMAGE_SEARCH_UPDATED"
-    );
     assert!(updates.try_recv().is_err());
     runtime.report_error("Index failed".into());
     runtime.report_error("Index failed".into());
@@ -307,10 +303,6 @@ async fn repeated_model_projections_emit_once_per_changed_snapshot() {
     let changed: serde_json::Value = serde_json::from_str(&changed.payload).unwrap();
     assert!(changed["version"].as_u64().unwrap() > first["version"].as_u64().unwrap());
     assert_eq!(changed["errorMessage"], "Index failed");
-    assert_eq!(
-        updates.try_recv().unwrap().event_type,
-        "IMAGE_SEARCH_UPDATED"
-    );
     assert!(updates.try_recv().is_err());
     runtime.shutdown().await;
 }
@@ -323,10 +315,6 @@ async fn idle_model_runtime_does_not_poll_snapshots_and_index_events_project_wit
     assert_eq!(
         updates.recv().await.unwrap().event_type,
         "IMAGE_MODELS_UPDATED"
-    );
-    assert_eq!(
-        updates.recv().await.unwrap().event_type,
-        "IMAGE_SEARCH_UPDATED"
     );
     tokio::task::yield_now().await;
     runtime.snapshot_reads.store(0, Ordering::Relaxed);
@@ -377,7 +365,7 @@ async fn initial_snapshot_is_published_before_the_core_is_returned_to_consumers(
     while let Ok(event) = events.try_recv() {
         assert!(!matches!(
             event.event_type,
-            "IMAGE_MODELS_UPDATED" | "IMAGE_SEARCH_UPDATED"
+            "IMAGE_MODELS_UPDATED"
         ));
     }
     core.stop_core().await;

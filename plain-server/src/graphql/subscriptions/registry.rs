@@ -401,7 +401,7 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ version status downloadProgress errorMessage modelSize modelDir isIndexing totalImages indexedImages }",
         permissions: &[],
         capability: None,
-        local_only: true,
+        local_only: false,
     },
     EventSpec {
         field: "appUpdateDownloadUpdated",

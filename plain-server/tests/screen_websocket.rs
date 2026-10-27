@@ -174,13 +174,14 @@ async fn screen_transports_authenticated_media_and_controls_separately_from_subs
     ] {
         let mut plain = chrono::Utc::now().timestamp_millis().to_be_bytes().to_vec();
         plain.extend_from_slice(payload);
-        screen.send(ClientMessage::Binary(
-            plain_rs::crypto::xchacha_encrypt_raw(&key, &plain)
-                .unwrap()
-                .into(),
-        ))
-        .await
-        .unwrap();
+        screen
+            .send(ClientMessage::Binary(
+                plain_rs::crypto::xchacha_encrypt_raw(&key, &plain)
+                    .unwrap()
+                    .into(),
+            ))
+            .await
+            .unwrap();
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(3), received.recv())
                 .await
@@ -239,10 +240,14 @@ async fn screen_transports_authenticated_media_and_controls_separately_from_subs
         .unwrap();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(3), received.recv())
-            .await.unwrap().unwrap().0,
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
         "systemScreenMirrorControls"
     );
-    screen.send(ClientMessage::Binary(control.into()))
+    screen
+        .send(ClientMessage::Binary(control.into()))
         .await
         .unwrap();
     let message = tokio::time::timeout(Duration::from_secs(3), screen.next())
@@ -401,5 +406,29 @@ async fn remote_subscription_cannot_read_local_pairing_credentials() {
     assert_eq!(response["id"], "private");
     assert_eq!(response["type"], "error");
     assert_eq!(response["payload"][0]["message"], "no_permission");
+    let query = json!({"type":"subscribe","id":"models","payload":{"query":"subscription { imageModelsUpdated { version status downloadProgress errorMessage modelSize modelDir isIndexing totalImages indexedImages } }"}}).to_string();
+    socket
+        .send(ClientMessage::Binary(
+            stream.encode(query.as_bytes(), &key).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let ClientMessage::Binary(frame) = socket.next().await.unwrap().unwrap() else {
+                panic!("Expected encrypted image model update")
+            };
+            let response: serde_json::Value =
+                serde_json::from_slice(&stream.decode(&frame, &key).unwrap()).unwrap();
+            if response["id"] == "models"
+                && response["payload"]["data"]["imageModelsUpdated"]["status"].is_string()
+            {
+                break;
+            }
+            assert_ne!(response["type"], "error");
+        }
+    })
+    .await
+    .unwrap();
     core.shutdown().await;
 }
