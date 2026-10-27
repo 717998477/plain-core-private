@@ -254,7 +254,7 @@ async fn handle(stream: TcpStream, http: reqwest::Client, peers: PeerResolver) {
         let mut resp = match builder.send().await {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[http_proxy] upstream {url} failed: {e}");
+                log::warn!("[http_proxy] upstream {url} failed: {e}");
                 let _ = wr.write_all(b"HTTP/1.1 502 Bad Gateway\r\n").await;
                 let _ = wr.write_all(CORS).await;
                 let _ = wr

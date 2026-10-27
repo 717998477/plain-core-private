@@ -49,7 +49,7 @@ impl HeadlessService {
                 .map_err(anyhow::Error::msg)?,
         );
         let log_file = crate::platform::system::log::default_log_file(&paths.data_dir);
-        crate::platform::system::log::set_file(&log_file);
+        crate::platform::system::log::set_file(&log_file)?;
         core.set_log_file(&log_file).map_err(anyhow::Error::msg)?;
         let runtime = Arc::new(Runtime::new(core.clone(), capabilities()));
         let host = tokio::spawn(runtime.run());

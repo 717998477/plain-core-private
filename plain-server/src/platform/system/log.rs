@@ -1,37 +1,6 @@
-//! File + stderr logger behind the standard `log` facade.
-//!
-//! Why not `tracing`?
-//! ------------------
-//! The `tracing` ecosystem is the de-facto Rust standard, but the call
-//! sites in this codebase only ever use the lowest-level surface:
-//! `info!` / `debug!` / `warn!` / `error!` / `trace!` through the
-//! `log` crate macros.
-//!
-//! `tracing` + `tracing-subscriber` together pull in:
-//!   * `tracing-core`, `tracing-log`, `tracing-attributes`
-//!   * `tracing-subscriber` -> `matchers`, `regex-automata`, `regex-syntax`,
-//!     `aho-corasick`, `nu-ansi-term`, `sharded-slab`, `thread_local`,
-//!     `lazy_static`
-//!
-//! That's ~13 crates and ~5 seconds of compile time for what is
-//! effectively `eprintln!("[LEVEL] {message}")` plus a level filter.
-//!
-//! This module:
-//!   1. Exposes `init(level)` — installs a [`log::Log`] implementation
-//!      (stderr mirror + optional on-disk sink) via `log::set_boxed_logger`
-//!      and sets both the facade's max level and the internal filter, so
-//!      disabled-level `log::` call sites skip formatting entirely.
-//!   2. Keeps the on-disk log sink (`<data_dir>/logs/latest.log`) behind
-//!      the developer UI (`appLogPath` / `appLogs` / `clearAppLogs`).
-//!
-//! What we deliberately don't support:
-//!   * spans, `event!`, `#[instrument]` (no call-sites use them).
-//!   * structured JSON output (we never needed it).
-//!   * per-target filters (one global level is enough).
-
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// Log level. Ordered: Trace < Debug < Info < Warn < Error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -77,13 +46,22 @@ impl Level {
 /// Initialise the logger and the global level from a string. `RUST_LOG`
 /// overrides the explicit `level` argument. Installing the logger a
 /// second time (tests) keeps the first installation.
-pub fn init(level: &str) {
+pub fn init(level: &str) -> Result<(), String> {
+    static LOGGER: OnceLock<Result<(), String>> = OnceLock::new();
+    LOGGER
+        .get_or_init(|| log::set_logger(&FILE_LOGGER).map_err(|error| error.to_string()))
+        .clone()?;
     let level = match std::env::var("RUST_LOG") {
         Ok(env) => Level::parse(&env),
         Err(_) => Level::parse(level),
     };
-    let _ = log::set_logger(&NAS_LOGGER);
     log::set_max_level(level.to_filter());
+    Ok(())
+}
+
+pub fn init_file(path: &Path, level: &str) -> Result<(), String> {
+    set_file(path).map_err(|error| error.to_string())?;
+    init(level)
 }
 
 #[inline]
@@ -111,7 +89,7 @@ pub fn set_level(level: Level) {
     log::set_max_level(level.to_filter());
 }
 
-fn write_log(level: Level, body: &str) {
+pub fn write_log(level: Level, body: &str) {
     if !enabled(level) {
         return;
     }
@@ -120,99 +98,138 @@ fn write_log(level: Level, body: &str) {
     append_to_file(level, body);
 }
 
-// ---------------------------------------------------------------------------
-// On-disk log sink (`<data_dir>/logs/latest.log`), the surface behind the
-// developer UI (`appLogPath` / `appLogs` / `clearAppLogs`), mirroring
-// plain-app's DiskLog: a single `latest.log` file, one line per record,
-// newest lines at the end.
-//
-// File line format: `YYYY-MM-DD HH:MM:SS.mmm LEVEL body` — same shape as
-// plain-app's `DiskLogFormatStrategy`, but timestamps are UTC (project
-// rule for anything persisted).
-// ---------------------------------------------------------------------------
+const MAX_LOG_BYTES: u64 = 25 * 1024 * 1024;
 
-/// File name of the on-disk log, relative to `<data_dir>/logs/`.
-
-/// Default on-disk log path for a data dir. Single source of truth for
-/// the startup sink, the `appLogPath` resolver and tests.
 pub fn default_log_file(data_dir: &Path) -> PathBuf {
     plain_rs::data_paths::DataPaths::new(data_dir).log_file()
 }
 
 struct Sink {
     path: PathBuf,
-    file: std::fs::File,
+    file: Option<std::fs::File>,
+}
+
+impl Sink {
+    fn append(&mut self, line: &str, max_bytes: u64) -> std::io::Result<()> {
+        let marker = " [truncated]\n";
+        let mut end = line.len().min(max_bytes as usize);
+        let truncated = end < line.len();
+        if truncated {
+            end -= marker.len();
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+        }
+        let bytes = end as u64 + if truncated { marker.len() as u64 } else { 0 };
+        if self.file.is_none() {
+            self.file = Some(
+                std::fs::File::options()
+                    .append(true)
+                    .create(true)
+                    .open(&self.path)?,
+            );
+        }
+        if self.file.as_ref().unwrap().metadata()?.len() + bytes > max_bytes {
+            self.file = None;
+            let mut backup = self.path.as_os_str().to_owned();
+            backup.push(".bak");
+            match std::fs::remove_file(&backup) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+            std::fs::rename(&self.path, &backup)?;
+            self.file = Some(
+                std::fs::File::options()
+                    .append(true)
+                    .create(true)
+                    .open(&self.path)?,
+            );
+        }
+        let file = self.file.as_mut().unwrap();
+        file.write_all(line[..end].as_bytes())?;
+        if truncated {
+            file.write_all(marker.as_bytes())?;
+        }
+        file.flush()
+    }
 }
 
 static SINK: Mutex<Option<Sink>> = Mutex::new(None);
 
-/// Enable the on-disk sink. Called once at startup once the data dir is
-/// known; logging before that (or in subcommands that never call this)
-/// still goes to stderr only.
-pub fn set_file(path: &Path) {
+pub fn set_file(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)?;
     }
-    match std::fs::File::options()
+    let file = std::fs::File::options()
         .append(true)
         .create(true)
-        .open(path)
-    {
-        Ok(file) => {
-            *SINK.lock().unwrap_or_else(|e| e.into_inner()) = Some(Sink {
-                path: path.to_path_buf(),
-                file,
-            });
-        }
-        Err(e) => write_log(Level::Warn, &format!("log file sink open failed: {e}")),
-    }
+        .open(path)?;
+    *SINK.lock().unwrap_or_else(|error| error.into_inner()) = Some(Sink {
+        path: path.to_path_buf(),
+        file: Some(file),
+    });
+    Ok(())
 }
 
-/// Append one rendered record to the on-disk sink. No-op when the sink
-/// is disabled. A write error drops the cached handle and reopens once
-/// (recovers from the file being rotated/deleted underneath us).
 fn append_to_file(level: Level, body: &str) {
-    let mut guard = SINK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = SINK.lock().unwrap_or_else(|error| error.into_inner());
     let Some(sink) = guard.as_mut() else { return };
     let ts = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let line = format!("{ts} {lvl} {body}\n", lvl = level.as_str());
-    if let Err(e) = sink
-        .file
-        .write_all(line.as_bytes())
-        .and_then(|_| sink.file.flush())
-    {
-        let path = sink.path.clone();
-        *guard = None;
-        drop(guard);
-        write_log(
-            Level::Warn,
-            &format!("log file write failed ({e}); reopening {}", path.display()),
-        );
-        set_file(&path);
+    if let Err(error) = sink.append(&line, MAX_LOG_BYTES) {
+        sink.file = None;
+        eprintln!("Rust log write failed ({}): {error}", sink.path.display());
     }
 }
 
-/// Truncate the on-disk log. When `path` is the active sink file the
-/// cached handle is rewound too; otherwise the file is truncated
-/// standalone. No-op when the file does not exist (plain-app parity).
-pub fn clear_file(path: &Path) {
-    let mut guard = SINK.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(sink) = guard.as_mut()
-        && sink.path == path
-        && sink.file.set_len(0).is_ok()
-    {
-        let _ = sink.file.seek(SeekFrom::Start(0));
-        return;
+pub(crate) fn clear_files(paths: &[&Path]) -> io::Result<()> {
+    let _guard = SINK.lock().unwrap_or_else(|error| error.into_inner());
+    for path in paths {
+        for file in log_family(path)? {
+            let result = if file == *path {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&file)
+                    .and_then(|file| file.set_len(0))
+            } else {
+                std::fs::remove_file(&file)
+            };
+            match result {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
     }
-    // No sink, a foreign path, or a stale handle: truncate standalone.
-    if let Ok(f) = std::fs::File::options()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-    {
-        let _ = f.set_len(0);
+    Ok(())
+}
+
+pub(crate) fn log_family(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("Missing log directory"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("Missing log filename"))?
+        .to_string_lossy();
+    let prefix = format!("{name}.");
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let entry_name = entry.file_name();
+        let entry_name = entry_name.to_string_lossy();
+        if (entry_name == name || entry_name.starts_with(&prefix)) && entry.file_type()?.is_file() {
+            files.push(entry.path());
+        }
     }
+    files.sort();
+    Ok(files)
 }
 
 pub use crate::services::logs::read_lines_newest_first;
@@ -224,11 +241,11 @@ pub use crate::services::logs::read_lines_newest_first;
 // when enabled.
 // ---------------------------------------------------------------------------
 
-struct NasLogger;
+struct FileLogger;
 
-static NAS_LOGGER: NasLogger = NasLogger;
+static FILE_LOGGER: FileLogger = FileLogger;
 
-impl log::Log for NasLogger {
+impl log::Log for FileLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         enabled(from_facade_level(metadata.level()))
     }

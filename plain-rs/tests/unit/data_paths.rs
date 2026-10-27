@@ -12,6 +12,7 @@ fn all_platforms_derive_one_layout_from_the_data_root() {
         (paths.audio(), "audio"),
         (paths.logs(), "logs"),
         (paths.log_file(), "logs/latest.log"),
+        (paths.rust_log_file(), "logs/rust.log"),
         (paths.crash_report(), "crash_report.txt"),
         (paths.crash_log(), "crash_log.txt"),
         (paths.pomodoro_sound(), "audio/pomodoro_sound.mp3"),

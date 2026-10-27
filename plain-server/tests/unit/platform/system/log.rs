@@ -102,9 +102,8 @@ fn write_lines(path: &std::path::Path, lines: &[&str]) {
 #[test]
 fn file_sink_writes_enabled_levels_only() {
     let _seq = SINK_SEQ.lock().unwrap();
-    init("info");
     let path = tmp_log("sink");
-    set_file(&path);
+    init_file(&path, "info").unwrap();
     let saved = level();
     set_level(Level::Info);
 
@@ -195,19 +194,21 @@ fn read_lines_newest_first_matches_plain_app_semantics() {
     std::fs::remove_file(&path2).ok();
 }
 
-/// `clear_file` truncates; the sink keeps appending afterwards at the
-/// new (empty) end. Standalone truncate works for non-sink paths too.
 #[test]
-fn clear_file_truncates_and_sink_recovers() {
+fn clear_files_truncates_and_sink_recovers() {
     let _seq = SINK_SEQ.lock().unwrap();
-    init("info");
+    init("info").unwrap();
     let path = tmp_log("clear");
     write_lines(&path, &["old-1", "old-2"]);
-    set_file(&path);
+    set_file(&path).unwrap();
     let saved = level();
     set_level(Level::Info);
     log::info!("clearmarker-kept");
-    clear_file(&path);
+    let mut backup = path.as_os_str().to_owned();
+    backup.push(".bak");
+    std::fs::write(&backup, b"rotated").unwrap();
+    clear_files(&[&path]).unwrap();
+    assert!(!Path::new(&backup).exists());
     log::info!("clearmarker-after-clear");
     set_level(saved);
     *SINK.lock().unwrap() = None;
@@ -223,10 +224,9 @@ fn clear_file_truncates_and_sink_recovers() {
         "{content:?}"
     );
 
-    // Truncating a non-sink path creates/truncates standalone.
     let other = tmp_log("clear-other");
     write_lines(&other, &["x"]);
-    clear_file(&other);
+    clear_files(&[&other]).unwrap();
     assert_eq!(std::fs::metadata(&other).unwrap().len(), 0);
     std::fs::remove_file(&path).ok();
     std::fs::remove_file(&other).ok();
@@ -237,7 +237,7 @@ fn clear_file_truncates_and_sink_recovers() {
 #[test]
 fn set_file_creates_missing_parent_dirs() {
     let _seq = SINK_SEQ.lock().unwrap();
-    init("info");
+    init("info").unwrap();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -245,7 +245,7 @@ fn set_file_creates_missing_parent_dirs() {
     let root = std::env::temp_dir().join(format!("plainapp-log-mkdir-{nanos}"));
     let path = root.join("logs").join("latest.log");
 
-    set_file(&path);
+    set_file(&path).unwrap();
     let saved = level();
     set_level(Level::Info);
     log::info!("mkdir-marker");
@@ -255,4 +255,75 @@ fn set_file_creates_missing_parent_dirs() {
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains(" INFO mkdir-marker"), "{content:?}");
     std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn rotation_bounds_files_and_keeps_only_the_previous_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rust.log");
+    let backup = directory.path().join("rust.log.bak");
+    let mut sink = Sink {
+        path: path.clone(),
+        file: None,
+    };
+    sink.append(&"a".repeat(128), 128).unwrap();
+    assert!(!backup.exists());
+    drop(sink);
+    let mut sink = Sink {
+        path: path.clone(),
+        file: None,
+    };
+    sink.append("second\n", 128).unwrap();
+    assert_eq!(std::fs::read(&backup).unwrap(), vec![b'a'; 128]);
+    sink.append(&"b".repeat(128), 128).unwrap();
+    assert_eq!(std::fs::read(&backup).unwrap(), b"second\n");
+    assert_eq!(std::fs::read(&path).unwrap(), vec![b'b'; 128]);
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn oversized_utf8_record_is_truncated_and_writes_continue_after_clear() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rust.log");
+    let mut sink = Sink {
+        path: path.clone(),
+        file: None,
+    };
+    sink.append(&"界".repeat(128), 128).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.len() <= 128);
+    assert!(content.ends_with(" [truncated]\n"));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+    sink.append("after clear\n", 128).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"after clear\n");
+    assert!(!directory.path().join("rust.log.bak").exists());
+}
+
+#[test]
+fn rotation_failure_is_reported_and_keeps_the_current_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rust.log");
+    std::fs::write(&path, vec![b'a'; 128]).unwrap();
+    std::fs::create_dir(directory.path().join("rust.log.bak")).unwrap();
+    let mut sink = Sink {
+        path: path.clone(),
+        file: None,
+    };
+    assert!(sink.append("next\n", 128).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), vec![b'a'; 128]);
+    std::fs::remove_dir(directory.path().join("rust.log.bak")).unwrap();
+    sink.append("recovered\n", 128).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"recovered\n");
+}
+
+#[test]
+fn file_open_failure_is_returned_to_startup() {
+    let _seq = SINK_SEQ.lock().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    assert!(init_file(directory.path(), "info").is_err());
 }

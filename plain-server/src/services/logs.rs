@@ -6,11 +6,13 @@ use std::{
 
 pub(crate) struct Logs {
     path: RwLock<PathBuf>,
+    rust_path: PathBuf,
 }
 impl Logs {
     pub(crate) fn new(directory: &Path) -> Self {
         Self {
             path: RwLock::new(plain_rs::data_paths::DataPaths::new(directory).log_file()),
+            rust_path: plain_rs::data_paths::DataPaths::new(directory).rust_log_file(),
         }
     }
     pub(crate) fn set_path(&self, path: PathBuf) -> Result<(), String> {
@@ -47,11 +49,14 @@ impl Logs {
     }
     pub(crate) async fn size(&self) -> Result<u64, String> {
         let path = self.path()?;
+        let rust_path = self.rust_path.clone();
         tokio::task::spawn_blocking(move || {
-            log_files(&path)?.into_iter().try_fold(0u64, |size, file| {
-                size.checked_add(std::fs::metadata(file)?.len())
-                    .ok_or_else(|| io::Error::other("Log size overflow"))
-            })
+            log_files(&path, &rust_path)?
+                .into_iter()
+                .try_fold(0u64, |size, file| {
+                    size.checked_add(std::fs::metadata(file)?.len())
+                        .ok_or_else(|| io::Error::other("Log size overflow"))
+                })
         })
         .await
         .map_err(|error| error.to_string())?
@@ -64,11 +69,12 @@ impl Logs {
         stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Option<String>, String> {
         let path = self.path()?;
+        let rust_path = self.rust_path.clone();
         let paths = plain_rs::data_paths::DataPaths::new(directory);
         let reports = vec![paths.crash_report(), paths.crash_log()];
         let target = cache.root().join("logs.zip");
         let files = tokio::task::spawn_blocking(move || {
-            let mut files = log_files(&path)?
+            let mut files = log_files(&path, &rust_path)?
                 .into_iter()
                 .map(|path| {
                     let name = format!(
@@ -107,12 +113,9 @@ impl Logs {
     }
     pub(crate) async fn clear(&self) -> Result<(), String> {
         let path = self.path()?;
+        let rust_path = self.rust_path.clone();
         tokio::task::spawn_blocking(move || {
-            match std::fs::OpenOptions::new().write(true).open(path) {
-                Ok(file) => file.set_len(0),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            }
+            crate::platform::system::log::clear_files(&[&path, &rust_path])
         })
         .await
         .map_err(|error| error.to_string())?
@@ -120,30 +123,11 @@ impl Logs {
     }
 }
 
-fn log_files(path: &Path) -> io::Result<Vec<PathBuf>> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::other("Missing log directory"))?;
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::other("Missing log filename"))?
-        .to_string_lossy();
-    let prefix = format!("{name}.");
-    let entries = match std::fs::read_dir(parent) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    };
-    let mut files = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        let entry_name = entry.file_name();
-        let entry_name = entry_name.to_string_lossy();
-        if (entry_name == name || entry_name.starts_with(&prefix)) && entry.file_type()?.is_file() {
-            files.push(entry.path());
-        }
-    }
+fn log_files(path: &Path, rust_path: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut files = crate::platform::system::log::log_family(path)?;
+    files.extend(crate::platform::system::log::log_family(rust_path)?);
     files.sort();
+    files.dedup();
     Ok(files)
 }
 

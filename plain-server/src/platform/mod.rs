@@ -1,4 +1,4 @@
-#[cfg(feature = "system")]
+#[cfg(feature = "core")]
 pub mod system;
 
 #[cfg(feature = "core")]

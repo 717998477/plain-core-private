@@ -40,6 +40,9 @@ impl DataPaths {
     pub fn log_file(&self) -> PathBuf {
         self.logs().join("latest.log")
     }
+    pub fn rust_log_file(&self) -> PathBuf {
+        self.logs().join("rust.log")
+    }
     pub fn crash_report(&self) -> PathBuf {
         self.root.join("crash_report.txt")
     }

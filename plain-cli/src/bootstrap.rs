@@ -9,7 +9,7 @@ pub fn run() -> Result<()> {
         crate::version::COMMIT,
         crate::version::BUILD_TIME,
     );
-    plain_server::platform::system::log::init("info");
+    plain_server::platform::system::log::init("info").map_err(anyhow::Error::msg)?;
 
     let cli = crate::cli::Cli::parse();
     let paths = cli.paths()?;
