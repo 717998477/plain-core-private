@@ -1,10 +1,5 @@
 use super::*;
-use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{Message as WsMessage, client::IntoClientRequest},
-};
 fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
     let dir = tempfile::tempdir().unwrap();
     let prefs = Arc::new(plain_rs::prefs::Prefs::load(&dir.path().join("system.json")).unwrap());
@@ -18,18 +13,27 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
     .unwrap();
     (dir, server)
 }
-fn socket_request(
-    port: u16,
-    path: &str,
-    token: &str,
-) -> tokio_tungstenite::tungstenite::http::Request<()> {
-    let mut req = format!("ws://127.0.0.1:{port}{path}")
+#[tokio::test]
+async fn removed_ble_websocket_does_not_upgrade() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let (_dir, server) = fixture();
+    let mut request = format!("ws://127.0.0.1:{}/chat/ble-incoming", server.port)
         .into_client_request()
         .unwrap();
-    req.headers_mut()
-        .insert("authorization", format!("Bearer {token}").parse().unwrap());
-    req
+    request.headers_mut().insert(
+        "authorization",
+        format!(
+            "Bearer {}",
+            plain_rs::utils::base64::base64_encode(&[3; 32])
+        )
+        .parse()
+        .unwrap(),
+    );
+    assert!(tokio_tungstenite::connect_async(request).await.is_err());
+    server.shutdown().await;
 }
+
 #[tokio::test]
 async fn outgoing_completes_in_one_host_call() {
     let (_dir, server) = fixture();
@@ -104,99 +108,37 @@ async fn incoming_preserves_file_bytes_without_host_bridge() {
         format!("fid:{}", file.fid_suffix).as_bytes(),
     )
     .unwrap();
-    let (mut socket, _) = connect_async(socket_request(
-        server.port,
-        "/chat/ble-incoming",
-        &plain_rs::utils::base64::base64_encode(&[3; 32]),
-    ))
+    let bytes = incoming_exchange(
+        &server,
+        ble::HTTP_CHAR_UUID,
+        "actual MAC",
+        Request::FileChunk {
+            client_id: "actor".into(),
+            file_id: plain_rs::utils::base64::base64_encode(&id),
+            offset: 0,
+            length: 8192,
+        }
+        .encode()
+        .unwrap(),
+    )
     .await
     .unwrap();
-    socket.send(WsMessage::Text(serde_json::json!({"remoteHost":"actual MAC","characteristicUuid":"d8d5c4a0-8f0a-4e7d-b9e1-706c70616913"}).to_string().into())).await.unwrap();
-    socket
-        .send(WsMessage::Binary(
-            Request::FileChunk {
-                client_id: "actor".into(),
-                file_id: plain_rs::utils::base64::base64_encode(&id),
-                offset: 0,
-                length: 8192,
-            }
-            .encode()
-            .unwrap()
-            .into(),
-        ))
-        .await
-        .unwrap();
-    let WsMessage::Binary(bytes) = socket.next().await.unwrap().unwrap() else {
-        panic!("Expected binary")
-    };
     let (status, body) = ble::decode_response(&bytes).unwrap();
     assert_eq!(status, 200);
     assert_eq!(body, payload);
     assert!(!state.host.connected());
     server.shutdown().await;
 }
-#[tokio::test]
-async fn local_channels_reject_bad_auth_and_wrong_frame_type() {
-    let (_dir, server) = fixture();
-    assert!(
-        connect_async(socket_request(server.port, "/chat/ble-incoming", "wrong"))
-            .await
-            .is_err()
-    );
-    let (mut socket, _) = connect_async(socket_request(
-        server.port,
-        "/chat/ble-incoming",
-        &plain_rs::utils::base64::base64_encode(&[3; 32]),
-    ))
-    .await
-    .unwrap();
-    socket
-        .send(WsMessage::Binary(vec![0; 8].into()))
-        .await
-        .unwrap();
-    let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
-        .await
-        .unwrap();
-    assert!(matches!(
-        frame,
-        None | Some(Err(_)) | Some(Ok(WsMessage::Close(_)))
-    ));
-    server.shutdown().await;
-}
-
 async fn incoming_exchange(
-    port: u16,
+    server: &crate::assembly::server::ContentServer,
     characteristic: &str,
     address: &str,
     bytes: Vec<u8>,
 ) -> Option<Vec<u8>> {
-    let (mut socket, _) = connect_async(socket_request(
-        port,
-        "/chat/ble-incoming",
-        &plain_rs::utils::base64::base64_encode(&[3; 32]),
-    ))
-    .await
-    .unwrap();
-    socket
-        .send(WsMessage::Text(
-            serde_json::json!({
-                "remoteHost": address,
-                "characteristicUuid": characteristic,
-            })
-            .to_string()
-            .into(),
-        ))
+    crate::native::management::NativeManagement::new(server.runtime_state())
+        .ble_incoming(address.to_owned(), characteristic.to_owned(), bytes)
         .await
-        .unwrap();
-    let _ = socket.send(WsMessage::Binary(bytes.into())).await;
-    match tokio::time::timeout(Duration::from_secs(2), socket.next())
-        .await
-        .unwrap()
-    {
-        Some(Ok(WsMessage::Binary(bytes))) => Some(bytes.to_vec()),
-        None | Some(Err(_)) | Some(Ok(WsMessage::Close(_))) => None,
-        frame => panic!("Unexpected BLE response: {frame:?}"),
-    }
+        .ok()
 }
 
 #[tokio::test]
@@ -205,7 +147,7 @@ async fn nearby_discovery_uses_the_existing_raw_channel_and_shared_identity() {
     let state = server.runtime_state();
     state.prefs.set("device_name", "BLE fixture").unwrap();
     let bytes = incoming_exchange(
-        server.port,
+        &server,
         ble::NEARBY_CHAR_UUID,
         "radio-source",
         ble::message(&[], b"DISCOVER:").unwrap(),
@@ -229,7 +171,7 @@ async fn incoming_characteristics_are_allowlisted_and_cannot_cross_protocols() {
     let discover = ble::message(&[], b"DISCOVER:").unwrap();
     assert!(
         incoming_exchange(
-            server.port,
+            &server,
             "not-a-characteristic",
             "radio-source",
             discover.clone()
@@ -238,7 +180,7 @@ async fn incoming_characteristics_are_allowlisted_and_cannot_cross_protocols() {
         .is_none()
     );
     assert!(
-        incoming_exchange(server.port, ble::HTTP_CHAR_UUID, "radio-source", discover)
+        incoming_exchange(&server, ble::HTTP_CHAR_UUID, "radio-source", discover)
             .await
             .is_none()
     );
@@ -251,13 +193,13 @@ async fn incoming_characteristics_are_allowlisted_and_cannot_cross_protocols() {
     .encode()
     .unwrap();
     assert!(
-        incoming_exchange(server.port, ble::NEARBY_CHAR_UUID, "radio-source", request)
+        incoming_exchange(&server, ble::NEARBY_CHAR_UUID, "radio-source", request)
             .await
             .is_none()
     );
     for body in ["UNKNOWN:{}", "PAIR_REQUEST:{}", "DISCOVER_REPLY:{}"] {
         let bytes = incoming_exchange(
-            server.port,
+            &server,
             ble::NEARBY_CHAR_UUID,
             "radio-source",
             ble::message(&[], body.as_bytes()).unwrap(),
@@ -310,7 +252,7 @@ async fn nearby_pairing_preserves_signatures_and_the_actual_radio_return_address
     let mut events = state.events.subscribe();
     let body = Message::PairRequest(invalid).wire().unwrap();
     let ack = incoming_exchange(
-        server.port,
+        &server,
         ble::NEARBY_CHAR_UUID,
         "untrusted-route",
         ble::message(&[], body.as_bytes()).unwrap(),
@@ -327,7 +269,7 @@ async fn nearby_pairing_preserves_signatures_and_the_actual_radio_return_address
     assert!(events.try_recv().is_err());
     let body = Message::PairRequest(request.clone()).wire().unwrap();
     let ack = incoming_exchange(
-        server.port,
+        &server,
         ble::NEARBY_CHAR_UUID,
         "actual-radio-source",
         ble::message(&[], body.as_bytes()).unwrap(),
@@ -413,7 +355,7 @@ async fn nearby_cancel_requires_the_matching_signed_request() {
     let (request, key) = signed_nearby_request();
     let body = Message::PairRequest(request.clone()).wire().unwrap();
     let ack = incoming_exchange(
-        server.port,
+        &server,
         ble::NEARBY_CHAR_UUID,
         "radio-source",
         ble::message(&[], body.as_bytes()).unwrap(),
@@ -436,7 +378,7 @@ async fn nearby_cancel_requires_the_matching_signed_request() {
         cancel.signature = plain_rs::crypto::ed25519_sign(&key, cancel.signature_data().as_bytes());
         let body = Message::PairCancel(cancel.clone()).wire().unwrap();
         let ack = incoming_exchange(
-            server.port,
+            &server,
             ble::NEARBY_CHAR_UUID,
             "radio-source",
             ble::message(&[], body.as_bytes()).unwrap(),

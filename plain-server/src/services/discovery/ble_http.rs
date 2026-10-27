@@ -1,17 +1,8 @@
 use crate::assembly::server::ServerState;
 use anyhow::{Result, ensure};
-use axum::{
-    body::Body,
-    extract::{
-        State, WebSocketUpgrade,
-        ws::{Message, WebSocket},
-    },
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
+use axum::body::Body;
 use plain_rs::protocols::ble;
 use plain_rs::protocols::ble::Request;
-use serde::Deserialize;
 use std::time::Duration;
 
 mod nearby;
@@ -61,38 +52,6 @@ impl Runtime {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Incoming {
-    remote_host: String,
-    characteristic_uuid: String,
-}
-pub(crate) async fn incoming(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    ws: WebSocketUpgrade,
-) -> Response {
-    if !state.authenticated(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    ws.max_message_size(ble::MAX_MESSAGE).max_frame_size(ble::MAX_MESSAGE).on_upgrade(move |mut socket| async move {
-        let _ = tokio::time::timeout(Duration::from_secs(120), async {
-            let first = tokio::time::timeout(Duration::from_secs(15), socket.recv()).await?.ok_or_else(|| anyhow::anyhow!("BLE channel closed"))??;
-            let Message::Text(text) = first else { anyhow::bail!("Missing BLE connection facts"); };
-            ensure!(text.len() <= 4096, "BLE facts exceed limit");
-            let facts: Incoming = serde_json::from_str(&text)?;
-            let bytes = receive(&mut socket, Duration::from_secs(15)).await?;
-            let mut stop = state.stop.clone();
-            let response = tokio::select! {
-                result = dispatch_incoming(state, facts.remote_host, facts.characteristic_uuid, &bytes) => result?,
-                _ = socket.recv() => anyhow::bail!("BLE channel closed or received an unexpected frame"),
-                _ = stop.changed() => anyhow::bail!("BLE core stopped"),
-            };
-            socket.send(Message::Binary(response.into())).await?;
-            Ok::<_, anyhow::Error>(())
-        }).await;
-    })
-}
 fn matches_characteristic(value: &str) -> bool {
     value.eq_ignore_ascii_case(ble::HTTP_CHAR_UUID)
         || value.eq_ignore_ascii_case(ble::NEARBY_CHAR_UUID)
@@ -120,15 +79,6 @@ pub(crate) async fn dispatch_incoming(
     }
 }
 
-async fn receive(socket: &mut WebSocket, timeout: Duration) -> Result<Vec<u8>> {
-    let frame = tokio::time::timeout(timeout, socket.recv())
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("BLE channel closed"))??;
-    let Message::Binary(bytes) = frame else {
-        anyhow::bail!("Expected BLE bytes");
-    };
-    Ok(bytes.to_vec())
-}
 pub(crate) async fn dispatch(
     state: ServerState,
     data: &[u8],

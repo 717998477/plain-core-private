@@ -1,4 +1,4 @@
-use axum::{Router, extract::DefaultBodyLimit, http::HeaderMap, routing::get};
+use axum::http::HeaderMap;
 use plain_rs::db::Db;
 use plain_rs::events::WsEvent;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -821,14 +821,4 @@ pub(crate) struct PublicServer {
     pub(crate) discovery: crate::assembly::lifecycle::PublicDiscovery,
     pub(crate) listeners: crate::http::listeners::HttpListeners,
     pub(crate) stop: watch::Sender<bool>,
-}
-pub(crate) fn adapter_router(state: ServerState) -> Router {
-    let router = Router::new().route(
-        "/chat/ble-incoming",
-        get(crate::services::discovery::ble_http::incoming),
-    );
-    let router = router
-        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
-        .with_state(state.clone());
-    router
 }
