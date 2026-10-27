@@ -70,12 +70,6 @@ impl Runtime {
         ids.dedup();
         ids
     }
-    pub(crate) fn snapshot_event(&self) -> WsEvent {
-        WsEvent::broadcast("ONLINE_CLIENTS_UPDATED", json!(self.snapshot()).to_string())
-    }
-    fn changed(&self, state: &ServerState) {
-        let _ = state.events.send(self.snapshot_event());
-    }
     pub(crate) fn close_client(&self, state: &ServerState, client_id: Option<&str>) {
         state.subscription_sessions.close_client(client_id);
         let connections = self.connections.lock().unwrap();
@@ -86,7 +80,6 @@ impl Runtime {
             let _ = c.closing.send(Some((1000, "")));
         }
         drop(connections);
-        self.changed(state);
     }
     pub(crate) async fn complete(
         &self,
@@ -342,7 +335,6 @@ async fn run(
                     registered = true;
                     if let Some(c) = state.main_ws.connections.lock().unwrap().get_mut(&id) { c.registered = true; }
                     if channel == Channel::Events {
-                        state.main_ws.changed(&state);
                         let _ = state.mobile.mms.replay();
                         if let Err(error) = state.sms_sends.replay() { log::error!("SMS send replay: {error}"); }
                         let _ = state.events.send(WsEvent::broadcast("WEB_SOCKET_REGISTERED", "{}".into()));
@@ -406,9 +398,6 @@ async fn run(
         .await;
     }
     state.main_ws.connections.lock().unwrap().remove(&id);
-    if channel == Channel::Events {
-        state.main_ws.changed(&state);
-    }
     if channel == Channel::Events
         && registered
         && !state

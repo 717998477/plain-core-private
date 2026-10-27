@@ -145,6 +145,7 @@ async fn run(mut socket: WebSocket, state: ServerState, client: String) {
         }) => {
             let result = async {
                 tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Binary(ack))).await.map_err(|_| "Slow subscription client")?.map_err(|error| error.to_string())?;
+                session.mark_online()?;
                 let mut read = Box::pin(session.read());
                 loop {
                     let outbound = tokio::select! {

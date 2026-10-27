@@ -45,6 +45,7 @@ pub struct Session {
     owner_scope: String,
     key: Option<Vec<u8>>,
     closed: watch::Sender<bool>,
+    online: Mutex<bool>,
     outgoing: mpsc::Sender<Queued>,
     incoming: tokio::sync::Mutex<mpsc::Receiver<Queued>>,
     operations: Mutex<HashMap<String, Operation>>,
@@ -75,6 +76,7 @@ impl Sessions {
             owner_scope: scope.id().to_owned(),
             key,
             closed,
+            online: Mutex::new(false),
             outgoing,
             incoming: tokio::sync::Mutex::new(incoming),
             operations: Mutex::default(),
@@ -105,34 +107,79 @@ impl Sessions {
             .cloned()
             .ok_or_else(|| "Unknown subscription session".into())
     }
+    pub(crate) fn snapshot(&self) -> Vec<String> {
+        let entries = self.entries.lock().unwrap();
+        let mut clients: Vec<_> = entries
+            .values()
+            .filter(|session| *session.online.lock().unwrap())
+            .map(|session| session.client.clone())
+            .collect();
+        clients.sort();
+        clients.dedup();
+        clients
+    }
+    pub(crate) fn snapshot_event(&self) -> plain_rs::events::WsEvent {
+        plain_rs::events::WsEvent::broadcast(
+            "ONLINE_CLIENTS_UPDATED",
+            serde_json::json!(self.snapshot()).to_string(),
+        )
+    }
     pub fn close(&self, id: u64) {
-        if let Some(session) = self.entries.lock().unwrap().remove(&id) {
+        let session = self.entries.lock().unwrap().remove(&id);
+        if let Some(session) = session {
             session.close();
         }
     }
     pub(crate) fn close_client(&self, client: Option<&str>) {
-        let mut entries = self.entries.lock().unwrap();
-        entries.retain(|_, session| {
-            if client.is_none_or(|id| id == session.client) {
-                session.close();
-                false
-            } else {
-                true
-            }
-        });
+        let sessions = {
+            let mut entries = self.entries.lock().unwrap();
+            let ids: Vec<_> = entries
+                .iter()
+                .filter(|(_, session)| client.is_none_or(|id| id == session.client))
+                .map(|(id, _)| *id)
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| entries.remove(&id))
+                .collect::<Vec<_>>()
+        };
+        for session in sessions {
+            session.close();
+        }
     }
 }
 impl Session {
     pub fn scope_id(&self) -> &str {
         &self.owner_scope
     }
+    pub(crate) fn mark_online(&self) -> Result<(), String> {
+        let mut online = self.online.lock().unwrap();
+        if *self.closed.borrow() {
+            return Err("Subscription session closed".into());
+        }
+        *online = true;
+        drop(online);
+        let _ = self
+            .state
+            .events
+            .send(self.state.subscription_sessions.snapshot_event());
+        Ok(())
+    }
     pub fn close(&self) {
+        let mut online = self.online.lock().unwrap();
         self.closed.send_replace(true);
+        let changed = std::mem::replace(&mut *online, false);
+        drop(online);
         for (_, operation) in self.operations.lock().unwrap().drain() {
             operation.scope.close();
             if let Some(task) = operation.task {
                 task.abort();
             }
+        }
+        if changed {
+            let _ = self
+                .state
+                .events
+                .send(self.state.subscription_sessions.snapshot_event());
         }
     }
     fn valid(&self) -> bool {

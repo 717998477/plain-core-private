@@ -682,21 +682,25 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let insert = |id: &str, registered: bool| {
-        let (outgoing, _) = mpsc::channel(1);
-        let (closing, _) = tokio::sync::watch::channel(None);
-        state.main_ws.connections.lock().unwrap().insert(
-            id.into(),
-            Connection {
-                channel: Channel::Events,
-                client_id: id.into(),
-                registered,
-                outgoing,
-                pending: None,
-                closing,
-            },
-        );
+        let session = state
+            .subscription_sessions
+            .open(
+                state.clone(),
+                crate::graphql::executor::RequestContext::authenticated_remote(
+                    state.clone(),
+                    id.into(),
+                ),
+                id.into(),
+                Some(vec![1; 32]),
+                crate::native::graphql::NativeRequestScope::default(),
+            )
+            .unwrap();
+        if registered {
+            session.mark_online().unwrap();
+        }
+        session.id
     };
-    insert("owned-client", true);
+    let owned = insert("owned-client", true);
     insert("unregistered-client", false);
     let bridge = core.host_events().unwrap();
     assert_eq!(
@@ -741,12 +745,7 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
             json!(["stale-client"]).to_string(),
         ))
         .unwrap();
-    state
-        .main_ws
-        .connections
-        .lock()
-        .unwrap()
-        .remove("owned-client");
+    state.subscription_sessions.close(owned);
     insert("current-client", true);
     let current = bridge.next_event(None).await.unwrap();
     assert_eq!(
@@ -836,4 +835,117 @@ async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
     );
     core.stop_core().await;
     assert!(replacement.next_event(None).await.is_none());
+}
+
+#[tokio::test]
+async fn online_clients_follow_authenticated_graphql_connections() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::{Message as Frame, client::IntoClientRequest};
+
+    let (_directory, core) = public_fixture();
+    let state = core.runtime_state();
+    let client = state.native_client_id().unwrap();
+    let key = plain_rs::utils::base64::base64_decode(&plain_rs::prefs::identity::ensure_url_token(
+        &state.prefs,
+    ));
+    let native = core.native_graphql().unwrap();
+    let native_id = native
+        .open_subscriptions(crate::native::graphql::NativeRequestScope::default())
+        .unwrap();
+    let observer = native.subscription_session(native_id).unwrap();
+    observer.send(r#"{"type":"subscribe","id":"online","payload":{"query":"subscription { onlineClientsUpdated }"}}"#).unwrap();
+    async fn expect_online(
+        session: &crate::graphql::subscriptions::session::Session,
+        expected: Value,
+    ) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let response: Value = serde_json::from_str(&session.read().await.unwrap()).unwrap();
+                if response["payload"]["data"]["onlineClientsUpdated"] == expected {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+    expect_online(&observer, json!([])).await;
+    assert!(state.subscription_sessions.snapshot().is_empty());
+    let mut invalid_request = format!("ws://127.0.0.1:{}/graphql?cid={client}", core.port)
+        .into_client_request().unwrap();
+    invalid_request.headers_mut().insert("Sec-WebSocket-Protocol", "plain-graphql-ws-v1".parse().unwrap());
+    let (mut invalid, _) = tokio_tungstenite::connect_async(invalid_request).await.unwrap();
+    invalid.send(Frame::Binary(vec![0; 64].into())).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(3), invalid.next()).await.unwrap();
+    assert!(matches!(reply, Some(Ok(Frame::Close(_)))));
+    assert!(state.subscription_sessions.snapshot().is_empty());
+    let connect = |nonce: &str| {
+        let key = key.clone();
+        let client = client.clone();
+        let nonce = nonce.to_owned();
+        let port = core.port;
+        async move {
+            let mut request = format!("ws://127.0.0.1:{port}/graphql?cid={client}")
+                .into_client_request()
+                .unwrap();
+            request.headers_mut().insert(
+                "Sec-WebSocket-Protocol",
+                "plain-graphql-ws-v1".parse().unwrap(),
+            );
+            let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+            let init = plain_rs::protocols::graphql::seal_init(&key, &client, json!({"timestampMillis": chrono::Utc::now().timestamp_millis(), "clientNonce": nonce.repeat(32)}).to_string().as_bytes()).unwrap();
+            socket
+                .send(Frame::Binary(init.clone().into()))
+                .await
+                .unwrap();
+            let Frame::Binary(ack) = socket.next().await.unwrap().unwrap() else {
+                panic!("Expected encrypted acknowledgement")
+            };
+            assert!(plain_rs::protocols::graphql::open_ack(&key, &client, &init, &ack).is_some());
+            socket.send(Frame::Ping(vec![1].into())).await.unwrap();
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                Frame::Pong(_)
+            ));
+            socket
+        }
+    };
+    let mut first = connect("01").await;
+    expect_online(&observer, json!([client.clone()])).await;
+    let mut second = connect("02").await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while state.subscription_sessions.snapshot() != vec![client.clone()] {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    first.close(None).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(3), first.next())
+        .await
+        .unwrap();
+    assert_eq!(state.subscription_sessions.snapshot(), vec![client.clone()]);
+    second.close(None).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !state.subscription_sessions.snapshot().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    expect_online(&observer, json!([])).await;
+    let mut third = connect("03").await;
+    expect_online(&observer, json!([client.clone()])).await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while state.subscription_sessions.snapshot() != vec![client.clone()] {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    state.subscription_sessions.close_client(Some(&client));
+    assert!(state.subscription_sessions.snapshot().is_empty());
+    let _ = third.close(None).await;
+    native.close_subscriptions(native_id);
+    core.shutdown().await;
 }

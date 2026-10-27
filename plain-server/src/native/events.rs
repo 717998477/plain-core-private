@@ -142,7 +142,7 @@ impl NativeEventStream {
                     match snapshot {
                         Snapshot::HttpServer => self.state.http_server.status().event(),
                         Snapshot::Images => self.state.image_models.snapshot().event(),
-                        Snapshot::OnlineClients => self.state.main_ws.snapshot_event(),
+                        Snapshot::OnlineClients => self.state.subscription_sessions.snapshot_event(),
                         Snapshot::PeerTransport => {
                             crate::services::peers::peer_transport::snapshot_event(&self.state)
                         }
@@ -207,7 +207,7 @@ impl NativeEventStream {
                         {
                             self.state.http_server.status().event()
                         }
-                        "ONLINE_CLIENTS_UPDATED" => self.state.main_ws.snapshot_event(),
+                        "ONLINE_CLIENTS_UPDATED" => self.state.subscription_sessions.snapshot_event(),
                         "PEER_TRANSPORT_UPDATED" => {
                             crate::services::peers::peer_transport::snapshot_event(&self.state)
                         }

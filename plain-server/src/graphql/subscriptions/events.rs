@@ -136,7 +136,7 @@ async fn snapshot(state: &ServerState, name: &str) -> Result<Option<String>> {
         "PEER_TRANSPORT_UPDATED" => {
             crate::services::peers::peer_transport::snapshot_event(state).payload
         }
-        "ONLINE_CLIENTS_UPDATED" => state.main_ws.snapshot_event().payload,
+        "ONLINE_CLIENTS_UPDATED" => state.subscription_sessions.snapshot_event().payload,
         "DLNA_SENDER_UPDATED" => state.cast.snapshot().event().payload,
         "AUDIO_PLAYBACK_UPDATED" => {
             let event = state.audio.playback_event().await;
