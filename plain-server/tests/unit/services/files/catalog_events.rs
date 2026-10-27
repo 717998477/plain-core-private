@@ -18,26 +18,6 @@ fn native_batches_emit_one_deduplicated_public_invalidation_and_empty_batches_em
 }
 
 #[test]
-fn sdk_facts_are_validated_and_converted_without_echoing_the_host_packet() {
-    let (events, mut receiver) = broadcast::channel(8);
-    for payload in [
-        "{}",
-        r#"{"types":[]}"#,
-        r#"{"types":[0]}"#,
-        r#"{"types":[1,2,3,24,1]}"#,
-        r#"{"types":[1],"extra":true}"#,
-    ] {
-        assert!(report(&events, payload).is_err());
-        assert!(receiver.try_recv().is_err());
-    }
-    report(&events, r#"{"types":[1,1]}"#).unwrap();
-    let event = receiver.try_recv().unwrap();
-    assert_eq!(event.event_type, MEDIA_LIBRARY_UPDATED);
-    assert!(!event.is_host_event());
-    assert_eq!(event.payload, r#"{"types":[1]}"#);
-}
-
-#[test]
 fn catalog_routing_selects_only_the_reported_media_kind() {
     use plain_rs::enums::DataType;
     assert!(includes(r#"{"types":[3,1]}"#, DataType::Image));

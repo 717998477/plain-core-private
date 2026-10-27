@@ -325,14 +325,6 @@ impl HostEvents {
             .map_err(|error| error.to_string());
     }
 
-    pub async fn report_media_catalog_changed(&self, payload: String) -> Result<(), String> {
-        if !self.state.host.is_current(self.generation) {
-            return Err("host disconnected".into());
-        }
-
-        return crate::services::files::catalog_events::report(&self.state.events, &payload);
-    }
-
     pub async fn report_screen_mirror_state(&self, payload: String) -> Result<(), String> {
         self.publish(WsEvent::host_text("SCREEN_MIRRORING", payload))
     }
@@ -502,7 +494,6 @@ impl HostEvents {
             "BLE_ADVERTISEMENT_REPORTED" => self.report_ble_advertisement(payload).await,
             "BLE_SCAN_STATE_REPORTED" => self.report_ble_scan_state(payload).await,
             "BLE_ADVERTISING_FACTS_REPORTED" => self.report_ble_advertising_facts(payload).await,
-            "MEDIA_CATALOG_CHANGED" => self.report_media_catalog_changed(payload).await,
             "SCREEN_MIRRORING" => self.report_screen_mirror_state(payload).await,
             "SCREEN_MIRROR_VIDEO_CODEC" => self.report_screen_mirror_codec(payload).await,
             "SCREEN_MIRROR_AUDIO_GRANTED" => self.report_screen_mirror_audio_granted(payload).await,

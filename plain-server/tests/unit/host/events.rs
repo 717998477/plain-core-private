@@ -31,6 +31,7 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
         plain_rs::events::MEDIA_LIBRARY_UPDATED,
         "HTTP_SERVER_STATE_CHANGED",
         "MEDIA_ACTION_FINISHED",
+        "MEDIA_CATALOG_CHANGED",
     ] {
         assert!(bridge.publish_text(kind, "{}".into()).await.is_err());
         assert!(bridge.publish_binary(kind, vec![]).is_err());
@@ -52,7 +53,6 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
                 | "DLNA_SEEK_CONSUMED_REPORTED"
                 | "DLNA_STOPPED_REPORTED"
                 | "IMAGE_CATALOG_CHANGED"
-                | "MEDIA_CATALOG_CHANGED"
                 | "NETWORK_INTERFACES_CHANGED"
                 | "BLE_ADVERTISEMENT_REPORTED"
                 | "BLE_SCAN_STATE_REPORTED"

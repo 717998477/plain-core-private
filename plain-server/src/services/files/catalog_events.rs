@@ -27,21 +27,6 @@ pub(crate) fn publish(events: &broadcast::Sender<WsEvent>, types: impl IntoItera
     }
 }
 
-pub(crate) fn report(events: &broadcast::Sender<WsEvent>, payload: &str) -> Result<(), String> {
-    let change: Change = serde_json::from_str(payload).map_err(|error| error.to_string())?;
-    if change.types.is_empty()
-        || change.types.len() > 4
-        || change
-            .types
-            .iter()
-            .any(|kind| !matches!(kind, 1 | 2 | 3 | 24))
-    {
-        return Err("invalid media catalog types".into());
-    }
-    publish(events, change.types);
-    Ok(())
-}
-
 #[cfg(test)]
 #[path = "../../../tests/unit/services/files/catalog_events.rs"]
 mod tests;
