@@ -75,30 +75,37 @@ async fn phase(
 }
 
 #[cfg(feature = "http_transport")]
-async fn confirmation(
-    events: &mut tokio::sync::broadcast::Receiver<plain_rs::events::WsEvent>,
-) -> String {
-    confirmation_request(events).await["requestId"]
-        .as_str()
-        .unwrap()
-        .into()
+struct ConfirmationCallbacks {
+    host: std::sync::Arc<crate::host::bridge::Host>,
+    generation: u64,
+    requests: tokio::sync::mpsc::Receiver<Value>,
 }
 
 #[cfg(feature = "http_transport")]
-async fn confirmation_request(
-    events: &mut tokio::sync::broadcast::Receiver<plain_rs::events::WsEvent>,
-) -> Value {
-    tokio::time::timeout(Duration::from_secs(15), async {
-        loop {
-            let event = events.recv().await.unwrap();
-            if event.event_type == "WEB_LOGIN_REQUESTED" {
-                let value: Value = serde_json::from_str(&event.payload).unwrap();
-                return value;
+impl ConfirmationCallbacks {
+    fn new(state: &ServerState) -> Self {
+        let (generation, requests) = state.host.connect();
+        Self { host: state.host.clone(), generation, requests }
+    }
+    async fn next(&mut self, method: &str) -> Value {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let request = self.requests.recv().await.unwrap();
+                self.host.reply(self.generation, json!({"id":request["id"],"result":null})).unwrap();
+                if request["method"] == method { return request["params"].clone(); }
             }
-        }
-    })
-    .await
-    .unwrap()
+        }).await.unwrap()
+    }
+}
+
+#[cfg(feature = "http_transport")]
+async fn confirmation(events: &mut ConfirmationCallbacks) -> String {
+    confirmation_request(events).await["requestId"].as_str().unwrap().into()
+}
+
+#[cfg(feature = "http_transport")]
+async fn confirmation_request(events: &mut ConfirmationCallbacks) -> Value {
+    events.next("systemWebLoginRequested").await
 }
 
 #[cfg(feature = "http_transport")]
@@ -110,7 +117,7 @@ async fn passwordless_native_management_displays_the_same_code_and_commits_only_
     let remote_state = remote.runtime_state();
     remote_state.prefs.set("password_type", "NONE").unwrap();
     remote_state.prefs.set("login_require_approval", false).unwrap();
-    let mut events = remote_state.events.subscribe();
+    let mut events = ConfirmationCallbacks::new(&remote_state);
     let remote_id = remote_state.native_client_id().unwrap();
     let local_id = state.native_client_id().unwrap();
     let started = pairing_attempts::start(
@@ -178,7 +185,7 @@ async fn actual_native_management_uses_encrypted_auth_and_saves_both_grants_once
         .prefs
         .set("password", "fixture-password")
         .unwrap();
-    let mut events = remote_state.events.subscribe();
+    let mut events = ConfirmationCallbacks::new(&remote_state);
     let http_port = remote_state.public_ports().await.unwrap().0;
     let initial = pairing_attempts::start(
         &state,
@@ -211,17 +218,7 @@ async fn actual_native_management_uses_encrypted_auth_and_saves_both_grants_once
         .await
         .unwrap();
     let finished = phase(&state, &initial.generation, &["SUCCEEDED"]).await;
-    let completed = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let event = events.recv().await.unwrap();
-            if event.event_type == "WEB_LOGIN_COMPLETED" {
-                break event;
-            }
-        }
-    })
-    .await
-    .unwrap();
-    let completed: Value = serde_json::from_str(&completed.payload).unwrap();
+    let completed = events.next("systemWebLoginCompleted").await;
     assert!(completed["request"]["password"].is_null());
     assert!(
         !completed
@@ -313,7 +310,7 @@ async fn no_password_still_requires_remote_approval_and_cancel_prevents_local_co
     let state = local.runtime_state();
     let remote_state = remote.runtime_state();
     remote_state.prefs.set("password_type", "NONE").unwrap();
-    let mut events = remote_state.events.subscribe();
+    let mut events = ConfirmationCallbacks::new(&remote_state);
     let first = pairing_attempts::start(
         &state,
         Some(remote_state.native_client_id().unwrap()),
@@ -453,7 +450,7 @@ async fn remote_rejection_and_native_scope_closure_do_not_save_credentials() {
     let (_remote_dir, remote, port) = server().await;
     let state = local.runtime_state();
     let other = remote.runtime_state();
-    let mut events = other.events.subscribe();
+    let mut events = ConfirmationCallbacks::new(&other);
     let initial = pairing_attempts::start(
         &state,
         None,
@@ -528,7 +525,7 @@ async fn a_local_commit_failure_preserves_the_old_row_and_reports_the_remote_gra
         )
         .unwrap();
     state.db.with_conn(|conn| conn.execute_batch("CREATE TRIGGER fail_local_pair BEFORE UPDATE ON peers BEGIN SELECT RAISE(ABORT,'fixture local failure'); END;")).unwrap();
-    let mut events = other.events.subscribe();
+    let mut events = ConfirmationCallbacks::new(&other);
     let initial = pairing_attempts::start(
         &state,
         Some(remote_id.clone()),

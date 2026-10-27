@@ -1,14 +1,5 @@
-pub const H_CLIPBOARD_HISTORY_UPDATED: &str = "H_CLIPBOARD_HISTORY_UPDATED";
 pub const MEDIA_LIBRARY_UPDATED: &str = "MEDIA_LIBRARY_UPDATED";
-pub const AUDIO_LIBRARY_UPDATED: &str = "AUDIO_LIBRARY_UPDATED";
-pub const PEER_NOTIFICATIONS_UPDATED: &str = "PEER_NOTIFICATIONS_UPDATED";
-pub const PEER_CLIPBOARD_CHANGED: &str = "PEER_CLIPBOARD_CHANGED";
-pub const NETWORK_CHANGED: &str = "NETWORK_CHANGED";
-pub const HTTP_SERVER_STARTED: &str = "HTTP_SERVER_STARTED";
-pub const HTTP_SERVER_FAILED: &str = "HTTP_SERVER_FAILED";
-pub const HTTP_SERVER_STATE_CHANGED: &str = "HTTP_SERVER_STATE_CHANGED";
 pub const MEDIA_SCAN_PROGRESS: &str = "MEDIA_SCAN_PROGRESS";
-pub const MEDIA_ACTION_FINISHED: &str = "MEDIA_ACTION_FINISHED";
 pub const WS_PAIRING_SUCCESS: &str = "PAIRING_SUCCESS";
 
 #[derive(Clone, Debug)]
@@ -87,27 +78,10 @@ impl WsEvent {
     pub fn is_internal(&self) -> bool {
         matches!(
             self.event_type,
-            H_CLIPBOARD_HISTORY_UPDATED
-                | HTTP_SERVER_FAILED
-                | HTTP_SERVER_STARTED
-                | HTTP_SERVER_STATE_CHANGED
-                | MEDIA_ACTION_FINISHED
-                | "MDNS_UPDATED"
+            "MDNS_UPDATED"
                 | "PEER_CONNECTIONS_UPDATED"
-                | "PEER_TRANSPORT_UPDATED"
-                | PEER_CLIPBOARD_CHANGED
-                | PEER_NOTIFICATIONS_UPDATED
-                | "SHARED_FOLDER_DOWNLOAD_UPDATED"
-                | "DLNA_RENDERER_UPDATED"
-                | "ONLINE_CLIENTS_UPDATED"
-                | "WEB_REQUEST_RECEIVED"
-                | "WEB_LOGIN_REQUESTED"
-                | "WEB_LOGIN_COMPLETED"
-                | "WEB_LOGIN_CLOSED"
                 | "IMAGE_INDEX_UPDATED"
-                | "DLNA_SENDER_UPDATED"
                 | "IMAGE_MODELS_UPDATED"
-                | "APP_UPDATE_DOWNLOAD_UPDATED"
                 | "PREFS_UPDATED"
                 | "NEARBY_DEVICES_UPDATED"
         )

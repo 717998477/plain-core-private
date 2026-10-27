@@ -28,10 +28,9 @@ pub(crate) fn touch(state: &ServerState, client_id: &str) -> anyhow::Result<()> 
         client_id.to_owned(),
         plain_rs::utils::dbtime::iso_from_unix_millis(now),
     )])?;
-    let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-        "WEB_REQUEST_RECEIVED",
-        json!({"clientId":client_id,"time":now}).to_string(),
-    ));
+    if let Err(error) = state.host.notify("systemWebActivity", json!({})) {
+        log::warn!("Web activity callback: {error}");
+    }
     Ok(())
 }
 
@@ -63,14 +62,14 @@ pub(crate) fn rename(state: &ServerState, client_id: &str, name: &str) -> anyhow
 }
 
 pub(crate) fn delete(state: &ServerState, client_id: &str) -> anyhow::Result<bool> {
-    let cancelled = state
+    let mut attempts = state
         .login_attempts
         .lock()
-        .map_err(|_| anyhow::anyhow!("Login state unavailable"))?
-        .cancel_client(client_id);
-    for request_id in cancelled {
-        crate::http::auth::ws_login::notify_closed(state, &request_id);
+        .map_err(|_| anyhow::anyhow!("Login state unavailable"))?;
+    for request_id in attempts.cancel_client(client_id) {
+        crate::http::auth::ws_login::notify_closed(state, &mut attempts, &request_id);
     }
+    drop(attempts);
     state.main_ws.close_client(state, Some(client_id));
     Ok(state.db.session_delete(client_id)? > 0)
 }

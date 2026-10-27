@@ -15,7 +15,9 @@ fn stub(host: Arc<Host>, db: Arc<Db>, handler: impl Fn(&str, Value) -> Value + S
             let Some(id) = request["id"].as_u64() else {
                 continue;
             };
-            let result = if request["method"] == "audioLibraryResolve" {
+            let result = if request["method"] == "audioLibraryRefresh" {
+                Value::Null
+            } else if request["method"] == "audioLibraryResolve" {
                 let params = &request["params"];
                 let mut rows = db.with_conn(|conn|conn.prepare("SELECT id,path,title,artist,duration_ms,cover_image_id FROM media_items WHERE data_type=1 UNION SELECT media_id,path,title,artist,duration_ms,album_id FROM platform_audio_media UNION SELECT id,path,title,artist,duration_ms,'' FROM media_items WHERE data_type=1").unwrap().query_map([],|row|Ok(json!({"mediaId":row.get::<_,String>(0)?,"path":row.get::<_,String>(1)?,"title":row.get::<_,String>(2)?,"artist":row.get::<_,String>(3)?,"durationMs":row.get::<_,i64>(4)?,"albumId":row.get::<_,String>(5)?,"aliases":[]}))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap());
                 let mut paths = params["paths"].as_array().unwrap().clone();
@@ -1272,7 +1274,7 @@ async fn native_album_tags_reach_playlist_covers_without_platform_catalog_calls(
 }
 
 #[tokio::test]
-async fn browser_history_writes_do_not_change_the_current_player_or_call_the_host() {
+async fn browser_history_writes_do_not_change_the_current_player_or_control_the_platform_player() {
     let (_dir, schema) = fixture_with(GRANTED, |method, _| panic!("unexpected host call {method}"));
     seed_queue(&schema, &[("/one.mp3", "One", "Artist")]);
     let local_before = plain_rs::media::audio::playback::snapshot(database(&schema)).unwrap();
@@ -1281,21 +1283,15 @@ async fn browser_history_writes_do_not_change_the_current_player_or_call_the_hos
         .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()
         .unwrap()
         .subscribe();
-    for (method, position, changed) in [
-        ("recordMediaPlay", 123, true),
-        ("saveMediaPlayProgress", 234, false),
-        ("saveMediaPlayProgress", 456, false),
+    for (method, position) in [
+        ("recordMediaPlay", 123),
+        ("saveMediaPlayProgress", 234),
+        ("saveMediaPlayProgress", 456),
     ]
     {
         let response = query(&schema, &format!(r#"mutation {{ {method}(mediaId:"test:/one.mp3",type:AUDIO,positionMs:{position}) }}"#)).await;
         assert!(response["errors"].is_null(), "{response}");
         assert_eq!(response["data"][method], true);
-        if changed {
-            assert_eq!(
-                events.try_recv().unwrap().event_type,
-                plain_rs::events::AUDIO_LIBRARY_UPDATED
-            );
-        }
         assert!(events.try_recv().is_err());
     }
     let history = play_history::matching(db, &[]).unwrap();

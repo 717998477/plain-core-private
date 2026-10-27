@@ -103,7 +103,7 @@ fn absent_cache_is_empty_and_existing_invalid_roots_fail() {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::test]
-async fn cache_settings_execute_the_main_contract_without_host_calls() {
+async fn cache_settings_execute_the_main_contract_without_platform_operations() {
     let directory = tempfile::tempdir().unwrap();
     let external_cache = tempfile::tempdir().unwrap();
     let server = crate::assembly::server::ContentServer::open_with_cache(
@@ -115,7 +115,7 @@ async fn cache_settings_execute_the_main_contract_without_host_calls() {
     let mut events = server.runtime_state().events.subscribe();
     let cache = server.cache_paths().clone();
     std::fs::write(cache.root().join("scratch"), b"cached bytes").unwrap();
-    let (_generation, mut requests) = server.runtime_state().host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&server.runtime_state().host);
     let response = native
         .execute(async_graphql::Request::new("{appCacheSize}"))
         .await;

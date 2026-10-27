@@ -57,12 +57,6 @@ pub struct MirrorCodecConfiguration {
     pub annex_b: String,
 }
 
-#[derive(SimpleObject, Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerClipboardChange {
-    pub peer_id: ID,
-}
-
 #[derive(SimpleObject, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelInvite {
@@ -85,12 +79,6 @@ pub struct ChannelChange {
 }
 #[derive(SimpleObject, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PeerTransportState {
-    pub peer_id: ID,
-    pub transport: String,
-}
-#[derive(SimpleObject, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ImageModelsUpdate {
     pub version: Long,
     pub status: String,
@@ -101,17 +89,6 @@ pub struct ImageModelsUpdate {
     pub is_indexing: bool,
     pub total_images: i32,
     pub indexed_images: i32,
-}
-#[derive(SimpleObject, Deserialize)]
-pub struct FeedSyncUpdate {
-    pub states: Vec<crate::services::feeds::sync_service::FeedSyncState>,
-    pub removed: Vec<ID>,
-}
-#[derive(SimpleObject, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AudioPlaybackChange {
-    pub revision: Long,
-    pub position_ms: Long,
 }
 #[derive(SimpleObject, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -127,12 +104,6 @@ pub struct PairingRequestNotice {
     pub signature: String,
     pub from_ip: String,
     pub aware_supported: bool,
-}
-#[derive(SimpleObject, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PairingSuccessNotice {
-    pub device_id: ID,
-    pub key: String,
 }
 #[derive(SimpleObject, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -58,9 +58,52 @@ fn now_ms() -> u64 {
 pub(crate) struct LoginAttempts {
     entries: HashMap<String, Vec<(String, Instant)>>,
     pending: HashMap<String, Pending>,
+    recovery_pending: bool,
 }
 
 impl LoginAttempts {
+    pub(crate) fn notify_host(&mut self, state: &ServerState, method: &'static str, params: Value) {
+        if let Err(error) = state.host.notify(method, params) {
+            log::warn!("Web login callback {method}: {error}");
+            if self.recovery_pending || !state.host.connected() {
+                return;
+            }
+            self.recovery_pending = true;
+            let state = state.clone();
+            tokio::spawn(async move {
+                let permit = state.host.reserve_callback().await;
+                let mut attempts = state.login_attempts.lock().unwrap();
+                if let Ok(permit) = permit {
+                    if let Err(error) = state.host.notify_reserved_callback(
+                        "systemWebLoginSnapshot", attempts.host_snapshot(), permit,
+                    ) {
+                        log::warn!("Web login snapshot callback: {error}");
+                    }
+                }
+                attempts.recovery_pending = false;
+            });
+        }
+    }
+    pub(crate) fn contains(&self, request_id: &str) -> bool {
+        self.pending.contains_key(request_id)
+    }
+
+    pub(crate) fn host_snapshot(&self) -> Value {
+        let mut pending: Vec<_> = self.pending.iter()
+            .filter(|(_, item)| item.at.elapsed() < Duration::from_secs(300)).collect();
+        pending.sort_by(|(left_id, left), (right_id, right)| left.at.cmp(&right.at).then(left_id.cmp(right_id)));
+        let requests: Vec<_> = pending.into_iter().map(|(id, item)| {
+            let mut request = item.request.clone();
+            request["password"] = json!("");
+            request.as_object_mut().unwrap().remove("verificationCode");
+            if let Protection::Temporary(channel) = &item.protection {
+                request["verificationCode"] = json!(channel.verification_code);
+            }
+            json!({"requestId":id,"clientId":item.client_id,"clientIp":item.client_ip,"request":request})
+        }).collect();
+        json!({"requests":requests})
+    }
+
     fn acquire(&mut self, key: &str, attempt_id: &str) -> bool {
         let now = Instant::now();
         if self.entries.len() > MAX_TRACKED_CLIENTS {
@@ -266,11 +309,8 @@ impl Confirmation {
     }
 }
 
-pub(crate) fn notify_closed(state: &ServerState, request_id: &str) {
-    let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-        "WEB_LOGIN_CLOSED",
-        json!({"requestId":request_id}).to_string(),
-    ));
+pub(crate) fn notify_closed(state: &ServerState, attempts: &mut LoginAttempts, request_id: &str) {
+    attempts.notify_host(state, "systemWebLoginClosed", json!({"requestId":request_id}));
 }
 
 fn text(value: &Value, field: &str) -> String {
@@ -441,26 +481,22 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
     }
     let (pending, request_id) = match request {
         Request::Cancel { request_id } => {
-            let removed = state
-                .login_attempts
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Login state unavailable"))?
-                .pending
-                .remove(&request_id);
-            if removed.is_some() {
-                notify_closed(state, &request_id);
+            let mut attempts = state.login_attempts.lock()
+                .map_err(|_| anyhow::anyhow!("Login state unavailable"))?;
+            if attempts.pending.remove(&request_id).is_some() {
+                notify_closed(state, &mut attempts, &request_id);
             }
             return Ok(json!({"cancelled":true}));
         }
         Request::Complete { request_id } => {
-            let pending = state
-                .login_attempts
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Login state unavailable"))?
-                .pending
-                .remove(&request_id)
-                .ok_or_else(|| anyhow::anyhow!("Login confirmation is no longer pending"))?;
-            notify_closed(state, &request_id);
+            let pending = {
+                let mut attempts = state.login_attempts.lock()
+                    .map_err(|_| anyhow::anyhow!("Login state unavailable"))?;
+                let pending = attempts.pending.remove(&request_id)
+                    .ok_or_else(|| anyhow::anyhow!("Login confirmation is no longer pending"))?;
+                notify_closed(state, &mut attempts, &request_id);
+                pending
+            };
             anyhow::ensure!(
                 pending.at.elapsed() < Duration::from_secs(300),
                 "Login confirmation expired"
@@ -553,17 +589,19 @@ pub(crate) async fn execute(state: &ServerState, request: Request) -> anyhow::Re
                 if let Protection::Temporary(channel) = &pending.protection {
                     request_facts["verificationCode"] = json!(channel.verification_code);
                 }
-                let mut attempts = state
-                    .login_attempts
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("Login state unavailable"))?;
-                attempts
-                    .pending
-                    .retain(|_, item| item.at.elapsed() < Duration::from_secs(300));
-                for cancelled in attempts.cancel_client(&pending.client_id) {
-                    notify_closed(state, &cancelled);
+                {
+                    let mut attempts = state
+                        .login_attempts
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Login state unavailable"))?;
+                    attempts
+                        .pending
+                        .retain(|_, item| item.at.elapsed() < Duration::from_secs(300));
+                    for cancelled in attempts.cancel_client(&pending.client_id) {
+                        notify_closed(state, &mut attempts, &cancelled);
+                    }
+                    attempts.pending.insert(id.clone(), pending);
                 }
-                attempts.pending.insert(id.clone(), pending);
                 return Ok(
                     json!({"status":"PENDING","requestId":id,"request":request_facts,"frame":plain_rs::utils::base64::base64_encode(&encrypted)}),
                 );

@@ -11,7 +11,7 @@ use plain_rs::peers::pairing::sessions::Ticket;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -25,6 +25,12 @@ pub(crate) struct Runtime {
     associations: Mutex<HashMap<String, Association>>,
     pub(crate) attempts: super::pairing_attempts::Attempts,
     pub(crate) commit: Mutex<()>,
+    pending_success: Mutex<PendingSuccess>,
+}
+#[derive(Default)]
+struct PendingSuccess {
+    requests: BTreeMap<String, String>,
+    running: bool,
 }
 impl Runtime {
     fn check_address(&self, request: &PairingRequest, address: &str) -> anyhow::Result<()> {
@@ -146,8 +152,66 @@ pub(crate) fn success(state: &ServerState, peer: &Value, ip: &str) {
     event(
         state,
         plain_rs::chat::events::WS_PAIRING_SUCCESS,
-        json!({"deviceId":peer["id"],"deviceName":peer["name"],"ip":ip,"key":peer["key"]}),
+        json!({"deviceId":peer["id"],"deviceName":peer["name"],"ip":ip}),
     );
+    let (Some(id), Some(key)) = (peer["id"].as_str(), peer["key"].as_str()) else {
+        log::error!("Pairing result is missing its identity");
+        return;
+    };
+    let mut pending = state.pairing_runtime.pending_success.lock().unwrap();
+    pending.requests.insert(id.to_owned(), key.to_owned());
+    if pending.running { return; }
+    pending.running = true;
+    let state = state.clone();
+    tokio::spawn(async move { deliver_successes(state).await });
+}
+
+async fn deliver_successes(state: ServerState) {
+    let mut connection = state.host.connection_changes();
+    let mut stop = state.stop.clone();
+    loop {
+        let next = {
+            let mut pending = state.pairing_runtime.pending_success.lock().unwrap();
+            match pending.requests.iter().next() {
+                Some((id, key)) => Some((id.clone(), key.clone())),
+                None => { pending.running = false; None }
+            }
+        };
+        let Some((id, key)) = next else { return };
+        let Some(generation) = state.host.generation() else {
+            tokio::select! {
+                _ = stop.changed() => break,
+                result = connection.changed() => if result.is_err() { break },
+            }
+            continue;
+        };
+        let permit = tokio::select! {
+            _ = stop.changed() => break,
+            result = connection.changed() => { if result.is_err() { break; } continue; },
+            result = state.host.reserve_callback() => match result { Ok(permit) => permit, Err(_) => break },
+        };
+        let response = tokio::select! {
+            _ = stop.changed() => break,
+            result = connection.changed() => { if result.is_err() { break; } continue; },
+            result = state.host.call_reserved_current(generation, "pairingSucceeded", json!({"deviceId":id,"key":key}), permit) => result,
+        };
+        match response {
+            Ok(_) => {
+                let mut pending = state.pairing_runtime.pending_success.lock().unwrap();
+                if pending.requests.get(&id) == Some(&key) { pending.requests.remove(&id); }
+            }
+            Err(error) => {
+                log::warn!("Pairing host callback failed: {error}");
+                if state.host.is_current(generation) {
+                    tokio::select! {
+                        _ = stop.changed() => break,
+                        result = connection.changed() => if result.is_err() { break },
+                    }
+                }
+            }
+        }
+    }
+    state.pairing_runtime.pending_success.lock().unwrap().running = false;
 }
 pub(super) async fn local_device(state: &ServerState) -> anyhow::Result<Device> {
     let reply: plain_rs::discovery::nearby_wire::DiscoverReply = serde_json::from_value(

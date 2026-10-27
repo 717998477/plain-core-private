@@ -10,7 +10,6 @@ use plain_rs::media::actions::Outcome;
 use plain_rs::media::audio::commands as audio_commands;
 use plain_rs::media::audio::playback as audio_playback;
 use plain_rs::prefs::Prefs;
-use serde_json::json;
 use std::sync::Arc;
 pub struct MediaActions {
     #[cfg(feature = "media")]
@@ -236,10 +235,6 @@ impl MediaActions {
             let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
                 "CONTENT_CHANGED",
                 "{}".into(),
-            ));
-            let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
-                plain_rs::events::MEDIA_ACTION_FINISHED,
-                json!({"type":r#type.kind(),"action":action,"ids":completed_ids}).to_string(),
             ));
         }
         Ok(Completed {

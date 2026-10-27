@@ -38,10 +38,7 @@ pub(crate) fn monitor(
         };
         stop_locked(&state, &mut server).await;
         state.http_server.failed(error.clone());
-        let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-            plain_rs::events::HTTP_SERVER_FAILED,
-            serde_json::json!({"message": error}).to_string(),
-        ));
+        state.publish_http_status();
     });
 }
 

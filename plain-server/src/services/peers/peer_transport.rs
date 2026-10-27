@@ -15,24 +15,37 @@ pub(crate) async fn capabilities(
     serde_json::from_value(host.call("peerTransportCapabilities", json!({})).await?)
         .map_err(|error| error.to_string())
 }
-pub(crate) fn snapshot_event(state: &ServerState) -> plain_rs::events::WsEvent {
+fn snapshot(state: &ServerState) -> Value {
     let mut active: Vec<_> = state.transport.active().into_iter().collect();
     active.sort_by(|left, right| left.0.cmp(&right.0));
-    let payload: Vec<_> = active
-        .into_iter()
-        .map(|(peer_id, transport)| {
-            json!({
-                "peerId": peer_id, "transport": transport,
-            })
-        })
-        .collect();
-    plain_rs::events::WsEvent::broadcast("PEER_TRANSPORT_UPDATED", json!(payload).to_string())
+    json!({"active": active.into_iter().map(|(peer_id, transport)| {
+        json!({"peerId": peer_id, "transport": transport})
+    }).collect::<Vec<_>>()})
 }
+
+pub(crate) fn notify_snapshot(state: &ServerState) -> Result<(), String> {
+    let _delivery = state.transport_delivery.lock().unwrap();
+    state.host.notify("peerTransportsChanged", snapshot(state))
+}
+
 pub(crate) fn notify(state: &ServerState) {
-    let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-        "PEER_TRANSPORT_UPDATED",
-        "".into(),
-    ));
+    let mut recovering = state.transport_delivery.lock().unwrap();
+    if let Err(error) = state.host.notify("peerTransportsChanged", snapshot(state)) {
+        log::warn!("Peer transport callback: {error}");
+        if *recovering || !state.host.connected() { return; }
+        *recovering = true;
+        let state = state.clone();
+        tokio::spawn(async move {
+            let permit = state.host.reserve_callback().await;
+            let mut recovering = state.transport_delivery.lock().unwrap();
+            if let Ok(permit) = permit {
+                if let Err(error) = state.host.notify_reserved_callback("peerTransportsChanged", snapshot(&state), permit) {
+                    log::warn!("Peer transport recovery callback: {error}");
+                }
+            }
+            *recovering = false;
+        });
+    }
 }
 pub(crate) struct Pending<'a> {
     pub(crate) router: &'a Router,

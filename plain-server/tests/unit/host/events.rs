@@ -12,191 +12,11 @@ fn server(dir: &tempfile::TempDir) -> ContentServer {
 }
 
 #[tokio::test]
-async fn cancelled_audio_snapshot_read_is_retried_before_consuming_queued_events() {
-    let directory = tempfile::tempdir().unwrap();
-    let core = ContentServer::open(directory.path()).unwrap();
-    let state = core.runtime_state();
-    let bridge = core.host_events().unwrap();
-    for kind in [
-        "HTTP_SERVER_STATE_CHANGED",
-        "IMAGE_MODELS_UPDATED",
-        "ONLINE_CLIENTS_UPDATED",
-        "PEER_TRANSPORT_UPDATED",
-        "DLNA_SENDER_UPDATED",
-        "APP_UPDATE_DOWNLOAD_UPDATED",
-    ] {
-        assert_eq!(bridge.next_event(None).await.unwrap()["type"], kind);
-    }
-    let (locked, ready) = tokio::sync::oneshot::channel();
-    let (release, released) = tokio::sync::oneshot::channel();
-    let audio = state.audio.clone();
-    let holder = tokio::spawn(async move {
-        audio
-            .run_playback(move |_, _| {
-                locked.send(()).unwrap();
-                let _ = released.blocking_recv();
-                Ok(())
-            })
-            .await
-            .unwrap();
-    });
-    ready.await.unwrap();
-    {
-        let mut pending = Box::pin(bridge.next_event(None));
-        std::future::poll_fn(|context| {
-            assert!(std::future::Future::poll(pending.as_mut(), context).is_pending());
-            std::task::Poll::Ready(())
-        })
-        .await;
-    }
-    release.send(()).unwrap();
-    holder.await.unwrap();
-    state
-        .events
-        .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
-        .unwrap();
-    let recovered = tokio::time::timeout(Duration::from_secs(3), bridge.next_event(None))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(recovered["type"], "AUDIO_PLAYBACK_UPDATED");
-    let playback: Value = serde_json::from_str(recovered["payload"].as_str().unwrap()).unwrap();
-    assert!(playback.get("error").is_none(), "{playback}");
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-    let queued = tokio::time::timeout(Duration::from_secs(3), bridge.next_event(None))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(queued["type"], "CONTENT_CHANGED");
-    core.stop_core().await;
-}
-
-#[tokio::test]
-async fn model_snapshots_recover_current_versions_on_attach_overflow_and_replacement() {
-    let directory = tempfile::tempdir().unwrap();
-    let server = server(&directory);
-    let state = server.runtime_state();
-    let bridge = server.host_events().unwrap();
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    let initial = bridge.next_event(None).await.unwrap();
-    assert_eq!(initial["type"], "IMAGE_MODELS_UPDATED");
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "ONLINE_CLIENTS_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_TRANSPORT_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "DLNA_SENDER_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-    let before: Value = serde_json::from_str(initial["payload"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        before,
-        serde_json::to_value(state.image_models.snapshot()).unwrap()
-    );
-    state.image_index.update_cache(|db| {
-        db.with_conn(|connection| connection.execute(
-            "INSERT INTO image_embeddings(id,path,embedding,created_at,updated_at) VALUES('owned-image','/owned/image.jpg',X'0000803F','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')", [],
-        ))?;
-        Ok(())
-    }).unwrap();
-    let expected = serde_json::to_value(state.image_models.snapshot()).unwrap();
-    assert!(expected["version"].as_u64().unwrap() > before["version"].as_u64().unwrap());
-    assert_eq!(expected["indexedImages"], 1);
-    for _ in 0..300 {
-        state
-            .events
-            .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
-            .unwrap();
-    }
-    let recovery = bridge.next_event(None).await.unwrap();
-    assert_eq!(recovery["reconcile"], true);
-    assert_eq!(recovery["type"], "CONTENT_CHANGED");
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    let snapshot = bridge.next_event(None).await.unwrap();
-    assert_eq!(snapshot["type"], "IMAGE_MODELS_UPDATED");
-    assert_eq!(
-        serde_json::from_str::<Value>(snapshot["payload"].as_str().unwrap()).unwrap(),
-        expected
-    );
-    let replacement = server.host_events().unwrap();
-    assert!(bridge.next_event(None).await.is_none());
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    let snapshot = replacement.next_event(None).await.unwrap();
-    assert_eq!(snapshot["type"], "IMAGE_MODELS_UPDATED");
-    assert_eq!(
-        serde_json::from_str::<Value>(snapshot["payload"].as_str().unwrap()).unwrap(),
-        expected
-    );
-    server.shutdown().await;
-    assert!(replacement.next_event(None).await.is_none());
-}
-
-#[tokio::test]
 async fn native_events_enforce_direction_and_reconcile_lag() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(&dir);
     let bridge = server.host_events().unwrap();
     let mut public = server.runtime_state().events.subscribe();
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "IMAGE_MODELS_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "ONLINE_CLIENTS_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_TRANSPORT_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "DLNA_SENDER_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
     assert!(public.try_recv().is_err());
     for kind in [
         "MESSAGE_CREATED",
@@ -206,11 +26,11 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
         "CLIPBOARD_CHANGED",
         "UNKNOWN_EVENT",
         "IMAGE_INDEX_ERROR_REPORTED",
-        plain_rs::events::NETWORK_CHANGED,
-        plain_rs::events::AUDIO_LIBRARY_UPDATED,
+        "NETWORK_CHANGED",
+        "AUDIO_LIBRARY_UPDATED",
         plain_rs::events::MEDIA_LIBRARY_UPDATED,
-        plain_rs::events::HTTP_SERVER_FAILED,
-        plain_rs::events::MEDIA_ACTION_FINISHED,
+        "HTTP_SERVER_STATE_CHANGED",
+        "MEDIA_ACTION_FINISHED",
     ] {
         assert!(bridge.publish_text(kind, "{}".into()).await.is_err());
         assert!(bridge.publish_binary(kind, vec![]).is_err());
@@ -274,30 +94,7 @@ async fn native_events_enforce_direction_and_reconcile_lag() {
         public.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     ));
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), bridge.next_event(None))
-            .await
-            .is_err()
-    );
-    server
-        .runtime_state()
-        .events
-        .send(WsEvent::broadcast("PAIRING_SUCCESS", "{}".into()))
-        .unwrap();
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PAIRING_SUCCESS"
-    );
-    for _ in 0..300 {
-        server
-            .runtime_state()
-            .events
-            .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
-            .unwrap();
-    }
-    assert_eq!(bridge.next_event(None).await.unwrap()["reconcile"], true);
     server.shutdown().await;
-    assert!(bridge.next_event(None).await.is_none());
 }
 #[tokio::test]
 async fn native_requests_reply_and_replacement_cancel_pending_calls() {
@@ -312,9 +109,9 @@ async fn native_requests_reply_and_replacement_cancel_pending_calls() {
         if request["method"] == "fixture" {
             break request;
         }
-        assert_eq!(request["method"], "systemCapabilities");
+        let result = if request["method"] == "systemCapabilities" { json!([]) } else { json!(null) };
         bridge
-            .reply(json!({"id":request["id"],"result":[]}))
+            .reply(json!({"id":request["id"],"result":result}))
             .unwrap();
     };
     bridge
@@ -327,9 +124,9 @@ async fn native_requests_reply_and_replacement_cancel_pending_calls() {
         if request["method"] == "fixture" {
             break;
         }
-        assert_eq!(request["method"], "systemCapabilities");
+        let result = if request["method"] == "systemCapabilities" { json!([]) } else { json!(null) };
         bridge
-            .reply(json!({"id":request["id"],"result":[]}))
+            .reply(json!({"id":request["id"],"result":result}))
             .unwrap();
     }
     let replacement = server.host_events().unwrap();
@@ -350,123 +147,19 @@ async fn native_requests_reply_and_replacement_cancel_pending_calls() {
     server.shutdown().await;
 }
 
-#[cfg(feature = "http_transport")]
 #[tokio::test]
-async fn listener_failure_survives_event_queue_overflow() {
-    let dir = tempfile::tempdir().unwrap();
-    let server = server(&dir);
-    let bridge = server.host_events().unwrap();
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "IMAGE_MODELS_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "ONLINE_CLIENTS_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_TRANSPORT_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "DLNA_SENDER_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-    let state = server.runtime_state();
-    state.http_server.failed("failed".into());
-    for _ in 0..300 {
-        let _ = state
-            .events
-            .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()));
-    }
-    let recovery = bridge.next_event(None).await.unwrap();
-    assert_eq!(recovery["type"], "CONTENT_CHANGED");
-    assert_eq!(recovery["reconcile"], true);
-    let event = bridge.next_event(None).await.unwrap();
-    assert_eq!(event["type"], "HTTP_SERVER_STATE_CHANGED");
-    let payload: Value = serde_json::from_str(event["payload"].as_str().unwrap()).unwrap();
-    assert_eq!(payload["state"], "error");
-    assert_eq!(payload["message"], "failed");
-    assert!(payload.get("generation").is_none());
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn replacing_a_host_wakes_a_waiting_event_receiver() {
+async fn replacing_a_host_wakes_a_disconnection_waiter() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(&dir);
     let original = server.host_events().unwrap();
-    assert_eq!(
-        original.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    assert_eq!(
-        original.next_event(None).await.unwrap()["type"],
-        "IMAGE_MODELS_UPDATED"
-    );
-    assert_eq!(
-        original.next_event(None).await.unwrap()["type"],
-        "ONLINE_CLIENTS_UPDATED"
-    );
-    assert_eq!(
-        original.next_event(None).await.unwrap()["type"],
-        "PEER_TRANSPORT_UPDATED"
-    );
-    assert_eq!(
-        original.next_event(None).await.unwrap()["type"],
-        "DLNA_SENDER_UPDATED"
-    );
-    assert_eq!(
-        original.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        original.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        original.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-    let mut waiting = Box::pin(original.next_event(None));
+    let mut waiting = Box::pin(original.wait_disconnected());
     std::future::poll_fn(|context| {
         assert!(std::future::Future::poll(waiting.as_mut(), context).is_pending());
         std::task::Poll::Ready(())
-    })
-    .await;
+    }).await;
     let replacement = server.host_events().unwrap();
-    std::future::poll_fn(|context| {
-        assert!(matches!(
-            std::future::Future::poll(waiting.as_mut(), context),
-            std::task::Poll::Ready(None)
-        ));
-        std::task::Poll::Ready(())
-    })
-    .await;
-    drop(waiting);
-    drop(original);
-    assert!(
-        server
-            .runtime_state()
-            .host
-            .is_current(replacement.generation)
-    );
+    tokio::time::timeout(Duration::from_secs(3), waiting).await.unwrap();
+    assert!(server.runtime_state().host.is_current(replacement.generation));
     server.shutdown().await;
 }
 
@@ -482,7 +175,6 @@ async fn replaced_hosts_discard_requests_and_events_already_in_the_queue() {
         .unwrap();
     let replacement = server.host_events().unwrap();
     assert!(original.next_request().await.is_none());
-    assert!(original.next_event(None).await.is_none());
     original.wait_disconnected().await;
     assert!(
         server
@@ -537,13 +229,13 @@ async fn raw_ble_advertisements_are_consumed_without_public_rebroadcast() {
         .await
         .unwrap();
     assert!(public.try_recv().is_err());
+    let mut network = server.runtime_state().network_revision.subscribe();
     bridge
         .publish_text("NETWORK_INTERFACES_CHANGED", "null".into())
         .await
         .unwrap();
-    let changed = public.try_recv().unwrap();
-    assert_eq!(changed.event_type, plain_rs::events::NETWORK_CHANGED);
-    assert!(!changed.is_host_event());
+    assert!(network.has_changed().unwrap());
+    assert_eq!(*network.borrow_and_update(), 1);
     assert!(public.try_recv().is_err());
     assert!(
         bridge
@@ -574,112 +266,6 @@ async fn client_request_errors_cannot_overwrite_shared_image_model_state() {
     assert_eq!(before.status.error_message, after.status.error_message);
     assert_eq!(before.status.status, after.status.status);
     assert_eq!(before.version, after.version);
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn casting_snapshots_recover_the_current_version_without_a_query() {
-    let directory = tempfile::tempdir().unwrap();
-    let server = server(&directory);
-    let state = server.runtime_state();
-    state.cast.snapshot.lock().unwrap().items.push(
-        crate::services::casting::dlna_sender_runtime::Item {
-            path: "/owned/track.mp3".into(),
-            title: "Owned track".into(),
-            audio: true,
-            ..Default::default()
-        },
-    );
-    let bridge = server.host_events().unwrap();
-    for kind in [
-        "HTTP_SERVER_STATE_CHANGED",
-        "IMAGE_MODELS_UPDATED",
-        "ONLINE_CLIENTS_UPDATED",
-        "PEER_TRANSPORT_UPDATED",
-    ] {
-        assert_eq!(bridge.next_event(None).await.unwrap()["type"], kind);
-    }
-    let initial = bridge.next_event(None).await.unwrap();
-    assert_eq!(initial["type"], "DLNA_SENDER_UPDATED");
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-    let initial: Value = serde_json::from_str(initial["payload"].as_str().unwrap()).unwrap();
-    assert_eq!(initial["items"][0]["path"], "/owned/track.mp3");
-    state.cast.snapshot.lock().unwrap().items.clear();
-    state.cast.publish(&state);
-    let expected = serde_json::to_value(state.cast.snapshot()).unwrap();
-    assert!(expected["version"].as_u64().unwrap() > initial["version"].as_u64().unwrap());
-    for _ in 0..300 {
-        state
-            .events
-            .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
-            .unwrap();
-    }
-    assert_eq!(bridge.next_event(None).await.unwrap()["reconcile"], true);
-    for kind in [
-        "HTTP_SERVER_STATE_CHANGED",
-        "IMAGE_MODELS_UPDATED",
-        "ONLINE_CLIENTS_UPDATED",
-        "PEER_TRANSPORT_UPDATED",
-    ] {
-        assert_eq!(bridge.next_event(None).await.unwrap()["type"], kind);
-    }
-    let recovered = bridge.next_event(None).await.unwrap();
-    assert_eq!(recovered["type"], "DLNA_SENDER_UPDATED");
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-    assert_eq!(
-        serde_json::from_str::<Value>(recovered["payload"].as_str().unwrap()).unwrap(),
-        expected
-    );
-    let replacement = server.host_events().unwrap();
-    assert!(bridge.next_event(None).await.is_none());
-    for kind in [
-        "HTTP_SERVER_STATE_CHANGED",
-        "IMAGE_MODELS_UPDATED",
-        "ONLINE_CLIENTS_UPDATED",
-        "PEER_TRANSPORT_UPDATED",
-    ] {
-        assert_eq!(replacement.next_event(None).await.unwrap()["type"], kind);
-    }
-    let restored = replacement.next_event(None).await.unwrap();
-    assert_eq!(restored["type"], "DLNA_SENDER_UPDATED");
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-    assert_eq!(
-        serde_json::from_str::<Value>(restored["payload"].as_str().unwrap()).unwrap(),
-        expected
-    );
     server.shutdown().await;
 }
 
@@ -724,109 +310,6 @@ async fn scan_facts_are_validated_and_scoped_to_the_connected_host() {
     drop(ServingSession(&bridge));
     assert!(state.ble_scans.seen(&id, "0001020304050607").is_err());
     server.shutdown().await;
-}
-
-#[tokio::test]
-async fn update_download_snapshots_recover_without_querying_or_replaying_stale_hints() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = server(&dir);
-    let state = core.runtime_state();
-    let bridge = core.host_events().unwrap();
-    for kind in [
-        "HTTP_SERVER_STATE_CHANGED",
-        "IMAGE_MODELS_UPDATED",
-        "ONLINE_CLIENTS_UPDATED",
-        "PEER_TRANSPORT_UPDATED",
-        "DLNA_SENDER_UPDATED",
-        "APP_UPDATE_DOWNLOAD_UPDATED",
-        "AUDIO_PLAYBACK_UPDATED",
-        "PEER_NOTIFICATIONS_UPDATED",
-    ] {
-        assert_eq!(bridge.next_event(None).await.unwrap()["type"], kind);
-    }
-    let expected = state.update_checks.download.snapshot_event().payload;
-    state
-        .events
-        .send(WsEvent::broadcast(
-            "APP_UPDATE_DOWNLOAD_UPDATED",
-            "{\"status\":\"COMPLETED\",\"filePath\":\"stale\"}".into(),
-        ))
-        .unwrap();
-    let current = bridge.next_event(None).await.unwrap();
-    assert_eq!(current["type"], "APP_UPDATE_DOWNLOAD_UPDATED");
-    assert_eq!(current["payload"], expected);
-    for _ in 0..300 {
-        state
-            .events
-            .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
-            .unwrap();
-    }
-    assert_eq!(bridge.next_event(None).await.unwrap()["reconcile"], true);
-    for kind in [
-        "HTTP_SERVER_STATE_CHANGED",
-        "IMAGE_MODELS_UPDATED",
-        "ONLINE_CLIENTS_UPDATED",
-        "PEER_TRANSPORT_UPDATED",
-        "DLNA_SENDER_UPDATED",
-    ] {
-        assert_eq!(bridge.next_event(None).await.unwrap()["type"], kind);
-    }
-    let restored = bridge.next_event(None).await.unwrap();
-    assert_eq!(restored["type"], "APP_UPDATE_DOWNLOAD_UPDATED");
-    assert_eq!(restored["payload"], expected);
-    core.stop_core().await;
-}
-
-#[tokio::test]
-async fn http_status_snapshots_replace_stale_listener_events_without_exposing_generations() {
-    let directory = tempfile::tempdir().unwrap();
-    let core = ContentServer::open(directory.path()).unwrap();
-    let state = core.runtime_state();
-    state.http_server.started((8080, 8443));
-    let bridge = core.host_events().unwrap();
-    let initial = bridge.next_event(None).await.unwrap();
-    assert_eq!(initial["type"], "HTTP_SERVER_STATE_CHANGED");
-    assert_eq!(
-        serde_json::from_str::<Value>(initial["payload"].as_str().unwrap()).unwrap(),
-        json!({"state":"started","message":""})
-    );
-    for kind in [
-        "IMAGE_MODELS_UPDATED",
-        "ONLINE_CLIENTS_UPDATED",
-        "PEER_TRANSPORT_UPDATED",
-        "DLNA_SENDER_UPDATED",
-        "APP_UPDATE_DOWNLOAD_UPDATED",
-        "AUDIO_PLAYBACK_UPDATED",
-        "PEER_NOTIFICATIONS_UPDATED",
-    ] {
-        assert_eq!(bridge.next_event(None).await.unwrap()["type"], kind);
-    }
-    state
-        .events
-        .send(WsEvent::broadcast(
-            plain_rs::events::HTTP_SERVER_FAILED,
-            json!({"generation":1,"message":"old failure"}).to_string(),
-        ))
-        .unwrap();
-    state.http_server.started((8180, 8543));
-    let current = bridge.next_event(None).await.unwrap();
-    assert_eq!(current["type"], "HTTP_SERVER_STATE_CHANGED");
-    assert_eq!(
-        serde_json::from_str::<Value>(current["payload"].as_str().unwrap()).unwrap(),
-        json!({"state":"started","message":""})
-    );
-    state.http_server.failed("current failure".into());
-    state.http_server.stopped();
-    state
-        .events
-        .send(state.http_server.status().event())
-        .unwrap();
-    let stopped = bridge.next_event(None).await.unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(stopped["payload"].as_str().unwrap()).unwrap(),
-        json!({"state":"stopped","message":""})
-    );
-    core.stop_core().await;
 }
 
 #[tokio::test]

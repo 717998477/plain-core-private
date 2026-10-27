@@ -149,6 +149,7 @@ fn write_host(
     tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
             let reply = match request["method"].as_str().unwrap() {
+                "clipboardHistoryRefresh" => json!({"result":null}),
                 "systemCapabilities" => json!({"result":["CLIPBOARD"]}),
                 "systemSetClipboard" => {
                     let text = request["params"]["text"].as_str().unwrap();
@@ -176,16 +177,10 @@ async fn set_clipboard_records_authenticated_source_before_platform_write_and_su
     let state = server.runtime_state();
     let seen = write_host(&state, json!({"result":true}));
     let mut changes = state.events.subscribe();
-    for index in 0..2 {
+    for _ in 0..2 {
         let response = write_request(&state, "received 🌍").await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
         assert_eq!(response.data.into_json().unwrap()["setClipboard"], true);
-        if index == 0 {
-            assert_eq!(
-                changes.try_recv().unwrap().event_type,
-                plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED
-            );
-        }
         assert!(changes.try_recv().is_err());
     }
     let observations = seen.lock().unwrap();
@@ -221,10 +216,6 @@ async fn set_clipboard_records_authenticated_source_before_platform_write_and_su
         ))
         .await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
-    assert_eq!(
-        events.try_recv().unwrap().event_type,
-        plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED
-    );
     assert!(
         events.try_recv().is_err(),
         "native executor must not duplicate the service event"

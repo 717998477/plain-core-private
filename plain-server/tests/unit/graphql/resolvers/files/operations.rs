@@ -562,30 +562,20 @@ async fn media_batches_commit_successes_and_notify_only_confirmed_ids() {
         plain_rs::tags::keys_for_tag(db, &tag.id).unwrap(),
         vec![casualty.clone()]
     );
-    let mut committed = Vec::new();
     let mut refreshes = 0;
     while let Ok(event) = events.try_recv() {
         if event.event_type == "CONTENT_CHANGED" {
             assert!(!event.is_internal());
             refreshes += 1;
         }
-        if event.event_type == plain_rs::events::MEDIA_ACTION_FINISHED {
-            assert!(event.is_internal());
-            let payload: Value = serde_json::from_str(&event.payload).unwrap();
-            assert_eq!(payload["type"], 2);
-            assert_eq!(payload["action"], "DELETE");
-            committed.extend(
-                payload["ids"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|id| id.as_str().unwrap().to_owned()),
-            );
-        }
     }
     assert_eq!(refreshes, 2);
-    assert_eq!(committed.len(), 500);
-    assert!(!committed.contains(&casualty));
+    let remaining = db.with_conn(|connection| {
+        connection.prepare("SELECT id FROM media_items WHERE data_type=2")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+    }).unwrap();
+    assert_eq!(remaining, vec![casualty]);
 }
 
 #[test]

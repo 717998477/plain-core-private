@@ -177,7 +177,7 @@ async fn encrypted_app_observations_work_without_notification_support_and_cannot
     remote_state.prefs.set("http_port", 0).unwrap();
     remote_state.prefs.set("https_port", 0).unwrap();
     let (_, port) = remote.start_configured_public().await.unwrap();
-    let (generation, mut requests) = remote_state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&remote_state.host);
     let hold = Arc::new(AtomicBool::new(true));
     let requested = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());

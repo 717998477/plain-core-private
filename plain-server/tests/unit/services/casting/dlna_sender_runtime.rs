@@ -105,7 +105,7 @@ async fn sender_controls_use_soap_and_release_the_original_subscription() {
     .unwrap();
     let state = server.runtime_state();
     let host = state.host.clone();
-    let (_generation, mut requests) = host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&host);
     let device = DiscoveredDevice {
         udn: "uuid:renderer".into(),
         location: format!("{base}/description.xml"),
@@ -297,4 +297,54 @@ async fn multicast_lease_is_reused_only_within_the_same_host_generation() {
     );
     state.cast.receiver_lease.lock().unwrap().take();
     core.stop_core().await;
+}
+
+#[tokio::test]
+async fn sender_updates_deliver_versioned_host_snapshots_without_internal_session_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = crate::assembly::server::ContentServer::open(dir.path()).unwrap();
+    let state = server.runtime_state();
+    let (generation, mut requests) = state.host.connect();
+    {
+        let mut snapshot = state.cast.snapshot.lock().unwrap();
+        snapshot.sid = "private-session".into();
+        snapshot.active = true;
+        snapshot.current_uri = "fixture".into();
+    }
+    state.cast.publish(&state);
+    let request = requests.recv().await.unwrap();
+    assert_eq!(request["method"], "dlnaSenderChanged");
+    assert_eq!(request["params"]["currentUri"], "fixture");
+    assert_eq!(request["params"]["version"], 1);
+    assert!(request["params"].get("sid").is_none());
+    assert!(request["params"].get("active").is_none());
+    state.host.reply(generation, json!({"id":request["id"],"result":null})).unwrap();
+    state.host.disconnect(generation);
+    server.stop_core().await;
+}
+
+#[tokio::test]
+async fn saturated_host_receives_latest_sender_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = crate::assembly::server::ContentServer::open(dir.path()).unwrap();
+    let state = server.runtime_state();
+    let (generation, mut requests) = state.host.connect();
+    for _ in 0..crate::host::bridge::REQUEST_CAPACITY {
+        state.host.notify("blocked", json!({})).unwrap();
+    }
+    state.cast.snapshot.lock().unwrap().current_uri = "first".into();
+    state.cast.publish(&state);
+    state.cast.snapshot.lock().unwrap().current_uri = "latest".into();
+    state.cast.publish(&state);
+    for _ in 0..crate::host::bridge::REQUEST_CAPACITY {
+        let request = requests.recv().await.unwrap();
+        state.host.reply(generation, json!({"id":request["id"],"result":null})).unwrap();
+    }
+    let recovery = tokio::time::timeout(std::time::Duration::from_secs(3), requests.recv()).await.unwrap().unwrap();
+    assert_eq!(recovery["method"], "dlnaSenderChanged");
+    assert_eq!(recovery["params"]["currentUri"], "latest");
+    assert_eq!(recovery["params"]["version"], 2);
+    state.host.reply(generation, json!({"id":recovery["id"],"result":null})).unwrap();
+    state.host.disconnect(generation);
+    server.stop_core().await;
 }

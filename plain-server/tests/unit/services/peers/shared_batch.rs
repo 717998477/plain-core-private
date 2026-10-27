@@ -131,7 +131,7 @@ async fn terminal(state: &ServerState, id: &str) -> Value {
     .unwrap()
 }
 #[tokio::test]
-async fn main_queue_downloads_exact_bytes_without_host_callbacks_and_rejects_invalid_lengths() {
+async fn main_queue_downloads_exact_bytes_without_platform_transfer_operations_and_rejects_invalid_lengths() {
     let (directory, server, state) = fixture();
     let (port, tls, _, _) = tls().await;
     let target = directory.path().join("downloads");
@@ -277,4 +277,25 @@ fn invalid_default_download_roots_fail_without_replacing_an_explicit_target() {
         );
         assert!(downloads_directory(&host, "relative").is_err());
     }
+}
+
+#[tokio::test]
+async fn shared_download_changes_refresh_the_host_without_a_broadcast_event() {
+    let (_directory, server, state) = fixture();
+    let (generation, mut requests) = state.host.connect();
+    let mut events = state.events.subscribe();
+    state.shared_batches.queue.stop();
+    let request = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let request = requests.recv().await.unwrap();
+            state.host.reply(generation, json!({"id":request["id"],"result":null})).unwrap();
+            if request["method"] == "sharedFolderDownloadsRefresh" { break request; }
+        }
+    }).await.unwrap();
+    assert_eq!(request["params"], json!({}));
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event.event_type, "SHARED_FOLDER_DOWNLOAD_UPDATED");
+    }
+    state.host.disconnect(generation);
+    server.shutdown().await;
 }

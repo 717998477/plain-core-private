@@ -233,6 +233,7 @@ pub(crate) fn start(state: ServerState) {
     tokio::spawn(async move {
         let mut stop = state.stop.clone();
         let mut events = state.events.subscribe();
+        let mut network = state.network_revision.subscribe();
         let mut connection = state.host.connection_changes();
         let mut wake = None;
         loop {
@@ -266,12 +267,13 @@ pub(crate) fn start(state: ServerState) {
             tokio::select! {
                 _ = stop.changed() => break,
                 _ = connection.changed() => {},
+                _ = network.changed() => {},
                 _ = state.feeds.execution_changed.notified() => {},
                 _ = tokio::time::sleep(delay) => {},
                 _ = async {
                     loop {
                         match events.recv().await {
-                            Ok(event) if matches!(event.event_type, "PREFS_UPDATED" | plain_rs::events::NETWORK_CHANGED | "FEEDS_FETCHED" | "CONTENT_CHANGED") => break,
+                            Ok(event) if matches!(event.event_type, "PREFS_UPDATED" | "FEEDS_FETCHED" | "CONTENT_CHANGED") => break,
                             Err(_) => break,
                             _ => {},
                         }

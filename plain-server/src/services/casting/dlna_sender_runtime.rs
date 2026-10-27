@@ -8,7 +8,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-pub(crate) const EVENT_UPDATED: &'static str = "DLNA_SENDER_UPDATED";
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Device {
@@ -48,14 +47,10 @@ pub(crate) struct Snapshot {
     pub active: bool,
     pub sid: String,
 }
-impl Snapshot {
-    pub(crate) fn event(&self) -> plain_rs::events::WsEvent {
-        plain_rs::events::WsEvent::broadcast(EVENT_UPDATED, serde_json::to_string(self).unwrap())
-    }
-}
 #[derive(Default)]
 pub(crate) struct Runtime {
     pub snapshot: Mutex<Snapshot>,
+    delivery: Mutex<bool>,
     pub devices: Mutex<HashMap<String, DiscoveredDevice>>,
     pub scan: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub polling: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -77,13 +72,39 @@ impl Runtime {
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().unwrap().clone()
     }
+    fn host_snapshot(&self) -> serde_json::Value {
+        let mut value = serde_json::to_value(self.snapshot()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("sid");
+        object.remove("active");
+        value
+    }
+    pub(crate) fn notify_snapshot(&self, host: &crate::host::bridge::Host) -> Result<(), String> {
+        let _delivery = self.delivery.lock().unwrap();
+        host.notify("dlnaSenderChanged", self.host_snapshot())
+    }
     pub fn publish(&self, state: &ServerState) {
-        let event = {
+        let mut recovering = self.delivery.lock().unwrap();
+        {
             let mut snapshot = self.snapshot.lock().unwrap();
             snapshot.version = snapshot.version.saturating_add(1);
-            snapshot.event()
-        };
-        let _ = state.events.send(event);
+        }
+        if let Err(error) = state.host.notify("dlnaSenderChanged", self.host_snapshot()) {
+            log::warn!("DLNA sender callback: {error}");
+            if *recovering || !state.host.connected() { return; }
+            *recovering = true;
+            let state = state.clone();
+            tokio::spawn(async move {
+                let permit = state.host.reserve_callback().await;
+                let mut recovering = state.cast.delivery.lock().unwrap();
+                if let Ok(permit) = permit {
+                    if let Err(error) = state.host.notify_reserved_callback("dlnaSenderChanged", state.cast.host_snapshot(), permit) {
+                        log::warn!("DLNA sender recovery callback: {error}");
+                    }
+                }
+                *recovering = false;
+            });
+        }
     }
     pub fn stop_tasks(&self) {
         for slot in [&self.scan, &self.polling, &self.renewal] {

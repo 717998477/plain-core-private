@@ -42,7 +42,7 @@ async fn authenticated_reply_accepts_discovery_refresh_and_rejects_revoked_pairi
     for change in ["address", "key", "public_key", "status", "removed"] {
         let (_dir, server, state) = state();
         let host = state.host.clone();
-        let (generation, mut requests) = host.connect();
+        let (generation, mut requests) = crate::test_support::HostRequests::connect(&host);
         let sender = state.clone();
         let call =
             tokio::spawn(
@@ -112,7 +112,7 @@ async fn authenticated_reply_accepts_discovery_refresh_and_rejects_revoked_pairi
 async fn rust_falls_back_from_unavailable_socket_and_authenticates_raw_ble_business_errors() {
     let (_dir, server, state) = state();
     let host = state.host.clone();
-    let (generation, mut receiver) = host.connect();
+    let (generation, mut receiver) = crate::test_support::HostRequests::connect(&host);
     let ble = state.ble_transport.clone();
     let responder = tokio::spawn(async move {
         while let Some(request) = receiver.recv().await {
@@ -223,7 +223,7 @@ async fn aware_config_uses_current_pairing_identity_and_rejects_corrupt_keys() {
     );
     let native = server.native_graphql().unwrap();
     assert_eq!(
-        serde_json::from_str::<Value>(&snapshot_event(&state).payload).unwrap(),
+        snapshot(&state)["active"],
         json!([])
     );
     let removed = native
@@ -248,102 +248,37 @@ async fn aware_config_uses_current_pairing_identity_and_rejects_corrupt_keys() {
 }
 
 #[tokio::test]
-async fn native_transport_snapshots_follow_current_routes_without_graphql_reads() {
+async fn host_transport_snapshots_follow_current_routes_and_reconnect() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
     let mut first = peer();
     first.id = "b-peer".into();
-    let ticket = state
-        .transport
-        .begin(&first, &[TransportType::Ble])
-        .unwrap()
-        .ticket
-        .unwrap();
+    let ticket = state.transport.begin(&first, &[TransportType::Ble]).unwrap().ticket.unwrap();
     let mut second = first.clone();
     second.id = "a-peer".into();
-    state
-        .transport
-        .begin(&second, &[TransportType::Aware])
-        .unwrap();
+    state.transport.begin(&second, &[TransportType::Aware]).unwrap();
     let bridge = core.host_events().unwrap();
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "IMAGE_MODELS_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "ONLINE_CLIENTS_UPDATED"
-    );
-    let initial = bridge.next_event(None).await.unwrap();
-    assert_eq!(initial["type"], "PEER_TRANSPORT_UPDATED");
-    assert_eq!(
-        serde_json::from_str::<Value>(initial["payload"].as_str().unwrap()).unwrap(),
-        json!([
-            {"peerId":"a-peer","transport":"AWARE"}, {"peerId":"b-peer","transport":"BLE"},
-        ])
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "DLNA_SENDER_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-    notify(&state);
+    assert_eq!(transport_callback(&bridge).await, json!([
+        {"peerId":"a-peer","transport":"AWARE"}, {"peerId":"b-peer","transport":"BLE"},
+    ]));
     state.transport.abort(&ticket);
-    let current = bridge.next_event(None).await.unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(current["payload"].as_str().unwrap()).unwrap(),
-        json!([
-            {"peerId":"a-peer","transport":"AWARE"},
-        ])
-    );
+    notify(&state);
+    assert_eq!(transport_callback(&bridge).await, json!([{"peerId":"a-peer","transport":"AWARE"}]));
     state.transport.forget("a-peer");
-    for _ in 0..300 {
-        state
-            .events
-            .send(plain_rs::events::WsEvent::broadcast(
-                "CONTENT_CHANGED",
-                "{}".into(),
-            ))
-            .unwrap();
-    }
-    let reconcile = bridge.next_event(None).await.unwrap();
-    assert_eq!(reconcile["type"], "CONTENT_CHANGED");
-    assert_eq!(reconcile["reconcile"], true);
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "IMAGE_MODELS_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "ONLINE_CLIENTS_UPDATED"
-    );
-    let restored = bridge.next_event(None).await.unwrap();
-    assert_eq!(restored["type"], "PEER_TRANSPORT_UPDATED");
-    assert_eq!(
-        serde_json::from_str::<Value>(restored["payload"].as_str().unwrap()).unwrap(),
-        json!([])
-    );
+    let replacement = core.host_events().unwrap();
+    assert_eq!(transport_callback(&replacement).await, json!([]));
     core.stop_core().await;
+}
+
+async fn transport_callback(bridge: &crate::host::events::HostEvents) -> Value {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let request = bridge.next_request().await.unwrap();
+            bridge.reply(json!({"id":request["id"],"result":null})).unwrap();
+            if request["method"] == "peerTransportsChanged" { break request["params"]["active"].clone(); }
+        }
+    }).await.unwrap()
 }
 
 #[tokio::test]

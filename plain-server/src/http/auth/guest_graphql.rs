@@ -142,10 +142,9 @@ async fn execute(state: &ServerState, id: &str, body: &[u8]) -> (u16, Vec<u8>) {
         Ok(p) => p,
         Err(_) => return (400, vec![]),
     };
-    let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-        "WEB_REQUEST_RECEIVED",
-        json!({"clientId":id,"time":now}).to_string(),
-    ));
+    if let Err(error) = state.host.notify("systemWebActivity", json!({})) {
+        log::warn!("Web activity callback: {error}");
+    }
     let schema = schema_builder()
         .data(Guest {
             state: state.clone(),

@@ -132,7 +132,7 @@ impl MediaPlayHistoryMutation {
         .await??;
         if r#type == MediaDataType::AUDIO {
             crate::services::audio::reports::publish_library_updated(
-                ctx.data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?,
+                ctx.data::<Arc<crate::host::bridge::Host>>()?,
             );
         }
         Ok(true)

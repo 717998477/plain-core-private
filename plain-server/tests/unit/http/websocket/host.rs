@@ -73,7 +73,7 @@ fn rejecting_confirmation_retains_the_legacy_retry_close_code() {
 
 #[cfg(feature = "http_transport")]
 #[tokio::test]
-async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_the_browser() {
+async fn auth_confirmation_uses_host_callbacks_and_returns_the_hosts_decision_to_the_browser() {
     use futures_util::SinkExt;
     use sha2::Digest;
     use tokio_tungstenite::tungstenite::Message as ClientMessage;
@@ -101,9 +101,10 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
     .unwrap();
     let bridge = std::sync::Arc::new(server.host_events().unwrap());
     let host = bridge.clone();
+    let (callbacks, mut incoming) = tokio::sync::mpsc::unbounded_channel();
     let consumer = tokio::spawn(async move {
         while let Some(request) = host.next_request().await {
-            assert_ne!(request["method"], "systemWebLoginRequest");
+            if request["method"] == "systemWebLoginRequested" { callbacks.send(request["params"].clone()).unwrap(); }
             host.reply(json!({"id":request["id"],"result":null}))
                 .unwrap();
         }
@@ -141,24 +142,10 @@ async fn auth_confirmation_uses_native_events_and_returns_the_hosts_decision_to_
             .unwrap()
             .unwrap();
         assert!(matches!(response, ClientMessage::Binary(_)));
-        let event = tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                let event = bridge.next_event(None).await.unwrap();
-                if event["type"] == "WEB_LOGIN_REQUESTED" {
-                    break event;
-                }
-            }
-        })
-        .await
-        .unwrap();
-        let payload: Value = serde_json::from_str(event["payload"].as_str().unwrap()).unwrap();
+        let payload = tokio::time::timeout(Duration::from_secs(3), incoming.recv()).await.unwrap().unwrap();
         assert_eq!(payload["clientId"], cid);
         assert_eq!(payload["request"]["password"], "");
         assert_eq!(payload["request"]["browserName"], "Test");
-        assert!(
-            plain_rs::events::WsEvent::broadcast("WEB_LOGIN_REQUESTED", String::new())
-                .is_internal()
-        );
         let id = payload["requestId"].as_str().unwrap();
         confirm_login(&server, id, allowed).await.unwrap();
         let response = tokio::time::timeout(Duration::from_secs(3), socket.next())
@@ -370,7 +357,7 @@ async fn encrypted_timed_controls_forward_exact_json_and_touch_inputs_once_and_r
         &state.prefs,
     ));
     let client = state.native_client_id().unwrap();
-    let (generation, mut requests) = state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let host = state.host.clone();
     let (sent, mut received) = tokio::sync::mpsc::channel(8);
     let responder = tokio::spawn(async move {
@@ -447,164 +434,93 @@ async fn encrypted_timed_controls_forward_exact_json_and_touch_inputs_once_and_r
 }
 
 #[tokio::test]
-async fn native_online_snapshots_recover_on_attach_lag_and_host_replacement() {
+async fn host_replacement_restores_only_authenticated_online_clients() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
-    let insert = |id: &str, registered: bool| {
-        let session = state
-            .subscription_sessions
-            .open(
-                state.clone(),
-                crate::graphql::executor::RequestContext::authenticated_remote(
-                    state.clone(),
-                    id.into(),
-                ),
-                id.into(),
-                Some(vec![1; 32]),
-                crate::native::graphql::NativeRequestScope::default(),
-            )
-            .unwrap();
-        if registered {
-            session.mark_online().unwrap();
-        }
-        session.id
-    };
-    let owned = insert("owned-client", true);
-    insert("unregistered-client", false);
-    let bridge = core.host_events().unwrap();
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "IMAGE_MODELS_UPDATED"
-    );
-    let initial = bridge.next_event(None).await.unwrap();
-    assert_eq!(initial["type"], "ONLINE_CLIENTS_UPDATED");
-    assert_eq!(
-        serde_json::from_str::<Value>(initial["payload"].as_str().unwrap()).unwrap(),
-        json!(["owned-client"])
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_TRANSPORT_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "DLNA_SENDER_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-
-    state
-        .events
-        .send(WsEvent::broadcast(
-            "ONLINE_CLIENTS_UPDATED",
-            json!(["stale-client"]).to_string(),
-        ))
-        .unwrap();
-    state.subscription_sessions.close(owned);
-    insert("current-client", true);
-    let current = bridge.next_event(None).await.unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(current["payload"].as_str().unwrap()).unwrap(),
-        json!(["current-client"])
-    );
-
-    for _ in 0..300 {
-        state
-            .events
-            .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
-            .unwrap();
-    }
-    let reconcile = bridge.next_event(None).await.unwrap();
-    assert_eq!(reconcile["type"], "CONTENT_CHANGED");
-    assert_eq!(reconcile["reconcile"], true);
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "IMAGE_MODELS_UPDATED"
-    );
-    let recovered = bridge.next_event(None).await.unwrap();
-    assert_eq!(recovered["type"], "ONLINE_CLIENTS_UPDATED");
-    assert_eq!(
-        serde_json::from_str::<Value>(recovered["payload"].as_str().unwrap()).unwrap(),
-        json!(["current-client"])
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_TRANSPORT_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "DLNA_SENDER_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        bridge.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
-
+    let session = state.subscription_sessions.open(
+        state.clone(),
+        crate::graphql::executor::RequestContext::authenticated_remote(state.clone(), "remote".into()),
+        "remote".into(), Some(vec![1; 32]),
+        crate::native::graphql::NativeRequestScope::default(),
+    ).unwrap();
+    session.mark_online().unwrap();
+    let first = core.host_events().unwrap();
+    let initial = host_online(&first, json!(["remote"])).await;
+    assert_eq!(initial, json!(["remote"]));
     let replacement = core.host_events().unwrap();
-    assert!(bridge.next_event(None).await.is_none());
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "HTTP_SERVER_STATE_CHANGED"
-    );
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "IMAGE_MODELS_UPDATED"
-    );
-    let restored = replacement.next_event(None).await.unwrap();
-    assert_eq!(restored["type"], "ONLINE_CLIENTS_UPDATED");
-    assert_eq!(
-        serde_json::from_str::<Value>(restored["payload"].as_str().unwrap()).unwrap(),
-        json!(["current-client"])
-    );
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "PEER_TRANSPORT_UPDATED"
-    );
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "DLNA_SENDER_UPDATED"
-    );
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "APP_UPDATE_DOWNLOAD_UPDATED"
-    );
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "AUDIO_PLAYBACK_UPDATED"
-    );
-    assert_eq!(
-        replacement.next_event(None).await.unwrap()["type"],
-        "PEER_NOTIFICATIONS_UPDATED"
-    );
+    let restored = host_online(&replacement, json!(["remote"])).await;
+    assert_eq!(restored, json!(["remote"]));
+    state.subscription_sessions.close(session.id);
+    host_online(&replacement, json!([])).await;
     core.stop_core().await;
-    assert!(replacement.next_event(None).await.is_none());
+}
+
+#[tokio::test]
+async fn saturated_host_recovers_online_clients_without_counting_native_sessions() {
+    let (_directory, core) = public_fixture();
+    let state = core.runtime_state();
+    let native = core.native_graphql().unwrap();
+    let native_id = native.open_subscriptions(crate::native::graphql::NativeRequestScope::default()).unwrap();
+    let host = core.host_events().unwrap();
+    host_online(&host, json!([])).await;
+    let status = host.next_request().await.unwrap();
+    assert_eq!(status["method"], "httpServerStatusChanged");
+    host.reply(json!({"id":status["id"],"result":null})).unwrap();
+    let clipboard = host.next_request().await.unwrap();
+    assert_eq!(clipboard["method"], "clipboardHistoryRefresh");
+    host.reply(json!({"id":clipboard["id"],"result":null})).unwrap();
+    let dlna = host.next_request().await.unwrap();
+    assert_eq!(dlna["method"], "dlnaRendererRefresh");
+    host.reply(json!({"id":dlna["id"],"result":null})).unwrap();
+    let downloads = host.next_request().await.unwrap();
+    assert_eq!(downloads["method"], "sharedFolderDownloadsRefresh");
+    host.reply(json!({"id":downloads["id"],"result":null})).unwrap();
+    let transports = host.next_request().await.unwrap();
+    assert_eq!(transports["method"], "peerTransportsChanged");
+    host.reply(json!({"id":transports["id"],"result":null})).unwrap();
+    let update = host.next_request().await.unwrap();
+    assert_eq!(update["method"], "appUpdateDownloadChanged");
+    host.reply(json!({"id":update["id"],"result":null})).unwrap();
+    let sender = host.next_request().await.unwrap();
+    assert_eq!(sender["method"], "dlnaSenderChanged");
+    host.reply(json!({"id":sender["id"],"result":null})).unwrap();
+    let feeds = host.next_request().await.unwrap();
+    assert_eq!(feeds["method"], "feedSyncChanged");
+    host.reply(json!({"id":feeds["id"],"result":null})).unwrap();
+    let audio = host.next_request().await.unwrap();
+    assert_eq!(audio["method"], "audioPlaybackRefresh");
+    host.reply(json!({"id":audio["id"],"result":null})).unwrap();
+    let library = host.next_request().await.unwrap();
+    assert_eq!(library["method"], "audioLibraryRefresh");
+    host.reply(json!({"id":library["id"],"result":null})).unwrap();
+    let network = host.next_request().await.unwrap();
+    assert_eq!(network["method"], "networkInterfacesChanged");
+    host.reply(json!({"id":network["id"],"result":null})).unwrap();
+    for _ in 0..crate::host::bridge::REQUEST_CAPACITY {
+        state.host.notify("blocked", json!({})).unwrap();
+    }
+    let session = state.subscription_sessions.open(
+        state.clone(),
+        crate::graphql::executor::RequestContext::authenticated_remote(state.clone(), "remote".into()),
+        "remote".into(), Some(vec![1; 32]), crate::native::graphql::NativeRequestScope::default(),
+    ).unwrap();
+    session.mark_online().unwrap();
+    host_online(&host, json!(["remote"])).await;
+    native.close_subscriptions(native_id);
+    core.stop_core().await;
+}
+
+async fn host_online(host: &crate::host::events::HostEvents, expected: Value) -> Value {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let request = host.next_request().await.unwrap();
+            host.reply(json!({"id":request["id"],"result":null})).unwrap();
+            if request["method"] == "onlineClientsChanged" && request["params"]["clientIds"] == expected {
+                return request["params"]["clientIds"].clone();
+            }
+        }
+    }).await.unwrap()
 }
 
 #[tokio::test]
@@ -622,24 +538,8 @@ async fn online_clients_follow_authenticated_graphql_connections() {
     let native_id = native
         .open_subscriptions(crate::native::graphql::NativeRequestScope::default())
         .unwrap();
-    let observer = native.subscription_session(native_id).unwrap();
-    observer.send(r#"{"type":"subscribe","id":"online","payload":{"query":"subscription { onlineClientsUpdated }"}}"#).unwrap();
-    async fn expect_online(
-        session: &crate::graphql::subscriptions::session::Session,
-        expected: Value,
-    ) {
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                let response: Value = serde_json::from_str(&session.read().await.unwrap()).unwrap();
-                if response["payload"]["data"]["onlineClientsUpdated"] == expected {
-                    break;
-                }
-            }
-        })
-        .await
-        .unwrap();
-    }
-    expect_online(&observer, json!([])).await;
+    let host = core.host_events().unwrap();
+    host_online(&host, json!([])).await;
     assert!(state.subscription_sessions.snapshot().is_empty());
     let mut invalid_request = format!("ws://127.0.0.1:{}/graphql?cid={client}", core.port)
         .into_client_request().unwrap();
@@ -681,7 +581,7 @@ async fn online_clients_follow_authenticated_graphql_connections() {
         }
     };
     let mut first = connect("01").await;
-    expect_online(&observer, json!([client.clone()])).await;
+    host_online(&host, json!([client.clone()])).await;
     let mut second = connect("02").await;
     tokio::time::timeout(Duration::from_secs(3), async {
         while state.subscription_sessions.snapshot() != vec![client.clone()] {
@@ -703,9 +603,9 @@ async fn online_clients_follow_authenticated_graphql_connections() {
     })
     .await
     .unwrap();
-    expect_online(&observer, json!([])).await;
+    host_online(&host, json!([])).await;
     let mut third = connect("03").await;
-    expect_online(&observer, json!([client.clone()])).await;
+    host_online(&host, json!([client.clone()])).await;
     tokio::time::timeout(Duration::from_secs(3), async {
         while state.subscription_sessions.snapshot() != vec![client.clone()] {
             tokio::task::yield_now().await;

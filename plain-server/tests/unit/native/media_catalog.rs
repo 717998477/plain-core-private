@@ -35,7 +35,7 @@ async fn native_file_metadata_reaches_catalog_without_any_host_request() {
     std::fs::write(&path, "document").unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let host = core.runtime_state().host.clone();
-    let (_generation, mut requests) = host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&host);
     let catalog = core.native_media_catalog().unwrap();
     let indexed = catalog
         .scan_file(plain_rs::enums::DataType::Doc, path.to_str().unwrap())
@@ -101,7 +101,7 @@ async fn rescan_with_failed_probe_retains_current_known_metadata_without_host_ro
     known.cover_image_id = Some("known-album".into());
     known.size_bytes = 999;
     let original = catalog.record_files(&[known]).unwrap().remove(0);
-    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&core.runtime_state().host);
     let updated = catalog
         .scan_file(plain_rs::enums::DataType::Audio, path.to_str().unwrap())
         .await
@@ -131,7 +131,7 @@ async fn file_scan_cancel_aborts_pending_reads_and_keeps_catalog_unchanged() {
     let mut catalog = core.native_media_catalog().unwrap();
     let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
     catalog.read_gate = Some(gate.clone());
-    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&core.runtime_state().host);
     let worker = tokio::spawn({
         let catalog = catalog.clone();
         let path = path.clone();
@@ -190,7 +190,7 @@ async fn aborted_scan_future_releases_the_shared_job_and_failed_scans_report_par
     let mut catalog = core.native_media_catalog().unwrap();
     let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
     catalog.read_gate = Some(gate.clone());
-    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&core.runtime_state().host);
     let worker = tokio::spawn({
         let catalog = catalog.clone();
         let path = path.clone();
@@ -291,7 +291,7 @@ async fn directory_scan_uses_core_policy_real_walker_and_existing_catalog() {
     );
     catalog.configure_scan_directories(Some(&config)).unwrap();
     let host = core.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&host);
     let (done, mut finish) = tokio::sync::oneshot::channel::<()>();
     let authorize = tokio::spawn(async move {
         loop {
@@ -343,7 +343,7 @@ async fn directory_scan_cancels_during_the_first_read_without_catalog_writes() {
     std::fs::write(root.join("visible.txt"), b"data").unwrap();
     let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
     catalog.read_gate = Some(gate.clone());
-    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&core.runtime_state().host);
     let worker = tokio::spawn({
         let catalog = catalog.clone();
         let root = root.to_str().unwrap().to_owned();
@@ -383,7 +383,7 @@ async fn directory_scan_cancellation_releases_a_bounded_producer_without_committ
     catalog.configure_scan_directories(None).unwrap();
     let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
     catalog.read_gate = Some(gate.clone());
-    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&core.runtime_state().host);
     let worker = tokio::spawn({
         let catalog = catalog.clone();
         let root = root.to_str().unwrap().to_owned();
@@ -517,7 +517,7 @@ async fn source_directory_scan_keeps_one_session_across_roots_and_partial_failur
     catalog.set_source_directories(&sources).unwrap();
     let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
     catalog.read_gate = Some(gate.clone());
-    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&core.runtime_state().host);
     let worker = tokio::spawn({
         let catalog = catalog.clone();
         async move { catalog.scan_source_directories("/").await }
@@ -584,7 +584,7 @@ async fn background_source_scan_is_busy_before_the_first_read_and_core_stop_join
         .unwrap();
     let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Semaphore::new(0)));
     catalog.read_gate = Some(gate.clone());
-    let (_generation, mut requests) = core.runtime_state().host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&core.runtime_state().host);
     let started = catalog.start_source_scan("/").unwrap();
     assert!(catalog.start_source_scan("/").is_err());
     tokio::time::timeout(std::time::Duration::from_secs(5), gate.0.notified())

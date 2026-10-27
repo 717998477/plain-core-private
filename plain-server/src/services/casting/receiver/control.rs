@@ -4,8 +4,6 @@ use crate::assembly::server::ServerState;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub(crate) const EVENT_UPDATED: &str = "DLNA_RENDERER_UPDATED";
-
 pub(crate) fn snapshot(state: &DlnaRendererState) -> Value {
     json!({
         "version": state.version,
@@ -26,10 +24,9 @@ pub(crate) fn snapshot(state: &DlnaRendererState) -> Value {
 }
 
 pub(crate) fn emit(state: &ServerState, renderer: &DlnaRendererState) {
-    let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-        EVENT_UPDATED,
-        json!({"renderer": snapshot(renderer)}).to_string(),
-    ));
+    if state.host.notify("dlnaRendererChanged", snapshot(renderer)).is_err() {
+        state.host.invalidate("dlnaRendererRefresh");
+    }
 }
 
 #[derive(Deserialize)]
@@ -123,3 +120,7 @@ fn rules(state: &ServerState) -> Value {
     };
     json!({"allowed":entries(DLNA_ALLOWED_SENDERS),"denied":entries(DLNA_DENIED_SENDERS)})
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/services/casting/receiver/control.rs"]
+mod tests;

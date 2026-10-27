@@ -116,6 +116,7 @@ impl Services {
         let feeds = crate::services::feeds::SyncService::new(
             db.clone(),
             events.clone(),
+            host.clone(),
             Some(feed_assets.clone()),
         );
         let pomodoro =

@@ -2,24 +2,6 @@ type ActionResult {
 	affectedCount: Int!
 }
 
-type AppUpdateDownload {
-	coreId: ID!
-	taskId: ID!
-	revision: Long!
-	status: AppUpdateDownloadStatus!
-	progress: Int!
-	filePath: String!
-	error: String!
-}
-
-enum AppUpdateDownloadStatus {
-	IDLE
-	DOWNLOADING
-	COMPLETED
-	FAILED
-	CANCELLED
-}
-
 type Audio implements MediaItem {
 	albumId: ID!
 	id: ID!
@@ -34,11 +16,6 @@ type Audio implements MediaItem {
 	isFavorite: Boolean!
 	albumFileId: String!
 	tags: [Tag!]!
-}
-
-type AudioPlaybackChange {
-	revision: Long!
-	positionMs: Long!
 }
 
 type ChannelChange {
@@ -91,11 +68,6 @@ type FeedSyncChange {
 	feedId: ID!
 	error: String
 	cancelled: Boolean
-}
-
-type FeedSyncUpdate {
-	states: [FeedSyncState!]!
-	removed: [ID!]!
 }
 
 enum FileSortBy {
@@ -195,11 +167,6 @@ type PairingRequestNotice {
 	awareSupported: Boolean!
 }
 
-type PairingSuccessNotice {
-	deviceId: ID!
-	key: String!
-}
-
 type Peer {
 	id: ID!
 	name: String!
@@ -224,19 +191,10 @@ type PeerAddress {
 	statusWsUrl: String!
 }
 
-type PeerClipboardChange {
-	peerId: ID!
-}
-
 enum PeerStatus {
 	PAIRED
 	UNPAIRED
 	CHANNEL
-}
-
-type PeerTransportState {
-	peerId: ID!
-	transport: String!
 }
 
 type PomodoroAction {
@@ -256,27 +214,14 @@ type SmsSendResult {
 
 type Subscription {
 	preferencesChanged: Boolean!
-	networkChanged: Boolean!
-	httpServerChanged: Boolean!
-	audioLibraryChanged: Boolean!
-	clipboardHistoryChanged: Boolean!
 	peersChanged: Boolean!
 	channelsChanged: ChannelChange!
 	mdnsChanged: Boolean!
 	nearbyDevicesChanged: Boolean!
 	downloadsChanged: Boolean!
-	sharedFolderDownloadsChanged: Boolean!
-	dlnaRendererChanged: Boolean!
-	dlnaSenderUpdated: DlnaSenderState!
-	peerTransportsUpdated: [PeerTransportState!]!
-	onlineClientsUpdated: [String!]!
 	imageModelsUpdated: ImageModelsUpdate!
-	appUpdateDownloadUpdated: AppUpdateDownload!
-	feedSyncUpdated: FeedSyncUpdate!
-	audioPlaybackChanged: AudioPlaybackChange!
 	pairingChanged: Boolean!
 	pairingRequested: PairingRequestNotice!
-	pairingSucceeded: PairingSuccessNotice!
 	pairingCompleted: PairingCompletedNotice!
 	pairingStarted: PairingProgressNotice!
 	pairingFailed: PairingProgressNotice!
@@ -287,7 +232,6 @@ type Subscription {
 	permissionsUpdated: Boolean!
 	contentChanged: Boolean!
 	clipboardChanged: ClipboardChange!
-	peerClipboardChanged: PeerClipboardChange!
 	screenMirrorState: MirrorState!
 	screenMirrorVideoCodec: MirrorCodecConfiguration
 	screenMirrorAudioGranted: Boolean!

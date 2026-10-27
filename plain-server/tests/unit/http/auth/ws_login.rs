@@ -57,7 +57,7 @@ async fn local_approval_socket_controls_real_passwordless_browser_sessions() {
     let (directory, server, port) = passwordless_server().await;
     let service = login::Service::start(&server).await.unwrap().unwrap();
     let state = server.runtime_state();
-    let mut events = state.events.subscribe();
+    let mut events = LoginCallbacks::new(&state);
     for allowed in [false, true] {
         let client_id = if allowed {
             "local-approved"
@@ -321,36 +321,40 @@ async fn passwordless_browser(
 }
 
 #[cfg(feature = "http_transport")]
-async fn pending_event(
-    events: &mut tokio::sync::broadcast::Receiver<plain_rs::events::WsEvent>,
-) -> Value {
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let event = events.recv().await.unwrap();
-            if event.event_type == "WEB_LOGIN_REQUESTED" {
-                break serde_json::from_str(&event.payload).unwrap();
-            }
-        }
-    })
-    .await
-    .unwrap()
+struct LoginCallbacks {
+    host: std::sync::Arc<crate::host::bridge::Host>,
+    generation: u64,
+    requests: tokio::sync::mpsc::Receiver<Value>,
 }
 
 #[cfg(feature = "http_transport")]
-async fn closed_event(
-    events: &mut tokio::sync::broadcast::Receiver<plain_rs::events::WsEvent>,
-    request_id: &str,
-) {
-    let payload: Value = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let event = events.recv().await.unwrap();
-            if event.event_type == "WEB_LOGIN_CLOSED" {
-                break serde_json::from_str(&event.payload).unwrap();
+impl LoginCallbacks {
+    fn new(state: &ServerState) -> Self {
+        let (generation, requests) = state.host.connect();
+        Self { host: state.host.clone(), generation, requests }
+    }
+
+    async fn next(&mut self, method: &str) -> Value {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let request = self.requests.recv().await.unwrap();
+                self.host.reply(self.generation, json!({"id":request["id"],"result":null})).unwrap();
+                if request["method"] == method {
+                    return request["params"].clone();
+                }
             }
-        }
-    })
-    .await
-    .unwrap();
+        }).await.unwrap()
+    }
+}
+
+#[cfg(feature = "http_transport")]
+async fn pending_event(callbacks: &mut LoginCallbacks) -> Value {
+    callbacks.next("systemWebLoginRequested").await
+}
+
+#[cfg(feature = "http_transport")]
+async fn closed_event(callbacks: &mut LoginCallbacks, request_id: &str) {
+    let payload = callbacks.next("systemWebLoginClosed").await;
     assert_eq!(payload, json!({"requestId":request_id}));
 }
 
@@ -393,12 +397,75 @@ async fn passwordless_hello_consumes_the_same_ip_limiter_before_key_exchange() {
 
 #[cfg(feature = "http_transport")]
 #[tokio::test]
+async fn replacing_a_pending_login_closes_the_old_request_before_announcing_the_new_one() {
+    let (_directory, server, port) = passwordless_server().await;
+    let state = server.runtime_state();
+    let mut events = LoginCallbacks::new(&state);
+    let (_first, _, _, _) = passwordless_browser(&state, port, "same-browser").await;
+    let first = pending_event(&mut events).await;
+    let first_id = first["requestId"].as_str().unwrap();
+
+    let (_second, _, _, _) = passwordless_browser(&state, port, "same-browser").await;
+    closed_event(&mut events, first_id).await;
+    let second = pending_event(&mut events).await;
+    let second_id = second["requestId"].as_str().unwrap();
+    assert_ne!(first_id, second_id);
+    let pending = server.native_management().unwrap().web_login_requests(None).unwrap();
+    assert_eq!(pending.requests.len(), 1);
+    assert_eq!(pending.requests[0].request_id, second_id);
+    server.shutdown().await;
+}
+
+#[cfg(feature = "http_transport")]
+#[tokio::test]
+async fn reconnecting_host_receives_pending_login_before_its_close_callback() {
+    let (_directory, server, port) = passwordless_server().await;
+    let state = server.runtime_state();
+    let mut callbacks = LoginCallbacks::new(&state);
+    let (_socket, _, _, _) = passwordless_browser(&state, port, "reconnect-browser").await;
+    let request = pending_event(&mut callbacks).await;
+    let request_id = request["requestId"].as_str().unwrap();
+    let host = server.host_events().unwrap();
+    let snapshot = host.next_request().await.unwrap();
+    assert_eq!(snapshot["method"], "systemWebLoginSnapshot");
+    assert_eq!(snapshot["params"]["requests"][0]["requestId"], request_id);
+    assert_eq!(snapshot["params"]["requests"][0]["request"]["password"], "");
+    host.reply(json!({"id":snapshot["id"],"result":null})).unwrap();
+    server.native_management().unwrap().confirm_web_login(request_id.into(), false).await.unwrap();
+    loop {
+        let next = host.next_request().await.unwrap();
+        host.reply(json!({"id":next["id"],"result":null})).unwrap();
+        if next["method"] == "systemWebLoginClosed" {
+            assert_eq!(next["params"]["requestId"], request_id);
+            break;
+        }
+    }
+    server.shutdown().await;
+}
+
+#[cfg(feature = "http_transport")]
+#[tokio::test]
+async fn saturated_host_recovers_the_pending_login_snapshot() {
+    let (_directory, server, port) = passwordless_server().await;
+    let state = server.runtime_state();
+    let mut callbacks = LoginCallbacks::new(&state);
+    for _ in 0..crate::host::bridge::REQUEST_CAPACITY {
+        state.host.notify("blocked", json!({})).unwrap();
+    }
+    let (_socket, _, _, _) = passwordless_browser(&state, port, "queued-browser").await;
+    let snapshot = callbacks.next("systemWebLoginSnapshot").await;
+    assert_eq!(snapshot["requests"][0]["clientId"], "queued-browser");
+    server.shutdown().await;
+}
+
+#[cfg(feature = "http_transport")]
+#[tokio::test]
 async fn passwordless_browser_requires_approval_when_enabled_and_only_approval_issues_the_session()
 {
     use tokio_tungstenite::tungstenite::Message;
     let (_directory, server, port) = passwordless_server().await;
     let state = server.runtime_state();
-    let mut events = state.events.subscribe();
+    let mut events = LoginCallbacks::new(&state);
     for allowed in [false, true] {
         let client_id = if allowed {
             "approved-browser"
@@ -470,7 +537,7 @@ async fn disconnect_expiry_mode_changes_and_repeated_requests_cannot_create_a_pa
     for failure in ["disconnect", "expiry", "mode", "replay"] {
         let (_directory, server, port) = passwordless_server().await;
         let state = server.runtime_state();
-        let mut events = state.events.subscribe();
+        let mut events = LoginCallbacks::new(&state);
         let (mut socket, _, _, frame) = passwordless_browser(&state, port, "browser").await;
         let event = pending_event(&mut events).await;
         let id = event["requestId"].as_str().unwrap();
@@ -556,4 +623,25 @@ async fn completing_an_attempt_preserves_other_attempts_from_the_same_address() 
     let remaining = attempts.entries.get("fixture").unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].0, "failure");
+}
+
+#[test]
+fn recovery_requests_follow_creation_order_independent_of_hash_iteration() {
+    let mut attempts = LoginAttempts::default();
+    let now = Instant::now();
+    for id in ["first", "second", "third"] {
+        attempts.pending.insert(id.into(), Pending {
+            client_id: id.into(), client_ip: String::new(), request: json!({"browserName":id}),
+            at: now, protection: Protection::Password(String::new()),
+        });
+    }
+    let mut ids: Vec<_> = attempts.pending.keys().cloned().collect();
+    for (index, id) in ids.iter().enumerate() {
+        attempts.pending.get_mut(id).unwrap().at = now - Duration::from_secs(index as u64);
+    }
+    ids.reverse();
+    let snapshot = attempts.host_snapshot();
+    let actual: Vec<_> = snapshot["requests"].as_array().unwrap().iter()
+        .map(|value| value["requestId"].as_str().unwrap()).collect();
+    assert_eq!(actual, ids);
 }

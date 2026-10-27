@@ -1,3 +1,4 @@
+use plain_rs::events::WsEvent;
 use serde_json::json;
 use super::super::clipboard::receive as synchronize_clipboard;
 use super::*;
@@ -117,7 +118,7 @@ async fn relay_rechecks_credentials_and_addresses_under_the_database_lock() {
         ip: peer.ip.clone(),
         port: None,
     };
-    let mut events = state.events.subscribe();
+    let (generation, mut requests) = state.host.connect();
     assert!(
         publish_clipboard_change(
             &state,
@@ -128,15 +129,10 @@ async fn relay_rechecks_credentials_and_addresses_under_the_database_lock() {
         .await
         .unwrap()
     );
-    let relayed = std::iter::from_fn(|| events.try_recv().ok())
-        .find(|event| event.event_type == plain_rs::events::PEER_CLIPBOARD_CHANGED)
-        .unwrap();
-    assert_eq!(relayed.event_type, plain_rs::events::PEER_CLIPBOARD_CHANGED);
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&relayed.payload).unwrap(),
-        json!({"peerId":"peer"})
-    );
-    assert!(relayed.into_public().is_none());
+    let relayed = requests.try_recv().unwrap();
+    assert_eq!(relayed["method"], "peerClipboardChanged");
+    assert_eq!(relayed["params"], json!({"peerIds":["peer"],"refreshAll":false}));
+    state.host.reply(generation, json!({"id":relayed["id"],"result":null})).unwrap();
     state.db.with_conn(|connection| {
         connection
             .execute("UPDATE peers SET token='' WHERE id='peer'", [])
@@ -170,9 +166,8 @@ async fn relay_rechecks_credentials_and_addresses_under_the_database_lock() {
         .await
         .unwrap()
     );
-    while let Ok(event) = events.try_recv() {
-        assert_ne!(event.event_type, plain_rs::events::PEER_CLIPBOARD_CHANGED);
-    }
+    assert!(requests.try_recv().is_err());
+    state.host.disconnect(generation);
     core.stop_core().await;
 }
 
@@ -262,7 +257,6 @@ async fn actual_management_socket_authenticates_and_relays_only_decrypted_native
     .unwrap();
     let state = manager.runtime_state();
     let (host_generation, mut requests) = state.host.connect();
-    let mut local_events = state.events.subscribe();
     let mut peer = DPeer::new(
         &remote_state.native_client_id().unwrap(),
         "Fixture server",
@@ -281,18 +275,18 @@ async fn actual_management_socket_authenticates_and_relays_only_decrypted_native
                 _ = ticks.tick() => {
                     remote_state.events.send(WsEvent::broadcast("CLIPBOARD_CHANGED", payload.to_string())).unwrap();
                 }
-                event = local_events.recv() => {
-                    let event = event.unwrap();
-                    if event.event_type == plain_rs::events::PEER_CLIPBOARD_CHANGED { break event; }
+                request = requests.recv() => {
+                    let request = request.unwrap();
+                    state.host.reply(host_generation, json!({"id":request["id"],"result":null})).unwrap();
+                    if request["method"] == "peerClipboardChanged" { break request; }
                 }
             }
         }
     }).await.unwrap();
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&relayed.payload).unwrap(),
-        json!({"peerId":peer.id})
+        relayed["params"],
+        json!({"peerIds":[peer.id],"refreshAll":false})
     );
-    assert!(relayed.into_public().is_none());
     state.host.disconnect(host_generation);
     manager.stop_core().await;
     responder.abort();
@@ -330,7 +324,7 @@ async fn a_cancelled_worker_cannot_publish_even_while_credentials_still_match() 
     let peer = peer();
     peers::save(&state.db, &[peer.clone()], SaveMode::Insert).unwrap();
     let expected = identity(&peer, "actor", "https://[::1]:18443").unwrap();
-    let mut events = state.events.subscribe();
+    let (generation, mut requests) = state.host.connect();
     let (_cancel, cancelled) = watch::channel(true);
     assert!(
         !publish_clipboard_change(
@@ -342,9 +336,8 @@ async fn a_cancelled_worker_cannot_publish_even_while_credentials_still_match() 
         .await
         .unwrap()
     );
-    while let Ok(event) = events.try_recv() {
-        assert_ne!(event.event_type, plain_rs::events::PEER_CLIPBOARD_CHANGED);
-    }
+    assert!(requests.try_recv().is_err());
+    state.host.disconnect(generation);
     core.stop_core().await;
 }
 
@@ -404,7 +397,7 @@ async fn encrypted_clipboard_sync_seeds_baseline_retries_failed_writes_and_reche
     )
     .unwrap();
     let (cancel, cancelled) = watch::channel(false);
-    let (generation, mut requests) = state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let writes = Arc::new(AtomicUsize::new(0));
     let succeeds = Arc::new(AtomicBool::new(false));
     let supports = Arc::new(AtomicBool::new(true));
@@ -504,7 +497,7 @@ async fn encrypted_clipboard_sync_seeds_baseline_retries_failed_writes_and_reche
         .unwrap();
     assert_eq!(writes.load(Ordering::SeqCst), 2);
     assert_eq!(state.db.clipboard_count_rows().unwrap(), 1);
-    let (remote_generation, mut remote_requests) = remote_state.host.connect();
+    let (remote_generation, mut remote_requests) = crate::test_support::HostRequests::connect(&remote_state.host);
     let (remote_host, remote_db) = (remote_state.host.clone(), remote_state.db.clone());
     let expected_source = session.client_id.clone();
     let remote_responder = tokio::spawn(async move {

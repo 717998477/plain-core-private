@@ -20,7 +20,7 @@ async fn inactive_and_replaced_scans_do_not_request_platform_reads() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
-    let (owner, mut requests) = state.host.connect();
+    let (owner, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     state.ble_scans.set_owner(owner);
     let cancelled = pending(&state, owner, "cancelled");
     state
@@ -30,7 +30,7 @@ async fn inactive_and_replaced_scans_do_not_request_platform_reads() {
     run(state.clone(), cancelled).await;
     assert!(requests.try_recv().is_err());
     let replaced = pending(&state, owner, "replaced");
-    let (replacement, mut requests) = state.host.connect();
+    let (replacement, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     run(state.clone(), replaced).await;
     assert!(requests.try_recv().is_err());
     state.ble_scans.set_owner(replacement);
@@ -43,7 +43,7 @@ async fn stopping_cancels_the_active_read_and_discards_the_rest_of_the_queue() {
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let mut state = core.runtime_state();
     state.ble_scan = std::sync::Arc::new(Runtime::default());
-    let (owner, mut requests) = state.host.connect();
+    let (owner, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     state.ble_scans.set_owner(owner);
     state.ble_scan.schedule(pending(&state, owner, "first"));
     state.ble_scan.schedule(pending(&state, owner, "second"));
@@ -69,7 +69,7 @@ async fn already_stopped_worker_discards_queued_reads_without_touching_the_platf
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let mut state = core.runtime_state();
     state.ble_scan = std::sync::Arc::new(Runtime::default());
-    let (owner, mut requests) = state.host.connect();
+    let (owner, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     state.ble_scans.set_owner(owner);
     state.ble_scan.schedule(pending(&state, owner, "queued"));
     core.stop_core().await;
@@ -84,7 +84,7 @@ async fn scheduled_read_supplies_canonical_request_and_checks_reply_identity() {
         let directory = tempfile::tempdir().unwrap();
         let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
         let state = core.runtime_state();
-        let (owner, mut requests) = state.host.connect();
+        let (owner, mut requests) = crate::test_support::HostRequests::connect(&state.host);
         let scan = uuid::Uuid::new_v4();
         let short_id = plain_rs::discovery::nearby_wire::short_id("fixture");
         state.ble_scans.set_owner(owner);

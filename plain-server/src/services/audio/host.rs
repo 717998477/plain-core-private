@@ -70,17 +70,6 @@ impl Audio {
         .await
     }
 
-    pub(crate) async fn playback_event(&self) -> plain_rs::events::WsEvent {
-        let snapshot = self
-            .run_playback(|db, _| plain_rs::media::audio::playback::snapshot(db))
-            .await;
-        let payload = match snapshot {
-            Ok(snapshot) => serde_json::to_value(snapshot).unwrap(),
-            Err(error) => serde_json::json!({"error":error.message}),
-        };
-        plain_rs::events::WsEvent::broadcast("AUDIO_PLAYBACK_UPDATED", payload.to_string())
-    }
-
     pub(crate) async fn cover(&self, path: &str) -> Result<Option<std::path::PathBuf>, String> {
         super::covers::cache(&self.resources, &self.cache, path).await
     }

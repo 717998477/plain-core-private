@@ -109,7 +109,7 @@ async fn signed_invites_ack_keys_and_deleted_broadcast_use_rust_snapshot() {
     add_peer(&state, "paired", true);
     add_peer(&state, "group", false);
     let channel = state::create(&state.db, "actor", "fixture").unwrap();
-    let (generation, mut rx) = state.host.connect();
+    let (generation, mut rx) = crate::test_support::HostRequests::connect(&state.host);
     let host = state.host.clone();
     let prefs = state.prefs.clone();
     let channel_key = channel.key.clone();
@@ -242,7 +242,7 @@ async fn queued_send_and_decline_ack_cannot_act_on_replacement() {
         plain_rs::db::chat_store::SaveMode::Update,
     )
     .unwrap();
-    let (generation, mut rx) = state.host.connect();
+    let (generation, mut rx) = crate::test_support::HostRequests::connect(&state.host);
     let call = {
         let state = state.clone();
         let id = channel.id.clone();
@@ -324,7 +324,7 @@ async fn peer_key_changes_before_physical_send_are_rejected_and_accept_leave_dec
         plain_rs::db::chat_store::SaveMode::Update,
     )
     .unwrap();
-    let (generation, mut rx) = state.host.connect();
+    let (generation, mut rx) = crate::test_support::HostRequests::connect(&state.host);
     let call = {
         let state = state.clone();
         let id = channel.id.clone();

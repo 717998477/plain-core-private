@@ -87,16 +87,16 @@ async fn listener_failure_cleans_up_and_notifies_host() {
     let state = server.runtime_state();
     let (host_generation, mut calls) = state.host.connect();
     let host = state.host.clone();
+    let (reported, mut reports) = tokio::sync::mpsc::unbounded_channel();
     let responder = tokio::spawn(async move {
         while let Some(request) = calls.recv().await {
-            assert_eq!(request["method"], "systemCapabilities");
+            if request["method"] == "httpServerStatusChanged" { reported.send(request["params"].clone()).unwrap(); }
             let _ = host.reply(
                 host_generation,
                 serde_json::json!({"id":request["id"],"result":[]}),
             );
         }
     });
-    let mut events = state.events.subscribe();
     let (failure, receiver) = watch::channel(None);
     let stop = state
         .public_server
@@ -110,21 +110,8 @@ async fn listener_failure_cleans_up_and_notifies_host() {
     failure
         .send(Some("injected listener failure".into()))
         .unwrap();
-    let event = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let event = events.recv().await.unwrap();
-            if event.event_type == "HTTP_SERVER_FAILED" {
-                break event;
-            }
-        }
-    })
-    .await
-    .unwrap();
-    assert_eq!(event.event_type, "HTTP_SERVER_FAILED");
-    assert!(event.is_internal());
-    let failure: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
-    assert!(failure.get("generation").is_none());
-    assert_eq!(failure["message"], "injected listener failure");
+    let failure = tokio::time::timeout(Duration::from_secs(5), reports.recv()).await.unwrap().unwrap();
+    assert_eq!(failure, serde_json::json!({"state":"error","message":"injected listener failure","httpPort":0,"httpsPort":0}));
     assert!(server.http_ports().await.is_none());
     for port in [ports.0, ports.1] {
         assert_port_released(port);

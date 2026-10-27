@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::json;
 
 #[test]
 fn restart_receipts_are_serial_and_keep_live_ports_on_preflight_failure() {
@@ -126,15 +127,19 @@ async fn remote_and_invalid_restart_requests_never_start_a_runtime_operation() {
     core.stop_core().await;
 }
 
-#[test]
-fn listener_started_notifications_are_internal_core_events() {
-    let event =
-        plain_rs::events::WsEvent::broadcast(plain_rs::events::HTTP_SERVER_STARTED, "{}".into());
-    assert!(event.is_internal());
-    assert!(
-        plain_rs::events::WsEvent::host_text(plain_rs::events::HTTP_SERVER_STARTED, "{}".into())
-            .is_none()
-    );
+#[tokio::test]
+async fn listener_failure_is_reported_to_the_host_with_current_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
+    let state = core.runtime_state();
+    let (generation, mut requests) = state.host.connect();
+    state.http_server.failed("listener failed".into());
+    state.publish_http_status();
+    let request = requests.recv().await.unwrap();
+    assert_eq!(request["method"], "httpServerStatusChanged");
+    assert_eq!(request["params"], json!({"state":"error","message":"listener failed","httpPort":0,"httpsPort":0}));
+    state.host.reply(generation, json!({"id":request["id"],"result":null})).unwrap();
+    core.stop_core().await;
 }
 
 #[tokio::test]

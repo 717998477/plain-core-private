@@ -6,7 +6,6 @@ pub struct EventSpec {
     pub selection: &'static str,
     pub permissions: &'static [&'static str],
     pub capability: Option<&'static str>,
-    pub local_only: bool,
 }
 pub const EVENTS: &[EventSpec] = &[
     EventSpec {
@@ -17,7 +16,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "deviceNameUpdated",
@@ -27,7 +25,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "permissionsUpdated",
@@ -37,7 +34,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "contentChanged",
@@ -47,7 +43,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "screenMirrorState",
@@ -57,7 +52,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ running }",
         permissions: &[],
         capability: Some("SCREEN_MIRROR"),
-        local_only: false,
     },
     EventSpec {
         field: "screenMirrorVideoCodec",
@@ -67,7 +61,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ annexB }",
         permissions: &[],
         capability: Some("SCREEN_MIRROR"),
-        local_only: false,
     },
     EventSpec {
         field: "screenMirrorAudioGranted",
@@ -77,7 +70,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: Some("SCREEN_MIRROR"),
-        local_only: false,
     },
     EventSpec {
         field: "notificationCreated",
@@ -87,7 +79,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ id onlyOnce isClearable appId appName postedAt silent title body actions replyActions }",
         permissions: &["NOTIFICATION_LISTENER"],
         capability: Some("NOTIFICATIONS"),
-        local_only: false,
     },
     EventSpec {
         field: "notificationUpdated",
@@ -97,7 +88,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ id onlyOnce isClearable appId appName postedAt silent title body actions replyActions }",
         permissions: &["NOTIFICATION_LISTENER"],
         capability: Some("NOTIFICATIONS"),
-        local_only: false,
     },
     EventSpec {
         field: "notificationDeleted",
@@ -107,7 +97,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ id onlyOnce isClearable appId appName postedAt silent title body actions replyActions }",
         permissions: &["NOTIFICATION_LISTENER"],
         capability: Some("NOTIFICATIONS"),
-        local_only: false,
     },
     EventSpec {
         field: "notificationRefreshed",
@@ -117,7 +106,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &["NOTIFICATION_LISTENER"],
         capability: Some("NOTIFICATIONS"),
-        local_only: false,
     },
     EventSpec {
         field: "messagesCreated",
@@ -127,7 +115,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ id fromId toId channelId content createdAt updatedAt status statusData }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "messagesUpdated",
@@ -137,7 +124,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ id fromId toId channelId content createdAt updatedAt status statusData }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "messagesDeleted",
@@ -147,7 +133,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "mediaLibraryUpdated",
@@ -157,7 +142,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ types }",
         permissions: &["WRITE_EXTERNAL_STORAGE"],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "mediaScanProgress",
@@ -167,7 +151,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ indexed pending total state error }",
         permissions: &["WRITE_EXTERNAL_STORAGE"],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "bookmarksUpdated",
@@ -177,7 +160,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ id url title faviconPath groupId pinned clickCount lastClickedAt sortOrder createdAt updatedAt }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "feedsFetched",
@@ -187,7 +169,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ feedId error cancelled }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "uploadMergeResult",
@@ -197,7 +178,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ fileId ok value mergedSize error }",
         permissions: &["WRITE_EXTERNAL_STORAGE"],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "smsProviderChanged",
@@ -207,7 +187,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ uris }",
         permissions: &["READ_SMS"],
         capability: Some("SMS"),
-        local_only: false,
     },
     EventSpec {
         field: "smsSendResult",
@@ -217,7 +196,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ requestId success resultCode }",
         permissions: &["SEND_SMS"],
         capability: Some("SMS"),
-        local_only: false,
     },
     EventSpec {
         field: "mmsSendResult",
@@ -227,7 +205,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ pendingId success resultCode }",
         permissions: &["SEND_SMS"],
         capability: Some("SMS"),
-        local_only: false,
     },
     EventSpec {
         field: "mmsSent",
@@ -237,7 +214,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &["SEND_SMS"],
         capability: Some("SMS"),
-        local_only: false,
     },
     EventSpec {
         field: "clipboardChanged",
@@ -247,57 +223,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ text sensitive time }",
         permissions: &["CLIPBOARD"],
         capability: Some("CLIPBOARD"),
-        local_only: false,
-    },
-    EventSpec {
-        field: "peerClipboardChanged",
-        event: "PEER_CLIPBOARD_CHANGED",
-        aliases: &[],
-        invalidation: false,
-        selection: "{ peerId }",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "networkChanged",
-        event: "NETWORK_CHANGED",
-        aliases: &[],
-        invalidation: true,
-        selection: "",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "httpServerChanged",
-        event: "HTTP_SERVER_STATE_CHANGED",
-        aliases: &[],
-        invalidation: true,
-        selection: "",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "audioLibraryChanged",
-        event: "AUDIO_LIBRARY_UPDATED",
-        aliases: &[],
-        invalidation: true,
-        selection: "",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "clipboardHistoryChanged",
-        event: "H_CLIPBOARD_HISTORY_UPDATED",
-        aliases: &[],
-        invalidation: true,
-        selection: "",
-        permissions: &[],
-        capability: None,
-        local_only: true,
     },
     EventSpec {
         field: "peersChanged",
@@ -311,7 +236,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "channelsChanged",
@@ -321,7 +245,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ changed invite { channelId channelName ownerPeerId ownerPeerName } cancel { channelId ownerPeerId } }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "mdnsChanged",
@@ -331,7 +254,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "nearbyDevicesChanged",
@@ -341,7 +263,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "downloadsChanged",
@@ -351,57 +272,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
-    },
-    EventSpec {
-        field: "sharedFolderDownloadsChanged",
-        event: "SHARED_FOLDER_DOWNLOAD_UPDATED",
-        aliases: &[],
-        invalidation: true,
-        selection: "",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "dlnaRendererChanged",
-        event: "DLNA_RENDERER_UPDATED",
-        aliases: &[],
-        invalidation: true,
-        selection: "",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "dlnaSenderUpdated",
-        event: "DLNA_SENDER_UPDATED",
-        aliases: &[],
-        invalidation: false,
-        selection: "{ version devices { id hostAddress name location } currentDevice { id hostAddress name location } items { path title albumArt artist durationMs audio } currentUri playing progressMs durationMs supportsCallback }",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "peerTransportsUpdated",
-        event: "PEER_TRANSPORT_UPDATED",
-        aliases: &[],
-        invalidation: false,
-        selection: "{ peerId transport }",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "onlineClientsUpdated",
-        event: "ONLINE_CLIENTS_UPDATED",
-        aliases: &[],
-        invalidation: false,
-        selection: "",
-        permissions: &[],
-        capability: None,
-        local_only: true,
     },
     EventSpec {
         field: "imageModelsUpdated",
@@ -411,37 +281,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ version status downloadProgress errorMessage modelSize modelDir isIndexing totalImages indexedImages }",
         permissions: &[],
         capability: None,
-        local_only: false,
-    },
-    EventSpec {
-        field: "appUpdateDownloadUpdated",
-        event: "APP_UPDATE_DOWNLOAD_UPDATED",
-        aliases: &[],
-        invalidation: false,
-        selection: "{ coreId taskId revision status progress filePath error }",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "feedSyncUpdated",
-        event: "FEED_SYNC_UPDATED",
-        aliases: &[],
-        invalidation: false,
-        selection: "{ states { feedId taskId revision status error } removed }",
-        permissions: &[],
-        capability: None,
-        local_only: true,
-    },
-    EventSpec {
-        field: "audioPlaybackChanged",
-        event: "AUDIO_PLAYBACK_UPDATED",
-        aliases: &[],
-        invalidation: false,
-        selection: "{ revision positionMs }",
-        permissions: &[],
-        capability: None,
-        local_only: true,
     },
     EventSpec {
         field: "pairingChanged",
@@ -451,7 +290,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "pairingRequested",
@@ -461,17 +299,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ fromId fromName port deviceType ecdhPublicKey signaturePublicKey timestamp ips signature fromIp awareSupported }",
         permissions: &[],
         capability: None,
-        local_only: false,
-    },
-    EventSpec {
-        field: "pairingSucceeded",
-        event: "PAIRING_SUCCESS",
-        aliases: &[],
-        invalidation: false,
-        selection: "{ deviceId key }",
-        permissions: &[],
-        capability: None,
-        local_only: true,
     },
     EventSpec {
         field: "pairingCompleted",
@@ -481,7 +308,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ deviceId deviceName ip }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "pairingStarted",
@@ -491,7 +317,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ deviceId deviceName error }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "pairingFailed",
@@ -501,7 +326,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ deviceId deviceName error }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "pairingCanceled",
@@ -511,7 +335,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ deviceId deviceName error }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "pomodoroSettingsChanged",
@@ -521,7 +344,6 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
     EventSpec {
         field: "pomodoroAction",
@@ -531,13 +353,10 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ today { date state timeLeftSec totalTimeSec completedCount currentRound isRunning isPaused } completedState }",
         permissions: &[],
         capability: None,
-        local_only: false,
     },
 ];
 pub fn migrated(event: &str) -> bool {
-    EVENTS.iter().any(|spec| {
-        (!spec.local_only || spec.field == "peerClipboardChanged") && spec.matches(event)
-    })
+    EVENTS.iter().any(|spec| spec.matches(event))
 }
 pub fn document(spec: &EventSpec) -> String {
     format!("subscription {{ {} {} }}", spec.field, spec.selection)

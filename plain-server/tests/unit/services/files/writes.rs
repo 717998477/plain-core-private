@@ -14,7 +14,7 @@ async fn main_writes_preserve_utf8_metadata_and_refuse_overwrite_or_invalid_path
     let directory = tempfile::tempdir().unwrap();
     let core = ContentServer::open(&directory.path().join("core")).unwrap();
     let state = core.runtime_state();
-    let (_generation, mut requests) = state.host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let parent = directory.path().join("parent/child");
     let response = graphql(
         &core,
@@ -54,11 +54,11 @@ async fn main_writes_preserve_utf8_metadata_and_refuse_overwrite_or_invalid_path
 }
 
 #[tokio::test]
-async fn shared_preview_export_recreates_the_rust_directory_after_cache_clear_without_host() {
+async fn shared_preview_export_recreates_the_rust_directory_after_cache_clear_without_platform_operations() {
     let directory = tempfile::tempdir().unwrap();
     let core = ContentServer::open(&directory.path().join("core")).unwrap();
     let state = core.runtime_state();
-    let (_generation, mut requests) = state.host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let parent = core.cache_paths().shared_previews();
     assert!(parent.is_dir());
     let old = parent.join("old.txt");
@@ -85,7 +85,7 @@ async fn text_export_replaces_only_the_selected_file_with_exact_captured_bytes()
     let directory = tempfile::tempdir().unwrap();
     let core = ContentServer::open(&directory.path().join("core")).unwrap();
     let state = core.runtime_state();
-    let (_generation, mut requests) = state.host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let selected = directory.path().join("selected.txt");
     let neighbor = directory.path().join("neighbor.txt");
     std::fs::write(&selected, b"old content").unwrap();

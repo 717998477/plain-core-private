@@ -24,6 +24,7 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 #[derive(Default)]
 pub struct Sessions {
     entries: Mutex<HashMap<u64, Arc<Session>>>,
+    host_delivery: Mutex<bool>,
 }
 struct Operation {
     scope: NativeRequestScope,
@@ -118,11 +119,33 @@ impl Sessions {
         clients.dedup();
         clients
     }
-    pub(crate) fn snapshot_event(&self) -> plain_rs::events::WsEvent {
-        plain_rs::events::WsEvent::broadcast(
-            "ONLINE_CLIENTS_UPDATED",
-            serde_json::json!(self.snapshot()).to_string(),
-        )
+    pub(crate) fn notify_snapshot(&self, host: &crate::host::bridge::Host) -> Result<(), String> {
+        let _delivery = self.host_delivery.lock().unwrap();
+        host.notify("onlineClientsChanged", serde_json::json!({"clientIds":self.snapshot()}))
+    }
+
+    fn notify(state: &ServerState) {
+        let sessions = &state.subscription_sessions;
+        let mut recovering = sessions.host_delivery.lock().unwrap();
+        if let Err(error) = state.host.notify("onlineClientsChanged", serde_json::json!({"clientIds":sessions.snapshot()})) {
+            log::warn!("Online clients callback: {error}");
+            if *recovering || !state.host.connected() { return; }
+            *recovering = true;
+            let state = state.clone();
+            tokio::spawn(async move {
+                let permit = state.host.reserve_callback().await;
+                let sessions = &state.subscription_sessions;
+                let mut recovering = sessions.host_delivery.lock().unwrap();
+                if let Ok(permit) = permit {
+                    if let Err(error) = state.host.notify_reserved_callback(
+                        "onlineClientsChanged", serde_json::json!({"clientIds":sessions.snapshot()}), permit,
+                    ) {
+                        log::warn!("Online clients snapshot callback: {error}");
+                    }
+                }
+                *recovering = false;
+            });
+        }
     }
     pub fn close(&self, id: u64) {
         let session = self.entries.lock().unwrap().remove(&id);
@@ -161,10 +184,7 @@ impl Session {
         }
         *online = true;
         drop(online);
-        let _ = self
-            .state
-            .events
-            .send(self.state.subscription_sessions.snapshot_event());
+        Sessions::notify(&self.state);
         Ok(())
     }
     pub fn close(&self) {
@@ -179,10 +199,7 @@ impl Session {
             }
         }
         if changed {
-            let _ = self
-                .state
-                .events
-                .send(self.state.subscription_sessions.snapshot_event());
+            Sessions::notify(&self.state);
         }
     }
     fn valid(&self) -> bool {

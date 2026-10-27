@@ -68,7 +68,7 @@ async fn enabling_receiver_uses_the_public_listeners_actual_bound_port() {
     assert_ne!(http, 0);
     let state = core.runtime_state();
     let host = state.host.clone();
-    let (generation, mut requests) = host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&host);
     tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
             if request["method"] == "systemCapabilities" {

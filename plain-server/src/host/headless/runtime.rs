@@ -10,6 +10,7 @@ pub struct Runtime {
     core: Arc<ContentServer>,
     capabilities: Vec<String>,
     multicast: std::sync::Mutex<crate::host::multicast::MulticastLeases>,
+    failure: tokio::sync::watch::Sender<Option<String>>,
 }
 
 impl Runtime {
@@ -18,6 +19,7 @@ impl Runtime {
             core,
             capabilities,
             multicast: Default::default(),
+            failure: tokio::sync::watch::channel(None).0,
         }
     }
 
@@ -27,6 +29,14 @@ impl Runtime {
             return linux::dispatch(&self.core, method, params).await;
         }
         match method {
+            "httpServerStatusChanged" => {
+                let status = self.core.http_status();
+                if status.state == "error" {
+                    self.failure.send_replace(Some(format!("HTTP server failed: {}", status.message)));
+                }
+                Ok(Value::Null)
+            }
+            "systemWebLoginRequested" | "systemWebLoginClosed" | "systemWebLoginCompleted" | "systemWebLoginSnapshot" | "peerNotificationsChanged" | "peerClipboardChanged" | "clipboardHistoryRefresh" | "dlnaRendererChanged" | "dlnaRendererRefresh" | "sharedFolderDownloadsRefresh" | "peerTransportsChanged" | "appUpdateDownloadChanged" | "dlnaSenderChanged" | "feedSyncChanged" | "audioPlaybackRefresh" | "audioLibraryRefresh" | "pairingSucceeded" | "networkInterfacesChanged" | "onlineClientsChanged" | "systemWebActivity" => Ok(Value::Null),
             "systemCapabilities" => {
                 serde_json::to_value(&self.capabilities).map_err(|error| error.to_string())
             }
@@ -54,38 +64,18 @@ impl Runtime {
     pub async fn run(self: Arc<Self>) -> Result<(), String> {
         let _multicast = crate::host::multicast::MulticastSession::new(&self.multicast);
         let session = Arc::new(self.core.host_events()?);
+        let mut failure = self.failure.subscribe();
         let requests = self.clone();
-        let result = session
-            .serve(
-                move |method, params| {
+        tokio::select! {
+            result = session.serve(move |method, params| {
                     let requests = requests.clone();
                     async move { requests.dispatch(&method, params).await }
-                },
-                |event| {
-                    let kind = event
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .ok_or("missing host event type")?;
-                    let payload = event
-                        .get("payload")
-                        .and_then(Value::as_str)
-                        .ok_or("missing host event payload")?;
-                    if kind == plain_rs::events::HTTP_SERVER_STATE_CHANGED {
-                        let status: Value = serde_json::from_str(payload)
-                            .map_err(|error| error.to_string())?;
-                        if status["state"] == "error" {
-                            return Err(format!(
-                                "HTTP server failed: {}",
-                                status["message"].as_str().unwrap_or_default()
-                            ));
-                        }
-                    }
-                    log::info!("[shell] {kind}: {payload}");
-                    Ok(())
-                },
-            )
-            .await;
-        result
+                }) => result,
+            changed = failure.wait_for(|value| value.is_some()) => {
+                let value = changed.map_err(|_| "HTTP server status channel closed")?;
+                Err(value.clone().unwrap())
+            },
+        }
     }
 }
 

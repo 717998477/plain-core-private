@@ -13,7 +13,7 @@ impl Drop for Waiting {
 }
 
 #[tokio::test]
-async fn serving_relays_events_while_request_waits_and_cancels_on_stop() {
+async fn serving_handles_callbacks_while_request_waits_and_cancels_on_stop() {
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let session = Arc::new(core.host_events().unwrap());
@@ -27,7 +27,9 @@ async fn serving_relays_events_while_request_waits_and_cancels_on_stop() {
             move |method, _params| {
                 let dropped = dropped.clone();
                 let started = started.clone();
+                let events = events.clone();
                 async move {
+                    if method == "systemWebLoginRequested" { events.send(method.clone()).unwrap(); }
                     if method == "waitingRequest" {
                         let _waiting = Waiting(dropped);
                         started.notify_one();
@@ -37,16 +39,12 @@ async fn serving_relays_events_while_request_waits_and_cancels_on_stop() {
                 }
             }
         },
-        move |event| events.send(event).map_err(|error| error.to_string()),
     ));
     let host = core.runtime_state().host.clone();
     let call = tokio::spawn(async move { host.call("waitingRequest", json!({})).await });
     started.notified().await;
-    core.runtime_state()
-        .events
-        .send(WsEvent::broadcast("CONTENT_CHANGED", "{}".into()))
-        .unwrap();
-    while received.recv().await.unwrap()["type"] != "CONTENT_CHANGED" {}
+    core.runtime_state().host.notify("systemWebLoginRequested", json!({})).unwrap();
+    assert_eq!(received.recv().await.unwrap(), "systemWebLoginRequested");
     assert!(!dropped.load(Ordering::SeqCst));
     core.stop_core().await;
     runner.await.unwrap().unwrap();
@@ -67,7 +65,6 @@ async fn serving_preserves_request_errors_and_old_session_cannot_disconnect_repl
                 Ok(json!(true))
             }
         },
-        |_event| Ok(()),
     ));
     assert_eq!(
         core.runtime_state()
@@ -114,7 +111,6 @@ async fn aborting_runner_disconnects_session_even_with_retained_handle() {
                 }
             }
         },
-        |_event| Ok(()),
     ));
     let host = core.runtime_state().host.clone();
     let call = tokio::spawn(async move { host.call("waitingRequest", json!({})).await });

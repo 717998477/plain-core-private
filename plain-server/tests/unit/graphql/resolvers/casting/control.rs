@@ -23,7 +23,7 @@ fn fixture() -> (tempfile::TempDir, crate::assembly::server::ContentServer) {
     )
     .unwrap();
     let host = server.runtime_state().host.clone();
-    let (generation, mut requests) = host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&host);
     tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
             let result = match request["method"].as_str().unwrap() {
@@ -450,7 +450,7 @@ async fn receiver_name_uses_the_native_default_and_current_core_setting_without_
     let (_dir, server) = fixture();
     let state = server.runtime_state();
     state.prefs.set("device_name", "").unwrap();
-    let (_generation, mut requests) = state.host.connect();
+    let (_generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     assert_eq!(
         device_name(&state).await.unwrap(),
         plain_rs::prefs::identity::default_device_name()

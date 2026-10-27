@@ -11,35 +11,69 @@ use super::*;
 use crate::graphql::types::Instant;
 use std::time::Duration;
 use tokio::sync::Notify;
+use plain_rs::events::WsEvent;
+use std::sync::Arc;
 
-fn fixture() -> (
-    Store,
-    DPeer,
-    Identity,
-    broadcast::Sender<WsEvent>,
-    broadcast::Receiver<WsEvent>,
-) {
-    let peer = DPeer::new(
-        "peer",
-        "Fixture",
-        "127.0.0.1",
-        Some(18443),
-        DeviceType::Computer,
-    );
+struct CallbackReceiver {
+    host: Arc<crate::host::bridge::Host>,
+    generation: u64,
+    requests: tokio::sync::mpsc::Receiver<serde_json::Value>,
+    buffered: std::collections::VecDeque<serde_json::Value>,
+}
+
+impl CallbackReceiver {
+    fn new(host: Arc<crate::host::bridge::Host>) -> Self {
+        let (generation, requests) = host.connect();
+        Self { host, generation, requests, buffered: Default::default() }
+    }
+
+    fn try_recv(&mut self) -> Result<serde_json::Value, tokio::sync::mpsc::error::TryRecvError> {
+        if let Some(value) = self.buffered.pop_front() { return Ok(value); }
+        loop {
+            let request = self.requests.try_recv()?;
+            self.host.reply(self.generation, json!({"id":request["id"],"result":null})).unwrap();
+            if request["method"] == "peerNotificationsChanged" {
+                return Ok(request["params"].clone());
+            }
+        }
+    }
+
+    async fn recv(&mut self) -> Option<serde_json::Value> {
+        if let Some(value) = self.buffered.pop_front() { return Some(value); }
+        loop {
+            let request = self.requests.recv().await?;
+            self.host.reply(self.generation, json!({"id":request["id"],"result":null})).unwrap();
+            if request["method"] == "peerNotificationsChanged" {
+                return Some(request["params"].clone());
+            }
+        }
+    }
+    async fn recv_clipboard(&mut self) -> Option<serde_json::Value> {
+        loop {
+            let request = self.requests.recv().await?;
+            self.host.reply(self.generation, json!({"id":request["id"],"result":null})).unwrap();
+            match request["method"].as_str() {
+                Some("peerClipboardChanged") => return Some(request["params"].clone()),
+                Some("peerNotificationsChanged") => self.buffered.push_back(request["params"].clone()),
+                _ => {}
+            }
+        }
+    }
+
+}
+
+fn fixture() -> (Store, DPeer, Identity, Arc<crate::host::bridge::Host>, CallbackReceiver) {
+    let peer = DPeer::new("peer", "Fixture", "127.0.0.1", Some(18443), DeviceType::Computer);
     let identity = Identity {
         url: "wss://127.0.0.1:18443/?cid=fixture".into(),
         token: plain_rs::utils::base64::base64_encode(&[7; 32]),
-        ip: peer.ip.clone(),
-        port: peer.port,
+        ip: peer.ip.clone(), port: peer.port,
     };
-    let (events, receiver) = broadcast::channel(256);
+    let host = Arc::new(crate::host::bridge::Host::default());
+    let receiver = CallbackReceiver::new(host.clone());
     let store = Store::default();
-    store.reconcile(
-        std::slice::from_ref(&peer),
-        &HashMap::from([(peer.id.clone(), identity.clone())]),
-        &events,
-    );
-    (store, peer, identity, events, receiver)
+    store.reconcile(std::slice::from_ref(&peer), &HashMap::from([(peer.id.clone(), identity.clone())]), &host);
+    (store, peer, identity, host, receiver)
 }
 
 fn notification(id: &str) -> Notification {
@@ -71,17 +105,12 @@ fn observation(items: Vec<Notification>) -> Result<(App, Vec<Notification>, reqw
     ))
 }
 
-fn event(receiver: &mut broadcast::Receiver<WsEvent>) -> serde_json::Value {
-    loop {
-        let event = receiver.try_recv().unwrap();
-        if event.event_type == plain_rs::events::PEER_NOTIFICATIONS_UPDATED {
-            return serde_json::from_str(&event.payload).unwrap();
-        }
-    }
+fn event(receiver: &mut CallbackReceiver) -> serde_json::Value {
+    receiver.try_recv().unwrap()
 }
 
-#[test]
-fn baseline_diffs_and_repeated_hints_only_alert_new_confirmed_items() {
+#[tokio::test]
+async fn baseline_diffs_and_repeated_hints_only_alert_new_confirmed_items() {
     let (store, peer, identity, events, mut receiver) = fixture();
     assert!(event(&mut receiver)["group"]["loading"].as_bool().unwrap());
     store
@@ -131,8 +160,8 @@ fn baseline_diffs_and_repeated_hints_only_alert_new_confirmed_items() {
     );
 }
 
-#[test]
-fn silent_items_and_active_updates_do_not_alert_but_a_dismissed_id_can_notify_again() {
+#[tokio::test]
+async fn silent_items_and_active_updates_do_not_alert_but_a_dismissed_id_can_notify_again() {
     let (store, peer, identity, events, mut receiver) = fixture();
     event(&mut receiver);
     let mut once = notification("once");
@@ -193,8 +222,8 @@ fn silent_items_and_active_updates_do_not_alert_but_a_dismissed_id_can_notify_ag
     assert_eq!(event(&mut receiver)["alerts"][0]["id"], "ordinary");
 }
 
-#[test]
-fn capability_or_permission_revocation_clears_data_and_regrant_starts_a_fresh_baseline() {
+#[tokio::test]
+async fn capability_or_permission_revocation_clears_data_and_regrant_starts_a_fresh_baseline() {
     for capability in [true, false] {
         let (store, peer, identity, events, mut receiver) = fixture();
         event(&mut receiver);
@@ -236,8 +265,8 @@ fn capability_or_permission_revocation_clears_data_and_regrant_starts_a_fresh_ba
     }
 }
 
-#[test]
-fn snapshots_recover_without_alerts_and_credentials_or_membership_retire_old_results() {
+#[tokio::test]
+async fn snapshots_recover_without_alerts_and_credentials_or_membership_retire_old_results() {
     let (store, mut peer, identity, events, mut receiver) = fixture();
     event(&mut receiver);
     store
@@ -249,7 +278,7 @@ fn snapshots_recover_without_alerts_and_credentials_or_membership_retire_old_res
         )
         .unwrap();
     event(&mut receiver);
-    let initial: serde_json::Value = serde_json::from_str(&store.snapshot_event().payload).unwrap();
+    let initial: serde_json::Value = store.snapshot();
     assert_eq!(initial["groups"][0]["items"][0]["id"], "old");
     assert!(initial.get("alerts").is_none());
     peer.name = "Renamed".into();
@@ -271,7 +300,7 @@ fn snapshots_recover_without_alerts_and_credentials_or_membership_retire_old_res
     );
     assert!(receiver.try_recv().is_err());
     let retained: serde_json::Value =
-        serde_json::from_str(&store.snapshot_event().payload).unwrap();
+        store.snapshot();
     assert_eq!(retained["groups"][0]["items"][0]["id"], "old");
     store
         .apply(
@@ -339,8 +368,8 @@ fn snapshots_recover_without_alerts_and_credentials_or_membership_retire_old_res
     assert!(receiver.try_recv().is_err());
 }
 
-#[test]
-fn invalid_snapshots_do_not_mutate_projection_and_icons_decrypt_with_standard_url_token() {
+#[tokio::test]
+async fn invalid_snapshots_do_not_mutate_projection_and_icons_decrypt_with_standard_url_token() {
     let (store, peer, identity, events, mut receiver) = fixture();
     event(&mut receiver);
     let duplicate = notification("duplicate");
@@ -385,7 +414,7 @@ fn invalid_snapshots_do_not_mutate_projection_and_icons_decrypt_with_standard_ur
         b"pkgicon://fixture.app"
     );
     assert!(value["alerts"].as_array().unwrap().is_empty());
-    assert!(!store.snapshot_event().payload.contains("urlToken"));
+    assert!(!store.snapshot().to_string().contains("urlToken"));
 }
 
 #[cfg(feature = "http_transport")]
@@ -521,7 +550,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     );
     peer.token = session.token;
     peers::save(&state.db, &[peer.clone()], SaveMode::Insert).unwrap();
-    let mut local_events = state.events.subscribe();
+    let mut callbacks = CallbackReceiver::new(state.host.clone());
     state.management.start(state.clone()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), requested.notified())
         .await
@@ -556,32 +585,16 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
             json!({"text":"hint", "sensitive":false, "time":1}).to_string(),
         ))
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let event = local_events.recv().await.unwrap();
-            if event.event_type == plain_rs::events::PEER_CLIPBOARD_CHANGED {
-                let value: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
-                assert_eq!(value["peerId"], "remote");
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
+    let clipboard = tokio::time::timeout(Duration::from_secs(3), callbacks.recv_clipboard())
+        .await.unwrap().unwrap();
+    assert_eq!(clipboard, json!({"peerIds":["remote"],"refreshAll":false}));
     release.notify_one();
     let baseline = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let event = local_events.recv().await.unwrap();
-            if event.event_type == plain_rs::events::PEER_NOTIFICATIONS_UPDATED {
-                let value: serde_json::Value = serde_json::from_str(&event.payload).unwrap();
-                if value["group"]["loaded"] == true {
-                    break value;
-                }
-            }
+            let value = callbacks.recv().await.unwrap();
+            if value["group"]["loaded"] == true { break value; }
         }
-    })
-    .await
-    .unwrap();
+    }).await.unwrap();
     assert_eq!(baseline["group"]["items"][0]["id"], "old");
     assert!(baseline["alerts"].as_array().unwrap().is_empty());
     state.management.shutdown().await;
@@ -596,17 +609,17 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
         port: peer.port,
     };
     let (cancel, cancelled) = watch::channel(false);
-    while local_events.try_recv().is_ok() {}
+    while callbacks.try_recv().is_ok() {}
     *facts.lock().unwrap() = vec![serde_json::to_value(notification("confirmed")).unwrap()];
     refresh(&state, &peer.id, &identity, &cancelled)
         .await
         .unwrap();
-    let confirmed = event(&mut local_events);
+    let confirmed = event(&mut callbacks);
     assert_eq!(confirmed["alerts"][0]["id"], "confirmed");
     refresh(&state, &peer.id, &identity, &cancelled)
         .await
         .unwrap();
-    assert!(local_events.try_recv().is_err());
+    assert!(callbacks.try_recv().is_err());
     let before = reads.load(Ordering::SeqCst);
     allowed.store(false, Ordering::SeqCst);
     refresh(&state, &peer.id, &identity, &cancelled)
@@ -614,7 +627,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
         .unwrap();
     assert_eq!(reads.load(Ordering::SeqCst), before);
     assert!(
-        event(&mut local_events)["group"]["items"]
+        event(&mut callbacks)["group"]["items"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -625,7 +638,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
         .await
         .unwrap();
     assert_eq!(reads.load(Ordering::SeqCst), before);
-    let unsupported = event(&mut local_events);
+    let unsupported = event(&mut callbacks);
     assert!(
         !unsupported["group"]["capabilities"]
             .as_array()
@@ -637,7 +650,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     refresh(&state, &peer.id, &identity, &cancelled)
         .await
         .unwrap();
-    event(&mut local_events);
+    event(&mut callbacks);
     remote_state
         .prefs
         .set("api_permissions", json!([]))
@@ -660,7 +673,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
         error.downcast_ref::<super::super::management_http::AuthorizationError>(),
         Some(super::super::management_http::AuthorizationError::Permission)
     ));
-    let denied = event(&mut local_events);
+    let denied = event(&mut callbacks);
     assert!(denied["group"]["items"].as_array().unwrap().is_empty());
     assert!(
         denied["group"]["permissions"]
@@ -687,7 +700,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     });
     release.notify_one();
     pending.await.unwrap();
-    assert!(local_events.try_recv().is_err());
+    assert!(callbacks.try_recv().is_err());
     cancel.send_replace(true);
     let before = reads.load(Ordering::SeqCst);
     refresh(&state, &peer.id, &identity, &cancelled)
@@ -706,7 +719,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     refresh(&state, &peer.id, &identity, &cancelled)
         .await
         .unwrap();
-    let restored = event(&mut local_events);
+    let restored = event(&mut callbacks);
     assert_eq!(restored["group"]["items"][0]["id"], "confirmed");
     assert_eq!(
         remote_state.db.session_delete(&session.client_id).unwrap(),
@@ -715,7 +728,7 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     refresh(&state, &peer.id, &identity, &cancelled)
         .await
         .unwrap();
-    let rejected = event(&mut local_events);
+    let rejected = event(&mut callbacks);
     assert_eq!(rejected["group"]["online"], false);
     assert!(rejected["group"]["items"].as_array().unwrap().is_empty());
     remote_state.host.disconnect(generation);
@@ -724,8 +737,8 @@ async fn encrypted_snapshots_keep_socket_delivery_live_and_discard_revoked_crede
     remote.stop_core().await;
 }
 
-#[test]
-fn confirmed_authorization_failures_clear_data_instead_of_looking_like_network_timeouts() {
+#[tokio::test]
+async fn confirmed_authorization_failures_clear_data_instead_of_looking_like_network_timeouts() {
     use super::super::management_http::AuthorizationError;
     for permission in [true, false] {
         let (store, peer, identity, events, mut receiver) = fixture();
@@ -768,70 +781,49 @@ fn confirmed_authorization_failures_clear_data_instead_of_looking_like_network_t
 }
 
 #[tokio::test]
-async fn notifications_arriving_after_attachment_survive_delayed_initial_snapshot_delivery() {
-    let directory = tempfile::tempdir().unwrap();
-    let core = crate::assembly::server::ContentServer::open_with_cache(
-        &directory.path().join("data"),
-        &directory.path().join("cache"),
-    )
-    .unwrap();
-    let state = core.runtime_state();
-    state.management.shutdown().await;
-    let (_store, peer, identity, _events, _receiver) = fixture();
-    state.management.notifications.reconcile(
-        std::slice::from_ref(&peer),
-        &HashMap::from([(peer.id.clone(), identity.clone())]),
-        &state.events,
-    );
-    state
-        .management
-        .notifications
-        .apply(
-            &peer.id,
-            &identity,
-            observation(vec![notification("old")]),
-            &state.events,
-        )
-        .unwrap();
-    let mut stream = core
-        .native_graphql()
-        .unwrap()
-        .subscribe_events(Default::default())
-        .unwrap();
-    state
-        .management
-        .notifications
-        .apply(
-            &peer.id,
-            &identity,
-            observation(vec![notification("new"), notification("old")]),
-            &state.events,
-        )
-        .unwrap();
-    let initial = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let event = stream.recv().await.unwrap();
-            if event.event_type == plain_rs::events::PEER_NOTIFICATIONS_UPDATED {
-                break serde_json::from_str::<serde_json::Value>(&event.payload).unwrap();
-            }
-        }
-    })
-    .await
-    .unwrap();
-    assert_eq!(initial["groups"][0]["items"].as_array().unwrap().len(), 1);
+async fn notifications_arriving_after_snapshot_retain_their_host_callback() {
+    let (store, peer, identity, host, mut callbacks) = fixture();
+    event(&mut callbacks);
+    store.apply(&peer.id, &identity, observation(vec![notification("old")]), &host).unwrap();
+    event(&mut callbacks);
+    let initial = store.snapshot();
+    store.apply(&peer.id, &identity, observation(vec![notification("new"), notification("old")]), &host).unwrap();
+    let update = event(&mut callbacks);
     assert_eq!(initial["groups"][0]["items"][0]["id"], "old");
-    let update = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let event = stream.recv().await.unwrap();
-            if event.event_type == plain_rs::events::PEER_NOTIFICATIONS_UPDATED {
-                break event;
-            }
-        }
-    })
-    .await
-    .unwrap();
-    let update: serde_json::Value = serde_json::from_str(&update.payload).unwrap();
     assert!(update["revision"].as_u64().unwrap() > initial["revision"].as_u64().unwrap());
     assert_eq!(update["alerts"][0]["id"], "new");
-    core.stop_core().await;
+}
+
+#[tokio::test]
+async fn reconnecting_host_receives_a_complete_notification_snapshot_without_alerts() {
+    let (store, peer, identity, host, mut old) = fixture();
+    event(&mut old);
+    store.apply(&peer.id, &identity, observation(vec![notification("old")]), &host).unwrap();
+    event(&mut old);
+    let mut replacement = CallbackReceiver::new(host.clone());
+    store.notify_snapshot(&host).unwrap();
+    let snapshot = event(&mut replacement);
+    assert_eq!(snapshot["groups"][0]["items"][0]["id"], "old");
+    assert!(snapshot.get("alerts").is_none());
+    store.apply(&peer.id, &identity, observation(vec![notification("new")]), &host).unwrap();
+    let update = event(&mut replacement);
+    assert!(update["revision"].as_u64().unwrap() > snapshot["revision"].as_u64().unwrap());
+    assert_eq!(update["alerts"][0]["id"], "new");
+}
+
+#[tokio::test]
+async fn saturated_host_recovers_the_latest_snapshot_and_missed_alerts() {
+    let (store, peer, identity, host, mut callbacks) = fixture();
+    event(&mut callbacks);
+    store.apply(&peer.id, &identity, observation(vec![notification("old")]), &host).unwrap();
+    event(&mut callbacks);
+    for _ in 0..crate::host::bridge::REQUEST_CAPACITY {
+        host.notify("blocked", json!({})).unwrap();
+    }
+    store.apply(&peer.id, &identity, observation(vec![notification("new")]), &host).unwrap();
+    assert!(callbacks.try_recv().is_err());
+    store.apply(&peer.id, &identity, observation(vec![notification("latest")]), &host).unwrap();
+    let recovery = tokio::time::timeout(Duration::from_secs(3), callbacks.recv()).await.unwrap().unwrap();
+    assert_eq!(recovery["groups"][0]["items"][0]["id"], "latest");
+    assert_eq!(recovery["alerts"].as_array().unwrap().iter().map(|item| item["id"].as_str().unwrap()).collect::<Vec<_>>(), ["new", "latest"]);
 }

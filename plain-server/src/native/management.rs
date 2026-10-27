@@ -40,6 +40,11 @@ pub struct NativeManagement {
 }
 
 impl NativeManagement {
+    pub fn peer_notifications(&self) -> Result<serde_json::Value, String> {
+        self.state.native_client_id()?;
+        Ok(self.state.management.notifications.snapshot())
+    }
+
     pub(crate) fn new(state: ServerState) -> Self {
         Self { state }
     }

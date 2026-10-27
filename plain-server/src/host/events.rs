@@ -8,7 +8,6 @@ pub struct HostEvents {
     generation: u64,
     preferences: Mutex<serde_json::Map<String, Value>>,
     requests: Mutex<mpsc::Receiver<Value>>,
-    events: Mutex<crate::native::events::NativeEventStream>,
 }
 struct ServingSession<'a>(&'a HostEvents);
 
@@ -24,8 +23,30 @@ impl HostEvents {
     pub(crate) fn new(state: ServerState) -> Result<Self, String> {
         let preferences =
             crate::native::management::NativeManagement::new(state.clone()).preferences()?;
-        let events = crate::native::events::NativeEventStream::new(state.clone(), None);
         let (generation, requests) = state.host.connect();
+        let initial = (|| {
+            let attempts = state.login_attempts.lock().map_err(|_| "Login state unavailable")?;
+            state.host.notify("systemWebLoginSnapshot", attempts.host_snapshot())?;
+            drop(attempts);
+            state.management.notifications.notify_snapshot(&state.host)?;
+            state.management.notify_clipboard_snapshot(&state.host)?;
+            state.subscription_sessions.notify_snapshot(&state.host)?;
+            state.http_server.notify_snapshot(&state.host)?;
+            state.host.notify("clipboardHistoryRefresh", json!({}))?;
+            state.host.notify("dlnaRendererRefresh", json!({}))?;
+            state.host.notify("sharedFolderDownloadsRefresh", json!({}))?;
+            crate::services::peers::peer_transport::notify_snapshot(&state)?;
+            state.update_checks.download.notify_snapshot(&state.host)?;
+            state.cast.notify_snapshot(&state.host)?;
+            state.feeds.notify_snapshot()?;
+            state.host.notify("audioPlaybackRefresh", json!({}))?;
+            state.host.notify("audioLibraryRefresh", json!({}))?;
+            state.host.notify("networkInterfacesChanged", json!({}))
+        })();
+        if let Err(error) = initial {
+            state.host.disconnect(generation);
+            return Err(error);
+        }
         state.ble_scans.set_owner(generation);
         state.ble_advertising.connect(generation);
         crate::services::settings::update_download::Runtime::schedule_reconcile(&state);
@@ -46,41 +67,7 @@ impl HostEvents {
             state,
             generation,
             requests: Mutex::new(requests),
-            events: Mutex::new(events),
         })
-    }
-
-    pub async fn observe_session_callbacks(&self) -> Result<(), String> {
-        const CALLBACKS: &[&str] = &[
-            "WEB_REQUEST_RECEIVED",
-            "WEB_LOGIN_REQUESTED",
-            "WEB_LOGIN_CLOSED",
-            "WEB_LOGIN_COMPLETED",
-        ];
-        while let Some(delivery) = self.next_delivery(Some(CALLBACKS)).await {
-            let event = delivery.event;
-            let kind = event.event_type;
-            let method = match kind {
-                "WEB_REQUEST_RECEIVED" => "systemWebActivity",
-                "WEB_LOGIN_REQUESTED" => "systemWebLoginRequested",
-                "WEB_LOGIN_CLOSED" => "systemWebLoginClosed",
-                "WEB_LOGIN_COMPLETED" => "systemWebLoginCompleted",
-                _ => unreachable!("session callback selection changed"),
-            };
-            let params = if kind == "WEB_REQUEST_RECEIVED" {
-                json!({})
-            } else {
-                serde_json::from_str(&event.payload).map_err(|error| error.to_string())?
-            };
-            tokio::select! {
-                biased;
-                _ = self.wait_disconnected() => return Ok(()),
-                result = self.state.host.call_current(self.generation, method, params) => {
-                    if let Err(error) = result { log::warn!("Session host callback {method} failed: {error}"); }
-                },
-            };
-        }
-        Ok(())
     }
 
     pub async fn prefs_changed(&self) -> Result<(), String> {
@@ -127,52 +114,25 @@ impl HostEvents {
             value = requests.recv() => value,
         }
     }
-    pub async fn next_event(&self, selected: Option<&[&str]>) -> Option<Value> {
-        self.next_delivery(selected)
-            .await
-            .map(crate::native::events::Delivery::into_json)
-    }
-    async fn next_delivery(
-        &self,
-        selected: Option<&[&str]>,
-    ) -> Option<crate::native::events::Delivery> {
-        let mut events = self.events.lock().await;
-        loop {
-            let delivery = tokio::select! {
-                biased;
-                _ = self.wait_disconnected() => return None,
-                delivery = events.next_delivery() => delivery?,
-            };
-            if delivery.event.binary_payload.is_none()
-                && selected.is_none_or(|types| types.contains(&delivery.event.event_type))
-            {
-                return Some(delivery);
-            }
-        }
-    }
-    pub async fn serve<Requests, Events, Pending>(
+    pub async fn serve<Requests, Pending>(
         self: std::sync::Arc<Self>,
         requests: Requests,
-        events: Events,
     ) -> Result<(), String>
     where
         Requests: Fn(String, Value) -> Pending,
         Pending: std::future::Future<Output = Result<Value, String>> + Send + 'static,
-        Events: Fn(Value) -> Result<(), String>,
     {
         let _session = ServingSession(&self);
-        self.serve_connected(requests, events).await
+        self.serve_connected(requests).await
     }
 
-    async fn serve_connected<Requests, Events, Pending>(
+    async fn serve_connected<Requests, Pending>(
         &self,
         requests: Requests,
-        events: Events,
     ) -> Result<(), String>
     where
         Requests: Fn(String, Value) -> Pending,
         Pending: std::future::Future<Output = Result<Value, String>> + Send + 'static,
-        Events: Fn(Value) -> Result<(), String>,
     {
         let mut workers = tokio::task::JoinSet::new();
         loop {
@@ -189,12 +149,6 @@ impl HostEvents {
                     };
                     self.reply(reply)?;
                 },
-                event = self.next_event(None) => {
-                    match event {
-                        Some(event) => events(event)?,
-                        None => break,
-                    }
-                },
                 request = self.next_request(), if workers.len() < crate::host::bridge::REQUEST_CAPACITY => {
                     let Some(request) = request else { break };
                     let id = request.get("id").and_then(Value::as_u64)
@@ -203,8 +157,17 @@ impl HostEvents {
                         .ok_or("invalid host request method")?.to_owned();
                     let params = request.get("params").cloned()
                         .ok_or("missing host request parameters")?;
-                    let pending = requests(method, params);
-                    workers.spawn(async move { (id, pending.await) });
+                    if matches!(method.as_str(), "systemWebLoginRequested" | "systemWebLoginClosed" | "systemWebLoginCompleted" | "systemWebLoginSnapshot" | "peerNotificationsChanged" | "peerClipboardChanged" | "onlineClientsChanged" | "httpServerStatusChanged" | "clipboardHistoryRefresh" | "peerTransportsChanged" | "appUpdateDownloadChanged" | "dlnaSenderChanged" | "feedSyncChanged") {
+                        let result = requests(method, params).await;
+                        let reply = match result {
+                            Ok(result) => json!({"id": id, "result": result}),
+                            Err(error) => json!({"id": id, "error": error}),
+                        };
+                        self.reply(reply)?;
+                    } else {
+                        let pending = requests(method, params);
+                        workers.spawn(async move { (id, pending.await) });
+                    }
                 },
             }
         }
@@ -304,10 +267,8 @@ impl HostEvents {
 
         serde_json::from_str::<()>(&payload).map_err(|error| error.to_string())?;
         self.state.mdns.network_changed(self.state.clone());
-        let _ = self.state.events.send(WsEvent::broadcast(
-            plain_rs::events::NETWORK_CHANGED,
-            "{}".into(),
-        ));
+        self.state.network_revision.send_modify(|revision| *revision = revision.wrapping_add(1));
+        self.state.host.invalidate("networkInterfacesChanged");
         return Ok(());
     }
 
@@ -612,11 +573,11 @@ impl TestHost {
     pub(crate) async fn next(
         &mut self,
     ) -> Option<Result<tokio_tungstenite::tungstenite::Message, String>> {
-        self.0.next_request().await.map(|v| {
-            Ok(tokio_tungstenite::tungstenite::Message::Text(
-                v.to_string().into(),
-            ))
-        })
+        loop {
+            let value = self.0.next_request().await?;
+            if crate::test_support::acknowledge_host_callback(&self.0.state.host, self.0.generation, &value) { continue; }
+            return Some(Ok(tokio_tungstenite::tungstenite::Message::Text(value.to_string().into())));
+        }
     }
     pub(crate) async fn send(
         &mut self,

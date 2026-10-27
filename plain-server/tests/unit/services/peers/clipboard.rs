@@ -158,17 +158,6 @@ async fn sending_uses_the_real_encrypted_api_preserves_source_and_retries_platfo
     );
     assert_eq!(*writes.borrow(), vec!["Fixture 🌍", "Fixture 🌍"]);
     assert_eq!(remote_state.db.clipboard_count_rows().unwrap(), 1);
-    let names = (0..3)
-        .map(|_| remote_events.try_recv().unwrap().event_type)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        names,
-        [
-            "WEB_REQUEST_RECEIVED",
-            plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED,
-            "WEB_REQUEST_RECEIVED"
-        ]
-    );
     assert!(
         remote_events.try_recv().is_err(),
         "HTTP writes must not broadcast clipboard text or generic refreshes"

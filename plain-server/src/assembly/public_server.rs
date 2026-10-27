@@ -20,7 +20,7 @@ impl ServerState {
             Ok(listeners) => listeners,
             Err(error) => {
                 self.http_server.failed(error.clone());
-                let _ = self.events.send(self.http_server.status().event());
+                self.publish_http_status();
                 return Err(error);
             }
         };
@@ -36,7 +36,7 @@ impl ServerState {
             let error = error.to_string();
             listeners.shutdown().await;
             self.http_server.failed(error.clone());
-            let _ = self.events.send(self.http_server.status().event());
+            self.publish_http_status();
             return Err(error);
         }
         self.http_server.started(ports);
@@ -60,11 +60,7 @@ impl ServerState {
         if let Err(error) = crate::services::casting::receiver::lifecycle::reconcile(self).await {
             log::warn!("DLNA receiver startup: {error}");
         }
-        let _ = self.events.send(plain_rs::events::WsEvent::broadcast(
-            plain_rs::events::HTTP_SERVER_STARTED,
-            serde_json::json!({"httpPort":ports.0,"httpsPort":ports.1})
-                .to_string(),
-        ));
+        self.publish_http_status();
         Ok(ports)
     }
     pub(crate) async fn http_configuration(

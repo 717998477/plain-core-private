@@ -68,38 +68,5 @@ fn public_projection_keeps_regular_text_and_binary_buffers_and_excludes_internal
     let bytes = event.binary_payload.unwrap();
     assert_eq!(bytes, [0, 1, 255]);
     assert_eq!(bytes.as_ptr(), pointer);
-    assert!(
-        WsEvent::broadcast("WEB_LOGIN_REQUESTED", "private".into())
-            .into_public()
-            .is_none()
-    );
-    assert!(
-        WsEvent::broadcast("WEB_LOGIN_CLOSED", "private".into())
-            .into_public()
-            .is_none()
-    );
-}
 
-#[test]
-fn management_peer_events_are_native_only_and_cannot_be_reported_by_sdk_hosts() {
-    let event = WsEvent::broadcast(PEER_MANAGEMENT_EVENT, "{\"peerId\":\"fixture\"}".into());
-    assert!(event.is_internal());
-    assert!(event.into_public().is_none());
-    assert!(WsEvent::host_text(PEER_MANAGEMENT_EVENT, "{}".into()).is_none());
-}
-
-#[test]
-fn aggregated_notifications_are_native_only_and_cannot_be_reported_by_sdk_hosts() {
-    let event = WsEvent::broadcast(PEER_NOTIFICATIONS_UPDATED, "{}".into());
-    assert!(event.is_internal());
-    assert!(event.into_public().is_none());
-    assert!(WsEvent::host_text(PEER_NOTIFICATIONS_UPDATED, "{}".into()).is_none());
-}
-
-#[test]
-fn http_clipboard_history_notifications_are_local_and_cannot_be_uploaded() {
-    let event = WsEvent::broadcast(H_CLIPBOARD_HISTORY_UPDATED, "{}".into());
-    assert!(event.is_internal());
-    assert!(event.into_public().is_none());
-    assert!(WsEvent::host_text(H_CLIPBOARD_HISTORY_UPDATED, "{}".into()).is_none());
 }

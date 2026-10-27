@@ -16,7 +16,7 @@ async fn host_transport_preserves_signed_wire_and_requires_an_actual_receipt() {
     .unwrap();
     let state = server.runtime_state();
     let host = state.host.clone();
-    let (generation, mut receiver) = host.connect();
+    let (generation, mut receiver) = crate::test_support::HostRequests::connect(&host);
     let transport = Transport {
         state: state.clone(),
         attempt: plain_rs::transport::router::Attempt::Automatic,
@@ -39,11 +39,11 @@ async fn host_transport_preserves_signed_wire_and_requires_an_actual_receipt() {
         let host = host.clone();
         let ble = state.ble_transport.clone();
         tokio::spawn(async move {
-            for data in [
+            for (index, data) in [
                 json!({"createChatItem":[]}),
                 json!({"createChatItem":null}),
                 json!({"createChatItem":[]}),
-            ] {
+            ].into_iter().enumerate() {
                 let capabilities = receiver.recv().await.unwrap();
                 assert_eq!(capabilities["method"], "peerTransportCapabilities");
                 host.reply(
@@ -67,7 +67,7 @@ async fn host_transport_preserves_signed_wire_and_requires_an_actual_receipt() {
                 );
                 let errors = if data == json!({"createChatItem":null}) {
                     Value::Null
-                } else if data == json!({"createChatItem":[]}) && request["id"].as_u64() == Some(6)
+                } else if data == json!({"createChatItem":[]}) && index == 2
                 {
                     json!([{"message":"rejected"}])
                 } else {
@@ -155,7 +155,7 @@ async fn explicit_message_retry_root_probes_open_transport_and_sends_original_ro
             )
             .unwrap();
     }
-    let (generation, mut requests) = state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let host = state.host.clone();
     let ble = state.ble_transport.clone();
     let exchanges = Arc::new(AtomicUsize::new(0));

@@ -214,7 +214,7 @@ async fn retry_returns_pending_before_platform_transport_completes() {
         r#"{"type":"TEXT","value":{"text":"retry"}}"#,
     )
     .unwrap();
-    let (generation, mut requests) = state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let result = execute(
         &server,
         format!(
@@ -279,7 +279,7 @@ async fn batch_forward_uses_current_content_and_owns_each_creation_event() {
     )
     .await;
     let mut events = state.events.subscribe();
-    let (_generation, mut host_requests) = state.host.connect();
+    let (_generation, mut host_requests) = crate::test_support::HostRequests::connect(&state.host);
     let result = execute(&server, format!(r#"mutation {{ forwardChatItems(id:{}, targets:["local","peer:local"]) {{id content status}} }}"#, json!(id))).await;
     let rows = result["forwardChatItems"].as_array().unwrap();
     assert_eq!(rows.len(), 2);

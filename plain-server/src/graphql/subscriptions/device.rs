@@ -1,5 +1,5 @@
 use super::events;
-use super::models::{ClipboardChange, PeerClipboardChange};
+use super::models::ClipboardChange;
 use async_graphql::{Context, Result, Subscription};
 use futures_util::stream::BoxStream;
 
@@ -28,10 +28,5 @@ impl DeviceSubscriptions {
     ) -> Result<BoxStream<'static, Result<ClipboardChange>>> {
         events::stream(ctx, "CLIPBOARD_CHANGED").await
     }
-    async fn peer_clipboard_changed(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<BoxStream<'static, Result<PeerClipboardChange>>> {
-        events::stream(ctx, "PEER_CLIPBOARD_CHANGED").await
-    }
+
 }

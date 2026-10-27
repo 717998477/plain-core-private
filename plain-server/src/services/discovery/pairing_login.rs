@@ -125,7 +125,7 @@ pub(super) async fn run(
     if let Some(digest) = &digest {
         request["password"] = json!(digest);
     }
-    let mut url = base.clone();
+    let mut url = base.join("auth")?;
     url.set_scheme(if base.scheme() == "https" {
         "wss"
     } else {

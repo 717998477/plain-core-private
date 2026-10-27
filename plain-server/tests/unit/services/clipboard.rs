@@ -10,11 +10,18 @@ async fn platform_callbacks_before_write_reply_do_not_republish_received_text() 
     let state = server.runtime_state();
     let bridge = Arc::new(server.host_events().unwrap());
     let callbacks = bridge.clone();
+    let history_updates = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = history_updates.clone();
     let serving = tokio::spawn(bridge.clone().serve(
         move |method, params| {
             let callbacks = callbacks.clone();
+            let observed = observed.clone();
             async move {
                 match method.as_str() {
+                    "clipboardHistoryRefresh" => {
+                        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(Value::Null)
+                    }
                     "systemCapabilities" => Ok(json!(["CLIPBOARD"])),
                     "systemSetClipboard" => {
                         let report = json!({"text":params["text"],"sensitive":false}).to_string();
@@ -25,11 +32,12 @@ async fn platform_callbacks_before_write_reply_do_not_republish_received_text() 
                         }
                         Ok(json!(true))
                     }
+                    "systemWebLoginSnapshot" | "peerNotificationsChanged" | "peerClipboardChanged" |
+                    "onlineClientsChanged" | "httpServerStatusChanged" | "dlnaRendererRefresh" | "sharedFolderDownloadsRefresh" | "peerTransportsChanged" | "appUpdateDownloadChanged" | "dlnaSenderChanged" | "feedSyncChanged" | "audioPlaybackRefresh" | "audioLibraryRefresh" | "networkInterfacesChanged" => Ok(Value::Null),
                     _ => Err(format!("unexpected host method {method}")),
                 }
             }
         },
-        |_| Ok(()),
     ));
     let mut events = state.events.subscribe();
     let response = server
@@ -42,14 +50,10 @@ async fn platform_callbacks_before_write_reply_do_not_republish_received_text() 
     assert_eq!(response.data.into_json().unwrap()["setClipboard"], true);
     assert_eq!(state.db.clipboard_count_rows().unwrap(), 1);
     assert!(!state.clipboard_changes.can_send("remote callback fixture"));
-    let mut history_updates = 0;
     while let Ok(event) = events.try_recv() {
         assert_ne!(event.event_type, "CLIPBOARD_CHANGED");
-        if event.event_type == plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED {
-            history_updates += 1;
-        }
     }
-    assert_eq!(history_updates, 1);
+    assert_eq!(history_updates.load(std::sync::atomic::Ordering::SeqCst), 2);
     server.shutdown().await;
     serving.await.unwrap().unwrap();
     assert!(
@@ -98,17 +102,18 @@ async fn native_report_http_search_delete_and_restart_share_one_clipboard() {
     let (server, token, prefs) = start(&dir);
     let bridge = server.host_events().unwrap();
     let mut events = server.runtime_state().events.subscribe();
+    for _ in 0..15 {
+        let request = bridge.next_request().await.unwrap();
+        bridge.reply(json!({"id":request["id"],"result":null})).unwrap();
+    }
     let payload = json!({"text": "100%_ 🌍", "sensitive": true}).to_string();
     bridge
         .publish_text("CLIPBOARD_REPORTED", payload.clone())
         .await
         .unwrap();
-    let changed = events.try_recv().unwrap();
-    assert_eq!(
-        changed.event_type,
-        plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED
-    );
-    assert_eq!(changed.payload, "{}");
+    let callback = bridge.next_request().await.unwrap();
+    assert_eq!(callback["method"], "clipboardHistoryRefresh");
+    bridge.reply(json!({"id":callback["id"],"result":null})).unwrap();
     assert!(events.try_recv().is_err());
     let page = call(server.port, &token,
         r#"{clipboardItems(offset:0,limit:50,query:"%_") {id text source label sensitive createdAt} clipboardItemCount(query:"%_")}"#).await;
@@ -182,6 +187,7 @@ async fn reports_recheck_permission_deduplicate_and_publish_only_nonsensitive_te
     let (server, _, prefs) = start(&dir);
     let state = server.runtime_state();
     let mut events = state.events.subscribe();
+    let (generation, mut requests) = state.host.connect();
     prefs.set("api_permissions", json!([])).unwrap();
     let payload = json!({"text":"visible 🌍", "sensitive":false}).to_string();
     report(&state, &payload).unwrap();
@@ -189,10 +195,9 @@ async fn reports_recheck_permission_deduplicate_and_publish_only_nonsensitive_te
     assert!(events.try_recv().is_err());
     prefs.set("api_permissions", json!(["CLIPBOARD"])).unwrap();
     report(&state, &payload).unwrap();
-    assert_eq!(
-        events.try_recv().unwrap().event_type,
-        plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED
-    );
+    let callback = requests.try_recv().unwrap();
+    assert_eq!(callback["method"], "clipboardHistoryRefresh");
+    state.host.reply(generation, json!({"id":callback["id"],"result":null})).unwrap();
     let event = events.try_recv().unwrap();
     assert_eq!(event.event_type, "CLIPBOARD_CHANGED");
     let body: Value = serde_json::from_str(&event.payload).unwrap();

@@ -73,7 +73,7 @@ async fn terminal(state: &ServerState, id: &str) -> Option<Value> {
 async fn root_ble_chunks_commit_exact_bytes_and_reject_short_and_overlong_reads() {
     let (dir, server, state) = fixture();
     let payload = Arc::new((0..16384).map(|n| (n % 251) as u8).collect::<Vec<_>>());
-    let (generation, mut requests) = state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let host = state.host.clone();
     let data = payload.clone();
     let ble = state.ble_transport.clone();
@@ -206,7 +206,7 @@ async fn root_ble_chunks_commit_exact_bytes_and_reject_short_and_overlong_reads(
 async fn paused_generation_and_shutdown_reject_late_bytes_and_release_transfer_files() {
     let (dir, server, state) = fixture();
     seed_chat(&state, "slow", 8192);
-    let (generation, mut requests) = state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     state.downloads.enqueue("slow", "slow", "peer").unwrap();
     let caps = requests.recv().await.unwrap();
     state
@@ -273,7 +273,7 @@ async fn explicit_download_retry_roots_probe_open_transport_and_commit_exact_byt
                 )
                 .unwrap();
         }
-        let (generation, mut requests) = state.host.connect();
+        let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
         let host = state.host.clone();
         let ble = state.ble_transport.clone();
         let exchanges = Arc::new(AtomicUsize::new(0));

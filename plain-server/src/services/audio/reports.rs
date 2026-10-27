@@ -48,7 +48,7 @@ pub(crate) async fn accept(
                 .await
                 .map_err(|error| error.message)?;
             if accepted {
-                publish_library_updated(&state.events);
+                publish_library_updated(&state.host);
             }
         }
         AudioHostReport::Completed(report) => {
@@ -89,13 +89,8 @@ pub(crate) async fn accept(
     Ok(true)
 }
 
-pub(crate) fn publish_library_updated(
-    events: &tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>,
-) {
-    let _ = events.send(plain_rs::events::WsEvent::broadcast(
-        plain_rs::events::AUDIO_LIBRARY_UPDATED,
-        "{}".into(),
-    ));
+pub(crate) fn publish_library_updated(host: &std::sync::Arc<crate::host::bridge::Host>) {
+    host.invalidate("audioLibraryRefresh");
 }
 
 #[cfg(test)]

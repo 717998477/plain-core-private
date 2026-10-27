@@ -17,18 +17,41 @@ pub struct HttpStatus {
     pub message: String,
 }
 
-impl HttpStatus {
-    pub(crate) fn event(self) -> plain_rs::events::WsEvent {
-        plain_rs::events::WsEvent::broadcast(
-            plain_rs::events::HTTP_SERVER_STATE_CHANGED,
-            serde_json::to_string(&self).unwrap(),
-        )
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostStatus {
+    state: &'static str,
+    message: String,
+    http_port: i32,
+    https_port: i32,
+}
+
+impl ServerState {
+    pub(crate) fn publish_http_status(&self) {
+        let mut recovering = self.http_server.host_delivery.lock().unwrap();
+        if let Err(error) = self.host.notify("httpServerStatusChanged", serde_json::json!(self.http_server.host_status())) {
+            log::warn!("HTTP server status callback: {error}");
+            if *recovering || !self.host.connected() { return; }
+            *recovering = true;
+            let state = self.clone();
+            tokio::spawn(async move {
+                let permit = state.host.reserve_callback().await;
+                let mut recovering = state.http_server.host_delivery.lock().unwrap();
+                if let Ok(permit) = permit {
+                    if let Err(error) = state.host.notify_reserved_callback("httpServerStatusChanged", serde_json::json!(state.http_server.host_status()), permit) {
+                        log::warn!("HTTP server status recovery callback: {error}");
+                    }
+                }
+                *recovering = false;
+            });
+        }
     }
 }
 
 #[derive(Default)]
 pub(crate) struct Runtime {
     state: Mutex<HttpServerState>,
+    host_delivery: Mutex<bool>,
     completion: tokio::sync::Notify,
 }
 
@@ -71,6 +94,21 @@ impl Runtime {
                 message: String::new(),
             }
         }
+    }
+
+    fn host_status(&self) -> HostStatus {
+        let state = self.state.lock().unwrap();
+        HostStatus {
+            state: if state.http_port != 0 { "started" } else if !state.error.is_empty() { "error" } else { "stopped" },
+            message: state.error.clone(),
+            http_port: state.http_port,
+            https_port: state.https_port,
+        }
+    }
+
+    pub(crate) fn notify_snapshot(&self, host: &crate::host::bridge::Host) -> Result<(), String> {
+        let _delivery = self.host_delivery.lock().unwrap();
+        host.notify("httpServerStatusChanged", serde_json::json!(self.host_status()))
     }
 
     fn begin(&self) -> Result<HttpServerState, String> {
@@ -155,7 +193,7 @@ pub(crate) fn restart(
             }
             .await;
             state.http_server.finish(revision, result);
-            let _ = state.events.send(state.http_server.status().event());
+            state.publish_http_status();
         });
         Ok(receipt)
     }

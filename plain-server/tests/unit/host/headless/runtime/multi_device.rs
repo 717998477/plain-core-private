@@ -1,6 +1,5 @@
 use crate::assembly::server::ContentServer;
 use crate::host::headless::runtime::Runtime;
-use crate::native::events::NativeEventStream;
 use crate::native::graphql::{NativeGraphqlExecutor, NativeRequestScope};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -10,7 +9,7 @@ struct Node {
     core: Arc<ContentServer>,
     host: tokio::task::JoinHandle<Result<(), String>>,
     native: NativeGraphqlExecutor,
-    events: NativeEventStream,
+    pairing_changes: Arc<crate::graphql::subscriptions::session::Session>,
     scope: NativeRequestScope,
     port: u16,
     _directory: tempfile::TempDir,
@@ -45,12 +44,16 @@ impl Node {
         let host = tokio::spawn(Arc::new(Runtime::new(core.clone(), vec![])).run());
         let native = core.native_graphql().unwrap();
         let scope = NativeRequestScope::default();
-        let events = native.subscribe_events(scope.clone()).unwrap();
+        let subscription_id = native.open_subscriptions(scope.clone()).unwrap();
+        let pairing_changes = native.subscription_session(subscription_id).unwrap();
+        pairing_changes.send(r#"{"type":"subscribe","id":"pairing","payload":{"query":"subscription { pairingChanged }"}}"#).unwrap();
+        let ready: Value = serde_json::from_str(&pairing_changes.read().await.unwrap()).unwrap();
+        assert_eq!(ready["payload"]["extensions"]["subscriptionReady"], true);
         Self {
             core,
             host,
             native,
-            events,
+            pairing_changes,
             scope,
             port,
             _directory: directory,
@@ -61,20 +64,6 @@ impl Node {
         self.core.close_native_scope(&self.scope).await.unwrap();
         self.core.stop_core().await;
         (&mut self.host).await.unwrap().unwrap();
-    }
-
-    async fn event(&mut self, expected: &str) -> Value {
-        tokio::time::timeout(Duration::from_secs(15), async {
-            for _ in 0..128 {
-                let event = self.events.recv().await.unwrap();
-                if event.event_type == expected {
-                    return serde_json::from_str(&event.payload).unwrap();
-                }
-            }
-            panic!("expected native event {expected}");
-        })
-        .await
-        .unwrap()
     }
 
     async fn paired(&mut self, generation: &str) {
@@ -97,7 +86,7 @@ impl Node {
                 }
                 assert_ne!(state["phase"], "FAILED", "{state}");
                 assert_ne!(state["phase"], "CANCELLED", "{state}");
-                self.events.recv().await.unwrap();
+                self.pairing_changes.read().await.unwrap();
             }
             panic!("pairing did not converge");
         })
@@ -147,12 +136,18 @@ async fn native_password_and_approval_pairing_enables_actual_chat_and_preserves_
         json!({"host":format!("127.0.0.1:{}", second.port)}),
     )
     .await;
-    let requested = second.event("WEB_LOGIN_REQUESTED").await;
+    let request_id = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let pending = second.core.native_management().unwrap().web_login_requests(None).unwrap();
+            if let Some(request) = pending.requests.first() { break request.request_id.clone(); }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
     second
         .core
         .native_management()
         .unwrap()
-        .confirm_web_login(requested["requestId"].as_str().unwrap().into(), true)
+        .confirm_web_login(request_id, true)
         .await
         .unwrap();
     first

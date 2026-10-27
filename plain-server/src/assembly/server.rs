@@ -44,6 +44,7 @@ pub(crate) struct ServerState {
     pub(crate) peer_status: Arc<crate::services::peers::peer_status::Runtime>,
     pub(crate) management: Arc<crate::services::peers::management::Runtime>,
     pub(crate) clipboard_changes: Arc<crate::services::clipboard::Changes>,
+    pub(crate) network_revision: watch::Sender<u64>,
     pub(crate) mdns: Arc<crate::services::discovery::mdns_runtime::Runtime>,
     pub(crate) guest_replay: Arc<crate::http::auth::replay::Replay>,
     pub(crate) main_replay: Arc<crate::http::auth::replay::Replay>,
@@ -64,6 +65,7 @@ pub(crate) struct ServerState {
     pub(crate) db: Arc<Db>,
     pub(crate) lan: Arc<crate::services::peers::peer_lan::Lan>,
     pub(crate) transport: Arc<plain_rs::transport::router::Router>,
+    pub(crate) transport_delivery: Arc<std::sync::Mutex<bool>>,
     pub(crate) previews: Arc<crate::services::link_preview::Schedule>,
     pub(crate) prewarmer: Arc<plain_rs::chat::attachments::prewarm::Prewarmer>,
     pub(crate) shared_batches: Arc<crate::services::peers::shared_batch::Runtime>,
@@ -447,11 +449,13 @@ impl ContentServer {
             peer_status: Arc::new(crate::services::peers::peer_status::Runtime::default()),
             management: Arc::new(crate::services::peers::management::Runtime::default()),
             clipboard_changes: Arc::new(crate::services::clipboard::Changes::default()),
+            network_revision: watch::channel(0).0,
             mdns: Arc::new(crate::services::discovery::mdns_runtime::Runtime::default()),
             peer_schema: crate::graphql::schemas::peer::schema(),
             guest_replay: Arc::new(crate::http::auth::replay::Replay::default()),
             main_replay: Arc::new(crate::http::auth::replay::Replay::default()),
             transport: Arc::new(plain_rs::transport::router::Router::default()),
+            transport_delivery: Arc::new(std::sync::Mutex::new(false)),
             previews,
             prewarmer: Arc::new(plain_rs::chat::attachments::prewarm::Prewarmer::default()),
             shared_batches: Arc::new(crate::services::peers::shared_batch::Runtime::default()),
@@ -690,7 +694,7 @@ impl ContentServer {
             Err(error) => {
                 if self.state.public_server.lock().await.is_none() {
                     self.state.http_server.failed(error.clone());
-                    let _ = self.state.events.send(self.state.http_server.status().event());
+                    self.state.publish_http_status();
                 }
                 return Err(error);
             }
@@ -709,7 +713,7 @@ impl ContentServer {
         let mut server = self.state.public_server.lock().await.take();
         crate::assembly::lifecycle::stop_locked(&self.state, &mut server).await;
         self.state.http_server.stopped();
-        let _ = self.state.events.send(self.state.http_server.status().event());
+        self.state.publish_http_status();
     }
     pub fn http_status(&self) -> crate::services::http_server::HttpStatus {
         self.state.http_server.status()

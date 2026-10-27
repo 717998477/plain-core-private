@@ -18,7 +18,7 @@ async fn receiver_starts_without_http_and_retries_when_platform_permissions_chan
     )
     .unwrap();
     let state = server.runtime_state();
-    let (generation, mut requests) = state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let supported = Arc::new(AtomicBool::new(false));
     let granted = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
@@ -105,7 +105,7 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
         )
         .await
         .unwrap();
-    let (generation, mut rx) = state.host.connect();
+    let (generation, mut rx) = crate::test_support::HostRequests::connect(&state.host);
     let allowed = Arc::new(AtomicBool::new(false));
     let permission = allowed.clone();
     let acquired = Arc::new(AtomicBool::new(false));
@@ -295,7 +295,7 @@ async fn authenticated_runtime_preserves_radio_modes_and_releases_global_owner()
         !acquired.load(Ordering::SeqCst),
         "An old host generation must not reacquire permission"
     );
-    let (generation, mut rx) = state.host.connect();
+    let (generation, mut rx) = crate::test_support::HostRequests::connect(&state.host);
     let host = state.host.clone();
     let lease = acquired.clone();
     let responder = tokio::spawn(async move {
@@ -432,7 +432,7 @@ async fn file_sharing_capability_does_not_authorize_peer_discovery_or_acquire_mu
     let server =
         crate::assembly::server::ContentServer::start(directory.path(), &token, prefs).unwrap();
     let state = server.runtime_state();
-    let (generation, mut incoming) = state.host.connect();
+    let (generation, mut incoming) = crate::test_support::HostRequests::connect(&state.host);
     let worker = tokio::spawn({
         let state = state.clone();
         async move { control(&state, Request::Publish {}).await }
@@ -466,7 +466,7 @@ async fn inactive_runtime_cleanup_and_updates_do_not_request_platform_capabiliti
     let directory = tempfile::tempdir().unwrap();
     let core = crate::assembly::server::ContentServer::open(directory.path()).unwrap();
     let state = core.runtime_state();
-    let (generation, mut requests) = state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     for request in [
         Request::Update {},
         Request::Restart {},

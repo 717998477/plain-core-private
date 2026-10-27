@@ -158,7 +158,12 @@ async fn completed(state: &ServerState, result: &Value) {
     if let Some(request) = request.as_object_mut() {
         request.remove("password");
     }
-    let _ = state.events.send(WsEvent::broadcast("WEB_LOGIN_COMPLETED", json!({"request":request,"chatPaired":result["response"]["chatPaired"],"clientIp":result["clientIp"]}).to_string()));
+    if let Err(error) = state.host.notify(
+        "systemWebLoginCompleted",
+        json!({"request":request,"chatPaired":result["response"]["chatPaired"],"clientIp":result["clientIp"]}),
+    ) {
+        log::warn!("Web login completion callback: {error}");
+    }
 }
 async fn run(
     mut socket: WebSocket,
@@ -396,13 +401,20 @@ fn notify_login_request(
     request_id: &str,
     request: &Value,
 ) {
+    let Ok(mut attempts) = state.login_attempts.lock() else {
+        log::warn!("Web login state unavailable");
+        return;
+    };
+    if !attempts.contains(request_id) {
+        return;
+    }
     let mut request = request.clone();
     request["password"] = json!("");
-    let _ = state.events.send(plain_rs::events::WsEvent::broadcast(
-        "WEB_LOGIN_REQUESTED",
-        json!({"clientId":client_id,"clientIp":client_ip,"requestId":request_id,"request":request})
-            .to_string(),
-    ));
+    attempts.notify_host(
+        state,
+        "systemWebLoginRequested",
+        json!({"clientId":client_id,"clientIp":client_ip,"requestId":request_id,"request":request}),
+    );
 }
 
 fn controls(bytes: &[u8]) -> Vec<Value> {

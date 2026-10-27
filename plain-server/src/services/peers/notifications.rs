@@ -4,14 +4,14 @@ use crate::{
     assembly::server::ServerState, graphql::resolvers::notifications::types::Notification,
 };
 use anyhow::{Result, ensure};
-use plain_rs::{chat::enums::DeviceType, db::DPeer, events::WsEvent};
+use plain_rs::{chat::enums::DeviceType, db::DPeer};
 use serde::Serialize;
 use serde_json::json;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
 const LIMIT: usize = 200;
 
@@ -49,10 +49,13 @@ struct Peer {
 struct State {
     revision: u64,
     peers: BTreeMap<String, Peer>,
+    recovery_pending: bool,
+    missed_alerts: Vec<Item>,
+    missed_permissions_changed: bool,
 }
 
 #[derive(Default)]
-pub(crate) struct Store(Mutex<State>);
+pub(crate) struct Store(Arc<Mutex<State>>);
 
 fn allowed(app: &AppSnapshot) -> bool {
     app.capabilities
@@ -65,36 +68,52 @@ fn allowed(app: &AppSnapshot) -> bool {
 }
 
 impl State {
-    fn snapshot_event(&self) -> WsEvent {
+    fn snapshot(&self) -> serde_json::Value {
         let groups: Vec<_> = self.peers.values().map(|peer| &peer.group).collect();
-        WsEvent::broadcast(
-            plain_rs::events::PEER_NOTIFICATIONS_UPDATED,
-            json!({"revision":self.revision,"groups":groups}).to_string(),
-        )
-    }
-
-    fn publish(
-        &mut self,
-        id: &str,
-        alerts: Vec<Item>,
-        permissions_changed: bool,
-        events: &broadcast::Sender<WsEvent>,
-    ) {
-        self.revision += 1;
-        let group = self.peers.get(id).map(|peer| &peer.group);
-        let _ = events.send(WsEvent::broadcast(
-            plain_rs::events::PEER_NOTIFICATIONS_UPDATED,
-            json!({"revision":self.revision,"peerId":id,"group":group,"alerts":alerts,"permissionsChanged":permissions_changed}).to_string(),
-        ));
+        json!({"revision":self.revision,"groups":groups})
     }
 }
 
 impl Store {
+    fn publish(&self, state: &mut State, id: &str, alerts: Vec<Item>, permissions_changed: bool, host: &Arc<crate::host::bridge::Host>) {
+        state.revision += 1;
+        if state.recovery_pending {
+            state.missed_alerts.extend(alerts);
+            state.missed_permissions_changed |= permissions_changed;
+            return;
+        }
+        let group = state.peers.get(id).map(|peer| &peer.group);
+        let params = json!({"revision":state.revision,"peerId":id,"group":group,"alerts":alerts,"permissionsChanged":permissions_changed});
+        if let Err(error) = host.notify("peerNotificationsChanged", params) {
+            log::warn!("Peer notifications callback: {error}");
+            if !host.connected() { return; }
+            state.missed_alerts.extend(alerts);
+            state.missed_permissions_changed |= permissions_changed;
+            state.recovery_pending = true;
+            let shared = self.0.clone();
+            let host = host.clone();
+            tokio::spawn(async move {
+                let permit = host.reserve_callback().await;
+                let mut state = shared.lock().unwrap();
+                if let Ok(permit) = permit {
+                    let mut snapshot = state.snapshot();
+                    snapshot["alerts"] = json!(state.missed_alerts);
+                    snapshot["permissionsChanged"] = json!(state.missed_permissions_changed);
+                    match host.notify_reserved_callback("peerNotificationsChanged", snapshot, permit) {
+                        Ok(()) => { state.missed_alerts.clear(); state.missed_permissions_changed = false; }
+                        Err(error) => log::warn!("Peer notifications snapshot callback: {error}"),
+                    }
+                }
+                state.recovery_pending = false;
+            });
+        }
+    }
+
     pub(super) fn reconcile(
         &self,
         peers: &[DPeer],
         wanted: &HashMap<String, Identity>,
-        events: &broadcast::Sender<WsEvent>,
+        host: &Arc<crate::host::bridge::Host>,
     ) {
         let mut state = self.0.lock().unwrap();
         let removed: Vec<_> = state
@@ -105,7 +124,7 @@ impl Store {
             .collect();
         for id in removed {
             state.peers.remove(&id);
-            state.publish(&id, vec![], false, events);
+            self.publish(&mut state, &id, vec![], false, host);
         }
         for peer in peers {
             let Some(identity) = wanted.get(&peer.id) else {
@@ -136,7 +155,7 @@ impl Store {
                         icons: HashMap::new(),
                     },
                 );
-                state.publish(&peer.id, vec![], false, events);
+                self.publish(&mut state, &peer.id, vec![], false, host);
             } else if let Some(old) = state.peers.get_mut(&peer.id) {
                 if old.identity != *identity {
                     old.identity = identity.clone();
@@ -145,22 +164,29 @@ impl Store {
                 if old.group.name != peer.name || old.group.device_type != peer.device_type {
                     old.group.name = peer.name.clone();
                     old.group.device_type = peer.device_type;
-                    state.publish(&peer.id, vec![], false, events);
+                    self.publish(&mut state, &peer.id, vec![], false, host);
                 }
             }
         }
     }
 
-    pub(crate) fn snapshot_event(&self) -> WsEvent {
-        self.0.lock().unwrap().snapshot_event()
+    pub(crate) fn snapshot(&self) -> serde_json::Value {
+        self.0.lock().unwrap().snapshot()
     }
 
-    pub(crate) fn subscribe(
-        &self,
-        events: &broadcast::Sender<WsEvent>,
-    ) -> (broadcast::Receiver<WsEvent>, WsEvent) {
-        let state = self.0.lock().unwrap();
-        (events.subscribe(), state.snapshot_event())
+    pub(crate) fn notify_snapshot(&self, host: &crate::host::bridge::Host) -> Result<(), String> {
+        let mut state = self.0.lock().unwrap();
+        let mut snapshot = state.snapshot();
+        if !state.missed_alerts.is_empty() {
+            snapshot["alerts"] = json!(state.missed_alerts);
+        }
+        if state.missed_permissions_changed {
+            snapshot["permissionsChanged"] = json!(true);
+        }
+        host.notify("peerNotificationsChanged", snapshot)?;
+        state.missed_alerts.clear();
+        state.missed_permissions_changed = false;
+        Ok(())
     }
 
     fn apply(
@@ -168,7 +194,7 @@ impl Store {
         id: &str,
         identity: &Identity,
         result: Result<(AppSnapshot, Vec<Notification>, reqwest::Url)>,
-        events: &broadcast::Sender<WsEvent>,
+        host: &Arc<crate::host::bridge::Host>,
     ) -> Result<()> {
         let mut state = self.0.lock().unwrap();
         let Some(peer) = state
@@ -259,7 +285,7 @@ impl Store {
         peer.group.loaded = true;
         if peer.group != before || !alerts.is_empty() {
             let permissions_changed = peer.group.permissions != before.permissions;
-            state.publish(id, alerts, permissions_changed, events);
+            self.publish(&mut state, id, alerts, permissions_changed, host);
         }
         Ok(())
     }
@@ -316,7 +342,7 @@ pub(super) async fn refresh_from_app(
                 state
                     .management
                     .notifications
-                    .apply(&id, &identity, result, &state.events)?;
+                    .apply(&id, &identity, result, &state.host)?;
             }
             Ok(())
         })

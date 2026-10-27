@@ -19,19 +19,24 @@ fn setup() -> (tempfile::TempDir, ContentServer, ServerState, Identity) {
     (dir, core, state, identity)
 }
 
-fn allow_updates(state: &ServerState) {
+fn allow_updates(state: &ServerState) -> tokio::sync::mpsc::UnboundedReceiver<serde_json::Value> {
     let host = state.host.clone();
     let (generation, mut requests) = host.connect();
+    let (sent, received) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
-            assert_eq!(request["method"], "systemCapabilities");
-            host.reply(
-                generation,
-                json!({"id":request["id"],"result":["APP_UPDATES"]}),
-            )
-            .unwrap();
+            let result = match request["method"].as_str().unwrap() {
+                "systemCapabilities" => json!(["APP_UPDATES"]),
+                "appUpdateDownloadChanged" => {
+                    let _ = sent.send(request["params"].clone());
+                    json!(null)
+                }
+                other => panic!("unexpected host method: {other}"),
+            };
+            host.reply(generation, json!({"id":request["id"],"result":result})).unwrap();
         }
     });
+    received
 }
 
 #[test]
@@ -53,7 +58,7 @@ fn progress_is_bounded_without_overflow_and_unknown_lengths_do_not_invent_progre
 #[tokio::test]
 async fn complete_stream_is_published_with_identity_and_restored_without_client_file_checks() {
     let (_dir, core, state, identity) = setup();
-    allow_updates(&state);
+    let mut reports = allow_updates(&state);
     let (_cancel, mut receiver) = watch::channel(false);
     let mut events = state.events.subscribe();
     let stream = futures_util::stream::iter([Ok(&b"a"[..]), Ok(&b"b"[..]), Ok(&b"cd"[..])]);
@@ -75,47 +80,37 @@ async fn complete_stream_is_published_with_identity_and_restored_without_client_
     let info = crate::services::settings::updates::info(&state).unwrap();
     assert_eq!(restored(&state, &info).unwrap(), Some(path.clone()));
     let mut progress = Vec::new();
-    while let Ok(event) = events.try_recv() {
-        if event.event_type == "APP_UPDATE_DOWNLOAD_UPDATED" {
-            progress.push(
-                serde_json::from_str::<serde_json::Value>(&event.payload).unwrap()["progress"]
-                    .as_i64()
-                    .unwrap(),
-            );
-        }
+    for _ in 0..3 {
+        let report = tokio::time::timeout(Duration::from_secs(3), reports.recv()).await.unwrap().unwrap();
+        progress.push(report["progress"].as_i64().unwrap());
     }
     assert_eq!(progress, vec![25, 50, 99]);
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event.event_type, "APP_UPDATE_DOWNLOAD_UPDATED");
+    }
     core.stop_core().await;
     let core =
         ContentServer::open_with_cache(&_dir.path().join("data"), &_dir.path().join("cache"))
             .unwrap();
     let state = core.runtime_state();
     let bridge = Arc::new(core.host_events().unwrap());
-    let (reported, mut reports) = tokio::sync::mpsc::unbounded_channel();
-    let serving = tokio::spawn(bridge.serve(
-        |method, _| async move {
-            if method == "systemCapabilities" {
-                Ok(json!(["APP_UPDATES"]))
-            } else {
-                Err(format!("Unexpected recovery platform request: {method}"))
-            }
-        },
-        move |event| reported.send(event).map_err(|error| error.to_string()),
-    ));
-    let snapshot = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let event = reports.recv().await.unwrap();
-            if event["type"] == "APP_UPDATE_DOWNLOAD_UPDATED" {
-                let snapshot: serde_json::Value =
-                    serde_json::from_str(event["payload"].as_str().unwrap()).unwrap();
-                if snapshot["status"] == "COMPLETED" {
-                    break snapshot;
-                }
+    let (sent, mut reports) = tokio::sync::mpsc::unbounded_channel();
+    let serving = tokio::spawn(bridge.serve(move |method, params| {
+        let sent = sent.clone();
+        async move {
+            match method.as_str() {
+                "systemCapabilities" => Ok(json!(["APP_UPDATES"])),
+                "appUpdateDownloadChanged" => { let _ = sent.send(params); Ok(json!(null)) }
+                _ => Ok(json!(null)),
             }
         }
-    })
-    .await
-    .unwrap();
+    }));
+    let snapshot = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = reports.recv().await.unwrap();
+            if snapshot["status"] == "COMPLETED" { break snapshot; }
+        }
+    }).await.unwrap();
     assert_eq!(snapshot["filePath"], path);
     let snapshot = state
         .update_checks
@@ -374,7 +369,7 @@ async fn dropping_the_request_does_not_detach_worker_cleanup_from_the_serialized
             completed.store(true, Ordering::Release);
         }),
     });
-    let (generation, mut requests) = state.host.connect();
+    let (generation, mut requests) = crate::test_support::HostRequests::connect(&state.host);
     let host = state.host.clone();
     let capabilities = tokio::spawn(async move {
         let request = requests.recv().await.unwrap();

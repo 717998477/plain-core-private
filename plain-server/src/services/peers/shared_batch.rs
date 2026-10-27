@@ -89,17 +89,12 @@ pub(crate) async fn control(state: &ServerState, id: &str, command: &str) -> Res
 }
 pub(crate) fn start(state: ServerState) {
     let progress_state = state.clone();
+    let mut changed = progress_state.shared_batches.queue.changed.subscribe();
     tokio::spawn(async move {
-        let mut changed = progress_state.shared_batches.queue.changed.subscribe();
         let mut stop = progress_state.stop.clone();
         loop {
             tokio::select! { result=changed.changed()=>if result.is_err(){break}, _=stop.changed()=>break };
-            let _ = progress_state
-                .events
-                .send(plain_rs::events::WsEvent::broadcast(
-                    "SHARED_FOLDER_DOWNLOAD_UPDATED",
-                    String::new(),
-                ));
+            progress_state.host.invalidate("sharedFolderDownloadsRefresh");
         }
     });
 

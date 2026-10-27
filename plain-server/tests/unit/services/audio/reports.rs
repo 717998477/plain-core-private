@@ -108,10 +108,9 @@ async fn an_acknowledged_start_notifies_the_library_once_without_echoing_the_sdk
     accept(&state, generation, "AUDIO_STARTED_REPORTED", &payload)
         .await
         .unwrap();
-    assert_eq!(
-        events.try_recv().unwrap().event_type,
-        plain_rs::events::AUDIO_LIBRARY_UPDATED
-    );
+    let callback = requests.try_recv().unwrap();
+    assert_eq!(callback["method"], "audioLibraryRefresh");
+    state.host.reply(generation, json!({"id":callback["id"],"result":null})).unwrap();
     assert!(events.try_recv().is_err());
     accept(&state, generation, "AUDIO_STARTED_REPORTED", &payload)
         .await

@@ -48,13 +48,14 @@ impl Drop for Deletion<'_> {
 pub struct SyncService {
     db: Arc<Db>,
     events: broadcast::Sender<WsEvent>,
+    host: Arc<crate::host::bridge::Host>,
     state: Mutex<State>,
     assets: Option<Arc<super::FeedAssets>>,
     permits: Semaphore,
     auto_allowed: std::sync::atomic::AtomicBool,
     policy_gate: tokio::sync::Mutex<()>,
     revision: std::sync::atomic::AtomicI64,
-    notifications: Mutex<()>,
+    notifications: Mutex<bool>,
     leases: Mutex<BTreeMap<String, schedule::Lease>>,
     execution_changed: tokio::sync::Notify,
 }
@@ -62,18 +63,20 @@ impl SyncService {
     pub fn new(
         db: Arc<Db>,
         events: broadcast::Sender<WsEvent>,
+        host: Arc<crate::host::bridge::Host>,
         assets: Option<Arc<super::FeedAssets>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             db,
             events,
+            host,
             state: Mutex::new(State::default()),
             assets,
             permits: Semaphore::new(16),
             auto_allowed: std::sync::atomic::AtomicBool::new(false),
             policy_gate: tokio::sync::Mutex::new(()),
             revision: std::sync::atomic::AtomicI64::new(0),
-            notifications: Mutex::new(()),
+            notifications: Mutex::new(false),
             leases: Mutex::new(BTreeMap::new()),
             execution_changed: tokio::sync::Notify::new(),
         })
@@ -111,29 +114,37 @@ impl SyncService {
             .chain(state.batch.iter().map(|batch| batch.borrow().clone()))
             .collect()
     }
-    fn notify(&self, ids: &[String], removed: &[String]) {
-        if ids.is_empty() && removed.is_empty() {
-            return;
-        }
-        let _notification = self.notifications.lock().unwrap();
+    pub(crate) fn notify_snapshot(&self) -> Result<(), String> {
+        let _delivery = self.notifications.lock().unwrap();
+        self.host.notify("feedSyncChanged", serde_json::json!({"states":self.states(),"removed":[],"replace":true}))
+    }
+    fn notify(self: &Arc<Self>, ids: &[String], removed: &[String]) {
+        if ids.is_empty() && removed.is_empty() { return; }
+        let mut recovering = self.notifications.lock().unwrap();
         let runtime = self.state.lock().unwrap();
-        let states = ids
-            .iter()
-            .filter_map(|id| {
-                if id == "all" {
-                    runtime.batch.as_ref().map(|batch| batch.borrow().clone())
-                } else {
-                    runtime
-                        .tasks
-                        .get(id)
-                        .map(|task| task.state.borrow().clone())
+        let states = ids.iter().filter_map(|id| {
+            if id == "all" { runtime.batch.as_ref().map(|batch| batch.borrow().clone()) }
+            else { runtime.tasks.get(id).map(|task| task.state.borrow().clone()) }
+        }).collect::<Vec<_>>();
+        drop(runtime);
+        let payload = serde_json::json!({"states":states,"removed":removed,"replace":false});
+        if let Err(error) = self.host.notify("feedSyncChanged", payload) {
+            log::warn!("Feed sync callback: {error}");
+            if *recovering || !self.host.connected() { return; }
+            *recovering = true;
+            let service = self.clone();
+            tokio::spawn(async move {
+                let permit = service.host.reserve_callback().await;
+                let mut recovering = service.notifications.lock().unwrap();
+                if let Ok(permit) = permit {
+                    let snapshot = serde_json::json!({"states":service.states(),"removed":[],"replace":true});
+                    if let Err(error) = service.host.notify_reserved_callback("feedSyncChanged", snapshot, permit) {
+                        log::warn!("Feed sync recovery callback: {error}");
+                    }
                 }
-            })
-            .collect::<Vec<_>>();
-        let payload = serde_json::json!({"states":states,"removed":removed}).to_string();
-        let _ = self
-            .events
-            .send(WsEvent::broadcast("FEED_SYNC_UPDATED", payload));
+                *recovering = false;
+            });
+        }
     }
     pub fn queue(self: &Arc<Self>, id: Option<String>) -> anyhow::Result<()> {
         let feeds = if let Some(id) = id.as_ref() {
@@ -352,7 +363,7 @@ impl SyncService {
             }
         }
     }
-    pub async fn delete(&self, id: &str) -> anyhow::Result<bool> {
+    pub async fn delete(self: &Arc<Self>, id: &str) -> anyhow::Result<bool> {
         {
             let mut state = self.state.lock().unwrap();
             anyhow::ensure!(!state.stopped, "Feed sync stopped");
@@ -391,7 +402,7 @@ impl SyncService {
             }
         }
     }
-    fn forget(&self, id: &str) {
+    fn forget(self: &Arc<Self>, id: &str) {
         self.state.lock().unwrap().tasks.remove(id);
         self.notify(&[], &[id.to_owned()]);
     }

@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
     time::Duration,
 };
 use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
@@ -15,14 +15,26 @@ struct State {
     next_id: u64,
     peer_sockets: bool,
     sender: Option<mpsc::Sender<Value>>,
-    pending: HashMap<u64, oneshot::Sender<Reply>>,
+    pending: HashMap<u64, PendingReply>,
+}
+struct PendingReply {
+    reply: oneshot::Sender<Reply>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
 }
 pub struct Host {
     state: Arc<Mutex<State>>,
     ready: Notify,
-    capacity: Semaphore,
+    capacity: Arc<Semaphore>,
     connection: watch::Sender<u64>,
     startup: super::startup::StartupConfig,
+    activity_in_flight: Arc<AtomicBool>,
+    pending_invalidations: Mutex<HashSet<&'static str>>,
+}
+struct ActivityCall(Arc<AtomicBool>);
+impl Drop for ActivityCall {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl Default for Host {
@@ -50,9 +62,11 @@ impl Host {
         Self {
             state: Arc::new(Mutex::new(State::default())),
             ready: Notify::new(),
-            capacity: Semaphore::new(REQUEST_CAPACITY),
+            capacity: Arc::new(Semaphore::new(REQUEST_CAPACITY)),
             connection: watch::channel(0).0,
             startup,
+            activity_in_flight: Arc::new(AtomicBool::new(false)),
+            pending_invalidations: Mutex::new(HashSet::new()),
         }
     }
     pub fn with_startup_config(startup: super::startup::StartupConfig) -> Result<Self, String> {
@@ -87,8 +101,8 @@ impl Host {
     pub fn connect(&self) -> (u64, mpsc::Receiver<Value>) {
         let (sender, receiver) = mpsc::channel(REQUEST_CAPACITY);
         let mut state = self.state.lock().unwrap();
-        for (_, reply) in state.pending.drain() {
-            let _ = reply.send(Err("host connection replaced".into()));
+        for (_, pending) in state.pending.drain() {
+            let _ = pending.reply.send(Err("host connection replaced".into()));
         }
         state.generation += 1;
         state.sender = Some(sender);
@@ -110,8 +124,8 @@ impl Host {
         }
         state.sender = None;
         self.connection.send_replace(generation);
-        for (_, reply) in state.pending.drain() {
-            let _ = reply.send(Err("host disconnected".into()));
+        for (_, pending) in state.pending.drain() {
+            let _ = pending.reply.send(Err("host disconnected".into()));
         }
     }
     pub fn reply(&self, generation: u64, message: Value) -> Result<(), String> {
@@ -123,7 +137,7 @@ impl Host {
         if state.generation != generation {
             return Ok(());
         }
-        if let Some(reply) = state.pending.remove(&id) {
+        if let Some(pending) = state.pending.remove(&id) {
             let result = match message.get("error") {
                 Some(Value::String(error)) => Err(error.clone()),
                 Some(_) => Err("invalid host error".into()),
@@ -132,13 +146,92 @@ impl Host {
                     .cloned()
                     .ok_or_else(|| "missing host result".into()),
             };
-            let _ = reply.send(result);
+            let _ = pending.reply.send(result);
         }
         Ok(())
     }
     pub async fn call(&self, method: &str, params: Value) -> Reply {
         self.call_inner(method, params, Some(Duration::from_secs(25)))
             .await
+    }
+
+    pub(crate) fn notify(&self, method: &'static str, params: Value) -> Result<(), String> {
+        let activity = if method == "systemWebActivity" {
+            if self.activity_in_flight.swap(true, Ordering::AcqRel) {
+                return Ok(());
+            }
+            Some(ActivityCall(self.activity_in_flight.clone()))
+        } else {
+            None
+        };
+        let permit = self.capacity.clone().try_acquire_owned()
+            .map_err(|_| "host request capacity exceeded")?;
+        self.notify_reserved(method, params, permit, activity)
+    }
+
+    pub(crate) fn invalidate(self: &Arc<Self>, method: &'static str) {
+        let mut pending = self.pending_invalidations.lock().unwrap();
+        if pending.contains(method) { return; }
+        if self.notify(method, json!({})).is_ok() || !self.connected() { return; }
+        pending.insert(method);
+        let host = self.clone();
+        tokio::spawn(async move {
+            let permit = host.reserve_callback().await;
+            let mut pending = host.pending_invalidations.lock().unwrap();
+            if let Ok(permit) = permit {
+                if let Err(error) = host.notify_reserved_callback(method, json!({}), permit) {
+                    log::warn!("Host callback {method} recovery: {error}");
+                }
+            }
+            pending.remove(method);
+        });
+    }
+
+    pub(crate) async fn reserve_callback(&self) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+        self.capacity.clone().acquire_owned().await.map_err(|_| "host request capacity closed".into())
+    }
+
+    pub(crate) fn notify_reserved_callback(
+        &self,
+        method: &'static str,
+        params: Value,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> Result<(), String> {
+        self.notify_reserved(method, params, permit, None)
+    }
+
+    fn notify_reserved(
+        &self,
+        method: &'static str,
+        params: Value,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        activity: Option<ActivityCall>,
+    ) -> Result<(), String> {
+        let (id, receiver) = {
+            let mut state = self.state.lock().unwrap();
+            let sender = state.sender.clone().ok_or("host unavailable")?;
+            state.next_id += 1;
+            let id = state.next_id;
+            let (reply, receiver) = oneshot::channel();
+            state.pending.insert(id, PendingReply { reply, _permit: permit });
+            if sender.try_send(json!({"id":id,"method":method,"params":params})).is_err() {
+                state.pending.remove(&id);
+                return Err("host request queue unavailable".into());
+            }
+            (id, receiver)
+        };
+        let pending = Pending { state: self.state.clone(), id };
+        tokio::spawn(async move {
+            let _activity = activity;
+            let _pending = pending;
+            match tokio::time::timeout(Duration::from_secs(25), receiver).await {
+                Ok(Ok(Ok(_))) => {},
+                Ok(Ok(Err(error))) => log::warn!("Host callback {method} failed: {error}"),
+                Ok(Err(_)) => log::warn!("Host callback {method} reply canceled"),
+                Err(_) => log::warn!("Host callback {method} timed out"),
+            }
+        });
+        Ok(())
     }
     pub(crate) async fn call_wait(&self, method: &str, params: Value) -> Reply {
         self.call_inner(method, params, None).await
@@ -149,8 +242,18 @@ impl Host {
             params,
             Some(Duration::from_secs(25)),
             Some(generation),
+            None,
         )
         .await
+    }
+    pub(crate) async fn call_reserved_current(
+        &self,
+        generation: u64,
+        method: &str,
+        params: Value,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> Reply {
+        self.request_inner(method, params, Some(Duration::from_secs(25)), Some(generation), Some(permit)).await
     }
     async fn call_inner(&self, method: &str, params: Value, timeout: Option<Duration>) -> Reply {
         if method == "systemProperties" {
@@ -190,7 +293,7 @@ impl Host {
         self.request(method, params, timeout).await
     }
     async fn request(&self, method: &str, params: Value, timeout: Option<Duration>) -> Reply {
-        self.request_inner(method, params, timeout, None).await
+        self.request_inner(method, params, timeout, None, None).await
     }
     async fn request_inner(
         &self,
@@ -198,11 +301,14 @@ impl Host {
         params: Value,
         timeout: Option<Duration>,
         generation: Option<u64>,
+        reserved: Option<tokio::sync::OwnedSemaphorePermit>,
     ) -> Reply {
-        let _permit = self
-            .capacity
-            .try_acquire()
-            .map_err(|_| "host request capacity exceeded")?;
+        let permit = match reserved {
+            Some(permit) => permit,
+            None => self.capacity.clone().try_acquire_owned()
+                .map_err(|_| "host request capacity exceeded")?,
+        };
+        let mut permit = Some(permit);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         let (id, receiver) = loop {
             let notified = self.ready.notified();
@@ -222,7 +328,7 @@ impl Host {
                     state.next_id += 1;
                     let id = state.next_id;
                     let (reply, receiver) = oneshot::channel();
-                    state.pending.insert(id, reply);
+                    state.pending.insert(id, PendingReply { reply, _permit: permit.take().unwrap() });
                     if sender
                         .try_send(json!({"id":id,"method":method,"params":params}))
                         .is_err()

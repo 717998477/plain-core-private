@@ -12,6 +12,57 @@ fn startup_json() -> Value {
 }
 
 #[tokio::test]
+async fn callbacks_enter_the_host_queue_in_order_and_release_capacity_on_reply() {
+    let host = Host::default();
+    let (generation, mut incoming) = host.connect();
+    host.notify("systemWebLoginClosed", json!({"requestId":"old"})).unwrap();
+    host.notify("systemWebLoginRequested", json!({"requestId":"new"})).unwrap();
+    let first = incoming.recv().await.unwrap();
+    let second = incoming.recv().await.unwrap();
+    assert_eq!(first["method"], "systemWebLoginClosed");
+    assert_eq!(first["params"]["requestId"], "old");
+    assert_eq!(second["method"], "systemWebLoginRequested");
+    assert_eq!(second["params"]["requestId"], "new");
+    host.reply(generation, json!({"id":first["id"],"result":null})).unwrap();
+    host.reply(generation, json!({"id":second["id"],"result":null})).unwrap();
+    tokio::task::yield_now().await;
+    assert!(host.state.lock().unwrap().pending.is_empty());
+    assert_eq!(host.capacity.available_permits(), REQUEST_CAPACITY);
+    host.disconnect(generation);
+    assert_eq!(host.notify("systemWebLoginClosed", json!({})).unwrap_err(), "host unavailable");
+}
+
+#[tokio::test]
+async fn replacing_a_full_host_releases_capacity_before_recovery_callbacks() {
+    let host = Host::default();
+    let (_old, _incoming) = host.connect();
+    for id in 0..REQUEST_CAPACITY {
+        host.notify("peerNotificationsChanged", json!({"revision":id})).unwrap();
+    }
+    assert_eq!(host.capacity.available_permits(), 0);
+    let (generation, mut incoming) = host.connect();
+    host.notify("peerNotificationsChanged", json!({"revision":32,"groups":[]})).unwrap();
+    let request = incoming.recv().await.unwrap();
+    assert_eq!(request["params"]["revision"], 32);
+    host.reply(generation, json!({"id":request["id"],"result":null})).unwrap();
+    assert_eq!(host.capacity.available_permits(), REQUEST_CAPACITY);
+}
+
+#[tokio::test]
+async fn web_activity_coalesces_while_the_host_is_processing_it() {
+    let host = Host::default();
+    let (generation, mut requests) = host.connect();
+    host.notify("systemWebActivity", json!({})).unwrap();
+    host.notify("systemWebActivity", json!({})).unwrap();
+    let request = requests.recv().await.unwrap();
+    assert!(requests.try_recv().is_err());
+    host.reply(generation, json!({"id":request["id"],"result":null})).unwrap();
+    tokio::task::yield_now().await;
+    host.notify("systemWebActivity", json!({})).unwrap();
+    assert_eq!(requests.recv().await.unwrap()["method"], "systemWebActivity");
+}
+
+#[tokio::test]
 async fn generation_bound_calls_never_enter_a_replacement_host_queue() {
     let host = Arc::new(Host::default());
     let (old, _) = host.connect();
@@ -297,4 +348,25 @@ async fn cache_root_is_reused_from_startup_without_a_host_request() {
         })
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn invalidations_coalesce_while_host_capacity_is_full() {
+    let host = Arc::new(Host::default());
+    let (generation, mut requests) = host.connect();
+    for _ in 0..REQUEST_CAPACITY {
+        host.notify("fixture", json!({})).unwrap();
+    }
+    host.invalidate("clipboardHistoryRefresh");
+    host.invalidate("clipboardHistoryRefresh");
+    let first = requests.recv().await.unwrap();
+    host.reply(generation, json!({"id":first["id"],"result":null})).unwrap();
+    for _ in 1..REQUEST_CAPACITY {
+        let request = requests.recv().await.unwrap();
+        host.reply(generation, json!({"id":request["id"],"result":null})).unwrap();
+    }
+    let refresh = tokio::time::timeout(Duration::from_secs(3), requests.recv()).await.unwrap().unwrap();
+    assert_eq!(refresh["method"], "clipboardHistoryRefresh");
+    host.reply(generation, json!({"id":refresh["id"],"result":null})).unwrap();
+    assert!(requests.try_recv().is_err());
 }

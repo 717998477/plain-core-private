@@ -13,9 +13,6 @@ pub(super) async fn authorize(
     origin: RequestOrigin,
     spec: &EventSpec,
 ) -> Result<()> {
-    if spec.local_only && origin != RequestOrigin::Local {
-        return Err("no_permission".into());
-    }
     if origin == RequestOrigin::Remote
         && !crate::http::auth::public_gate::is_enabled(&state.prefs, spec.permissions)
     {
@@ -137,25 +134,6 @@ async fn snapshot(state: &ServerState, name: &str) -> Result<Option<String>> {
             return mirror_snapshot(state, name).await.map(Some);
         }
         "IMAGE_MODELS_UPDATED" => state.image_models.snapshot().event().payload,
-        "APP_UPDATE_DOWNLOAD_UPDATED" => state.update_checks.download.snapshot_event().payload,
-        "PEER_TRANSPORT_UPDATED" => {
-            crate::services::peers::peer_transport::snapshot_event(state).payload
-        }
-        "ONLINE_CLIENTS_UPDATED" => state.subscription_sessions.snapshot_event().payload,
-        "DLNA_SENDER_UPDATED" => state.cast.snapshot().event().payload,
-        "AUDIO_PLAYBACK_UPDATED" => {
-            let event = state.audio.playback_event().await;
-            #[derive(serde::Deserialize)]
-            struct Failure {
-                error: Option<String>,
-            }
-            let result: Failure = serde_json::from_str(&event.payload)
-                .map_err(|error| async_graphql::Error::new(error.to_string()))?;
-            if let Some(error) = result.error {
-                return Err(error.into());
-            }
-            event.payload
-        }
         _ => return Ok(None),
     };
     Ok(Some(value))

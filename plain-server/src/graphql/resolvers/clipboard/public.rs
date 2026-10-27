@@ -62,7 +62,7 @@ impl ClipboardMutation {
             .unwrap_or_default();
         crate::services::clipboard::record_history(
             ctx.data::<Arc<Db>>()?,
-            ctx.data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?,
+            ctx.data::<Arc<Host>>()?,
             &text,
             source,
             false,
@@ -98,12 +98,7 @@ impl ClipboardMutation {
             .clipboard_delete_query(&query)
             .map_err(async_graphql::Error::new)?;
         if affected_count > 0 {
-            let _ = ctx
-                .data::<tokio::sync::broadcast::Sender<plain_rs::events::WsEvent>>()?
-                .send(plain_rs::events::WsEvent::broadcast(
-                    plain_rs::events::H_CLIPBOARD_HISTORY_UPDATED,
-                    "{}".into(),
-                ));
+            ctx.data::<Arc<Host>>()?.invalidate("clipboardHistoryRefresh");
         }
         Ok(ActionResult {
             affected_count: affected_count.try_into()?,

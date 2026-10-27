@@ -3,7 +3,7 @@ use crate::{assembly::server::ServerState, graphql::types::Long};
 use anyhow::{Result, anyhow, ensure};
 use futures_util::StreamExt;
 use plain_rs::prefs::pref_keys::SKIP_VERSION;
-use plain_rs::{events::WsEvent, prefs::security::UpdateInfo};
+use plain_rs::prefs::security::UpdateInfo;
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -62,6 +62,7 @@ struct Task {
 struct State {
     snapshot: AppUpdateDownload,
     cancel: Option<watch::Sender<bool>>,
+    recovery_pending: bool,
 }
 impl Default for State {
     fn default() -> Self {
@@ -71,6 +72,7 @@ impl Default for State {
                 ..Default::default()
             },
             cancel: None,
+            recovery_pending: false,
         }
     }
 }
@@ -81,13 +83,6 @@ pub(crate) struct Runtime {
     closed: AtomicBool,
 }
 impl Runtime {
-    pub(crate) fn snapshot_event(&self) -> WsEvent {
-        let snapshot = self.state.lock().unwrap().snapshot.clone();
-        WsEvent::broadcast(
-            "APP_UPDATE_DOWNLOAD_UPDATED",
-            serde_json::to_string(&snapshot).unwrap(),
-        )
-    }
     pub(crate) fn schedule_reconcile(state: &ServerState) {
         let state = state.clone();
         tokio::spawn(async move {
@@ -98,15 +93,35 @@ impl Runtime {
             }
         });
     }
+    pub(crate) fn notify_snapshot(&self, host: &crate::host::bridge::Host) -> Result<(), String> {
+        let current = self.state.lock().unwrap();
+        let snapshot = serde_json::to_value(&current.snapshot).map_err(|error| error.to_string())?;
+        host.notify("appUpdateDownloadChanged", snapshot)
+    }
     fn publish(&self, state: &ServerState, mut snapshot: AppUpdateDownload) -> AppUpdateDownload {
         let mut current = self.state.lock().unwrap();
         snapshot.core_id = current.snapshot.core_id.clone();
         snapshot.revision = Long(current.snapshot.revision.0 + 1);
         current.snapshot = snapshot.clone();
-        let _ = state.events.send(WsEvent::broadcast(
-            "APP_UPDATE_DOWNLOAD_UPDATED",
-            serde_json::to_string(&snapshot).unwrap(),
-        ));
+        if let Err(error) = state.host.notify("appUpdateDownloadChanged", serde_json::to_value(&snapshot).unwrap()) {
+            log::warn!("Update download callback: {error}");
+            if !current.recovery_pending && state.host.connected() {
+                current.recovery_pending = true;
+                let state = state.clone();
+                tokio::spawn(async move {
+                    let permit = state.host.reserve_callback().await;
+                    let mut current = state.update_checks.download.state.lock().unwrap();
+                    if let Ok(permit) = permit {
+                        if let Err(error) = state.host.notify_reserved_callback(
+                            "appUpdateDownloadChanged", serde_json::to_value(&current.snapshot).unwrap(), permit,
+                        ) {
+                            log::warn!("Update download recovery callback: {error}");
+                        }
+                    }
+                    current.recovery_pending = false;
+                });
+            }
+        }
         snapshot
     }
     pub(super) fn invalidate(&self) {

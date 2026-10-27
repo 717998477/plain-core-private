@@ -3,7 +3,6 @@ use anyhow::{Result, anyhow, ensure};
 use futures_util::{SinkExt, StreamExt};
 use plain_rs::{
     db::{DPeer, chat_store::peers},
-    events::WsEvent,
 };
 use rusqlite::OptionalExtension;
 use std::{collections::HashMap, sync::Mutex, time::Duration};
@@ -45,9 +44,34 @@ impl Drop for Worker {
 pub(crate) struct Runtime {
     coordinator: Mutex<Option<(watch::Sender<bool>, JoinHandle<()>)>>,
     pub(crate) notifications: super::notifications::Store,
+    clipboard_delivery: Mutex<bool>,
 }
 
 impl Runtime {
+    pub(crate) fn notify_clipboard_snapshot(&self, host: &crate::host::bridge::Host) -> Result<(), String> {
+        let _delivery = self.clipboard_delivery.lock().unwrap();
+        host.notify("peerClipboardChanged", serde_json::json!({"peerIds":[],"refreshAll":true}))
+    }
+
+    fn notify_clipboard(state: &ServerState, peer_id: &str) {
+        let mut recovering = state.management.clipboard_delivery.lock().unwrap();
+        if let Err(error) = state.host.notify("peerClipboardChanged", serde_json::json!({"peerIds":[peer_id],"refreshAll":false})) {
+            log::warn!("Peer clipboard callback: {error}");
+            if *recovering || !state.host.connected() { return; }
+            *recovering = true;
+            let state = state.clone();
+            tokio::spawn(async move {
+                let permit = state.host.reserve_callback().await;
+                let mut recovering = state.management.clipboard_delivery.lock().unwrap();
+                if let Ok(permit) = permit {
+                    if let Err(error) = state.host.notify_reserved_callback("peerClipboardChanged", serde_json::json!({"peerIds":[],"refreshAll":true}), permit) {
+                        log::warn!("Peer clipboard recovery callback: {error}");
+                    }
+                }
+                *recovering = false;
+            });
+        }
+    }
     pub(crate) fn start(&self, state: ServerState) -> Result<()> {
         let actor = state.native_client_id().map_err(anyhow::Error::msg)?;
         let mut slot = self
@@ -56,7 +80,7 @@ impl Runtime {
             .map_err(|_| anyhow!("Management runtime unavailable"))?;
         ensure!(slot.is_none(), "Management runtime already started");
         let mut changed = state.db.peer_changes();
-        let mut events = state.events.subscribe();
+        let mut network = state.network_revision.subscribe();
         let (cancel, mut cancelled) = watch::channel(false);
         let coordinator = tokio::spawn(async move {
             let mut stop = state.stop.clone();
@@ -76,7 +100,7 @@ impl Runtime {
                         state
                             .management
                             .notifications
-                            .reconcile(&peers, &wanted, &state.events);
+                            .reconcile(&peers, &wanted, &state.host);
                         reconcile(&state, &mut workers, wanted).await;
                         false
                     }
@@ -94,12 +118,7 @@ impl Runtime {
                         _ = cancelled.changed() => break false,
                         result = changed.changed() => break result.is_ok(),
                         _ = &mut retry_delay, if retry => break true,
-                        event = events.recv() => match event {
-                            Ok(event) if event.event_type == "NETWORK_CHANGED" || event.event_type == "NETWORK_INTERFACES_CHANGED" => break true,
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break true,
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break false,
-                            _ => {},
-                        },
+                        result = network.changed() => break result.is_ok(),
                     }
                 };
                 if !again {
@@ -230,14 +249,7 @@ async fn publish_clipboard_change(
             if !current(connection, &state, &peer_id, &identity, &cancelled)? {
                 return Ok(false);
             }
-            let _ = state.events.send(WsEvent::broadcast(
-                plain_rs::events::PEER_CLIPBOARD_CHANGED,
-                serde_json::to_string(
-                    &crate::graphql::subscriptions::models::PeerClipboardChange {
-                        peer_id: peer_id.clone().into(),
-                    },
-                )?,
-            ));
+            Runtime::notify_clipboard(&state, &peer_id);
             Ok(true)
         })
     })

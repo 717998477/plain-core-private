@@ -1,4 +1,3 @@
-use super::*;
 use plain_rs::media::audio::{playback, queue};
 
 #[tokio::test]
@@ -15,21 +14,17 @@ async fn native_host_lifetime_restores_position_and_invalidates_reports_once_per
     playback::prepare_track(&state.db, &track).unwrap();
     let previous = playback::seek(&state.db, 1234).unwrap();
     let (first, requests) = state.host.connect();
-    let event = state.audio.playback_event().await;
-    assert_eq!(event.event_type, "AUDIO_PLAYBACK_UPDATED");
-    let restored: playback::Playback = serde_json::from_str(&event.payload).unwrap();
+    let restored = state.audio.run_playback(|db, _| playback::snapshot(db)).await.unwrap();
     assert_eq!(restored.path, track.path);
     assert_eq!(restored.position_ms, 1234);
     assert!(restored.revision > previous.revision);
     assert!(!playback::report(&state.db, &track.path, previous.revision, 0).unwrap());
     assert!(requests.is_empty());
-    let again: playback::Playback =
-        serde_json::from_str(&state.audio.playback_event().await.payload).unwrap();
+    let again = state.audio.run_playback(|db, _| playback::snapshot(db)).await.unwrap();
     assert_eq!(again, restored);
     let (second, requests) = state.host.connect();
     assert!(second > first);
-    let replacement: playback::Playback =
-        serde_json::from_str(&state.audio.playback_event().await.payload).unwrap();
+    let replacement = state.audio.run_playback(|db, _| playback::snapshot(db)).await.unwrap();
     assert_eq!(replacement.position_ms, 1234);
     assert!(replacement.revision > restored.revision);
     assert!(!playback::report(&state.db, &track.path, restored.revision, 0).unwrap());

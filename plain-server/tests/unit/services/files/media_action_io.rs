@@ -307,16 +307,13 @@ async fn native_main_delete_has_no_host_exchange_and_publishes_each_event_once()
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     assert!(requests.try_recv().is_err());
     let mut content = 0;
-    let mut finished = 0;
     while let Ok(event) = events.try_recv() {
         match event.event_type {
             "CONTENT_CHANGED" => content += 1,
-            plain_rs::events::MEDIA_ACTION_FINISHED => finished += 1,
             _ => {}
         }
     }
     assert_eq!(content, 1);
-    assert_eq!(finished, 1);
     assert!(!source.exists());
     core.stop_core().await;
 }

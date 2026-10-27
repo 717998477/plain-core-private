@@ -48,7 +48,7 @@ pub(super) async fn receive(
         }
         crate::services::clipboard::record_history(
             &state.db,
-            &state.events,
+            &state.host,
             &item.text,
             peer_id,
             false,

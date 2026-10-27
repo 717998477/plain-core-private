@@ -69,6 +69,13 @@ async fn screen_transports_authenticated_media_and_controls_separately_from_subs
         while let Some(request) = host.next_request().await {
             let method = request["method"].as_str().unwrap();
             let result = match method {
+                "systemWebLoginRequested" | "systemWebLoginClosed" | "systemWebLoginCompleted" |
+                "systemWebLoginSnapshot" | "peerNotificationsChanged" | "peerClipboardChanged" |
+                "onlineClientsChanged" | "httpServerStatusChanged" | "clipboardHistoryRefresh" |
+                "dlnaRendererChanged" | "dlnaRendererRefresh" | "sharedFolderDownloadsRefresh" | "peerTransportsChanged" |
+                "appUpdateDownloadChanged" | "dlnaSenderChanged" | "feedSyncChanged" |
+                "audioPlaybackRefresh" | "audioLibraryRefresh" | "networkInterfacesChanged" |
+                "systemWebActivity" | "pairingSucceeded" => json!(null),
                 "systemCapabilities" => json!(["SCREEN_MIRROR"]),
                 "systemScreenMirrorState" => mirror_host.lock().unwrap().clone(),
                 "systemScreenMirrorControls" | "systemScreenMirrorResetTouch" => {
@@ -415,7 +422,7 @@ async fn remote_subscriptions_enforce_access_and_deliver_pomodoro_updates() {
         serde_json::from_slice(&stream.decode(&frame, &key).unwrap()).unwrap();
     assert_eq!(response["id"], "private");
     assert_eq!(response["type"], "error");
-    assert_eq!(response["payload"][0]["message"], "no_permission");
+    assert_eq!(response["payload"][0]["message"], "Unknown subscription field");
     let query = json!({"type":"subscribe","id":"models","payload":{"query":"subscription { imageModelsUpdated { version status downloadProgress errorMessage modelSize modelDir isIndexing totalImages indexedImages } }"}}).to_string();
     socket
         .send(ClientMessage::Binary(
