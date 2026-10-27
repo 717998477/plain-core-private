@@ -1,5 +1,3 @@
-//! Unit tests for `src/library/db/audio_queue.rs` (row IO layer).
-
 #[path = "../../library/fixtures.rs"]
 mod fixtures;
 use fixtures::*;
@@ -44,69 +42,64 @@ fn replace_queue_items_assigns_dense_sort_orders() {
 }
 
 #[test]
-fn history_upsert_and_trim_are_deterministic() {
+fn history_records_order_equal_timestamps_by_rowid_and_update_existing_rows() {
     let db = test_db("history_io");
-    let mk = |path: &str, played_at: &str| {
-        register_audio(&db, &audio(path, "t", 1));
-        crate::db::PlayHistory {
-            media_id: format!("test:{}", path),
-            path: path.into(),
-            title: "T".into(),
-            artist: String::new(),
-            duration_ms: 1,
-            play_count: 1,
-            played_at: played_at.into(),
-        }
-    };
-    crate::db::audio_queue::upsert_history(&db, &mk("/old.mp3", "2026-01-01T00:00:00.000Z"))
+    for (path, played_at) in [
+        ("/old.mp3", "2026-01-01T00:00:00.000Z"),
+        ("/new.mp3", "2026-01-02T00:00:00.000Z"),
+        ("/tie1.mp3", "2026-01-02T00:00:00.000Z"),
+        ("/tie2.mp3", "2026-01-02T00:00:00.000Z"),
+    ] {
+        register_audio(&db, &audio(path, "T", 1));
+        db.media_play_history_record(crate::enums::DataType::Audio, &format!("test:{path}"), 0)
+            .unwrap();
+        db.with_conn(|conn| {
+            conn.execute(
+                "UPDATE media_play_history SET played_at=?1 WHERE media_id=?2",
+                rusqlite::params![played_at, format!("test:{path}")],
+            )
+        })
         .unwrap();
-    crate::db::audio_queue::upsert_history(&db, &mk("/new.mp3", "2026-01-02T00:00:00.000Z"))
-        .unwrap();
-    // Same millisecond tie: rowid (insertion order) breaks it.
-    crate::db::audio_queue::upsert_history(&db, &mk("/tie1.mp3", "2026-01-02T00:00:00.000Z"))
-        .unwrap();
-    crate::db::audio_queue::upsert_history(&db, &mk("/tie2.mp3", "2026-01-02T00:00:00.000Z"))
-        .unwrap();
-    let all = crate::db::audio_queue::all_history(&db).unwrap();
+    }
+    let rows = crate::media::play_history::matching(&db, &[]).unwrap();
     assert_eq!(
-        all.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
-        ["/tie2.mp3", "/tie1.mp3", "/new.mp3", "/old.mp3"]
+        rows.iter()
+            .map(|row| row.media_id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "test:/tie2.mp3",
+            "test:/tie1.mp3",
+            "test:/new.mp3",
+            "test:/old.mp3"
+        ]
     );
-    // Upsert keeps the row, bumps nothing by itself (caller sets fields).
-    crate::db::audio_queue::upsert_history(&db, &mk("/old.mp3", "2026-01-03T00:00:00.000Z"))
+    db.media_play_history_record(crate::enums::DataType::Audio, "test:/old.mp3", 123)
         .unwrap();
-    assert_eq!(crate::db::audio_queue::all_history(&db).unwrap().len(), 4);
-    // Trim keeps the newest N.
-    crate::db::audio_queue::trim_history(&db, 3).unwrap();
-    let all = crate::db::audio_queue::all_history(&db).unwrap();
-    assert_eq!(
-        all.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
-        ["/old.mp3", "/tie2.mp3", "/tie1.mp3"]
-    );
+    db.with_conn(|conn| conn.execute("UPDATE media_play_history SET played_at='2026-01-03T00:00:00.000Z' WHERE media_id='test:/old.mp3'", [])).unwrap();
+    let rows = crate::media::play_history::matching(&db, &[]).unwrap();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0].media_id, "test:/old.mp3");
+    assert_eq!(rows[0].play_count, 2);
+    assert_eq!(rows[0].position_ms, 123);
 }
 
 #[test]
-fn remove_by_paths_deletes_only_matches() {
+fn remove_by_paths_deletes_only_matching_audio_history() {
     let db = test_db("remove_paths_io");
-    let history = |p: &str| {
-        register_audio(&db, &audio(p, "t", 1));
-        crate::db::PlayHistory {
-            media_id: format!("test:{}", p),
-            path: p.into(),
-            title: String::new(),
-            artist: String::new(),
-            duration_ms: 0,
-            play_count: 1,
-            played_at: "2026-01-01T00:00:00.000Z".into(),
-        }
-    };
-    crate::db::audio_queue::upsert_history(&db, &history("/a.mp3")).unwrap();
-    crate::db::audio_queue::upsert_history(&db, &history("/b.mp3")).unwrap();
-    crate::db::audio_queue::remove_history(&db, &["/a.mp3".to_string(), "/zz.mp3".to_string()])
+    for path in ["/a.mp3", "/b.mp3"] {
+        register_audio(&db, &audio(path, "Track", 1));
+        db.media_play_history_record(crate::enums::DataType::Audio, &format!("test:{path}"), 0)
+            .unwrap();
+    }
+    db.media_play_history_record(crate::enums::DataType::Video, "video", 999)
         .unwrap();
-    let all = crate::db::audio_queue::all_history(&db).unwrap();
-    assert_eq!(all.len(), 1);
-    assert_eq!(all[0].path, "/b.mp3");
+    crate::db::audio_queue::remove_history(&db, &["/a.mp3".into(), "/missing.mp3".into()]).unwrap();
+    let rows =
+        crate::media::play_history::matching(&db, &crate::utils::search_dsl::parse("type:AUDIO"))
+            .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].media_id, "test:/b.mp3");
+    assert_eq!(history_row(&db, "video").unwrap().position_ms, 999);
 }
 
 #[test]
@@ -156,7 +149,11 @@ fn queue_path_lookup_does_not_require_a_play_history_row() {
     let track = audio("/queued.mp3", "Queued", 123);
     register_audio(&db, &track);
     crate::media::audio::queue::enqueue(&db, std::slice::from_ref(&track), false).unwrap();
-    assert!(crate::db::audio_queue::all_history(&db).unwrap().is_empty());
+    assert!(
+        crate::media::audio::overview::history(&db)
+            .unwrap()
+            .is_empty()
+    );
     let row = crate::db::audio_queue::queue_item_by_path(&db, &track.path)
         .unwrap()
         .unwrap();

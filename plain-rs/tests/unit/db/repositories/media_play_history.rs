@@ -3,24 +3,15 @@ use super::*;
 #[test]
 fn starts_increment_counts_and_position_saves_preserve_them() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    db.media_play_history_start(crate::enums::DataType::Video, "video", 3_000_000_123)
+    db.media_play_history_record(crate::enums::DataType::Video, "video", 3_000_000_123)
         .unwrap();
-    crate::media::videos::progress::save(&db, "video", 456).unwrap();
-    let row = db
-        .media_play_history_get(crate::enums::DataType::Video, "video")
-        .unwrap()
-        .unwrap();
+    crate::media::play_history::save(&db, crate::enums::DataType::Video, "video", 456).unwrap();
+    let row = fixtures::history_row(&db, "video").unwrap();
     assert_eq!(row.position_ms, 456);
     assert_eq!(row.play_count, 1);
-    db.media_play_history_start(crate::enums::DataType::Video, "video", 0)
+    db.media_play_history_record(crate::enums::DataType::Video, "video", 0)
         .unwrap();
-    assert_eq!(
-        db.media_play_history_get(crate::enums::DataType::Video, "video")
-            .unwrap()
-            .unwrap()
-            .play_count,
-        2
-    );
+    assert_eq!(fixtures::history_row(&db, "video").unwrap().play_count, 2);
 }
 
 #[path = "../../library/fixtures.rs"]
@@ -36,15 +27,8 @@ fn normalized_audio_reads_live_catalog_metadata_and_keeps_video_history() {
     crate::media::audio::queue::enqueue(&db, std::slice::from_ref(&track), false).unwrap();
     crate::media::audio::queue::add_playlist_items(&db, &playlist.id, std::slice::from_ref(&track))
         .unwrap();
-    crate::media::audio::queue::on_playing(
-        &db,
-        &track.path,
-        &track.title,
-        &track.artist,
-        track.duration_ms,
-    )
-    .unwrap();
-    db.media_play_history_start(crate::enums::DataType::Video, "video", 987)
+    crate::media::audio::queue::on_playing(&db, &track.path).unwrap();
+    db.media_play_history_record(crate::enums::DataType::Video, "video", 987)
         .unwrap();
     track.title = "Updated".into();
     fixtures::register_audio(&db, &track);
@@ -57,15 +41,14 @@ fn normalized_audio_reads_live_catalog_metadata_and_keeps_video_history() {
         "Updated"
     );
     assert_eq!(
-        crate::db::audio_queue::all_history(&db).unwrap()[0].title,
+        crate::media::audio::overview::native(&db)
+            .unwrap()
+            .recent_items[0]
+            .title,
         "Updated"
     );
-    crate::db::audio_queue::trim_history(&db, 0).unwrap();
-    assert!(
-        db.media_play_history_get(crate::enums::DataType::Video, "video")
-            .unwrap()
-            .is_some()
-    );
+    crate::db::audio_queue::remove_history(&db, &[track.path.clone()]).unwrap();
+    assert!(fixtures::history_row(&db, "video").is_some());
     for table in [
         "audio_queue_items",
         "audio_playlist_items",
@@ -145,10 +128,7 @@ fn platform_system_ids_and_uri_aliases_are_used_without_persisting_metadata() {
     assert!(
         crate::media::audio::playback::report(&db, uri, playback.revision, 3_000_000_123).unwrap()
     );
-    let row = db
-        .media_play_history_get(crate::enums::DataType::Audio, "42")
-        .unwrap()
-        .unwrap();
+    let row = fixtures::history_row(&db, "42").unwrap();
     assert_eq!(row.play_count, 1);
     assert_eq!(row.position_ms, 3_000_000_123);
     db.with_conn(|conn| {
@@ -214,15 +194,8 @@ fn moving_audio_keeps_its_queue_playlist_history_and_current_reference() {
     crate::media::audio::queue::enqueue(&db, std::slice::from_ref(&track), false).unwrap();
     crate::media::audio::queue::add_playlist_items(&db, &playlist.id, std::slice::from_ref(&track))
         .unwrap();
-    crate::media::audio::queue::on_playing(
-        &db,
-        &track.path,
-        &track.title,
-        &track.artist,
-        track.duration_ms,
-    )
-    .unwrap();
-    db.media_play_history_start(crate::enums::DataType::Audio, &id, 123)
+    crate::media::audio::queue::on_playing(&db, &track.path).unwrap();
+    db.media_play_history_record(crate::enums::DataType::Audio, &id, 123)
         .unwrap();
     crate::media::actions::cleanup(
         &db,
@@ -247,13 +220,7 @@ fn moving_audio_keeps_its_queue_playlist_history_and_current_reference() {
         crate::media::audio::queue::get_audio_current(&db).unwrap(),
         "/moved/one.mp3"
     );
-    assert_eq!(
-        db.media_play_history_get(crate::enums::DataType::Audio, &id)
-            .unwrap()
-            .unwrap()
-            .position_ms,
-        123
-    );
+    assert_eq!(fixtures::history_row(&db, &id).unwrap().position_ms, 123);
     db.forget_media_file("/moved/one.mp3").unwrap();
     assert!(
         crate::db::audio_queue::all_queue_items(&db)
@@ -270,11 +237,7 @@ fn moving_audio_keeps_its_queue_playlist_history_and_current_reference() {
             .unwrap()
             .is_empty()
     );
-    assert!(
-        db.media_play_history_get(crate::enums::DataType::Audio, &id)
-            .unwrap()
-            .is_none()
-    );
+    assert!(fixtures::history_row(&db, &id).is_none());
 }
 
 #[test]
@@ -317,7 +280,7 @@ fn aliases_of_one_system_media_are_deduplicated_in_queue_and_playlist() {
 #[test]
 fn overflowing_play_counts_leave_the_existing_record_unchanged() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    db.media_play_history_start(crate::enums::DataType::Video, "video", 123)
+    db.media_play_history_record(crate::enums::DataType::Video, "video", 123)
         .unwrap();
     db.with_conn(|conn| {
         conn.execute(
@@ -327,13 +290,10 @@ fn overflowing_play_counts_leave_the_existing_record_unchanged() {
     })
     .unwrap();
     assert!(
-        db.media_play_history_start(crate::enums::DataType::Video, "video", 0)
+        db.media_play_history_record(crate::enums::DataType::Video, "video", 0)
             .is_err()
     );
-    let row = db
-        .media_play_history_get(crate::enums::DataType::Video, "video")
-        .unwrap()
-        .unwrap();
+    let row = fixtures::history_row(&db, "video").unwrap();
     assert_eq!(row.play_count, i64::MAX);
     assert_eq!(row.position_ms, 123);
 }
@@ -341,19 +301,13 @@ fn overflowing_play_counts_leave_the_existing_record_unchanged() {
 #[test]
 fn explicit_media_type_classifies_history_without_a_loaded_audio_catalog() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
-    db.media_play_history_start(DataType::Audio, "audio", 111)
+    db.media_play_history_record(DataType::Audio, "audio", 111)
         .unwrap();
-    db.media_play_history_start(DataType::Video, "video", 222)
+    db.media_play_history_record(DataType::Video, "video", 222)
         .unwrap();
-    crate::media::videos::progress::save(&db, "video", 333).unwrap();
-    let audio = db
-        .media_play_history_get(DataType::Audio, "audio")
-        .unwrap()
-        .unwrap();
-    let video = db
-        .media_play_history_get(DataType::Video, "video")
-        .unwrap()
-        .unwrap();
+    crate::media::play_history::save(&db, crate::enums::DataType::Video, "video", 333).unwrap();
+    let audio = fixtures::history_row(&db, "audio").unwrap();
+    let video = fixtures::history_row(&db, "video").unwrap();
     assert_eq!(
         (audio.media_type, audio.position_ms, audio.play_count),
         (1, 111, 1)
@@ -362,8 +316,17 @@ fn explicit_media_type_classifies_history_without_a_loaded_audio_catalog() {
         (video.media_type, video.position_ms, video.play_count),
         (2, 333, 1)
     );
-    assert!(db.video_progress_get("audio").unwrap().is_none());
-    let recent = db.video_progress_recent("0000").unwrap();
+    assert!(
+        crate::media::play_history::matching(
+            &db,
+            &crate::utils::search_dsl::parse("type:VIDEO ids:audio")
+        )
+        .unwrap()
+        .is_empty()
+    );
+    let recent =
+        crate::media::play_history::matching(&db, &crate::utils::search_dsl::parse("type:VIDEO"))
+            .unwrap();
     assert_eq!(recent.len(), 1);
     assert_eq!(recent[0].media_id, "video");
     let history = crate::media::audio::overview::history(&db).unwrap();
@@ -381,22 +344,19 @@ fn explicit_media_type_classifies_history_without_a_loaded_audio_catalog() {
         }],
     )
     .unwrap();
-    assert_eq!(
-        db.media_play_history_get(DataType::Audio, "audio").unwrap(),
-        Some(audio)
-    );
+    assert_eq!(fixtures::history_row(&db, "audio"), Some(audio));
 }
 
 #[test]
 fn history_requires_explicit_types_and_globally_unique_media_ids() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     assert!(
-        db.media_play_history_start(DataType::Image, "image", 0)
+        db.media_play_history_record(DataType::Image, "image", 0)
             .is_err()
     );
-    db.media_play_history_start(DataType::Audio, "audio", 111)
+    db.media_play_history_record(DataType::Audio, "audio", 111)
         .unwrap();
-    let audio = db.media_play_history_get(DataType::Audio, "audio").unwrap();
+    let audio = fixtures::history_row(&db, "audio");
     db.with_conn(|conn| {
         for sql in [
             "INSERT INTO media_play_history(media_id,position_ms,play_count,played_at) VALUES('missing',0,0,'now')",
@@ -406,10 +366,12 @@ fn history_requires_explicit_types_and_globally_unique_media_ids() {
             assert!(conn.execute(sql, []).is_err());
         }
     });
-    assert!(crate::media::videos::progress::save(&db, "audio", 999).is_err());
-    assert!(crate::media::videos::progress::started(&db, "audio", 999).is_err());
-    assert_eq!(
-        db.media_play_history_get(DataType::Audio, "audio").unwrap(),
-        audio
+    assert!(
+        crate::media::play_history::save(&db, crate::enums::DataType::Video, "audio", 999).is_err()
     );
+    assert!(
+        crate::media::play_history::record(&db, crate::enums::DataType::Video, "audio", 999)
+            .is_err()
+    );
+    assert_eq!(fixtures::history_row(&db, "audio"), audio);
 }

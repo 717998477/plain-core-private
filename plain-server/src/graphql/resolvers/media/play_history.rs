@@ -154,3 +154,7 @@ impl MediaPlayHistoryMutation {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/graphql/resolvers/media/play_history.rs"]
+mod tests;

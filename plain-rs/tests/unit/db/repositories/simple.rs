@@ -1,5 +1,3 @@
-//! Unit tests for the fixed-query managers in `src/db/managers/simple.rs`.
-
 #[path = "../../library/fixtures.rs"]
 mod fixtures;
 use crate::db::Db;
@@ -12,7 +10,6 @@ use crate::db::models::simple::PomodoroItemRow;
 use crate::db::models::simple::SessionRow;
 use crate::db::models::simple::ShareRow;
 use crate::db::models::simple::TrashedMessageRow;
-use crate::db::models::simple::VideoPlayProgressRow;
 
 fn clipboard(id: &str, created_at: &str) -> ClipboardRow {
     ClipboardRow {
@@ -211,30 +208,6 @@ fn pomodoro_queries() {
 
     assert_eq!(db.pomodoro_total_completed().unwrap(), 12);
     assert_eq!(db.pomodoro_delete("p1").unwrap(), 1);
-}
-
-#[test]
-fn video_progress_cache() {
-    let db = test_db("media_cache");
-    db.video_progress_upsert(&VideoPlayProgressRow {
-        media_id: "42".into(),
-        position_ms: 5_000,
-        updated_at: "2026-01-01T00:00:00.000Z".into(),
-    })
-    .unwrap();
-    let progress = db.video_progress_get("42").unwrap().expect("progress");
-    assert_eq!(progress.position_ms, 5_000);
-    assert_eq!(
-        db.video_progress_recent("2026-01-01T00:00:00.000Z")
-            .unwrap()
-            .len(),
-        1
-    );
-    assert!(
-        db.video_progress_recent("2027-01-01T00:00:00.000Z")
-            .unwrap()
-            .is_empty()
-    );
 }
 
 #[test]

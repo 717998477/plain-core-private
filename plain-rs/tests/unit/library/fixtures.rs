@@ -69,7 +69,7 @@ pub fn indexed_on_playing(
             album_id: String::new(),
         },
     );
-    plain_rs::media::audio::queue::on_playing(db, path, title, artist, duration_ms)
+    plain_rs::media::audio::queue::on_playing(db, path)
 }
 
 pub fn indexed_current(db: &Db, path: &str) -> DomainResult<()> {
@@ -77,4 +77,18 @@ pub fn indexed_current(db: &Db, path: &str) -> DomainResult<()> {
         register_audio(db, &AudioTrack::from_path_stem(path));
     }
     plain_rs::media::audio::queue::save_audio_current(db, path)
+}
+
+pub fn history_row(db: &Db, media_id: &str) -> Option<plain_rs::db::MediaPlayHistoryRow> {
+    plain_rs::media::play_history::matching(
+        db,
+        &[plain_rs::utils::search_dsl::FilterField {
+            name: "ids".into(),
+            op: String::new(),
+            value: media_id.into(),
+        }],
+    )
+    .unwrap()
+    .into_iter()
+    .next()
 }

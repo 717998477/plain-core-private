@@ -111,11 +111,7 @@ fn remove_paths_prunes_queue_history_playlist_items_and_current() {
             .unwrap()
             .is_none()
     );
-    assert!(
-        crate::db::audio_queue::history_by_path(&db, "/tq3/a.mp3")
-            .unwrap()
-            .is_none()
-    );
+    assert!(history_row(&db, "test:/tq3/a.mp3").is_none());
     assert_eq!(playlist_item_count(&db, &pl.id).unwrap(), 1);
     assert_eq!(get_audio_current(&db).unwrap(), "");
     assert!(
@@ -175,7 +171,7 @@ fn playlist_crud_items_and_counts() {
     );
 }
 #[test]
-fn text_filter_precedes_pagination_on_queue_playlist_and_history() {
+fn text_filter_precedes_pagination_on_queue_and_playlist() {
     let db = test_db("text_filter");
     indexed_enqueue(
         &db,
@@ -218,39 +214,35 @@ fn text_filter_precedes_pagination_on_queue_playlist_and_history() {
         playlist_items_page(&db, &pl.id, 0, 10, "").unwrap().len(),
         2
     );
-    indexed_on_playing(&db, "/tf/road song.mp3", "Road Song", "Ferry", 1).unwrap();
-    indexed_on_playing(&db, "/tf/zzz.mp3", "Zzz", "Other", 3).unwrap();
-    let rows = history_page(&db, 0, 10, "ferry").unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].path, "/tf/road song.mp3");
-    assert_eq!(history_page(&db, 0, 10, "").unwrap().len(), 2);
 }
 
 #[test]
-fn history_upserts_play_count_and_trims_to_keep() {
+fn play_starts_increment_counts_and_trim_old_audio_history() {
     let db = test_db("history_trim");
     indexed_on_playing(&db, "/tq7/a.mp3", "A", "X", 1).unwrap();
     indexed_on_playing(&db, "/tq7/a.mp3", "A2", "X", 2).unwrap();
-    let h = crate::db::audio_queue::history_by_path(&db, "/tq7/a.mp3")
+    let h = history_row(&db, "test:/tq7/a.mp3").unwrap();
+    assert_eq!(h.play_count, 2);
+    let metadata = db
+        .media_file_by_path(crate::enums::DataType::Audio, "/tq7/a.mp3")
         .unwrap()
         .unwrap();
-    assert_eq!(h.play_count, 2);
-    assert_eq!(h.title, "A2");
-    assert_eq!(h.duration_ms, 2);
-    for i in 0..(HISTORY_KEEP * 5 / 4 + 2) {
+    assert_eq!(metadata.title, "A2");
+    assert_eq!(metadata.duration_ms, 2);
+    for i in 0..(crate::db::HISTORY_KEEP * 5 / 4 + 2) {
         indexed_on_playing(&db, &format!("/tq7/x{i}.mp3"), "T", "X", 1).unwrap();
     }
     assert_eq!(
-        crate::db::audio_queue::all_history(&db).unwrap().len(),
-        HISTORY_KEEP + 2
+        crate::media::audio::overview::history(&db).unwrap().len(),
+        crate::db::HISTORY_KEEP + 2
     );
-    let page = history_page(&db, 0, 10, "").unwrap();
-    assert!(page[0].path.starts_with("/tq7/x"));
+    let page = crate::media::audio::overview::history(&db).unwrap();
+    assert!(page[0].id.starts_with("test:/tq7/x"));
     assert!(
-        crate::db::audio_queue::all_history(&db)
+        crate::media::audio::overview::history(&db)
             .unwrap()
             .iter()
-            .all(|r| !r.path.ends_with("a.mp3"))
+            .all(|r| !r.id.ends_with("a.mp3"))
     );
 }
 
@@ -299,7 +291,10 @@ fn state_survives_reopen() {
     let listed = playlists(&db).unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].1, 1);
-    assert_eq!(history_page(&db, 0, 10, "").unwrap().len(), 1);
+    assert_eq!(
+        crate::media::audio::overview::history(&db).unwrap().len(),
+        1
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -326,7 +321,10 @@ fn milliseconds_survive_restart_without_persisting_album_snapshots() {
     assert_eq!(saved.duration_ms, 117_123);
     assert_eq!(saved.album_id, "");
     assert_eq!(
-        history_page(&db, 0, 10, "").unwrap()[0].duration_ms,
+        db.media_file_by_path(crate::enums::DataType::Audio, "/precise.mp3")
+            .unwrap()
+            .unwrap()
+            .duration_ms,
         117_123
     );
 }
@@ -407,13 +405,7 @@ fn concurrent_queue_and_history_writes_do_not_lose_updates() {
         crate::db::audio_queue::all_queue_items(&db).unwrap().len(),
         16
     );
-    assert_eq!(
-        crate::db::audio_queue::history_by_path(&db, "/shared")
-            .unwrap()
-            .unwrap()
-            .play_count,
-        16
-    );
+    assert_eq!(history_row(&db, "test:/shared").unwrap().play_count, 16);
 }
 
 #[test]
@@ -435,7 +427,11 @@ fn failed_media_cleanup_rolls_back_every_audio_table() {
         .unwrap();
     remove_paths(&db, &["/one".into()]).unwrap();
     assert_eq!(playlist_item_count(&db, &pl.id).unwrap(), 0);
-    assert!(history_page(&db, 0, 10, "").unwrap().is_empty());
+    assert!(
+        crate::media::audio::overview::history(&db)
+            .unwrap()
+            .is_empty()
+    );
     assert!(get_audio_current(&db).unwrap().is_empty());
 }
 
@@ -606,7 +602,11 @@ fn adding_to_an_idle_queue_selects_the_first_indexed_input_without_starting_play
             .collect::<Vec<_>>(),
         ["/b.mp3", "/a.mp3"]
     );
-    assert!(history_page(&db, 0, 10, "").unwrap().is_empty());
+    assert!(
+        crate::media::audio::overview::history(&db)
+            .unwrap()
+            .is_empty()
+    );
     let before = crate::media::audio::playback::snapshot(&db).unwrap();
     enqueue_selecting_if_idle(&db, &tracks[1..]).unwrap();
     assert_eq!(

@@ -126,3 +126,7 @@ fn validate(media_type: DataType, media_id: &str, position_ms: i64) -> DomainRes
 fn invalid(message: &str) -> DomainError {
     DomainError::Other(message.into())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/media/play_history.rs"]
+mod tests;

@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::json;
 
 fn item(id: &str) -> Item {
     Item {
@@ -41,9 +42,14 @@ fn directions_and_sensitive_items_do_not_advance_the_applied_marker() {
         ("pull", true),
         ("both", true),
     ] {
-        prefs.set(CLIPBOARD_DIRECTIONS, json!({"peer":direction})).unwrap();
+        prefs
+            .set(CLIPBOARD_DIRECTIONS, json!({"peer":direction}))
+            .unwrap();
         assert_eq!(super::receives(&prefs, "peer").unwrap(), receives);
-        assert_eq!(prepare(&prefs, &store, "peer", &item("next")).unwrap(), receives);
+        assert_eq!(
+            prepare(&prefs, &store, "peer", &item("next")).unwrap(),
+            receives
+        );
     }
     let sensitive = Item {
         sensitive: true,
@@ -55,7 +61,9 @@ fn directions_and_sensitive_items_do_not_advance_the_applied_marker() {
         json!({"peer":"baseline"})
     );
     for direction in [json!("invalid"), json!(1), Value::Null] {
-        prefs.set(CLIPBOARD_DIRECTIONS, json!({"peer":direction})).unwrap();
+        prefs
+            .set(CLIPBOARD_DIRECTIONS, json!({"peer":direction}))
+            .unwrap();
         assert!(super::receives(&prefs, "peer").is_err());
     }
 }
@@ -103,7 +111,9 @@ fn invalid_persisted_markers_do_not_claim_success_or_lose_other_peers() {
     let store = crate::kv::Db::open(&directory.path().join("fjall")).unwrap();
     assert!(!prepare(&prefs, &store, "peer", &item("old")).unwrap());
     assert!(!prepare(&prefs, &store, "other", &item("other-old")).unwrap());
-    store.set_json(APPLIED, json!({"peer":1,"other":"other-old"})).unwrap();
+    store
+        .set_json(APPLIED, json!({"peer":1,"other":"other-old"}))
+        .unwrap();
     let before = store.get_json::<Value>(APPLIED).unwrap();
     assert!(applied(&store, "peer", &item("new")).is_err());
     assert!(prepare(&prefs, &store, "peer", &item("new")).is_err());
@@ -122,13 +132,17 @@ fn sending_is_explicit_and_does_not_inherit_the_default_receive_direction() {
         ("push", true, false),
         ("both", true, true),
     ] {
-        prefs.set(CLIPBOARD_DIRECTIONS, json!({"peer":direction})).unwrap();
+        prefs
+            .set(CLIPBOARD_DIRECTIONS, json!({"peer":direction}))
+            .unwrap();
         assert_eq!(sends(&prefs, "peer").unwrap(), send);
         assert_eq!(receives(&prefs, "peer").unwrap(), receive);
         assert!(!sends(&prefs, "another").unwrap());
     }
     for value in [json!("invalid"), json!(1), Value::Null] {
-        prefs.set(CLIPBOARD_DIRECTIONS, json!({"peer":value})).unwrap();
+        prefs
+            .set(CLIPBOARD_DIRECTIONS, json!({"peer":value}))
+            .unwrap();
         assert!(sends(&prefs, "peer").is_err());
         assert!(receives(&prefs, "peer").is_err());
     }

@@ -51,10 +51,7 @@ fn reopening_remembers_only_the_current_track_and_preserves_queue_and_history() 
         .unwrap()
         .id;
     assert_eq!(
-        db.media_play_history_get(crate::enums::DataType::Audio, &id)
-            .unwrap()
-            .unwrap()
-            .position_ms,
+        fixtures::history_row(&db, &id).unwrap().position_ms,
         234_567
     );
     assert_eq!(db.audio_current_media_id().unwrap(), id);
@@ -78,7 +75,7 @@ fn reopening_remembers_only_the_current_track_and_preserves_queue_and_history() 
     assert!(!started(&db, &track, playing.revision).unwrap());
     assert_eq!(audio_queue::queue_page(&db, 0, 10, "").unwrap().len(), 1);
     assert_eq!(
-        audio_queue::history_page(&db, 0, 10, "").unwrap()[0].play_count,
+        crate::media::audio::overview::history(&db).unwrap()[0].play_count,
         1
     );
     assert_eq!(audio_queue::playlists(&db).unwrap()[0].0.id, playlist.id);
@@ -182,7 +179,7 @@ fn playback_start_is_once_per_revision_and_failed_history_write_can_retry() {
     assert!(started(&db, &track, row.revision).unwrap());
     assert!(!started(&db, &track, row.revision).unwrap());
     assert_eq!(
-        audio_queue::history_page(&db, 0, 10, "").unwrap()[0].play_count,
+        crate::media::audio::overview::history(&db).unwrap()[0].play_count,
         1
     );
     let newer = prepare_track(&db, &track).unwrap();
@@ -194,7 +191,7 @@ fn playback_start_is_once_per_revision_and_failed_history_write_can_retry() {
         .unwrap();
     assert!(started(&db, &track, newer.revision).unwrap());
     assert_eq!(
-        audio_queue::history_page(&db, 0, 10, "").unwrap()[0].play_count,
+        crate::media::audio::overview::history(&db).unwrap()[0].play_count,
         2
     );
 }
@@ -215,7 +212,7 @@ fn buffered_start_survives_pause_resume_and_seek_but_not_track_replacement() {
     assert!(!started(&db, &track, first.revision).unwrap());
     assert!(started(&db, &track, next.revision).unwrap());
     assert_eq!(
-        audio_queue::history_page(&db, 0, 10, "").unwrap()[0].play_count,
+        crate::media::audio::overview::history(&db).unwrap()[0].play_count,
         2
     );
     indexed_current(&db, "other").unwrap();
@@ -224,61 +221,31 @@ fn buffered_start_survives_pause_resume_and_seek_but_not_track_replacement() {
 }
 
 #[test]
-fn selected_playback_reports_count_actual_start_once_and_update_position_without_a_native_load() {
+fn progress_reports_do_not_count_plays_and_only_loaded_revisions_can_start() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     let track = audio_queue::AudioTrack::from_path_stem("one");
     register_audio(&db, &track);
-    let mut selected = prepare_track(&db, &track).unwrap();
-    selected.position_ms = 123;
-    assert_eq!(
-        report_selection(&db, &selected, false).unwrap(),
-        ReportResult {
-            accepted: true,
-            history_changed: false
-        }
-    );
+    let selected = prepare_track(&db, &track).unwrap();
+    assert!(report(&db, &track.path, selected.revision, 123).unwrap());
     assert!(
-        audio_queue::history_page(&db, 0, 10, "")
+        crate::media::audio::overview::history(&db)
             .unwrap()
             .is_empty()
     );
-    assert_eq!(
-        report_selection(&db, &selected, true).unwrap(),
-        ReportResult {
-            accepted: true,
-            history_changed: true
-        }
-    );
-    selected.position_ms = 456;
-    assert!(
-        !report_selection(&db, &selected, true)
-            .unwrap()
-            .history_changed
-    );
-    assert!(report_selection(&db, &selected, false).unwrap().accepted);
-    let history = audio_queue::history_page(&db, 0, 10, "").unwrap();
-    assert_eq!(history.len(), 1);
-    assert_eq!(history[0].play_count, 1);
-    assert_eq!(
-        db.media_play_history_get(crate::enums::DataType::Audio, &history[0].media_id)
-            .unwrap()
-            .unwrap()
-            .position_ms,
-        456
-    );
-    db.audio().read(|state| assert_eq!(state.load_revision, -1));
+    assert!(!started(&db, &track, selected.revision).unwrap());
+    loaded(&db, &track.path, selected.revision).unwrap();
+    assert!(started(&db, &track, selected.revision).unwrap());
+    assert!(!started(&db, &track, selected.revision).unwrap());
+    assert!(report(&db, &track.path, selected.revision, 456).unwrap());
+    let row = fixtures::history_row(&db, "test:one").unwrap();
+    assert_eq!(row.play_count, 1);
+    assert_eq!(row.position_ms, 456);
     let replay = prepare_track(&db, &track).unwrap();
+    assert!(!report(&db, &track.path, selected.revision, 999).unwrap());
+    loaded(&db, &track.path, replay.revision).unwrap();
+    assert!(started(&db, &track, replay.revision).unwrap());
     assert_eq!(
-        report_selection(&db, &selected, true).unwrap(),
-        ReportResult::default()
-    );
-    assert!(
-        report_selection(&db, &replay, true)
-            .unwrap()
-            .history_changed
-    );
-    assert_eq!(
-        audio_queue::history_page(&db, 0, 10, "").unwrap()[0].play_count,
+        fixtures::history_row(&db, "test:one").unwrap().play_count,
         2
     );
 }
@@ -288,57 +255,51 @@ fn new_selection_rejects_buffered_native_start_even_for_the_same_path() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     let track = audio_queue::AudioTrack::from_path_stem("one");
     register_audio(&db, &track);
-    let native = prepare_track(&db, &track).unwrap();
-    loaded(&db, &track.path, native.revision).unwrap();
-    let browser = prepare_track(&db, &track).unwrap();
-    assert!(!started(&db, &track, native.revision).unwrap());
-    assert!(
-        report_selection(&db, &browser, true)
-            .unwrap()
-            .history_changed
-    );
-    assert!(!started(&db, &track, native.revision).unwrap());
+    let first = prepare_track(&db, &track).unwrap();
+    loaded(&db, &track.path, first.revision).unwrap();
+    let replacement = prepare_track(&db, &track).unwrap();
+    assert!(!started(&db, &track, first.revision).unwrap());
+    assert!(!started(&db, &track, replacement.revision).unwrap());
+    loaded(&db, &track.path, replacement.revision).unwrap();
+    assert!(started(&db, &track, replacement.revision).unwrap());
+    assert!(!started(&db, &track, first.revision).unwrap());
     assert_eq!(
-        audio_queue::history_page(&db, 0, 10, "").unwrap()[0].play_count,
+        fixtures::history_row(&db, "test:one").unwrap().play_count,
         1
     );
 }
 
 #[test]
-fn selected_start_failure_rolls_back_position_and_can_retry() {
+fn failed_start_preserves_position_and_can_retry_the_same_loaded_revision() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     let track = audio_queue::AudioTrack::from_path_stem("one");
     register_audio(&db, &track);
-    let before = prepare_track(&db, &track).unwrap();
-    let mut report = before.clone();
-    report.position_ms = 123;
+    let selected = prepare_track(&db, &track).unwrap();
+    loaded(&db, &track.path, selected.revision).unwrap();
+    report(&db, &track.path, selected.revision, 123).unwrap();
+    let before = snapshot(&db).unwrap();
     db.with_conn(|c| c.execute_batch("CREATE TRIGGER fail_report BEFORE INSERT ON media_play_history BEGIN SELECT RAISE(ABORT,'fail'); END")).unwrap();
-    assert!(report_selection(&db, &report, true).is_err());
+    assert!(started(&db, &track, selected.revision).is_err());
     assert_eq!(snapshot(&db).unwrap(), before);
+    assert!(fixtures::history_row(&db, "test:one").is_none());
+    db.audio()
+        .read(|state| assert_eq!(state.started_revision, -1));
     db.with_conn(|c| c.execute_batch("DROP TRIGGER fail_report"))
         .unwrap();
-    assert!(
-        report_selection(&db, &report, true)
-            .unwrap()
-            .history_changed
-    );
-    assert_eq!(snapshot(&db).unwrap().position_ms, 123);
+    assert!(started(&db, &track, selected.revision).unwrap());
+    let row = fixtures::history_row(&db, "test:one").unwrap();
+    assert_eq!((row.play_count, row.position_ms), (1, 123));
 }
 
 #[test]
-fn unindexed_reports_do_not_create_history_and_invalid_reports_have_no_effect() {
+fn unindexed_playback_does_not_create_history_and_invalid_reports_have_no_effect() {
     let db = Db::open(std::path::Path::new(":memory:")).unwrap();
     let track = audio_queue::AudioTrack::from_path_stem("unindexed");
     let selected = prepare_track(&db, &track).unwrap();
-    assert_eq!(
-        report_selection(&db, &selected, true).unwrap(),
-        ReportResult {
-            accepted: true,
-            history_changed: false
-        }
-    );
+    loaded(&db, &track.path, selected.revision).unwrap();
+    assert!(started(&db, &track, selected.revision).unwrap());
     assert!(
-        audio_queue::history_page(&db, 0, 10, "")
+        crate::media::audio::overview::history(&db)
             .unwrap()
             .is_empty()
     );
@@ -356,7 +317,7 @@ fn unindexed_reports_do_not_create_history_and_invalid_reports_have_no_effect() 
             ..selected.clone()
         },
     ] {
-        assert!(report_selection(&db, &invalid, true).is_err());
+        assert!(report(&db, &invalid.path, invalid.revision, invalid.position_ms).is_err());
     }
     assert_eq!(snapshot(&db).unwrap(), selected);
 }

@@ -222,8 +222,24 @@ fn rebinding_swaps_provider_ids_atomically_and_rolls_back_on_failure() {
     db.with_conn(|c|c.execute_batch("INSERT INTO media_play_history(media_type,media_id,position_ms,played_at,play_count) VALUES(2,'a',1,'first',0),(2,'b',2,'second',0);")).unwrap();
     let bindings = [binding(2, "a", "b"), binding(2, "b", "a")];
     assert_eq!(rebind(&db, &bindings, "/source", "/target").unwrap(), 2);
-    assert_eq!(db.video_progress_get("a").unwrap().unwrap().position_ms, 2);
+    assert_eq!(
+        crate::media::play_history::matching(
+            &db,
+            &crate::utils::search_dsl::parse("type:VIDEO ids:a")
+        )
+        .unwrap()[0]
+            .position_ms,
+        2
+    );
     db.with_conn(|c|c.execute_batch("CREATE TRIGGER fail_move BEFORE DELETE ON media_play_history BEGIN SELECT RAISE(ABORT,'fixture failure'); END;")).unwrap();
     assert!(rebind(&db, &bindings, "/source", "/target").is_err());
-    assert_eq!(db.video_progress_get("a").unwrap().unwrap().position_ms, 2);
+    assert_eq!(
+        crate::media::play_history::matching(
+            &db,
+            &crate::utils::search_dsl::parse("type:VIDEO ids:a")
+        )
+        .unwrap()[0]
+            .position_ms,
+        2
+    );
 }

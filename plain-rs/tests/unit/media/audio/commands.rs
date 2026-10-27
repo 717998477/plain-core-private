@@ -52,7 +52,7 @@ fn commands_preserve_resume_and_repeat_one_only_applies_to_completion() {
     let next = command(&db, &prefs, &mut engine, Action::Next, 0, 1.0).unwrap();
     assert_eq!(next.path, "two");
     assert!(
-        audio_queue::history_page(&db, 0, 10, "")
+        crate::media::audio::overview::history(&db)
             .unwrap()
             .is_empty()
     );
@@ -110,7 +110,7 @@ fn path_playback_is_temporary_and_never_enqueues_or_fabricates_an_id() {
     let track = AudioTrack::from_path_stem("/unindexed.mp3");
     assert!(audio_playback::started(&db, &track, playback.revision).unwrap());
     assert!(
-        audio_queue::history_page(&db, 0, 10, "")
+        crate::media::audio::overview::history(&db)
             .unwrap()
             .is_empty()
     );
