@@ -121,6 +121,12 @@ impl AppStateSubscriptions {
     ) -> Result<BoxStream<'static, Result<PairingSuccessNotice>>> {
         events::stream(ctx, "PAIRING_SUCCESS").await
     }
+    async fn pomodoro_settings_changed(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<BoxStream<'static, Result<bool>>> {
+        events::stream(ctx, "POMODORO_SETTINGS_UPDATE").await
+    }
     async fn pomodoro_action(
         &self,
         ctx: &Context<'_>,

@@ -263,6 +263,7 @@ type Subscription {
 	pairingChanged: Boolean!
 	pairingRequested: PairingRequestNotice!
 	pairingSucceeded: PairingSuccessNotice!
+	pomodoroSettingsChanged: Boolean!
 	pomodoroAction: PomodoroAction!
 	deviceNameUpdated: String!
 	permissionsUpdated: Boolean!

@@ -464,6 +464,16 @@ pub const EVENTS: &[EventSpec] = &[
         local_only: true,
     },
     EventSpec {
+        field: "pomodoroSettingsChanged",
+        event: "POMODORO_SETTINGS_UPDATE",
+        aliases: &[],
+        invalidation: true,
+        selection: "",
+        permissions: &[],
+        capability: None,
+        local_only: false,
+    },
+    EventSpec {
         field: "pomodoroAction",
         event: "POMODORO_ACTION",
         aliases: &[],
@@ -471,7 +481,7 @@ pub const EVENTS: &[EventSpec] = &[
         selection: "{ today { date state timeLeftSec totalTimeSec completedCount currentRound isRunning isPaused } completedState }",
         permissions: &[],
         capability: None,
-        local_only: true,
+        local_only: false,
     },
 ];
 pub fn migrated(event: &str) -> bool {

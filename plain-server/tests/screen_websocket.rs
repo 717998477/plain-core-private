@@ -344,7 +344,7 @@ async fn screen_rejects_login_modes_missing_clients_invalid_keys_and_disabled_ac
 }
 
 #[tokio::test]
-async fn remote_subscription_cannot_read_local_pairing_credentials() {
+async fn remote_subscriptions_enforce_access_and_deliver_pomodoro_updates() {
     let (_directory, core, _) = public_fixture();
     let session = core
         .native_management()
@@ -426,6 +426,61 @@ async fn remote_subscription_cannot_read_local_pairing_credentials() {
                 break;
             }
             assert_ne!(response["type"], "error");
+        }
+    })
+    .await
+    .unwrap();
+    for (id, query) in [
+        ("pomodoro", "subscription { pomodoroAction { today { state isRunning } completedState } }"),
+        ("settings", "subscription { pomodoroSettingsChanged }"),
+    ] {
+        let command = json!({"type":"subscribe", "id":id, "payload":{"query":query}}).to_string();
+        socket
+            .send(ClientMessage::Binary(stream.encode(command.as_bytes(), &key).unwrap().into()))
+            .await
+            .unwrap();
+    }
+    let mut ready = std::collections::HashSet::new();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while ready.len() < 2 {
+            let ClientMessage::Binary(frame) = socket.next().await.unwrap().unwrap() else {
+                panic!("Expected subscription response")
+            };
+            let response: serde_json::Value =
+                serde_json::from_slice(&stream.decode(&frame, &key).unwrap()).unwrap();
+            assert_ne!(response["type"], "error");
+            if response["payload"]["extensions"]["subscriptionReady"] == true {
+                ready.insert(response["id"].as_str().unwrap().to_owned());
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let native = core.native_graphql().unwrap();
+    let settings = json!({"workDurationMin":26,"shortBreakDurationMin":5,"longBreakDurationMin":15,"pomodorosBeforeLongBreak":4,"showNotification":true,"playSoundOnComplete":true,"soundPath":"","originalSoundName":""});
+    let request = async_graphql::Request::new("mutation($value: JSON!) { setPref(key: \"pomodoro_settings\", value: $value) }")
+        .variables(async_graphql::Variables::from_json(json!({"value":settings})));
+    assert!(native.execute(request).await.errors.is_empty());
+    assert!(native
+        .execute("mutation { startPomodoro(durationSec:30) }".into())
+        .await
+        .errors
+        .is_empty());
+    let mut received = std::collections::HashSet::new();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while received.len() < 2 {
+            let ClientMessage::Binary(frame) = socket.next().await.unwrap().unwrap() else {
+                panic!("Expected encrypted subscription update")
+            };
+            let response: serde_json::Value =
+                serde_json::from_slice(&stream.decode(&frame, &key).unwrap()).unwrap();
+            assert_ne!(response["type"], "error");
+            if response["id"] == "settings" && response["payload"]["data"]["pomodoroSettingsChanged"] == true {
+                received.insert("settings");
+            }
+            if response["id"] == "pomodoro" && response["payload"]["data"]["pomodoroAction"]["today"]["isRunning"] == true {
+                received.insert("pomodoro");
+            }
         }
     })
     .await
